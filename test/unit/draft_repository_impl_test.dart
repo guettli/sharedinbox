@@ -22,6 +22,18 @@ class _StubAccounts implements AccountRepository {
   Future<String> getPassword(String accountId) async => '';
 }
 
+AccountsCompanion _accountRow(String id) => AccountsCompanion.insert(
+      id: id,
+      displayName: id,
+      email: '$id@example.com',
+      imapHost: '',
+      imapPort: 993,
+      imapSsl: true,
+      smtpHost: '',
+      smtpPort: 465,
+      smtpSsl: true,
+    );
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -183,6 +195,76 @@ void main() {
       final edited = await repo.getDraft(draft.id);
       expect(edited?.dirty, isTrue);
       expect(edited?.imapServerId, '42');
+    });
+
+    test(
+        'switching the account of a synced draft forgets its server id '
+        'and queues the old copy for removal', () async {
+      final db = openTestDatabase();
+      for (final id in ['acc-1', 'acc-2']) {
+        await db.into(db.accounts).insert(_accountRow(id));
+      }
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(dirty: Value(false), imapServerId: Value('17')),
+      );
+
+      await repo.saveDraft(
+        id: draft.id,
+        accountId: 'acc-2',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: '',
+      );
+
+      final moved = await repo.getDraft(draft.id);
+      expect(moved?.accountId, 'acc-2');
+      // UID 17 means nothing in acc-2's Drafts folder: pushing must append
+      // a fresh copy, not expunge acc-2's message 17.
+      expect(moved?.imapServerId, isNull);
+      expect(moved?.dirty, isTrue);
+      final tombstones = await db.select(db.draftTombstones).get();
+      expect(tombstones.single.accountId, 'acc-1');
+      expect(tombstones.single.serverId, '17');
+    });
+
+    test('a draft of a deleted account can move to another account', () async {
+      final db = openTestDatabase();
+      await db.into(db.accounts).insert(_accountRow('acc-2'));
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      // acc-1 is gone; its draft stayed behind.
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(jmapServerId: Value('M42')),
+      );
+
+      await repo.saveDraft(
+        id: draft.id,
+        accountId: 'acc-2',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+
+      final moved = await repo.getDraft(draft.id);
+      expect(moved?.accountId, 'acc-2');
+      expect(moved?.jmapServerId, isNull);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
     });
 
     test('deleteDraft writes a tombstone when the row had a server id',

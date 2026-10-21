@@ -38,18 +38,30 @@ class DraftRepositoryImpl implements DraftRepository {
   }) async {
     final now = DateTime.now();
     if (id != null) {
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
-        DraftsCompanion(
-          accountId: Value(accountId),
-          replyToEmailId: Value(replyToEmailId),
-          toText: Value(toText),
-          ccText: Value(ccText),
-          subjectText: Value(subjectText),
-          bodyText: Value(bodyText),
-          updatedAt: Value(now),
-          dirty: const Value(true),
-        ),
-      );
+      await _db.transaction(() async {
+        final old = await (_db.select(_db.drafts)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        // The server ids belong to the old account's mailbox. Kept across a
+        // switch of the From account, the next push would expunge that UID
+        // from the new account's Drafts folder — someone else's draft.
+        final switched = old != null && old.accountId != accountId;
+        if (switched) await _tombstoneServerCopy(old);
+        await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
+          DraftsCompanion(
+            accountId: Value(accountId),
+            replyToEmailId: Value(replyToEmailId),
+            toText: Value(toText),
+            ccText: Value(ccText),
+            subjectText: Value(subjectText),
+            bodyText: Value(bodyText),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+            imapServerId: switched ? const Value(null) : const Value.absent(),
+            jmapServerId: switched ? const Value(null) : const Value.absent(),
+          ),
+        );
+      });
       final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
           .getSingleOrNull();
       if (row != null) return _toModel(row);
@@ -118,18 +130,27 @@ class DraftRepositoryImpl implements DraftRepository {
     final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     if (row == null) return;
+    await _tombstoneServerCopy(row);
+    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+  }
+
+  /// Queues removal of [row]'s copy on its account's server, if it has one
+  /// and the account still exists (a deleted account has no server to sync).
+  Future<void> _tombstoneServerCopy(Draft row) async {
     final accountId = row.accountId;
     final serverId = row.imapServerId ?? row.jmapServerId;
-    if (accountId != null && serverId != null && serverId.isNotEmpty) {
-      await _db.into(_db.draftTombstones).insert(
-            DraftTombstonesCompanion.insert(
-              accountId: accountId,
-              serverId: serverId,
-              createdAt: DateTime.now(),
-            ),
-          );
-    }
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    if (accountId == null || serverId == null || serverId.isEmpty) return;
+    final account = await (_db.select(_db.accounts)
+          ..where((t) => t.id.equals(accountId)))
+        .getSingleOrNull();
+    if (account == null) return;
+    await _db.into(_db.draftTombstones).insert(
+          DraftTombstonesCompanion.insert(
+            accountId: accountId,
+            serverId: serverId,
+            createdAt: DateTime.now(),
+          ),
+        );
   }
 
   @override
