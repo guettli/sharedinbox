@@ -197,14 +197,12 @@ void main() {
           smtpSsl: true,
         );
 
-    test(
-        'switching the account of a synced draft forgets its server id '
-        'and queues the old copy for removal', () async {
-      final db = openTestDatabase();
-      for (final id in ['acc-1', 'acc-2']) {
-        await db.into(db.accounts).insert(accountRow(id));
-      }
-      final repo = DraftRepositoryImpl(db, _StubAccounts());
+    /// Saves a draft for acc-1 and marks it as pushed to the server
+    /// under IMAP UID 17, as a completed sync would.
+    Future<int> saveSyncedDraft(
+      AppDatabase db,
+      DraftRepositoryImpl repo,
+    ) async {
       final draft = await repo.saveDraft(
         accountId: 'acc-1',
         toText: 'a@example.com',
@@ -215,9 +213,21 @@ void main() {
       await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
         const DraftsCompanion(dirty: Value(false), imapServerId: Value('17')),
       );
+      return draft.id;
+    }
+
+    test(
+        'switching the account of a synced draft forgets its server id '
+        'and queues the old copy for removal', () async {
+      final db = openTestDatabase();
+      for (final id in ['acc-1', 'acc-2']) {
+        await db.into(db.accounts).insert(accountRow(id));
+      }
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
 
       await repo.saveDraft(
-        id: draft.id,
+        id: draftId,
         accountId: 'acc-2',
         toText: 'a@example.com',
         ccText: '',
@@ -225,7 +235,7 @@ void main() {
         bodyText: '',
       );
 
-      final moved = await repo.getDraft(draft.id);
+      final moved = await repo.getDraft(draftId);
       expect(moved?.accountId, 'acc-2');
       // UID 17 means nothing in acc-2's Drafts folder: pushing must append
       // a fresh copy, not expunge acc-2's message 17.
@@ -294,35 +304,11 @@ void main() {
     test('deleteDraft writes a tombstone when the row had a server id',
         () async {
       final db = openTestDatabase();
-      await db.into(db.accounts).insert(
-            AccountsCompanion.insert(
-              id: 'acc-1',
-              displayName: 'A',
-              email: 'a@example.com',
-              imapHost: '',
-              imapPort: 993,
-              imapSsl: true,
-              smtpHost: '',
-              smtpPort: 465,
-              smtpSsl: true,
-            ),
-          );
+      await db.into(db.accounts).insert(accountRow('acc-1'));
       final repo = DraftRepositoryImpl(db, _StubAccounts());
-      final draft = await repo.saveDraft(
-        accountId: 'acc-1',
-        toText: 'a@example.com',
-        ccText: '',
-        subjectText: 'Synced',
-        bodyText: '',
-      );
-      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
-        const DraftsCompanion(
-          dirty: Value(false),
-          imapServerId: Value('17'),
-        ),
-      );
+      final draftId = await saveSyncedDraft(db, repo);
 
-      await repo.deleteDraft(draft.id);
+      await repo.deleteDraft(draftId);
 
       final tombstones = await db.select(db.draftTombstones).get();
       expect(tombstones, hasLength(1));
