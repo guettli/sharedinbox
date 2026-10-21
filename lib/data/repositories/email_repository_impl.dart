@@ -1406,30 +1406,36 @@ class EmailRepositoryImpl implements EmailRepository {
       changedSinceModSequence: sinceModSeq,
     );
     final inFlightSet = await _inFlightFlagResourceIds(account.id);
-    final affectedThreads = <String>{};
-    for (final msg in result.messages) {
-      final uid = msg.uid;
-      if (uid == null) continue;
-      final emailId = '${account.id}:$mailboxPath:$uid';
-      if (inFlightSet.contains(emailId)) continue;
-      final updated = await (_db.update(_db.emails)
-            ..where((t) => t.id.equals(emailId)))
-          .writeReturning(
-        EmailsCompanion(
-          isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-          isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-        ),
-      );
-      for (final row in updated) {
+    // One transaction, and only rows whose flags really changed: a modseq
+    // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
+    // thousands of messages after a long time offline.
+    await _db.transaction(() async {
+      final affectedThreads = <String>{};
+      for (final msg in result.messages) {
+        final uid = msg.uid;
+        if (uid == null) continue;
+        final emailId = '${account.id}:$mailboxPath:$uid';
+        if (inFlightSet.contains(emailId)) continue;
+        final row = await (_db.select(_db.emails)
+              ..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+        if (row == null) continue;
+        final seen = msg.flags?.contains(r'\Seen') ?? false;
+        final flagged = msg.flags?.contains(r'\Flagged') ?? false;
+        if (row.isSeen == seen && row.isFlagged == flagged) continue;
+        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+            .write(
+          EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
+        );
         affectedThreads.add(row.threadId ?? row.id);
       }
-    }
-    // The message list reads unread/starred state from the thread row, so a
-    // mail read or starred on another device stayed bold/unstarred here
-    // although its own row was already up to date.
-    for (final tid in affectedThreads) {
-      await _updateThread(account.id, mailboxPath, tid);
-    }
+      // The message list reads unread/starred state from the thread row, so
+      // a mail read, unread, starred or unstarred on another device kept its
+      // old look here although its own row was already up to date.
+      for (final tid in affectedThreads) {
+        await _updateThread(account.id, mailboxPath, tid);
+      }
+    });
   }
 
   static const _imapFlagReconcileInterval = Duration(minutes: 15);
