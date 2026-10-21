@@ -87,16 +87,39 @@ void main() {
           '<table><tr><td>Item</td><td>Price</td></tr>'
           '<tr><td>Mug</td><td>5 &euro;</td></tr></table>',
         ),
-        'Item Price \nMug 5 €',
+        'Item Price\nMug 5 €',
       );
       expect(htmlToPlain('<div>one</div><div>two</div>'), 'one\ntwo');
     });
 
-    test('drops comments and doctype', () {
+    test('drops comments, doctype and Word markup', () {
       expect(
-        htmlToPlain('<!DOCTYPE html><!-- [if mso]> x <![endif] -->Hi'),
+        htmlToPlain('<!DOCTYPE html><!--[if mso]><table><![endif]-->Hi'),
         'Hi',
       );
+      expect(
+        htmlToPlain('<![if !supportLists]>1.<![endif]>Item'),
+        '1.Item',
+      );
+      expect(
+        htmlToPlain(
+          '<?xml:namespace prefix = o ns="urn:schemas-microsoft-com" />Hi',
+        ),
+        'Hi',
+      );
+      // Cut off by truncation before the comment ends.
+      expect(htmlToPlain('<p>a<!--[if mso]><table><tr><td>'), 'a');
+    });
+
+    test('treats <BR> like <br>', () {
+      expect(htmlToPlain('a<BR>b<Br/>c'), 'a\nb\nc');
+    });
+
+    test('stays fast on a body full of unclosed tags', () {
+      final watch = Stopwatch()..start();
+      htmlToPlain('<a ' * 40000);
+      htmlToPlain('<!--' * 40000);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
     });
 
     test('decodes &quot;', () {

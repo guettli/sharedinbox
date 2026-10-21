@@ -28,8 +28,14 @@ String htmlToPlain(String html) => _decodeEntities(html)
       ),
       '',
     )
-    .replaceAll(RegExp(r'<!--.*?-->', dotAll: true), '')
-    .replaceAll(RegExp(r'<br\s*/?>'), '\n')
+    // A comment, or one cut off by truncation (marketing mail opens with
+    // <!--[if mso]> blocks): one pattern, so an unclosed one ends the scan
+    // instead of being retried from every later "<!--".
+    .replaceAll(RegExp(r'<!--(?:.*?-->|.*$)', dotAll: true), '')
+    // Word's downlevel conditionals (<![if !supportLists]>) and processing
+    // instructions (<?xml:namespace … />), which carry no tag name.
+    .replaceAll(RegExp(r'<!\[[^\]<>]*\]>|<\?[^<>]*>'), '')
+    .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
     .replaceAll(RegExp(r'<p\s*/?>', caseSensitive: false), '\n')
     .replaceAll(RegExp(r'</p>', caseSensitive: false), '')
     // Block ends start a new line and table cells are set apart, so a
@@ -46,8 +52,9 @@ String htmlToPlain(String html) => _decodeEntities(html)
     // A truncated snippet can end inside a tag — an email whose first
     // kilobytes are one long inline-styled <div> would otherwise show its
     // markup as the preview.
-    .replaceAll(RegExp(r'</?[a-zA-Z][^>]*$'), '')
-    .replaceAll(RegExp(r'\n[ \t]*\n(?:[ \t]*\n)+'), '\n\n')
+    .replaceAll(RegExp(r'</?[a-zA-Z][^<>]*$'), '')
+    .replaceAll(RegExp(r'[ \t]+\n'), '\n')
+    .replaceAll(RegExp(r'\n\n\n+'), '\n\n')
     .trim();
 
 /// An HTML tag: `<`, an optional `/`, a name starting with a letter, then
@@ -55,8 +62,12 @@ String htmlToPlain(String html) => _decodeEntities(html)
 /// tag and survives: since entities are decoded first, the stricter `<[^>]+>`
 /// used to delete "Prices &lt;50%&gt; off" down to "Prices  off" and the
 /// "&lt;john@example.com&gt;" of a quoted "From:" line.
+///
+/// Attributes may not contain `<`: real tags never do, and stopping there
+/// keeps a body full of unclosed "<a " from being rescanned to its end from
+/// every one of them.
 final RegExp _tag = RegExp(
-  r'<!?/?[a-zA-Z][a-zA-Z0-9:-]*(?:\s[^>]*)?/?>',
+  r'<!?/?[a-zA-Z][a-zA-Z0-9:-]*(?:[\s/][^<>]*)?>',
 );
 
 /// Named HTML entities [_decodeEntities] handles. `&amp;` is deliberately not
