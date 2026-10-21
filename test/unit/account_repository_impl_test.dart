@@ -48,15 +48,7 @@ AccountRepositoryImpl _makeRepo() =>
 /// Seeds an inbox mailbox, one mail with a body, its thread and an undo-log
 /// entry for [accountId], straight into [db] (no account row required).
 Future<void> _seedMailOf(AppDatabase db, String accountId) async {
-  await db.into(db.mailboxes).insert(
-        MailboxesCompanion.insert(
-          id: '$accountId:INBOX',
-          accountId: accountId,
-          path: 'INBOX',
-          name: 'INBOX',
-          role: const Value('inbox'),
-        ),
-      );
+  await seedInboxMailbox(db, accountId);
   await db.into(db.emails).insert(
         EmailsCompanion.insert(
           id: '$accountId:INBOX:1',
