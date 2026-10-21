@@ -8695,6 +8695,32 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('a sync with nothing new fetches nothing', () async {
+      // Like a real server, the fake answers `UID 43:*` with the newest
+      // message (RFC 3501 reads n:* as *:n when n is past the last UID).
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Only mail',
+              from: 'alice@example.com',
+              text: 'Hi',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      final first = await r.emails.syncEmails('acc-1', 'INBOX');
+      final second = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(first.fetched, 1);
+      // Used to fetch message 42 again and report "1 new" on every sync.
+      expect(second.fetched, 0);
+    });
+
     test(
         'syncEmails dates mail by INTERNALDATE, not the fetch time, '
         'when it has no Date header', () async {
