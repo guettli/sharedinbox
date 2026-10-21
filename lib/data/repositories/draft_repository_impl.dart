@@ -164,15 +164,24 @@ class DraftRepositoryImpl implements DraftRepository {
       password,
     );
     try {
-      try {
-        await client.createMailbox(_draftsFolder);
-      } catch (_) {
-        // Already exists.
+      // The server's own drafts mailbox (SPECIAL-USE \Drafts, or a folder
+      // recognised by name, as the mailbox sync records it): "[Gmail]/Drafts",
+      // "INBOX.Drafts", "Entwürfe". Only without one is "Drafts" used and
+      // created; before, the app always made its own "Drafts" folder there,
+      // and its drafts never showed up in other mail clients.
+      final rolePath = await _draftsMailboxPath(account.id);
+      final draftsPath = rolePath ?? _draftsFolder;
+      if (rolePath == null) {
+        try {
+          await client.createMailbox(_draftsFolder);
+        } catch (_) {
+          // Already exists.
+        }
       }
-      await client.selectMailboxByPath(_draftsFolder);
+      await client.selectMailboxByPath(draftsPath);
 
       await _pushTombstonesImap(client, account.id);
-      await _pushDirtyImap(client, account);
+      await _pushDirtyImap(client, account, draftsPath);
       await _pullDraftsImap(client, account.id);
     } finally {
       await client.logout();
@@ -204,9 +213,20 @@ class DraftRepositoryImpl implements DraftRepository {
     }
   }
 
+  Future<String?> _draftsMailboxPath(String accountId) async =>
+      (await (_db.select(_db.mailboxes)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(accountId) & t.role.equals('drafts'),
+                )
+                ..limit(1))
+              .getSingleOrNull())
+          ?.path;
+
   Future<void> _pushDirtyImap(
     imap.ImapClient client,
     account_model.Account account,
+    String draftsPath,
   ) async {
     final dirty = await (_db.select(_db.drafts)
           ..where((t) => t.accountId.equals(account.id) & t.dirty.equals(true)))
@@ -223,7 +243,7 @@ class DraftRepositoryImpl implements DraftRepository {
 
       final appendResult = await client.appendMessage(
         mime,
-        targetMailboxPath: _draftsFolder,
+        targetMailboxPath: draftsPath,
         flags: [r'\Draft'],
       );
       final uidList =

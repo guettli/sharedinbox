@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart' show Value;
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -6,6 +7,7 @@ import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'fake_imap.dart';
 
 class _StubAccounts implements AccountRepository {
   @override
@@ -20,6 +22,66 @@ class _StubAccounts implements AccountRepository {
   Future<void> removeAccount(String id) async {}
   @override
   Future<String> getPassword(String accountId) async => '';
+}
+
+/// Accounts stub with one IMAP account.
+class _ImapAccounts extends _StubAccounts {
+  @override
+  Future<Account?> getAccount(String id) async => const Account(
+        id: 'acc-1',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+}
+
+/// Records which folder draft sync creates, selects and appends to.
+class _DraftsSpyImapClient extends SelectingFakeImapClient {
+  final created = <String>[];
+  final selected = <String>[];
+  final appendedTo = <String?>[];
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    created.add(path);
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+  }
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) {
+    selected.add(path);
+    return super.selectMailboxByPath(path);
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appendedTo.add(targetMailboxPath);
+    return imap.GenericImapResult();
+  }
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async =>
+      imap.SearchImapResult();
 }
 
 void main() {
@@ -238,6 +300,39 @@ void main() {
 
       final tombstones = await db.select(db.draftTombstones).get();
       expect(tombstones, isEmpty);
+    });
+
+    test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
+        () async {
+      final db = openTestDatabase();
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:[Gmail]/Drafts',
+              accountId: 'acc-1',
+              path: '[Gmail]/Drafts',
+              name: 'Drafts',
+              role: const Value('drafts'),
+            ),
+          );
+      final client = _DraftsSpyImapClient();
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+      await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      expect(client.created, isEmpty);
+      expect(client.selected, ['[Gmail]/Drafts']);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
     });
   });
 }
