@@ -756,6 +756,101 @@ class AppDatabase extends _$AppDatabase {
         onUpgrade: _upgradeAtomically,
       );
 
+  static const _missingAccount = 'account_id NOT IN (SELECT id FROM accounts)';
+
+  // Email ids start with "<accountId>:" (account ids never contain ':').
+  // Matching by prefix also catches bodies a resync left without their
+  // email row.
+  static const _emailOfMissingAccount =
+      "substr(email_id, 1, instr(email_id, ':') - 1) "
+      'NOT IN (SELECT id FROM accounts)';
+
+  /// Deletes the rows that the `onDelete: cascade` (and `setNull`)
+  /// references of the schema would remove for accounts that no longer
+  /// exist, and returns the ids of those accounts. SQLite enforces foreign
+  /// keys only after `PRAGMA foreign_keys = ON`, which the app runs only
+  /// after a resync, so deleting an account usually left all its mail,
+  /// mailboxes and threads behind. Drafts are kept for their text but
+  /// detached: their server ids belong to the gone account's server.
+  /// Run it inside a transaction.
+  Future<Set<String>> deleteRowsOfMissingAccounts() async {
+    final gone = <String>{
+      for (final row in await customSelect(
+        'SELECT DISTINCT account_id FROM mailboxes WHERE $_missingAccount '
+        'UNION SELECT DISTINCT account_id FROM emails WHERE $_missingAccount',
+      ).get())
+        row.read<String>('account_id'),
+    };
+    Future<void> run(
+      String sql,
+      Set<TableInfo> tables, {
+      UpdateKind kind = UpdateKind.delete,
+    }) =>
+        customUpdate(sql, updates: tables, updateKind: kind);
+
+    await run(
+      'DELETE FROM email_bodies WHERE $_emailOfMissingAccount',
+      {emailBodies},
+    );
+    await run(
+      'DELETE FROM attachment_files WHERE $_emailOfMissingAccount',
+      {attachmentFiles},
+    );
+    await run(
+      'DELETE FROM sync_log_mailboxes WHERE sync_log_id IN '
+      '(SELECT id FROM sync_logs WHERE $_missingAccount)',
+      {syncLogMailboxes},
+    );
+    await run(
+      'UPDATE app_logs SET email_id = NULL '
+      'WHERE email_id IS NOT NULL AND $_emailOfMissingAccount',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE app_logs SET sync_log_id = NULL WHERE sync_log_id IN '
+      '(SELECT id FROM sync_logs WHERE $_missingAccount)',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE app_logs SET account_id = NULL '
+      'WHERE account_id IS NOT NULL AND $_missingAccount',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE drafts SET account_id = NULL, imap_server_id = NULL, '
+      'jmap_server_id = NULL, dirty = 1 '
+      'WHERE account_id IS NOT NULL AND $_missingAccount',
+      {drafts},
+      kind: UpdateKind.update,
+    );
+    for (final table in <TableInfo>[
+      emails,
+      threads,
+      mailboxes,
+      pendingChanges,
+      syncStates,
+      syncLogs,
+      syncHealth,
+      draftTombstones,
+      localSieveScripts,
+      localSieveApplied,
+      undoActions,
+      notificationRules,
+      notifiedEmails,
+      emailNotes,
+      outbox,
+    ]) {
+      await run(
+        'DELETE FROM ${table.actualTableName} WHERE $_missingAccount',
+        {table},
+      );
+    }
+    return gone;
+  }
+
   /// Runs every upgrade step and the user_version bump as one write
   /// transaction. Drift runs migrations without one, so an upgrade that was
   /// killed or failed half-way left its schema changes behind with the old

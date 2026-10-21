@@ -1,4 +1,8 @@
-import 'package:drift/drift.dart' show TableInfo, UpdateKind, Value;
+import 'dart:io';
+
+import 'package:drift/drift.dart' show Value;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -6,10 +10,15 @@ import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 class AccountRepositoryImpl implements AccountRepository {
-  AccountRepositoryImpl(this._db, this._storage);
+  AccountRepositoryImpl(
+    this._db,
+    this._storage, {
+    Future<Directory> Function() getCacheDir = getTemporaryDirectory,
+  }) : _getCacheDir = getCacheDir;
 
   final AppDatabase _db;
   final SecureStorage _storage;
+  final Future<Directory> Function() _getCacheDir;
 
   @override
   Stream<List<model.Account>> observeAccounts() {
@@ -90,85 +99,30 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Future<void> removeAccount(String id) async {
-    await _db.transaction(() async {
+    final gone = await _db.transaction(() async {
       await (_db.delete(_db.accounts)..where((t) => t.id.equals(id))).go();
-      await _deleteRowsOfMissingAccounts();
+      return _db.deleteRowsOfMissingAccounts();
     });
     await _storage.delete(key: _passwordKey(id));
+    await _deleteAttachmentFiles({...gone, id});
   }
 
-  /// Deletes the rows the schema's `onDelete: cascade` (and `setNull`)
-  /// references would remove for accounts that no longer exist. SQLite
-  /// enforces foreign keys only after `PRAGMA foreign_keys = ON`, which runs
-  /// only after a resync, so deleting an account usually left all its mail,
-  /// mailboxes and threads behind — still listed in the combined inbox.
-  /// Matching every missing account also clears what earlier deletes left.
-  /// Drafts have no such reference and are kept: they hold the user's text.
-  Future<void> _deleteRowsOfMissingAccounts() async {
-    const gone = 'account_id NOT IN (SELECT id FROM accounts)';
-    Future<void> run(
-      String sql,
-      Set<TableInfo> tables, {
-      UpdateKind kind = UpdateKind.delete,
-    }) =>
-        _db.customUpdate(
-          sql,
-          updates: tables,
-          updateKind: kind,
-        );
-
-    // Children of the account's emails and sync logs first.
-    await run(
-      'DELETE FROM email_bodies WHERE email_id IN '
-      '(SELECT id FROM emails WHERE $gone)',
-      {_db.emailBodies},
-    );
-    await run(
-      'DELETE FROM attachment_files WHERE email_id IN '
-      '(SELECT id FROM emails WHERE $gone)',
-      {_db.attachmentFiles},
-    );
-    await run(
-      'DELETE FROM sync_log_mailboxes WHERE sync_log_id IN '
-      '(SELECT id FROM sync_logs WHERE $gone)',
-      {_db.syncLogMailboxes},
-    );
-    await run(
-      'UPDATE app_logs SET email_id = NULL WHERE email_id IN '
-      '(SELECT id FROM emails WHERE $gone)',
-      {_db.appLogs},
-      kind: UpdateKind.update,
-    );
-    await run(
-      'UPDATE app_logs SET sync_log_id = NULL WHERE sync_log_id IN '
-      '(SELECT id FROM sync_logs WHERE $gone)',
-      {_db.appLogs},
-      kind: UpdateKind.update,
-    );
-    await run(
-      'UPDATE app_logs SET account_id = NULL '
-      'WHERE account_id IS NOT NULL AND $gone',
-      {_db.appLogs},
-      kind: UpdateKind.update,
-    );
-    for (final table in <TableInfo>[
-      _db.emails,
-      _db.threads,
-      _db.mailboxes,
-      _db.pendingChanges,
-      _db.syncStates,
-      _db.syncLogs,
-      _db.syncHealth,
-      _db.draftTombstones,
-      _db.localSieveScripts,
-      _db.localSieveApplied,
-      _db.undoActions,
-      _db.notificationRules,
-      _db.notifiedEmails,
-      _db.emailNotes,
-      _db.outbox,
-    ]) {
-      await run('DELETE FROM ${table.actualTableName} WHERE $gone', {table});
+  /// Deletes downloaded attachments of [accountIds]: they live in one
+  /// folder per email, named after its id (`<accountId>:…` with ':' as '_').
+  Future<void> _deleteAttachmentFiles(Set<String> accountIds) async {
+    try {
+      final root = Directory(
+        p.join((await _getCacheDir()).path, 'sharedinbox', 'attachments'),
+      );
+      if (!await root.exists()) return;
+      await for (final entry in root.list()) {
+        final name = p.basename(entry.path);
+        if (accountIds.any((id) => name.startsWith('${id}_'))) {
+          await entry.delete(recursive: true);
+        }
+      }
+    } on Object {
+      // Best effort: the OS clears the cache folder eventually.
     }
   }
 
