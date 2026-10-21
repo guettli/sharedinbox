@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
-import 'package:sharedinbox/ui/screens/account_receive_screen.dart';
 import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 import 'helpers.dart';
@@ -120,10 +119,11 @@ void main() {
     testWidgets('New key replaces the shown key and clears the error', (
       tester,
     ) async {
+      final keys = FakeShareKeyRepository(freshKeys: true);
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/receive',
-          overrides: baseOverrides(),
+          overrides: baseOverrides(shareKeyRepository: keys),
         ),
       );
       await tester.pumpAndSettle();
@@ -141,6 +141,7 @@ void main() {
       await tester.tap(find.byKey(const Key('newKeyButton')));
       await tester.pumpAndSettle();
 
+      expect(keys.createCount, 2);
       expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
       // The snackbar may still show the old error; the page must not.
       expect(
@@ -150,37 +151,24 @@ void main() {
         ),
         findsNothing,
       );
-      expect(find.textContaining('expires in 19:5'), findsOneWidget);
     });
 
-    testWidgets('an expired key refuses to import', (tester) async {
-      final material = await ShareEncryptionService.generateKeyPair();
+    testWidgets('an expired key refuses to scan or import', (tester) async {
+      final fresh = await ShareEncryptionService.generateKeyPair();
+      final expired = ShareKeyMaterial(
+        keyId: fresh.keyId,
+        publicKeyBytes: fresh.publicKeyBytes,
+        privateKeyBytes: fresh.privateKeyBytes,
+        expiresAt: DateTime.now().toUtc().subtract(const Duration(seconds: 1)),
+      );
       final accountRepo = FakeAccountRepository();
-      final encryptedQr = await ShareEncryptionService.encryptAccounts(
-        recipientKeyId: material.keyId,
-        recipientPublicKeyBytes: material.publicKeyBytes,
-        accounts: [
-          AccountPayload(
-            accountJson: const Account(
-              id: 'src-1',
-              displayName: 'Alice',
-              email: 'alice@example.com',
-            ).toJson(),
-            password: 'secret',
-          ),
-        ],
-      );
 
-      AccountReceiveScreen.keyLifetime = Duration.zero;
-      addTearDown(
-        () => AccountReceiveScreen.keyLifetime = const Duration(minutes: 20),
-      );
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/receive',
           overrides: baseOverrides(
             accountRepository: accountRepo,
-            shareKeyRepository: FakeShareKeyRepository(material: material),
+            shareKeyRepository: FakeShareKeyRepository(material: expired),
           ),
         ),
       );
@@ -189,14 +177,10 @@ void main() {
 
       await tester.tap(find.byKey(const Key('scanEncryptedButton')));
       await tester.pumpAndSettle();
-      await tester.enterText(
-        find.byKey(const Key('encryptedCodeField')),
-        encryptedQr,
-      );
-      await tester.tap(find.text('Import'));
-      await tester.pumpAndSettle();
 
+      expect(find.byKey(const Key('encryptedCodeField')), findsNothing);
       expect(find.textContaining('This key has expired.'), findsOneWidget);
+      expect(find.byKey(const Key('newKeyButton')), findsOneWidget);
       expect(accountRepo.accounts, isEmpty);
     });
 

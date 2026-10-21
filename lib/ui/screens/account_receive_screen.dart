@@ -24,10 +24,6 @@ import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 class AccountReceiveScreen extends ConsumerStatefulWidget {
   const AccountReceiveScreen({super.key});
 
-  /// How long a shown key accepts encrypted codes. Tests shorten it.
-  @visibleForTesting
-  static Duration keyLifetime = const Duration(minutes: 20);
-
   @override
   ConsumerState<AccountReceiveScreen> createState() =>
       _AccountReceiveScreenState();
@@ -52,18 +48,20 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     try {
       final repo = ref.read(shareKeyRepositoryProvider);
       final material = await repo.createKeyPair();
+      if (!mounted) return;
       final qr = ShareEncryptionService.encodePublicKeyQr(
         material.keyId,
         material.publicKeyBytes,
       );
       setState(() {
         _keyMaterial = material;
-        _keyExpiresAt =
-            DateTime.now().toUtc().add(AccountReceiveScreen.keyLifetime);
+        _keyExpiresAt = material.expiresAt ??
+            DateTime.now().toUtc().add(ShareKeyMaterial.lifetime);
         _pubKeyQr = qr;
         _step = _Step.showingPubKey;
       });
     } catch (e, stack) {
+      if (!mounted) return;
       unawaited(
         ref.read(appLoggerProvider).error(
               'account.receive.key_generation_failed',
@@ -82,6 +80,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
 
   /// Replaces the shown key with a fresh one, e.g. after it expired.
   void _newKey() {
+    if (_step == _Step.generatingKey) return;
     setState(() {
       _errorMessage = null;
       _step = _Step.generatingKey;
@@ -89,10 +88,15 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
     unawaited(_generateKey());
   }
 
+  // Same boundary as [_ExpiryHint]: expired from the instant it is reached.
   bool get _keyExpired =>
-      _keyExpiresAt != null && _keyExpiresAt!.isBefore(DateTime.now().toUtc());
+      _keyExpiresAt != null && !DateTime.now().toUtc().isBefore(_keyExpiresAt!);
 
   void _startScanning() {
+    if (_keyExpired) {
+      setState(() => _errorMessage = _expiredKeyMessage);
+      return;
+    }
     setState(() => _step = _Step.scanning);
   }
 
@@ -169,8 +173,8 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
   }
 
   static const _expiredKeyMessage =
-      'This key has expired. Tap "New key" (top right) and let the sender '
-      'scan the new QR code.';
+      'This key has expired. Tap the New key button and let the sender scan '
+      'the new QR code.';
 
   String _friendlyError(Object e) {
     final s = e.toString();
@@ -230,7 +234,10 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
         _Step.error => Center(
             child: Padding(
               padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Text('Error: $_errorMessage'),
+              child: Text(
+                'Error: $_errorMessage\nTap the New key button to try again.',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
       },
