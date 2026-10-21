@@ -252,6 +252,53 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _activate(SieveScript script) => widget.isLocal
+      ? ref
+          .read(localSieveRepositoryProvider)
+          .activateScript(widget.accountId, script.id)
+      : ref
+          .read(sieveRepositoryProvider)
+          .activateScript(widget.accountId, script.id);
+
+  /// Activates [script] and says whether it worked. Like the filter list, it
+  /// re-reads the scripts afterwards: some servers accept the request and
+  /// silently leave the script inactive.
+  Future<void> _activateAndReport(
+    SieveScript script,
+    AppMessenger messenger,
+  ) async {
+    try {
+      await _activate(script);
+      final scripts = widget.isLocal
+          ? await ref
+              .read(localSieveRepositoryProvider)
+              .listScripts(widget.accountId)
+          : await ref
+              .read(sieveRepositoryProvider)
+              .listScripts(widget.accountId);
+      final took =
+          scripts.where((s) => s.id == script.id).firstOrNull?.isActive ??
+              false;
+      messenger.show(
+        took
+            ? 'Filter activated.'
+            : 'Activation may not have taken effect — please refresh.',
+      );
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).error(
+              'sieve.activate_failed',
+              'Failed to activate sieve script',
+              accountId: widget.accountId,
+              data: {'scriptId': script.id, 'isLocal': widget.isLocal},
+              error: e,
+              stack: stack,
+            ),
+      );
+      messenger.show('Failed to activate: $e', level: AppLogLevel.error);
+    }
+  }
+
   Future<void> _offerApplyToInbox({
     required SieveScript savedScript,
     required bool wasActive,
@@ -284,26 +331,51 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
 
     if (!mounted) return;
 
+    // A new filter is saved inactive. Both dialogs below therefore offer to
+    // activate it: with only "OK" (no match) or "Cancel" (matches), a filter
+    // written for mail that has not arrived yet, which is the usual case,
+    // stayed inactive and never ran.
+    const turnsOffOthers = 'Activating it turns off any other active filter.';
+
     if (count == 0) {
-      await showDialog<void>(
+      final activate = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('No matching messages'),
-          content: const Text(
-            'This filter does not match any messages currently in your inbox.',
+          content: Text(
+            wasActive
+                ? 'This filter does not match any messages currently in '
+                    'your inbox.'
+                : 'This filter does not match any messages currently in '
+                    'your inbox. It is not active yet, so it will not '
+                    'filter new mail either. $turnsOffOthers',
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('OK'),
-            ),
-          ],
+          actions: wasActive
+              ? [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('OK'),
+                  ),
+                ]
+              : [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('Leave inactive'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Activate'),
+                  ),
+                ],
         ),
       );
+      if (activate == true && mounted) {
+        await _activateAndReport(savedScript, messenger);
+      }
       return;
     }
 
-    final shouldApply = await showDialog<bool>(
+    final choice = await showDialog<_ApplyChoice>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Apply filter now?'),
@@ -312,35 +384,35 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
               ? 'This filter matches $count message(s) in your inbox. '
                   'Apply it to them now?'
               : 'This filter matches $count message(s) in your inbox. '
-                  'The filter will be activated first. Apply it now?',
+                  'It is not active yet. $turnsOffOthers Apply it to these '
+                  'messages too, or only activate it for new mail?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
+            onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.cancel),
             child: const Text('Cancel'),
           ),
+          if (!wasActive)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.activate),
+              child: const Text('Only activate'),
+            ),
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
+            onPressed: () => Navigator.of(ctx).pop(_ApplyChoice.apply),
             child: const Text('Apply'),
           ),
         ],
       ),
     );
 
-    if (shouldApply != true || !mounted) return;
+    if (choice == null || choice == _ApplyChoice.cancel || !mounted) return;
+    if (choice == _ApplyChoice.activate) {
+      await _activateAndReport(savedScript, messenger);
+      return;
+    }
 
     try {
-      if (!wasActive) {
-        if (widget.isLocal) {
-          await ref
-              .read(localSieveRepositoryProvider)
-              .activateScript(widget.accountId, savedScript.id);
-        } else {
-          await ref
-              .read(sieveRepositoryProvider)
-              .activateScript(widget.accountId, savedScript.id);
-        }
-      }
+      if (!wasActive) await _activate(savedScript);
       final applied = await emails.applySieveScriptToInbox(
         widget.accountId,
         content,
@@ -648,3 +720,5 @@ class _FolderField extends ConsumerWidget {
     );
   }
 }
+
+enum _ApplyChoice { cancel, activate, apply }
