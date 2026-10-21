@@ -25,6 +25,23 @@ class RawEmailSaveResult {
   final bool isPublic;
 }
 
+/// A file name for the raw mail with [subject]: letters, digits, spaces and
+/// `-` stay, anything else becomes `_`, cut to 120 characters, plus `.eml`.
+///
+/// Letters of any script count. An ASCII-only `\w` turned "Привет из
+/// Москвы" into `_ _ _.eml` and "Grüße" into `Gr_e.eml`.
+String rawEmailFilename(String? subject) {
+  final sanitized = (subject ?? 'email')
+      .replaceAll(RegExp(r'[^\p{L}\p{M}\p{N}\s_-]', unicode: true), '_')
+      .replaceAll(RegExp(r'_+'), '_')
+      .trim();
+  final base = sanitized.isEmpty ? 'email' : sanitized;
+  final runes = base.runes;
+  final clipped =
+      runes.length > 120 ? String.fromCharCodes(runes.take(120)) : base;
+  return '$clipped.eml';
+}
+
 /// Saves a raw .eml file to the platform's user-visible Downloads location
 /// when possible, so it shows up in the system file picker's "Recently used"
 /// list. Falls back to the app's temporary directory on platforms without a
