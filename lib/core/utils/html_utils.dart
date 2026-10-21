@@ -172,6 +172,13 @@ const Map<String, int> _namedEntities = {
   'yacute': 0xFD,
   'thorn': 0xFE,
   'yuml': 0xFF,
+  // HTML5 also accepts these upper-case legacy names.
+  'AMP': 0x26,
+  'LT': 0x3C,
+  'GT': 0x3E,
+  'QUOT': 0x22,
+  'COPY': 0xA9,
+  'REG': 0xAE,
   'lt': 0x3C,
   'gt': 0x3E,
   'amp': 0x26,
@@ -252,13 +259,54 @@ final RegExp _entity =
 /// point is missing, negative, past U+10FFFF, or a lone surrogate half.
 String _fromCodePoint(int? code, String original) {
   if (code == null ||
-      code < 0 ||
+      code <= 0 ||
       code > 0x10FFFF ||
       (code >= 0xD800 && code <= 0xDFFF)) {
     return original;
   }
+  // Like browsers, read 128–159 as Windows-1252 (Outlook writes &#150; for
+  // "–"): as code points they are invisible C1 controls.
+  if (code >= 0x80 && code <= 0x9F) {
+    return String.fromCharCode(_windows1252[code - 0x80] ?? code);
+  }
   return String.fromCharCode(code);
 }
+
+/// Windows-1252 characters for the bytes 0x80–0x9F (null: unassigned).
+const List<int?> _windows1252 = [
+  0x20AC,
+  null,
+  0x201A,
+  0x192,
+  0x201E,
+  0x2026,
+  0x2020,
+  0x2021,
+  0x2C6,
+  0x2030,
+  0x160,
+  0x2039,
+  0x152,
+  null,
+  0x17D,
+  null,
+  null,
+  0x2018,
+  0x2019,
+  0x201C,
+  0x201D,
+  0x2022,
+  0x2013,
+  0x2014,
+  0x2DC,
+  0x2122,
+  0x161,
+  0x203A,
+  0x153,
+  null,
+  0x17E,
+  0x178,
+];
 
 /// An optional attribute/CSS quote: a literal `"`/`'` or its named, decimal or
 /// hex entity form, as found inside `style="..."`.

@@ -164,6 +164,19 @@ void main() {
       );
     });
 
+    test('decodes names with digits and upper-case legacy names', () {
+      expect(htmlToPlain('&frac12; &sup2; &frac34;'), '½ ² ¾');
+      expect(htmlToPlain('&QUOT;x&QUOT; &COPY;'), '"x" ©');
+    });
+
+    test('reads numeric 128-159 as Windows-1252, like browsers', () {
+      expect(htmlToPlain('a &#150; b &#147;c&#148; &#128;'), 'a – b “c” €');
+    });
+
+    test('a decoded &amp; never starts another reference', () {
+      expect(htmlToPlain('&amp;#38;lt;b&amp;#38;gt;'), '&#38;lt;b&#38;gt;');
+    });
+
     test('leaves an unknown named entity as written', () {
       expect(htmlToPlain('a &bogus; b &AUML; c'), 'a &bogus; b &AUML; c');
     });
@@ -173,7 +186,7 @@ void main() {
     });
 
     test('leaves a malformed numeric entity as written (#682)', () {
-      expect(htmlToPlain('x&#;y'), 'x&#;y');
+      expect(htmlToPlain('x&#;y &#0; z'), 'x&#;y &#0; z');
     });
 
     test('trims surrounding whitespace', () {
