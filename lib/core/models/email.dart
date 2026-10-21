@@ -31,6 +31,10 @@ class Email {
   // dissolved into the real message once it arrives via sync (see #545).
   final bool isLocal;
 
+  /// When the mail was written (its Date header), or when it arrived if it
+  /// has no Date header, so a date can always be shown.
+  DateTime get date => sentAt ?? receivedAt;
+
   const Email({
     required this.id,
     required this.accountId,
