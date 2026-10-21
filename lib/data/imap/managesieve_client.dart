@@ -47,7 +47,12 @@ class ManageSieveClient {
       );
     }
     // ignore: close_sinks  // Stored in client and closed in logout().
-    Socket socket = await Socket.connect(host, port, timeout: timeout);
+    Socket socket;
+    try {
+      socket = await Socket.connect(host, port, timeout: timeout);
+    } catch (e, st) {
+      rethrowConnectError(e, st, host, port);
+    }
     var source = _ByteSource();
     var sub = _attach(socket, source);
     try {

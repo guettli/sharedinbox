@@ -519,6 +519,18 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 
 // Stalwart mail server service for backend and integration tests.
 func (m *Ci) Stalwart() *dagger.Service {
+	return m.stalwart("stalwart")
+}
+
+// stalwart builds the Stalwart service with server.hostname set to hostname.
+// Stalwart puts that name into the URLs of its JMAP session (apiUrl, …), so it
+// must be the name the client reaches the server by: "stalwart" for tests that
+// connect over the service binding, "localhost" for the explore service, where
+// the app goes through a localhost forward and refuses a non-localhost http
+// apiUrl. stalwart-dev/config.toml already says "localhost", so that variant
+// runs the config unchanged. Each hostname is its own service instance, so the
+// explore service does not share a Stalwart with concurrent test runs.
+func (m *Ci) stalwart(hostname string) *dagger.Service {
 	stalwartSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"stalwart-dev/"},
 	})
@@ -535,7 +547,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 	return dag.Container().
 		From("stalwartlabs/stalwart:v0.14.1").
 		WithFile("/etc/stalwart/config.toml.orig", config).
-		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
+		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"" + hostname + "\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
 		WithDirectory("/tmp/stalwart", dataDir).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
@@ -547,7 +559,12 @@ func (m *Ci) Stalwart() *dagger.Service {
 
 // WithStalwart binds the Stalwart service and sets test environment variables.
 func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
-	stalwart := m.Stalwart()
+	return withStalwartService(container, m.Stalwart())
+}
+
+// withStalwartService binds stalwart as host "stalwart" and sets the test
+// environment variables.
+func withStalwartService(container *dagger.Container, stalwart *dagger.Service) *dagger.Container {
 	return container.
 		WithServiceBinding("stalwart", stalwart).
 		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
@@ -1700,7 +1717,9 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 		WithExposedPort(1430). // IMAP, forwarded to Stalwart
 		WithExposedPort(1025). // SMTP
 		WithExposedPort(8080)  // JMAP
-	return m.WithStalwart(ctr).AsService(dagger.ContainerAsServiceOpts{
+	// JMAP session URLs must name localhost: the app reaches Stalwart through
+	// the localhost forward and refuses a plain-http apiUrl to any other host.
+	return withStalwartService(ctr, m.stalwart("localhost")).AsService(dagger.ContainerAsServiceOpts{
 		Args: []string{"bash", "/src/scripts/explore_entrypoint.sh"},
 	})
 }

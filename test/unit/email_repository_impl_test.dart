@@ -8695,6 +8695,39 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('a mail read on another device is no longer bold in the list',
+        () async {
+      final client = _CondstoreImapClient(
+        messages: {
+          42: _PreviewTestMessage(
+            subject: 'Lunch tomorrow?',
+            from: 'alice@example.com',
+            text: 'Noon?',
+            messageId: '<m42@example.com>',
+          ),
+        },
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+      expect((await r.db.select(r.db.threads).getSingle()).hasUnread, isTrue);
+
+      // Another client sets \Seen and \Flagged; HIGHESTMODSEQ moves on.
+      client
+        ..flags[42] = [r'\Seen', r'\Flagged']
+        ..modSeq = 2;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final email = await r.db.select(r.db.emails).getSingle();
+      expect(email.isSeen, isTrue);
+      // The list reads the thread row, which used to keep the old state.
+      final thread = await r.db.select(r.db.threads).getSingle();
+      expect(thread.hasUnread, isFalse);
+      expect(thread.isFlagged, isTrue);
+    });
+
     test(
         'syncEmails dates mail by INTERNALDATE, not the fetch time, '
         'when it has no Date header', () async {
@@ -9805,6 +9838,45 @@ class _PreviewSyncImapClient extends FakeImapClient {
                 wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] with CONDSTORE: SELECT reports [modSeq], and a
+/// `FLAGS` fetch with CHANGEDSINCE returns the [flags] of every message, the
+/// way a server answers once something changed.
+class _CondstoreImapClient extends _PreviewSyncImapClient {
+  _CondstoreImapClient({required super.messages});
+
+  int modSeq = 1;
+  final Map<int, List<String>> flags = {};
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      (await super.selectMailboxByPath(path))..highestModSequence = modSeq;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    if (changedSinceModSequence == null) {
+      return super.uidFetchMessages(sequence, fetchContentDefinition);
+    }
+    return imap.FetchImapResult(
+      [
+        for (final uid in messages.keys)
+          imap.MimeMessage()
+            ..uid = uid
+            ..flags = flags[uid] ?? [],
+      ],
+      null,
+    );
   }
 }
 
