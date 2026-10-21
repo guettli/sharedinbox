@@ -1,16 +1,12 @@
-import 'dart:convert';
-
-import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
-import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
+import 'helpers/sieve_test_helper.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,15 +18,8 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
-Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup() async {
-  final db = openTestDatabase();
-  final storage = MapSecureStorage();
-  final accounts = AccountRepositoryImpl(db, storage);
-  await accounts.addAccount(_account, 'password');
-
-  final repo = EmailRepositoryImpl(db, accounts);
-  return (db, repo);
-}
+Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup() =>
+    makeSieveTestSetup(_account);
 
 Future<String> _insertInboxEmail(
   AppDatabase db, {
@@ -38,35 +27,15 @@ Future<String> _insertInboxEmail(
   required String? messageId,
   String subject = 'Test',
   String from = 'sender@example.com',
-  String mailboxPath = 'INBOX',
-}) async {
-  await db.into(db.emails).insert(
-        EmailsCompanion.insert(
-          id: id,
-          accountId: _account.id,
-          mailboxPath: mailboxPath,
-          uid: int.parse(id.split(':').last),
-          subject: Value(subject),
-          receivedAt: DateTime.now(),
-          fromJson: Value(
-            jsonEncode([
-              {'name': '', 'email': from},
-            ]),
-          ),
-          messageId: Value(messageId),
-        ),
-      );
-  await db.into(db.threads).insertOnConflictUpdate(
-        ThreadsCompanion.insert(
-          id: id,
-          accountId: _account.id,
-          mailboxPath: mailboxPath,
-          latestDate: DateTime.now(),
-          latestEmailId: id,
-        ),
-      );
-  return id;
-}
+}) =>
+    insertSieveTestEmail(
+      db,
+      accountId: _account.id,
+      id: id,
+      messageId: messageId,
+      subject: subject,
+      from: from,
+    );
 
 Future<void> _markApplied(AppDatabase db, String messageId) async {
   await db.into(db.localSieveApplied).insert(
@@ -78,22 +47,9 @@ Future<void> _markApplied(AppDatabase db, String messageId) async {
       );
 }
 
-const _spamFileintoScript = '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''';
-
 const _spamKeepScript = '''
 if header :contains "subject" ["SPAM"] {
   keep;
-}
-''';
-
-const _spamDiscardScript = '''
-if header :contains "from" ["spam@evil.com"] {
-  discard;
 }
 ''';
 
@@ -112,7 +68,7 @@ void main() {
         subject: 'Hello world',
       );
       expect(
-        await repo.previewSieveRuleMatches(_account.id, _spamFileintoScript),
+        await repo.previewSieveRuleMatches(_account.id, spamFileintoScript),
         0,
       );
       // Preview persists nothing.
@@ -145,7 +101,7 @@ void main() {
       );
       await _markApplied(db, '<msg1@test>');
       expect(
-        await repo.previewSieveRuleMatches(_account.id, _spamFileintoScript),
+        await repo.previewSieveRuleMatches(_account.id, spamFileintoScript),
         1,
       );
     });
@@ -171,7 +127,7 @@ void main() {
         subject: 'More SPAM',
       );
       expect(
-        await repo.previewSieveRuleMatches(_account.id, _spamFileintoScript),
+        await repo.previewSieveRuleMatches(_account.id, spamFileintoScript),
         2,
       );
     });
@@ -185,7 +141,7 @@ void main() {
         subject: 'SPAM without id',
       );
       expect(
-        await repo.previewSieveRuleMatches(_account.id, _spamFileintoScript),
+        await repo.previewSieveRuleMatches(_account.id, spamFileintoScript),
         1,
       );
     });
@@ -214,7 +170,7 @@ void main() {
         subject: 'SPAM without id',
       );
       expect(
-        await repo.applySieveScriptToInbox(_account.id, _spamFileintoScript),
+        await repo.applySieveScriptToInbox(_account.id, spamFileintoScript),
         1,
       );
       expect(await db.select(db.pendingChanges).get(), hasLength(1));
@@ -233,14 +189,11 @@ void main() {
 
       final count = await repo.applySieveScriptToInbox(
         _account.id,
-        _spamFileintoScript,
+        spamFileintoScript,
       );
       expect(count, 1);
 
-      final pending = await db.select(db.pendingChanges).get();
-      expect(pending, hasLength(1));
-      expect(pending.first.changeType, 'move');
-      final payload = jsonDecode(pending.first.payload) as Map<String, dynamic>;
+      final payload = await expectSinglePendingChange(db, 'move');
       expect(payload['dest'], 'Archive');
     });
 
@@ -255,13 +208,11 @@ void main() {
 
       final count = await repo.applySieveScriptToInbox(
         _account.id,
-        _spamDiscardScript,
+        spamDiscardScript,
       );
       expect(count, 1);
 
-      final pending = await db.select(db.pendingChanges).get();
-      expect(pending, hasLength(1));
-      expect(pending.first.changeType, 'delete');
+      await expectSinglePendingChange(db, 'delete');
     });
 
     test('counts keep-only matches but does not enqueue a change', () async {
@@ -300,12 +251,10 @@ void main() {
 
       final count = await repo.applySieveScriptToInbox(
         _account.id,
-        _spamFileintoScript,
+        spamFileintoScript,
       );
       expect(count, 1);
-      final pending = await db.select(db.pendingChanges).get();
-      expect(pending, hasLength(1));
-      expect(pending.first.changeType, 'move');
+      await expectSinglePendingChange(db, 'move');
     });
 
     test('works even when no script is stored for the account', () async {
@@ -323,7 +272,7 @@ void main() {
 
       final count = await repo.applySieveScriptToInbox(
         _account.id,
-        _spamFileintoScript,
+        spamFileintoScript,
       );
       expect(count, 1);
     });

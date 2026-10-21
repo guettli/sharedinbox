@@ -1,15 +1,12 @@
-import 'dart:convert';
-
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 
-import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
+import 'helpers/sieve_test_helper.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -21,13 +18,20 @@ const _account = Account(
   smtpHost: 'smtp.example.com',
 );
 
-Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup() async {
-  final db = openTestDatabase();
-  final storage = MapSecureStorage();
-  final accounts = AccountRepositoryImpl(db, storage);
-  await accounts.addAccount(_account, 'password');
-
-  final repo = EmailRepositoryImpl(db, accounts);
+/// Sets up the test account and, when [script] is given, stores it as the
+/// account's active Sieve script.
+Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup([String? script]) async {
+  final (db, repo) = await makeSieveTestSetup(_account);
+  if (script != null) {
+    await db.into(db.localSieveScripts).insert(
+          LocalSieveScriptsCompanion.insert(
+            accountId: _account.id,
+            name: 'test-script',
+            content: Value(script),
+            isActive: const Value(true),
+          ),
+        );
+  }
   return (db, repo);
 }
 
@@ -35,51 +39,20 @@ Future<(AppDatabase, EmailRepositoryImpl)> _makeSetup() async {
 Future<String> _insertInboxEmail(
   AppDatabase db, {
   required String id,
-  required String messageId,
+  required String? messageId,
   String subject = 'Test',
   String from = 'sender@example.com',
   String mailboxPath = 'INBOX',
-}) async {
-  await db.into(db.emails).insert(
-        EmailsCompanion.insert(
-          id: id,
-          accountId: _account.id,
-          mailboxPath: mailboxPath,
-          uid: int.parse(id.split(':').last),
-          subject: Value(subject),
-          receivedAt: DateTime.now(),
-          fromJson: Value(
-            jsonEncode([
-              {'name': '', 'email': from},
-            ]),
-          ),
-          messageId: Value(messageId),
-        ),
-      );
-  // Insert a thread row so _updateThread does not throw.
-  await db.into(db.threads).insertOnConflictUpdate(
-        ThreadsCompanion.insert(
-          id: id,
-          accountId: _account.id,
-          mailboxPath: mailboxPath,
-          latestDate: DateTime.now(),
-          latestEmailId: id,
-        ),
-      );
-  return id;
-}
-
-/// Creates an active Sieve script for the test account.
-Future<void> _insertSieveScript(AppDatabase db, String content) async {
-  await db.into(db.localSieveScripts).insert(
-        LocalSieveScriptsCompanion.insert(
-          accountId: _account.id,
-          name: 'test-script',
-          content: Value(content),
-          isActive: const Value(true),
-        ),
-      );
-}
+}) =>
+    insertSieveTestEmail(
+      db,
+      accountId: _account.id,
+      id: id,
+      messageId: messageId,
+      subject: subject,
+      from: from,
+      mailboxPath: mailboxPath,
+    );
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -93,8 +66,7 @@ void main() {
     });
 
     test('returns 0 when script has no matching rules', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
+      final (db, repo) = await _makeSetup('''
 require ["fileinto"];
 if header :contains "subject" ["NEVER_MATCHES_XYZ"] {
   fileinto "Archive";
@@ -110,13 +82,7 @@ if header :contains "subject" ["NEVER_MATCHES_XYZ"] {
     });
 
     test('applies fileinto rule and queues a move pending change', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
+      final (db, repo) = await _makeSetup(spamFileintoScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
@@ -127,20 +93,12 @@ if header :contains "subject" ["SPAM"] {
       final count = await repo.applySieveRules(_account.id);
       expect(count, 1);
 
-      final pending = await db.select(db.pendingChanges).get();
-      expect(pending, hasLength(1));
-      expect(pending.first.changeType, 'move');
-      final payload = jsonDecode(pending.first.payload) as Map<String, dynamic>;
+      final payload = await expectSinglePendingChange(db, 'move');
       expect(payload['dest'], 'Archive');
     });
 
     test('applies discard rule and queues a delete pending change', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-if header :contains "from" ["spam@evil.com"] {
-  discard;
-}
-''');
+      final (db, repo) = await _makeSetup(spamDiscardScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
@@ -151,19 +109,11 @@ if header :contains "from" ["spam@evil.com"] {
       final count = await repo.applySieveRules(_account.id);
       expect(count, 1);
 
-      final pending = await db.select(db.pendingChanges).get();
-      expect(pending, hasLength(1));
-      expect(pending.first.changeType, 'delete');
+      await expectSinglePendingChange(db, 'delete');
     });
 
     test('records email in LocalSieveApplied after processing', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
+      final (db, repo) = await _makeSetup(spamFileintoScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
@@ -180,13 +130,7 @@ if header :contains "subject" ["SPAM"] {
     });
 
     test('does not reprocess an email already in LocalSieveApplied', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
+      final (db, repo) = await _makeSetup(spamFileintoScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
@@ -210,46 +154,20 @@ if header :contains "subject" ["SPAM"] {
     });
 
     test('skips emails with no messageId', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
-      // Insert without messageId.
-      await db.into(db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'sieve-acc:2',
-              accountId: _account.id,
-              mailboxPath: 'INBOX',
-              uid: 2,
-              subject: const Value('SPAM without id'),
-              receivedAt: DateTime.now(),
-            ),
-          );
-      await db.into(db.threads).insertOnConflictUpdate(
-            ThreadsCompanion.insert(
-              id: 'sieve-acc:2',
-              accountId: _account.id,
-              mailboxPath: 'INBOX',
-              latestDate: DateTime.now(),
-              latestEmailId: 'sieve-acc:2',
-            ),
-          );
+      final (db, repo) = await _makeSetup(spamFileintoScript);
+      await _insertInboxEmail(
+        db,
+        id: 'sieve-acc:2',
+        messageId: null,
+        subject: 'SPAM without id',
+      );
 
       expect(await repo.applySieveRules(_account.id), 0);
       expect(await db.select(db.pendingChanges).get(), isEmpty);
     });
 
     test('emails not in INBOX are ignored', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
+      final (db, repo) = await _makeSetup(spamFileintoScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
@@ -263,13 +181,7 @@ if header :contains "subject" ["SPAM"] {
     });
 
     test('processes multiple emails independently', () async {
-      final (db, repo) = await _makeSetup();
-      await _insertSieveScript(db, '''
-require ["fileinto"];
-if header :contains "subject" ["SPAM"] {
-  fileinto "Archive";
-}
-''');
+      final (db, repo) = await _makeSetup(spamFileintoScript);
       await _insertInboxEmail(
         db,
         id: 'sieve-acc:1',
