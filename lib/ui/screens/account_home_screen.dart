@@ -191,8 +191,20 @@ class _AccountHomeBody extends ConsumerWidget {
             'Delete account',
             style: TextStyle(color: Colors.red),
           ),
-          onTap: () =>
-              runAccountAction(context, ref, account, AccountAction.delete),
+          onTap: () async {
+            await runAccountAction(
+              context,
+              ref,
+              account,
+              AccountAction.delete,
+            );
+            // Once the account is gone this page could only say "Account not
+            // found"; go to the account list instead.
+            final stillThere = await ref
+                .read(accountRepositoryProvider)
+                .getAccount(account.id);
+            if (stillThere == null && context.mounted) context.go('/accounts');
+          },
         ),
       ],
     );

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 
 import 'helpers.dart';
 
@@ -42,6 +43,41 @@ void main() {
       final inboxY = tester.getTopLeft(inboxTile).dy;
       final foldersY = tester.getTopLeft(foldersTile).dy;
       expect(inboxY, lessThan(foldersY));
+    });
+
+    testWidgets('deleting the account leaves its page for the account list', (
+      tester,
+    ) async {
+      // Tall enough that the Delete tile at the end of the list is built.
+      tester.view.physicalSize = const Size(1080, 4000);
+      addTearDown(tester.view.reset);
+      await _pumpAccountHome(tester, [_inbox]);
+
+      final delete = find.text('Delete account');
+      await tester.tap(delete);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      // It used to stay here and say "Account not found".
+      expect(find.text('Account not found'), findsNothing);
+      expect(find.byType(AccountListScreen), findsOneWidget);
+    });
+
+    testWidgets('cancelling the deletion stays on the account', (tester) async {
+      // Tall enough that the Delete tile at the end of the list is built.
+      tester.view.physicalSize = const Size(1080, 4000);
+      addTearDown(tester.view.reset);
+      await _pumpAccountHome(tester, [_inbox]);
+
+      final delete = find.text('Delete account');
+      await tester.tap(delete);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AccountListScreen), findsNothing);
+      expect(delete, findsOneWidget);
     });
 
     testWidgets('tapping Inbox opens the inbox mailbox email list', (
