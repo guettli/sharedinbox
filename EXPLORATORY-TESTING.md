@@ -151,6 +151,23 @@ c click name=SSL/TLS contains=1 role='toggle button' index=1
 c click name=Save
 ```
 
+**Add a JMAP account** to test the other sync path. Stalwart advertises its
+JMAP URLs as `http://localhost:8080/…` here, matching the forward the app uses:
+
+```bash
+c click name='Add account'
+c fill name='Email address' text=alice@example.com
+c click name=Continue                            # auto-detect fails, as expected
+c click name=JMAP role='push button'
+c fill name='Display name' text=Alice
+c fill name='JMAP API URL' text=http://localhost:8080/.well-known/jmap
+c fill name=Password text=secret role='password text'
+c focus name=Save role='push button'; c key key=Return   # Save is off-screen
+```
+
+A button below the visible part of a form "exposes no actions"; focusing it
+scrolls it into view, and Return activates it.
+
 **Seed mail** from the host through the SMTP forward, as Alice:
 
 ```python
