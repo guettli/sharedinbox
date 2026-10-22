@@ -7,7 +7,6 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/services/notification_dispatcher.dart';
-import 'package:sharedinbox/core/services/notification_guard.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -94,7 +93,6 @@ void main() {
     Future<void> setup({
       required bool enabled,
       ShowNotification? show,
-      Duration showTimeout = kNotificationShowTimeout,
     }) async {
       db = openTestDatabase();
       addTearDown(db.close);
@@ -104,7 +102,6 @@ void main() {
       dispatcher = NotificationDispatcher(
         rules: rules,
         accounts: accounts,
-        showTimeout: showTimeout,
         show: show ??
             ({
               required String accountId,
@@ -161,11 +158,21 @@ void main() {
       expect(fired, hasLength(1));
     });
 
-    // #1107: on Linux without a notification daemon the plugin throws
-    // DBusServiceUnknownException. That must not escape dispatchForAccount
-    // (it froze the app via FlutterError.onError) nor skip markNotified.
-    test('a throwing show neither escapes nor skips markNotified', () async {
-      var calls = 0;
+    test('fires once when two dispatches overlap', () async {
+      await setup(enabled: true);
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await Future.wait([
+        dispatcher.dispatchForAccount('acc'),
+        dispatcher.dispatchForAccount('acc'),
+      ]);
+
+      expect(fired, hasLength(1));
+    });
+
+    // #1107: mail is marked notified before the show, so a show that fails
+    // or never answers cannot make the same mail alert on every sync.
+    test('a throwing show still leaves the mail marked notified', () async {
       await setup(
         enabled: true,
         show: ({
@@ -173,33 +180,36 @@ void main() {
           required String emailId,
           required String title,
           required String body,
-        }) async {
-          calls++;
-          throw StateError('org.freedesktop.Notifications not provided');
+        }) async =>
+            throw StateError('org.freedesktop.Notifications not provided'),
+      );
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await expectLater(
+        dispatcher.dispatchForAccount('acc'),
+        throwsA(isA<StateError>()),
+      );
+      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
+    });
+
+    test('a hanging show still leaves the mail marked notified', () async {
+      final shown = Completer<void>();
+      await setup(
+        enabled: true,
+        show: ({
+          required String accountId,
+          required String emailId,
+          required String title,
+          required String body,
+        }) {
+          shown.complete();
+          return Completer<void>().future;
         },
       );
       await rules.addRule('acc', _subjectContains('deploy'));
 
-      await expectLater(dispatcher.dispatchForAccount('acc'), completes);
-      expect(calls, 1);
-      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
-    });
-
-    test('a hanging show times out and markNotified still runs', () async {
-      await setup(
-        enabled: true,
-        showTimeout: const Duration(milliseconds: 50),
-        show: ({
-          required String accountId,
-          required String emailId,
-          required String title,
-          required String body,
-        }) =>
-            Completer<void>().future,
-      );
-      await rules.addRule('acc', _subjectContains('deploy'));
-
-      await expectLater(dispatcher.dispatchForAccount('acc'), completes);
+      unawaited(dispatcher.dispatchForAccount('acc'));
+      await shown.future;
       expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
     });
   });

@@ -15,7 +15,11 @@ void main() {
       Future<void> Function() show, {
       Duration timeout = const Duration(milliseconds: 50),
     }) =>
-        guardNotificationShow(show, timeout: timeout, onWarning: warnings.add);
+        guardNotificationShow(
+          show,
+          timeout: timeout,
+          onFailure: (message, _, __) => warnings.add(message),
+        );
 
     test('returns true and warns nothing when the show succeeds', () async {
       expect(await guard(() async {}), isTrue);
@@ -37,7 +41,7 @@ void main() {
     test('gives up on a show that never completes', () async {
       final shown = await guard(() => Completer<void>().future);
       expect(shown, isFalse);
-      expect(warnings.single, contains('no reply'));
+      expect(warnings.single, contains('no reply within 50 ms'));
     });
   });
 }

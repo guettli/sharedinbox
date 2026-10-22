@@ -3,14 +3,17 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/crash_logger.dart';
 import 'package:sharedinbox/core/services/notification_guard.dart';
 
 const _kChannelId = 'new_mail';
 const _kChannelName = 'New mail';
 
-/// Bounds plugin initialization and the Linux daemon probe, which both run
-/// before the first frame.
-const _kInitTimeout = Duration(seconds: 3);
+/// Bounds the Linux plugin initialization, which runs before the first frame.
+/// Android's init (channel setup, permission request) is not bounded: it may
+/// legitimately wait for the user.
+const _kLinuxInitTimeout = Duration(seconds: 10);
 
 final _plugin = FlutterLocalNotificationsPlugin();
 bool _initialized = false;
@@ -52,50 +55,36 @@ Future<void> initNotifications() async {
   try {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const linux = LinuxInitializationSettings(defaultActionName: 'Open');
-    await _plugin
-        .initialize(
-          settings:
-              const InitializationSettings(android: android, linux: linux),
-          onDidReceiveNotificationResponse: (response) {
-            final payload = response.payload;
-            if (payload != null && payload.isNotEmpty) {
-              onNotificationTap?.call(payload);
-            }
-          },
-        )
-        .timeout(_kInitTimeout);
-    if (Platform.isLinux && !await _linuxNotificationDaemonAvailable()) return;
+    final init = _plugin.initialize(
+      settings: const InitializationSettings(android: android, linux: linux),
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload != null && payload.isNotEmpty) {
+          onNotificationTap?.call(payload);
+        }
+      },
+    );
+    await (Platform.isLinux ? init.timeout(_kLinuxInitTimeout) : init);
     await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
+    // No probe for a Linux notification daemon here: one that starts late or
+    // restarts would leave notifications off for the whole session. Without a
+    // daemon Notify fails at once, and guardNotificationShow absorbs that.
     _initialized = true;
   } on MissingPluginException {
     // Plugin not registered on this device; notifications silently disabled.
-  } catch (e) {
-    debugPrint('Notifications disabled: initialization failed: $e');
-  }
-}
-
-/// Whether a notification daemon owns `org.freedesktop.Notifications` on the
-/// session bus. Minimal desktops (a bare i3/sway session without mako or
-/// dunst, a headless Xvfb) have a session bus but no daemon; every `Notify`
-/// call then fails with `ServiceUnknown` (#1107). Asks the daemon for its
-/// capabilities, which D-Bus-activates a daemon that is installed but not
-/// yet running, and treats an error or no reply as "no daemon".
-Future<bool> _linuxNotificationDaemonAvailable() async {
-  final linux = _plugin.resolvePlatformSpecificImplementation<
-      LinuxFlutterLocalNotificationsPlugin>();
-  if (linux == null) return false;
-  try {
-    await linux.getCapabilities().timeout(_kInitTimeout);
-    return true;
-  } catch (e) {
-    debugPrint(
-      'Notifications disabled: no notification daemon on the session bus '
-      '(org.freedesktop.Notifications): $e',
+  } catch (e, st) {
+    final message = 'Notifications disabled: initialization failed: $e';
+    debugPrint(message);
+    logUncaught(
+      'notification.init_failed',
+      message,
+      e,
+      st,
+      level: AppLogLevel.warn,
     );
-    return false;
   }
 }
 

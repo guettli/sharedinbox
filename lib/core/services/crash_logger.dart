@@ -46,3 +46,29 @@ void logUncaught(
     // never propagate back into the error handler.
   }
 }
+
+/// Installs the full-screen crash UI from `FlutterError.onError`, safely.
+///
+/// Async errors reach `onError` from the `runZonedGuarded` handler, which runs
+/// in the *parent* zone. Calling `runApp` there trips Flutter's debug "Zone
+/// mismatch" check, which reports a `FlutterError` synchronously back into
+/// `onError` — and `onError` used to call `runApp` again, a loop that never
+/// yielded and froze the app (#1107). So [install] runs the callback in the
+/// zone the binding was initialized in, and ignores calls made while it is
+/// already installing.
+class CrashScreenInstaller {
+  CrashScreenInstaller(this._zone);
+
+  final Zone _zone;
+  bool _installing = false;
+
+  void install(void Function() runCrashApp) {
+    if (_installing) return;
+    _installing = true;
+    try {
+      _zone.run(runCrashApp);
+    } finally {
+      _installing = false;
+    }
+  }
+}
