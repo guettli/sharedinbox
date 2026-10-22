@@ -79,14 +79,34 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<String> fetchRawRfc822(String id) async => '';
   @override
-  Future<List<Email>> searchEmails(String a, String m, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsStructured(String? a, FilterGroup f) async =>
+  Future<List<Email>> searchEmails(
+    String a,
+    String m,
+    String q, {
+    int limit = searchPageSize,
+  }) async =>
       [];
   @override
-  Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
+  Future<List<Email>> searchEmailsGlobal(
+    String? a,
+    String q, {
+    int limit = searchPageSize,
+  }) async =>
+      [];
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f, {
+    int limit = searchPageSize,
+  }) async =>
+      [];
+  @override
+  Future<List<Email>> getEmailsByAddress(
+    String? a,
+    String addr, {
+    int? limit,
+  }) async =>
+      [];
   @override
   Future<List<EmailAddress>> searchAddresses(
     String? a,

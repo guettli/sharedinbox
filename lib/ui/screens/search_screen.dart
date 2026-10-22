@@ -7,10 +7,12 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/folder_scope_dialog.dart';
@@ -62,6 +64,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// neither replace newer results nor report a failure nobody waits for.
   int _searchSeq = 0;
   bool _fieldFocused = false;
+
+  /// How many results the active search requests, and the query that
+  /// produced [_results] (called again with a larger limit by "Load more").
+  /// A new search starts back at one page.
+  int _limit = searchPageSize;
+  Future<List<Email>> Function(int limit)? _activeFetch;
+  bool _loadingMore = false;
+
+  /// Whether the last fetch filled its page (more matches may exist). Kept
+  /// from the fetch result, not the live [_results] length, so rows a batch
+  /// action removes locally do not hide "Load more".
+  bool _lastPageFull = false;
 
   /// Accounts the user has deactivated on the current result set. Purely a
   /// client-side view filter over [_results] — deactivating an account hides
@@ -231,10 +245,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Future<void> _search(String query) => _runSearch(
-        fetch: () => searchEmailsGlobalMerged(
+        fetch: (limit) => searchEmailsGlobalMerged(
           ref.read(emailRepositoryProvider),
           _effectiveAccountId,
           query,
+          limit: limit,
         ),
         logLabel: 'Search failed',
         warnMessage: 'Global search failed',
@@ -242,32 +257,39 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Future<void> _searchStructured() async {
     if (_filterGroup.isEmpty || _filterGroup.hasInvalidCondition) return;
+    final accountId = _effectiveAccountId;
+    final filter = _filterGroup;
     await _runSearch(
-      fetch: () => ref
+      fetch: (limit) => ref
           .read(emailRepositoryProvider)
-          .searchEmailsStructured(_effectiveAccountId, _filterGroup),
+          .searchEmailsStructured(accountId, filter, limit: limit),
       logLabel: 'Structured search failed',
       warnMessage: 'Structured search failed',
     );
   }
 
-  /// Runs [fetch], shows its results, and marks the screen failed on error.
-  /// Results or failures from a search superseded by a newer one are dropped.
+  /// Runs [fetch] for the first page, shows its results, and marks the screen
+  /// failed on error. Results or failures from a search superseded by a newer
+  /// one are dropped.
   Future<void> _runSearch({
-    required Future<List<Email>> Function() fetch,
+    required Future<List<Email>> Function(int limit) fetch,
     required String logLabel,
     required String warnMessage,
   }) async {
     final seq = ++_searchSeq;
     setState(() {
       _loading = true;
+      _loadingMore = false;
       _failed = false;
+      _limit = searchPageSize;
+      _activeFetch = fetch;
     });
     try {
-      final emails = await fetch();
+      final emails = await fetch(_limit);
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
+          _lastPageFull = emails.length >= _limit;
           _resetViewFilters();
           _loading = false;
         });
@@ -285,6 +307,53 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             ),
       );
       if (mounted && seq == _searchSeq) setState(_markFailed);
+    }
+  }
+
+  /// A full page means more matches may exist (same rule as the folder list).
+  /// Judged on the fetched [_results], not the client-side filtered view.
+  bool get _hasMore => _activeFetch != null && !_loadingMore && _lastPageFull;
+
+  /// "Load more": re-runs the active search with one more page. The current
+  /// results and view filters stay on screen meanwhile; a newer search or a
+  /// reset supersedes it.
+  Future<void> _loadMore() async {
+    final fetch = _activeFetch;
+    if (fetch == null || _loading || _loadingMore) return;
+    final seq = ++_searchSeq;
+    setState(() {
+      _loadingMore = true;
+      _limit += searchPageSize;
+    });
+    try {
+      final emails = await fetch(_limit);
+      if (mounted && seq == _searchSeq) {
+        setState(() {
+          _results = emails;
+          _lastPageFull = emails.length >= _limit;
+          _loadingMore = false;
+        });
+      }
+    } catch (e, stack) {
+      log('Load more failed: $e');
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Loading more search results failed',
+              screen: 'SearchScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
+      // Keep the results already shown; the button comes back for a retry.
+      if (mounted && seq == _searchSeq) {
+        setState(() {
+          _loadingMore = false;
+          _limit -= searchPageSize;
+        });
+        context.showAppSnackBar('Could not load more results.');
+      }
     }
   }
 
@@ -395,6 +464,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void _clearResults() {
     _searchSeq++;
     _loading = false;
+    _loadingMore = false;
+    _activeFetch = null;
     _results = null;
     _failed = false;
     _resetViewFilters();
@@ -403,6 +474,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// Only call inside [setState].
   void _markFailed() {
     _loading = false;
+    _loadingMore = false;
+    _activeFetch = null;
     _results = null;
     _resetViewFilters();
     _failed = true;
@@ -465,11 +538,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         Expanded(
           child: visible.isEmpty
               ? Center(
-                  child: Text(
-                    folderFiltered
-                        ? 'No mail matches the folder filter'
-                        : 'No accounts selected — tap an account to '
-                            'show its mail',
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        folderFiltered
+                            ? 'No mail matches the folder filter'
+                            : 'No accounts selected — tap an account to '
+                                'show its mail',
+                      ),
+                      // The filter hides every fetched row, but later pages
+                      // may still hold matching mail.
+                      if (_hasMore)
+                        TextButton(
+                          onPressed: () => unawaited(_loadMore()),
+                          child: const Text('Load more'),
+                        ),
+                    ],
                   ),
                 )
               : _buildResultsList(visible),
@@ -679,6 +764,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       showLocationLabel: true,
       accountNames: accountNames,
       onFolderTap: _onFolderTap,
+      hasMore: _hasMore,
+      onLoadMore: () => unawaited(_loadMore()),
     );
   }
 

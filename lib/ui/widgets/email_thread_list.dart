@@ -165,6 +165,7 @@ class EmailThreadList extends ConsumerStatefulWidget {
     this.onTap,
     this.onFolderTap,
     this.onLoadMore,
+    this.hasMore,
     this.emptyMessage = 'No emails',
   }) : assert(
           (stream == null) != (items == null),
@@ -220,6 +221,13 @@ class EmailThreadList extends ConsumerStatefulWidget {
   /// Notification fired when the user taps "Load more". Hosts that use a
   /// stream can grow their `limit` here.
   final VoidCallback? onLoadMore;
+
+  /// When non-null, decides on its own whether the "Load more" button shows,
+  /// instead of [enablePagination]'s "visible count equals the page size"
+  /// check. For [items] lists whose host pages the query itself (search
+  /// results): the host knows whether its last page came back full, even when
+  /// a client-side view filter shows fewer rows than it fetched.
+  final bool? hasMore;
 
   /// Message shown when the list is empty.
   final String emptyMessage;
@@ -304,7 +312,8 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
         ],
       );
     }
-    final hasMore = widget.enablePagination && threads.length == _limit;
+    final hasMore =
+        widget.hasMore ?? (widget.enablePagination && threads.length == _limit);
     return ListView.builder(
       itemCount: threads.length + (hasMore ? 1 : 0),
       itemBuilder: (ctx, i) {

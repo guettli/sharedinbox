@@ -633,8 +633,9 @@ class FakeEmailRepository implements EmailRepository {
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) async {
     if (onSearch != null) return onSearch!(query);
     return _searchResults;
   }
@@ -646,8 +647,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) async {
     searchGlobalAccountIds.add(accountId);
     return _searchResults;
   }
@@ -659,8 +661,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async {
     structuredSearchCalls.add(filter);
     return List.of(_structuredSearchResults);
   }
@@ -668,8 +671,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async =>
+    String address, {
+    int? limit,
+  }) async =>
       List.of(_byAddressResults);
 
   @override
@@ -1242,3 +1246,57 @@ List<GestureRecognizer> linkRecognizersFor(WidgetTester tester, String url) {
   }
   return recognizers;
 }
+
+/// Search fake that honours the `limit` paging parameter like the real
+/// repository: every search returns the first `limit` of [matches] (which the
+/// test supplies newest first) and records each requested limit in [limits].
+/// Address search returns nothing so merged searches see each match once.
+class PagedSearchRepository extends FakeEmailRepository {
+  PagedSearchRepository(this.matches);
+
+  final List<Email> matches;
+  final List<int> limits = [];
+
+  List<Email> _page(int limit) {
+    limits.add(limit);
+    return matches.take(limit).toList();
+  }
+
+  @override
+  Future<List<Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+
+  @override
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+}
+
+/// [count] distinct search hits "Bulk 000", "Bulk 001", …, newest first
+/// (each one minute older than the previous, so merged searches that re-sort
+/// newest first keep this order).
+List<Email> bulkSearchHits(int count) => [
+      for (var i = 0; i < count; i++)
+        testEmail(
+          id: 'acc-1:bulk-$i',
+          subject: 'Bulk ${i.toString().padLeft(3, '0')}',
+        ).copyWith(
+          receivedAt: DateTime(2024, 6).subtract(Duration(minutes: i)),
+        ),
+    ];

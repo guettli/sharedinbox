@@ -15,6 +15,11 @@ export 'package:sharedinbox/core/sieve/sieve_parser.dart'
 /// its generated mocks — stay unchanged; absent/unset means no check.
 final deleteExpectedMailboxZoneKey = Object();
 
+/// Page size of every local search (simple, folder, advanced). A search
+/// returns at most `limit` results; the UI starts at one page and grows the
+/// limit by one page per "Load more".
+const searchPageSize = 50;
+
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
     String accountId,
@@ -117,26 +122,46 @@ abstract class EmailRepository {
   Future<String> fetchRawRfc822(String emailId);
 
   /// Returns emails in [mailboxPath] whose subject or body contain [query].
-  /// Results come from the server (IMAP SEARCH) and are not cached.
+  ///
+  /// At most [limit] results, flagged first then newest first. A result list
+  /// of exactly [limit] entries means more matches may exist: the UI grows
+  /// [limit] by [searchPageSize] for "Load more", like the folder list.
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  );
+    String query, {
+    int limit = searchPageSize,
+  });
 
   /// Searches the local DB across all mailboxes of [accountId] (or all accounts
   /// if null) by subject, preview, body, and notes. Fast, works offline.
-  Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
+  ///
+  /// Paged by [limit] like [searchEmails].
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    int limit = searchPageSize,
+  });
 
   /// Searches the local DB using a structured [FilterGroup]. Fast, works offline.
+  ///
+  /// Paged by [limit] like [searchEmails].
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  );
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  });
 
   /// Returns all locally cached emails in any mailbox of [accountId] (or all
   /// accounts if null) whose from, to, or cc fields contain [address].
-  Future<List<Email>> getEmailsByAddress(String? accountId, String address);
+  ///
+  /// When [limit] is non-null, returns at most that many (flagged first, then
+  /// newest first); null returns every match.
+  Future<List<Email>> getEmailsByAddress(
+    String? accountId,
+    String address, {
+    int? limit,
+  });
 
   /// Returns unique email addresses from the local cache whose email or display
   /// name contains [query]. Results are deduplicated and capped at [limit].

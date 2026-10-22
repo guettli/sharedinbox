@@ -8,8 +8,10 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 
 import 'helpers.dart';
 
@@ -64,7 +66,11 @@ class _ScriptedSearchRepository extends FakeEmailRepository {
   Future<List<Email>> Function(String query)? onGlobal;
 
   @override
-  Future<List<Email>> searchEmailsGlobal(String? accountId, String query) =>
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    int limit = searchPageSize,
+  }) =>
       onGlobal?.call(query) ?? super.searchEmailsGlobal(accountId, query);
 }
 
@@ -72,8 +78,9 @@ class _FailingStructuredRepository extends FakeEmailRepository {
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) =>
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) =>
       Future.error(StateError('no such column'));
 }
 
@@ -100,6 +107,19 @@ Future<void> _pumpWithFilter(
   );
   await tester.pumpAndSettle();
 }
+
+/// Scrolls the result list until [target] is built and visible.
+Future<void> _scrollResultsTo(WidgetTester tester, Finder target) =>
+    tester.scrollUntilVisible(
+      target,
+      500,
+      scrollable: find
+          .descendant(
+            of: find.byType(EmailThreadList),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
 
 Future<void> _type(WidgetTester tester, String text) async {
   await tester.enterText(find.byType(TextField), text);
@@ -333,6 +353,56 @@ void main() {
         expect(find.text('Messages'), findsNothing);
       },
     );
+
+    testWidgets('a full page of results offers "Load more" for the next page',
+        (tester) async {
+      final repo = PagedSearchRepository(bulkSearchHits(80));
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        emails: repo,
+      );
+      await _type(tester, 'bulk');
+      expect(repo.limits.last, 50);
+
+      await _scrollResultsTo(tester, find.text('Load more'));
+      expect(find.text('Bulk 049'), findsOneWidget);
+      expect(find.text('Bulk 050'), findsNothing);
+
+      await tester.tap(find.text('Load more'));
+      await tester.pumpAndSettle();
+      expect(repo.limits.last, 100);
+      await _scrollResultsTo(tester, find.text('Bulk 079'));
+      expect(find.text('Bulk 079'), findsOneWidget);
+      expect(find.text('Load more'), findsNothing);
+    });
+
+    testWidgets('advanced search pages its results with "Load more"',
+        (tester) async {
+      final repo = PagedSearchRepository(bulkSearchHits(60));
+      await _pumpWithFilter(
+        tester,
+        FilterGroup(
+          operator: FilterOperator.and_,
+          children: [
+            FilterLeaf(
+              field: FilterField.subject,
+              comparison: FilterComparison.contains,
+              value: 'bulk',
+            ),
+          ],
+        ),
+        repo,
+      );
+      expect(repo.limits.last, 50);
+
+      await _scrollResultsTo(tester, find.text('Load more'));
+      await tester.tap(find.text('Load more'));
+      await tester.pumpAndSettle();
+      expect(repo.limits.last, 100);
+      await _scrollResultsTo(tester, find.text('Bulk 059'));
+      expect(find.text('Bulk 059'), findsOneWidget);
+    });
 
     testWidgets('tapping clear button resets results to placeholder', (
       tester,
