@@ -1056,29 +1056,44 @@ class _AccountSync with _KickableWait {
     try {
       await client.selectMailboxByPath('INBOX');
 
-      final newMessageCompleter = Completer<void>();
+      final changeCompleter = Completer<void>();
 
+      // Any change the server reports for INBOX wakes the loop: new mail
+      // (EXISTS), a removed message (EXPUNGE, or VANISHED under QRESYNC) and
+      // a flag change made on another device (an untagged FETCH, e.g. a mail
+      // read or starred elsewhere). Flag changes used to be ignored, so they
+      // only arrived with the next full sync, up to 25 minutes later.
+      //
+      // The app's own flag pushes cannot echo into an endless sync loop: they
+      // are only sent by flushPendingChanges() inside a sync cycle, and this
+      // IDLE connection is opened after that cycle and logged out before the
+      // next one. A server only reports changes made after SELECT, so the
+      // app's STOREs never reach it; at worst a late notification costs one
+      // extra cycle, which itself has nothing to flush.
       final sub = client.eventBus
           .on<imap.ImapEvent>()
           .where(
             (e) =>
-                e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
+                e is imap.ImapMessagesExistEvent ||
+                e is imap.ImapExpungeEvent ||
+                e is imap.ImapVanishedEvent ||
+                e is imap.ImapFetchEvent,
           )
           .listen((e) {
-        if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
+        if (!changeCompleter.isCompleted) changeCompleter.complete();
       });
 
       await client.idleStart();
 
       // Cap IDLE at 25 minutes (RFC 2177). Also wakes up when stop() is
-      // called or a new message / expunge event arrives.
+      // called or the server reports a change (see above).
       final idleTimer = Timer(const Duration(minutes: 25), () {
         if (_stopSignal != null && !_stopSignal!.isCompleted) {
           _stopSignal!.complete();
         }
       });
       try {
-        await Future.any([newMessageCompleter.future, _stopSignal!.future]);
+        await Future.any([changeCompleter.future, _stopSignal!.future]);
       } finally {
         idleTimer.cancel();
       }
@@ -1086,9 +1101,10 @@ class _AccountSync with _KickableWait {
       await client.idleDone();
       await sub.cancel();
 
-      // New mail detected during IDLE wakes the loop, which runs a full sync
-      // (storing the messages) and then fires notifications from _sync(). We do
-      // not notify here because the envelopes are not fetched yet.
+      // A change detected during IDLE wakes the loop, which runs a full sync
+      // (storing new messages and flags) and then fires notifications from
+      // _sync(). We do not notify here because the envelopes are not fetched
+      // yet.
     } finally {
       await client.logout();
       _idleClient = null;
