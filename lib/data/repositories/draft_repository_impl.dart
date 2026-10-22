@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -131,6 +132,45 @@ class DraftRepositoryImpl implements DraftRepository {
     final row = await (_db.select(
       _db.drafts,
     )..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    return row == null ? null : _toModel(row);
+  }
+
+  @override
+  Future<SavedDraft?> findDraftForEmail(model.Email email) async {
+    if (email.isLocal) return null;
+    final accountId = email.accountId;
+    // A JMAP message row is "<accountId>:<email id>". An IMAP row is
+    // "<accountId>:<mailbox>:<uid>", which never equals a JMAP email id.
+    final prefix = '$accountId:';
+    if (email.id.startsWith(prefix)) {
+      final jmapId = email.id.substring(prefix.length);
+      final row = await (_db.select(_db.drafts)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.jmapServerId.equals(jmapId),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (row != null) return _toModel(row);
+    }
+    if (email.uid <= 0) return null;
+    // IMAP UIDs only mean something in the mailbox draft sync used for them.
+    final state = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_draftsPathState),
+          ))
+        .getSingleOrNull();
+    if (email.mailboxPath != (state?.state ?? _draftsFolder)) return null;
+    final row = await (_db.select(_db.drafts)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.imapServerId.equals(email.uid.toString()),
+          )
+          ..limit(1))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }

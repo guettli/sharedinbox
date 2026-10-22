@@ -1,4 +1,5 @@
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart';
 
 abstract class DraftRepository {
   /// Inserts or updates a draft.  Pass [id] to update; omit to create new.
@@ -24,6 +25,16 @@ abstract class DraftRepository {
 
   /// Returns the draft with [id], or null.
   Future<SavedDraft?> getDraft(int id);
+
+  /// Returns the local draft whose server copy is [email], or null.
+  ///
+  /// [email] is a message row synced from the server's Drafts mailbox. Draft
+  /// sync pulls every server draft into the local drafts table and remembers
+  /// its server id (IMAP UID in the drafts mailbox in use, or JMAP email id),
+  /// so opening that message can resume the draft in compose instead of
+  /// showing it read-only. Null when the draft has not been pulled yet, or
+  /// [email] is not a draft's server copy.
+  Future<SavedDraft?> findDraftForEmail(Email email);
 
   /// Permanently removes the draft with [id]. If the row had been synced to
   /// the server, writes a tombstone so the next sync cycle deletes the

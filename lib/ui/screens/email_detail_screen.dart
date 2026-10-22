@@ -169,6 +169,54 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
+  /// Message whose draft lookup already ran, so it runs once per message.
+  String? _draftLookupDoneFor;
+
+  /// A message in the Drafts folder is a draft's server copy: open it in
+  /// compose to continue editing, like "Open draft" from the Compose action,
+  /// instead of read-only. Covers every way here (folder, combined inbox,
+  /// search, prev/next). Without a local draft yet the detail view stays, with
+  /// "Edit draft" in place of Reply.
+  void _openDraftInComposeOnce(Email header, String? folderRole) {
+    if (folderRole != 'drafts' || _draftLookupDoneFor == header.id) return;
+    _draftLookupDoneFor = header.id;
+    unawaited(_openDraftInCompose(header));
+  }
+
+  /// Replaces this screen with compose for [header]'s local draft. Returns
+  /// false when there is none.
+  Future<bool> _openDraftInCompose(Email header) async {
+    final draft =
+        await ref.read(draftRepositoryProvider).findDraftForEmail(header);
+    if (draft == null || !mounted) return false;
+    context.pushReplacement(
+      '/compose',
+      extra: {
+        'accountId': draft.accountId ?? header.accountId,
+        'draftId': draft.id,
+      },
+    );
+    return true;
+  }
+
+  /// "Edit draft": a server draft not pulled into the local drafts yet (made
+  /// by another client since the last sync) is pulled by a draft sync first.
+  Future<void> _editDraft(Email header) async {
+    if (await _openDraftInCompose(header)) return;
+    try {
+      await ref.read(draftRepositoryProvider).syncDrafts(header.accountId);
+    } catch (_) {
+      // Reported below: the draft is still not available.
+    }
+    if (!mounted || await _openDraftInCompose(header) || !mounted) return;
+    context.showAppSnackBar(
+      'This draft is not synced yet. Try again after the next sync.',
+      level: AppLogLevel.warn,
+      event: 'email.detail.draft_not_synced',
+      emailId: widget.emailId,
+    );
+  }
+
   void _goToNeighbour(EmailDetailNavItem target) {
     if (!mounted) return;
     context.go(
@@ -257,6 +305,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             )
             .value
             ?.role;
+    if (header != null) _openDraftInComposeOnce(header, folderRole);
 
     return Scaffold(
       appBar: AppBar(
@@ -276,15 +325,25 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   nextItem == null ? null : () => _goToNeighbour(nextItem),
             ),
           ],
-          IconButton(
-            icon: const Icon(Icons.reply),
-            tooltip: 'Reply',
-            onPressed: header == null
-                ? null
-                : () {
-                    unawaited(_replyWithRecipientDialog(context, header, body));
-                  },
-          ),
+          if (folderRole == 'drafts')
+            IconButton(
+              icon: const Icon(Icons.edit),
+              tooltip: 'Edit draft',
+              onPressed:
+                  header == null ? null : () => unawaited(_editDraft(header)),
+            )
+          else
+            IconButton(
+              icon: const Icon(Icons.reply),
+              tooltip: 'Reply',
+              onPressed: header == null
+                  ? null
+                  : () {
+                      unawaited(
+                        _replyWithRecipientDialog(context, header, body),
+                      );
+                    },
+            ),
           _ActionMorphButton(
             icon: Icons.archive,
             tooltip: 'Archive',
