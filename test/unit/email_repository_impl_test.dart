@@ -69,6 +69,7 @@ const _jmapPair = Account(
 
 http.Client _mockJmapEmails({
   required List<Map<String, dynamic>> apiResponses,
+  List<Map<String, dynamic>>? requests,
 }) {
   var callIndex = 0;
   return MockClient((req) async {
@@ -90,6 +91,7 @@ http.Client _mockJmapEmails({
         200,
       );
     }
+    requests?.add(jsonDecode(req.body) as Map<String, dynamic>);
     final resp = apiResponses[callIndex % apiResponses.length];
     callIndex++;
     return http.Response(jsonEncode(resp), 200);
@@ -4363,6 +4365,223 @@ void main() {
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes, hasLength(1));
       expect(changes.first.changeType, 'unsnooze');
+    });
+
+    // A JMAP move used to rewrite only `mailboxPath`, so a snoozed mail the
+    // user filed by hand kept `snoozedUntil` and the wake-up pulled it back to
+    // the Inbox from wherever it now lived — even out of Trash.
+    test('moving a snoozed JMAP mail ends the snooze; wake-up leaves it put',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-inbox',
+              accountId: 'jmap-1',
+              path: 'mbx-inbox',
+              name: 'Inbox',
+              role: const Value('inbox'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Snoozed until a moment that has passed by the time wake-up runs.
+      await r.emails.snoozeEmail(
+        'jmap-1:e1',
+        DateTime.now().subtract(const Duration(minutes: 1)),
+      );
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+      final moved = await r.emails.getEmail('jmap-1:e1');
+      expect(moved!.mailboxPath, 'mbx-archive');
+      expect(moved.snoozedUntil, isNull);
+      expect(moved.snoozedFromMailboxPath, isNull);
+      // The flush must also drop the server-side `snz:` keyword, or the next
+      // sync reads the snooze back.
+      final move = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.changeType.equals('move')))
+          .getSingle();
+      expect(
+        (jsonDecode(move.payload) as Map<String, dynamic>)['clearSnooze'],
+        isTrue,
+      );
+
+      expect(await r.emails.wakeUpEmails('jmap-1'), 0);
+
+      final after = await r.emails.getEmail('jmap-1:e1');
+      expect(after!.mailboxPath, 'mbx-archive');
+      expect(await _changeTypes(r.db), isNot(contains('unsnooze')));
+    });
+
+    test('moving a mail that is not snoozed does not ask to clear a snooze',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+      final move = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(jsonDecode(move.payload), isNot(contains('clearSnooze')));
+    });
+
+    // Defensive: a row whose expired snooze survived outside the Snoozed
+    // folder (another client filed it, sync read a stale `snz:` keyword back)
+    // must not be yanked to the Inbox.
+    test('wakeUpEmails leaves an expired snooze outside Snoozed in place',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-snoozed',
+              accountId: 'jmap-1',
+              path: 'mbx-snoozed',
+              name: 'Snoozed',
+              role: const Value('snoozed'),
+            ),
+          );
+      final past = DateTime.now().subtract(const Duration(hours: 1));
+      for (final (id, path) in const [
+        ('jmap-1:filed', 'mbx-trash'),
+        ('jmap-1:waiting', 'mbx-snoozed'),
+      ]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'jmap-1',
+                mailboxPath: path,
+                uid: 0,
+                receivedAt: DateTime(2024),
+                snoozedUntil: Value(past),
+              ),
+            );
+      }
+
+      expect(await r.emails.wakeUpEmails('jmap-1'), 1);
+
+      final filed = await r.emails.getEmail('jmap-1:filed');
+      expect(filed!.mailboxPath, 'mbx-trash');
+      expect(filed.snoozedUntil, isNull);
+      final waiting = await r.emails.getEmail('jmap-1:waiting');
+      expect(waiting!.mailboxPath, 'INBOX');
+      final changes = await r.db.select(r.db.pendingChanges).get();
+      expect(changes.map((c) => (c.resourceId, c.changeType)), [
+        ('jmap-1:waiting', 'unsnooze'),
+      ]);
+    });
+
+    test('JMAP move flush with clearSnooze removes the snz: keywords',
+        () async {
+      final requests = <Map<String, dynamic>>[];
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          requests: requests,
+          apiResponses: [
+            {
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/get',
+                  {
+                    'accountId': 'acct1',
+                    'list': [
+                      {
+                        'id': 'e1',
+                        'keywords': {
+                          r'$seen': true,
+                          'snz:20260510T150000.000': true,
+                        },
+                      },
+                    ],
+                  },
+                  '0',
+                ],
+              ],
+            },
+            {
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Email/set',
+                  {'accountId': 'acct1', 'updated': {}},
+                  '0',
+                ],
+              ],
+            },
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'Email',
+              resourceId: 'jmap-1:e1',
+              changeType: 'move',
+              payload: jsonEncode({
+                'src': 'mbx-snoozed',
+                'dest': 'mbx-archive',
+                'clearSnooze': true,
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final set = (requests.last['methodCalls'] as List).first as List;
+      final update = (set[1] as Map)['update'] as Map;
+      expect(update['e1'], {
+        'mailboxIds': {'mbx-archive': true},
+        'keywords/snz:20260510T150000.000': null,
+      });
+    });
+
+    test('IMAP move flush with clearSnooze removes the snz: flags first',
+        () async {
+      final spy = SnoozeSpyImapClient(
+        messageFlags: const [r'\Seen', 'snz:20260510T150000.000'],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Snoozed:5',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 5,
+                'mailboxPath': 'Snoozed',
+                'dest': 'Archive',
+                'clearSnooze': true,
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.removedFlags, ['snz:20260510T150000.000']);
+      expect(spy.moves, ['Snoozed:5->Archive']);
     });
 
     test('snoozeEmail mirrors the snooze onto the counterpart account',

@@ -4500,18 +4500,31 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailId = row.id;
     final srcMailboxPath = row.mailboxPath;
     final account = (await _bulkAccount(row.accountId))!;
+    // Filing a snoozed mail by hand ends the snooze: otherwise the wake-up
+    // later pulls it back to the Inbox from wherever the user put it. The
+    // flush also strips the server-side `snz:` keyword, which sync would
+    // otherwise read back into `snoozedUntil`.
+    final clearSnooze = row.snoozedUntil != null;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
         account.id,
         emailId,
         'move',
-        jsonEncode({'src': srcMailboxPath, 'dest': destMailboxPath}),
+        jsonEncode({
+          'src': srcMailboxPath,
+          'dest': destMailboxPath,
+          if (clearSnooze) 'clearSnooze': true,
+        }),
       );
       // Optimistic: move the cached row so it disappears from the current
       // mailbox immediately and is visible in the destination mailbox.
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(mailboxPath: Value(destMailboxPath)),
+        EmailsCompanion(
+          mailboxPath: Value(destMailboxPath),
+          snoozedUntil: const Value(null),
+          snoozedFromMailboxPath: const Value(null),
+        ),
       );
       await _reconcileSourceThreads(
         row.accountId,
@@ -4536,6 +4549,7 @@ class EmailRepositoryImpl implements EmailRepository {
           // Lets the flush re-resolve a stale UID (see
           // [_retryImapMoveByMessageId]) instead of silently no-op'ing (#1048).
           if (row.messageId != null) 'messageId': row.messageId,
+          if (clearSnooze) 'clearSnooze': true,
         }),
       );
       // Optimistic: move the cached row locally instead of hard-deleting.
@@ -4907,24 +4921,7 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
   Future<void> _snoozeRow(Email row, DateTime until) async {
     final accountId = row.accountId;
-
-    // Find or create Snoozed mailbox.
-    var snoozedMailbox = await (_db.select(_db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-
-    snoozedMailbox ??= await (_db.select(_db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-
-    // Default path if not found; flush logic will attempt to create it.
-    final destPath = snoozedMailbox?.path ?? 'Snoozed';
+    final destPath = await _snoozedMailboxPath(accountId);
 
     // Optimistic local update.
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
@@ -4968,6 +4965,27 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// The path of [accountId]'s Snoozed mailbox (by role, then by name), or
+  /// the literal `Snoozed` when it is not known locally yet — the snooze flush
+  /// creates it on the server.
+  Future<String> _snoozedMailboxPath(String accountId) async {
+    var snoozedMailbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    snoozedMailbox ??= await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    return snoozedMailbox?.path ?? 'Snoozed';
+  }
+
   @override
   Future<int> wakeUpEmails(String accountId) async {
     final now = DateTime.now();
@@ -4981,15 +4999,30 @@ class EmailRepositoryImpl implements EmailRepository {
 
     if (expired.isEmpty) return 0;
 
+    final snoozedPath = await _snoozedMailboxPath(accountId);
+    var woken = 0;
     for (final row in expired) {
+      // Only a mail still waiting in the Snoozed folder goes back to the
+      // Inbox. One the user (or another client) filed elsewhere since keeps
+      // its place; its stale snooze is just dropped locally.
+      if (row.mailboxPath != snoozedPath && row.mailboxPath != 'Snoozed') {
+        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+          const EmailsCompanion(
+            snoozedUntil: Value(null),
+            snoozedFromMailboxPath: Value(null),
+          ),
+        );
+        continue;
+      }
       await _unsnoozeRow(row);
       await _mirrorSnoozeToCounterparts(
         row.accountId,
         row.messageId,
         until: null,
       );
+      woken++;
     }
-    return expired.length;
+    return woken;
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that
@@ -5862,6 +5895,9 @@ class EmailRepositoryImpl implements EmailRepository {
             : await client.uidMarkUnflagged(seq);
       case 'move':
         final dest = payload['dest'] as String;
+        if (payload['clearSnooze'] == true) {
+          await _removeImapSnoozeFlags(client, seq);
+        }
         final result = await client.uidMove(seq, targetMailboxPath: dest);
         final located = await _remapEmailAfterImapMove(
           client,
@@ -5906,19 +5942,7 @@ class EmailRepositoryImpl implements EmailRepository {
         try {
           await client.createMailbox(dest);
         } catch (_) {}
-        // Remove any existing snooze flags.
-        final fetch = await client.uidFetchMessages(seq, 'FLAGS');
-        if (fetch.messages.isNotEmpty) {
-          final flags = fetch.messages.first.flags ?? [];
-          final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
-          if (snzFlags.isNotEmpty) {
-            await client.uidStore(
-              seq,
-              snzFlags,
-              action: imap.StoreAction.remove,
-            );
-          }
-        }
+        await _removeImapSnoozeFlags(client, seq);
         final unsnoozeResult =
             await client.uidMove(seq, targetMailboxPath: dest);
         await _remapEmailAfterImapMove(
@@ -5929,6 +5953,20 @@ class EmailRepositoryImpl implements EmailRepository {
           moveResult: unsnoozeResult,
         );
     }
+  }
+
+  /// Removes every `snz:` snooze keyword from the message at [seq] in the
+  /// selected mailbox, so a later sync does not read the snooze back.
+  Future<void> _removeImapSnoozeFlags(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+  ) async {
+    final fetch = await client.uidFetchMessages(seq, 'FLAGS');
+    if (fetch.messages.isEmpty) return;
+    final flags = fetch.messages.first.flags ?? [];
+    final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
+    if (snzFlags.isEmpty) return;
+    await client.uidStore(seq, snzFlags, action: imap.StoreAction.remove);
   }
 
   /// Handles a `UID MOVE` that reported OK but whose message could not be
@@ -6086,6 +6124,32 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// `Email/set` patch entries (`keywords/snz:…: null`) that remove every
+  /// snooze keyword [jmapEmailId] currently carries on the server.
+  Future<Map<String, dynamic>> _jmapSnoozeKeywordRemovals(
+    JmapClient jmap,
+    String jmapEmailId,
+  ) async {
+    final getResponses = await jmap.call([
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          'ids': [jmapEmailId],
+          'properties': ['keywords'],
+        },
+        '0',
+      ],
+    ]);
+    final getResult = _responseArgs(getResponses, 0, 'Email/get');
+    final email = (getResult['list'] as List).firstOrNull as Map?;
+    final keywords = (email?['keywords'] as Map?) ?? {};
+    return {
+      for (final k in keywords.keys)
+        if (k.toString().startsWith('snz:')) 'keywords/$k': null,
+    };
+  }
+
   /// Applies a single pending change to the JMAP server.
   ///
   /// The `Email/set` calls intentionally omit `ifInState`: each is a targeted
@@ -6144,6 +6208,11 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'move':
         final destMailboxId = payload['dest'] as String;
+        final moveUpdate = <String, dynamic>{
+          'mailboxIds': {destMailboxId: true},
+          if (payload['clearSnooze'] == true)
+            ...await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId),
+        };
         // Set `mailboxIds` outright rather than patching `dest: true` plus
         // `src: null`. `src` is the folder the row sat in when the move was
         // queued; by flush time the server can hold the message elsewhere
@@ -6158,11 +6227,7 @@ class EmailRepositoryImpl implements EmailRepository {
           [
             'Email/set',
             setArgs({
-              'update': {
-                jmapEmailId: {
-                  'mailboxIds': {destMailboxId: true},
-                },
-              },
+              'update': {jmapEmailId: moveUpdate},
             }),
             '0',
           ],
@@ -6225,32 +6290,11 @@ class EmailRepositoryImpl implements EmailRepository {
       case 'unsnooze':
         final destMailboxId = payload['dest'] as String;
         final srcMailboxId = payload['src'] as String;
-        // Fetch current keywords to identify which snz: keywords to remove.
-        final getResponses = await jmap.call([
-          [
-            'Email/get',
-            {
-              'accountId': jmap.accountId,
-              'ids': [jmapEmailId],
-              'properties': ['keywords'],
-            },
-            '0',
-          ],
-        ]);
-        final getResult = _responseArgs(getResponses, 0, 'Email/get');
-        final email = (getResult['list'] as List).firstOrNull as Map?;
-        final keywords = (email?['keywords'] as Map?) ?? {};
-        final toRemove = keywords.keys.where(
-          (k) => k.toString().startsWith('snz:'),
-        );
-
-        final update = {
+        final update = <String, dynamic>{
           'mailboxIds/$destMailboxId': true,
           'mailboxIds/$srcMailboxId': null,
+          ...await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId),
         };
-        for (final k in toRemove) {
-          update['keywords/$k'] = null;
-        }
 
         responses = await jmap.call([
           [

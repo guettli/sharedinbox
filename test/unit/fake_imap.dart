@@ -60,7 +60,14 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     this.searchResults = const {},
     this.searchResultsByMailbox,
     this.onUidMove,
+    this.messageFlags,
   });
+
+  /// When non-null, the flags a `UID FETCH … FLAGS` reports for the message.
+  final List<String>? messageFlags;
+
+  /// Every flag removed via `UID STORE -FLAGS`, in call order.
+  final List<String> removedFlags = [];
 
   String? selectedMailbox;
   String? createdMailbox;
@@ -133,8 +140,10 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     imap.StoreAction? action,
     bool? silent,
     int? unchangedSinceModSequence,
-  }) async =>
-      imap.StoreImapResult();
+  }) async {
+    if (action == imap.StoreAction.remove) removedFlags.addAll(flags);
+    return imap.StoreImapResult();
+  }
 
   @override
   Future<imap.GenericImapResult> uidMove(
@@ -184,8 +193,11 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     String? fetchContentDefinition, {
     int? changedSinceModSequence,
     Duration? responseTimeout,
-  }) async =>
-      const imap.FetchImapResult([], null);
+  }) async {
+    final flags = messageFlags;
+    if (flags == null) return const imap.FetchImapResult([], null);
+    return imap.FetchImapResult([imap.MimeMessage()..flags = flags], null);
+  }
 }
 
 /// Minimal fake SMTP client; only `quit` is exercised by ConnectionTestService.
