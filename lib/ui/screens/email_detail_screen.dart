@@ -1239,6 +1239,22 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         );
   }
 
+  /// One "To:"/"Cc:"/"Bcc:" header line. Capped so a mail to dozens of
+  /// people does not push the body off screen; the full lists are in
+  /// "Show Mail Headers". [empty] is shown when [addresses] is empty.
+  Widget _recipientLine(
+    BuildContext ctx,
+    String label,
+    List<EmailAddress> addresses, {
+    String empty = '',
+  }) =>
+      Text(
+        '$label: ${addresses.isEmpty ? empty : addresses.join(', ')}',
+        style: Theme.of(ctx).textTheme.bodySmall,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      );
+
   Widget _buildHeader(BuildContext ctx, Email email) {
     if (email.from.isEmpty || email.to.isEmpty) {
       unawaited(
@@ -1291,23 +1307,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             'From: (unknown)',
             style: Theme.of(ctx).textTheme.bodySmall,
           ),
-        // Capped so a mail to dozens of people does not push the body off
-        // screen; the full lists are in "Show Mail Headers".
-        Text(
-          email.to.isNotEmpty
-              ? 'To: ${email.to.map((a) => a.toString()).join(', ')}'
-              : 'To: (no recipients)',
-          style: Theme.of(ctx).textTheme.bodySmall,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (email.cc.isNotEmpty)
-          Text(
-            'Cc: ${email.cc.map((a) => a.toString()).join(', ')}',
-            style: Theme.of(ctx).textTheme.bodySmall,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
+        _recipientLine(ctx, 'To', email.to, empty: '(no recipients)'),
+        if (email.cc.isNotEmpty) _recipientLine(ctx, 'Cc', email.cc),
+        // Only known for mail you sent; never shown to other recipients.
+        if (email.bcc.isNotEmpty) _recipientLine(ctx, 'Bcc', email.bcc),
         Row(
           children: [
             // Flexible: the date led this row unconstrained, taking its

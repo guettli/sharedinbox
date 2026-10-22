@@ -728,16 +728,27 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
-        // Same opportunistic backfill for Reply-To (#919), so mail cached
-        // before we stored it replies to the right address once opened.
-        if (emailRow.replyToJson == '[]' || emailRow.replyToJson.isEmpty) {
-          final replyTo = msg.decodeHeaderMailAddressValue('Reply-To');
-          if (replyTo != null && replyTo.isNotEmpty) {
-            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-                .write(
-              EmailsCompanion(replyToJson: Value(_encodeAddresses(replyTo))),
-            );
-          }
+        // Same opportunistic backfill for address headers stored only since
+        // a later schema: Reply-To (#919), so mail cached before replies to
+        // the right address once opened, and Bcc of sent mail (#1097).
+        String? backfillAddresses(String stored, String header) {
+          if (stored != '[]' && stored.isNotEmpty) return null;
+          final addresses = msg.decodeHeaderMailAddressValue(header);
+          if (addresses == null || addresses.isEmpty) return null;
+          return _encodeAddresses(addresses);
+        }
+
+        final replyTo = backfillAddresses(emailRow.replyToJson, 'Reply-To');
+        final bcc = backfillAddresses(emailRow.bccJson, 'Bcc');
+        if (replyTo != null || bcc != null) {
+          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+              .write(
+            EmailsCompanion(
+              replyToJson:
+                  replyTo == null ? const Value.absent() : Value(replyTo),
+              bccJson: bcc == null ? const Value.absent() : Value(bcc),
+            ),
+          );
         }
 
         _logBodyLoaded(
@@ -1668,6 +1679,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
                 replyToJson: Value(_encodeAddresses(envelope.replyTo)),
+                bccJson: Value(_encodeAddresses(envelope.bcc)),
                 preview: Value(
                   previewFromSnippet(msg, previewSnippetByUid[uid]),
                 ),
@@ -2517,6 +2529,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'to',
     'cc',
     'replyTo',
+    'bcc',
     'keywords',
     'hasAttachment',
     'preview',
@@ -3619,6 +3632,7 @@ class EmailRepositoryImpl implements EmailRepository {
       final to = _encodeJmapAddresses(m['to'] as List<dynamic>?);
       final cc = _encodeJmapAddresses(m['cc'] as List<dynamic>?);
       final replyTo = _encodeJmapAddresses(m['replyTo'] as List<dynamic>?);
+      final bcc = _encodeJmapAddresses(m['bcc'] as List<dynamic>?);
       final sentAt = _parseDate(m['sentAt'] as String?);
       final receivedAt =
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
@@ -3661,6 +3675,7 @@ class EmailRepositoryImpl implements EmailRepository {
               toAddresses: Value(to),
               ccJson: Value(cc),
               replyToJson: Value(replyTo),
+              bccJson: Value(bcc),
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
@@ -5327,6 +5342,7 @@ class EmailRepositoryImpl implements EmailRepository {
               toAddresses: Value(jsonEncode(e.to)),
               ccJson: Value(jsonEncode(e.cc)),
               replyToJson: Value(jsonEncode(e.replyTo)),
+              bccJson: Value(jsonEncode(e.bcc)),
               preview: Value(e.preview),
               isSeen: Value(e.isSeen),
               isFlagged: Value(e.isFlagged),
@@ -7973,6 +7989,7 @@ class EmailRepositoryImpl implements EmailRepository {
       to: parseAddresses(row.toAddresses),
       cc: parseAddresses(row.ccJson),
       replyTo: parseAddresses(row.replyToJson),
+      bcc: parseAddresses(row.bccJson),
       preview: row.preview,
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,

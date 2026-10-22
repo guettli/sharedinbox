@@ -159,12 +159,15 @@ void main() {
       expect(find.textContaining('bob@example.com'), findsOneWidget);
     });
 
-    testWidgets('shows the Cc recipients in the header', (tester) async {
+    testWidgets('shows the Cc and then the Bcc recipients in the header', (
+      tester,
+    ) async {
       final email = testEmail().copyWith(
         cc: const [
           EmailAddress(name: 'Carol', email: 'carol@example.com'),
           EmailAddress(email: 'dave@example.com'),
         ],
+        bcc: const [EmailAddress(name: 'Boss', email: 'boss@example.com')],
       );
       await tester.pumpWidget(
         buildApp(
@@ -181,13 +184,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('Cc: Carol <carol@example.com>, dave@example.com'),
-        findsOneWidget,
-      );
+      final cc = find.text('Cc: Carol <carol@example.com>, dave@example.com');
+      final bcc = find.text('Bcc: Boss <boss@example.com>');
+      expect(cc, findsOneWidget);
+      expect(bcc, findsOneWidget);
+      expect(tester.getTopLeft(bcc).dy, greaterThan(tester.getTopLeft(cc).dy));
     });
 
-    testWidgets('shows no Cc line when there is no Cc', (tester) async {
+    testWidgets('shows no Cc or Bcc line when there is none', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -203,6 +207,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Cc:'), findsNothing);
+      expect(find.textContaining('Bcc:'), findsNothing);
     });
 
     testWidgets('shows attachment section when email has attachments', (

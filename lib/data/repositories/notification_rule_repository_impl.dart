@@ -156,6 +156,7 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
       to: parse(row.toAddresses),
       cc: parse(row.ccJson),
       replyTo: parse(row.replyToJson),
+      bcc: parse(row.bccJson),
       preview: row.preview,
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,

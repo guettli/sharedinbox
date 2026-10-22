@@ -224,6 +224,7 @@ Map<String, dynamic> _jmapEmail({
   bool seen = false,
   String? threadId,
   List<Map<String, dynamic>>? replyTo,
+  List<Map<String, dynamic>>? bcc,
 }) =>
     {
       'id': id,
@@ -239,6 +240,7 @@ Map<String, dynamic> _jmapEmail({
       ],
       'cc': [],
       'replyTo': replyTo,
+      'bcc': bcc,
       'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
       'hasAttachment': false,
       'preview': 'Hello world',
@@ -5285,7 +5287,7 @@ void main() {
       expect(emailState.state, 'est1');
     });
 
-    test('full sync stores replyTo addresses (#919)', () async {
+    test('full sync stores replyTo and bcc addresses (#919, #1097)', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
           apiResponses: _fullSyncResponses(
@@ -5298,6 +5300,9 @@ void main() {
                   subject: 'With Reply-To',
                   replyTo: [
                     {'name': 'Support', 'email': 'support@example.com'},
+                  ],
+                  bcc: [
+                    {'name': 'Boss', 'email': 'boss@example.com'},
                   ],
                 ),
                 _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Without'),
@@ -5314,7 +5319,11 @@ void main() {
           emails.firstWhere((e) => e.subject == 'With Reply-To');
       expect(withReplyTo.replyTo.single.email, 'support@example.com');
       expect(withReplyTo.replyTo.single.name, 'Support');
-      expect(emails.firstWhere((e) => e.subject == 'Without').replyTo, isEmpty);
+      expect(withReplyTo.bcc.single.email, 'boss@example.com');
+      expect(withReplyTo.bcc.single.name, 'Boss');
+      final without = emails.firstWhere((e) => e.subject == 'Without');
+      expect(without.replyTo, isEmpty);
+      expect(without.bcc, isEmpty);
     });
 
     test('incremental sync applies created, updated, destroyed', () async {
@@ -8931,7 +8940,7 @@ void main() {
       expect(thread.latestDate.toUtc(), DateTime.utc(2024, 6, 17, 9));
     });
 
-    test('syncEmails stores the Reply-To envelope addresses (#919)', () async {
+    test('syncEmails stores the Reply-To and Bcc envelope addresses', () async {
       final messages = {
         42: _PreviewTestMessage(
           subject: 'With Reply-To',
@@ -8939,6 +8948,7 @@ void main() {
           text: 'Hi',
           messageId: '<m42@example.com>',
           replyTo: 'support@example.com',
+          bcc: 'boss@example.com',
         ),
         43: _PreviewTestMessage(
           subject: 'Without Reply-To',
@@ -8961,8 +8971,10 @@ void main() {
         withReplyTo!.replyTo.map((a) => a.email),
         ['support@example.com'],
       );
+      expect(withReplyTo.bcc.map((a) => a.email), ['boss@example.com']);
       final withoutReplyTo = await r.emails.getEmail('acc-1:INBOX:43');
       expect(withoutReplyTo!.replyTo, isEmpty);
+      expect(withoutReplyTo.bcc, isEmpty);
     });
 
     test('syncEmails derives preview from HTML when there is no text part',
@@ -9119,7 +9131,7 @@ void main() {
       expect(emailRow.listUnsubscribeHeader, '<mailto:existing@example.com>');
     });
 
-    test('getEmailBody backfills an empty Reply-To (#919)', () async {
+    test('getEmailBody backfills an empty Reply-To and Bcc', () async {
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
             _ReplyToBodyImapClient(),
@@ -9141,9 +9153,12 @@ void main() {
       final email = await r.emails.getEmail('acc-1:INBOX:1');
       expect(email!.replyTo.map((a) => a.email), ['support@example.com']);
       expect(email.replyTo.single.name, 'Support');
+      expect(email.bcc.map((a) => a.email), ['boss@example.com']);
+      expect(email.bcc.single.name, 'Boss');
     });
 
-    test('getEmailBody leaves an existing Reply-To untouched', () async {
+    test('getEmailBody leaves an existing Reply-To and Bcc untouched',
+        () async {
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
             _ReplyToBodyImapClient(),
@@ -9160,6 +9175,9 @@ void main() {
               replyToJson: const Value(
                 '[{"name":null,"email":"existing@example.com"}]',
               ),
+              bccJson: const Value(
+                '[{"name":null,"email":"kept@example.com"}]',
+              ),
             ),
           );
 
@@ -9167,6 +9185,7 @@ void main() {
 
       final email = await r.emails.getEmail('acc-1:INBOX:1');
       expect(email!.replyTo.map((a) => a.email), ['existing@example.com']);
+      expect(email.bcc.map((a) => a.email), ['kept@example.com']);
     });
   });
 
@@ -9809,6 +9828,7 @@ class _PreviewTestMessage {
     this.text,
     this.html,
     this.replyTo,
+    this.bcc,
     this.hasDateHeader = true,
     this.internalDate,
     this.inReplyTo,
@@ -9827,6 +9847,7 @@ class _PreviewTestMessage {
   final String from;
   final String messageId;
   final String? replyTo;
+  final String? bcc;
   final String? text;
   final String? html;
 
@@ -9867,6 +9888,7 @@ class _PreviewTestMessage {
         from: [imap.MailAddress(null, from)],
         to: const [imap.MailAddress(null, 'alice@example.com')],
         replyTo: replyTo == null ? null : [imap.MailAddress(null, replyTo!)],
+        bcc: bcc == null ? null : [imap.MailAddress(null, bcc!)],
         messageId: messageId,
         inReplyTo: inReplyTo,
       );
@@ -10062,13 +10084,14 @@ class _PreviewBodyImapClient extends FakeImapClient {
   }
 }
 
-/// Serves a body carrying a Reply-To header so we can exercise the
-/// opportunistic Reply-To backfill on body fetch (#919).
+/// Serves a body carrying Reply-To and Bcc headers so we can exercise the
+/// opportunistic address backfill on body fetch (#919, #1097).
 class _ReplyToBodyImapClient extends _UnsubscribeBodyImapClient {
   static const String _kRawMime = 'MIME-Version: 1.0\r\n'
       'Content-Type: text/plain; charset=UTF-8\r\n'
       'From: Bob <bob@example.com>\r\n'
       'Reply-To: Support <support@example.com>\r\n'
+      'Bcc: Boss <boss@example.com>\r\n'
       '\r\n'
       'Body with a Reply-To header.\r\n';
 
