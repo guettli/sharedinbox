@@ -35,9 +35,11 @@ void main() {
       await db.close();
     });
 
-    test('legacy mailViewButtonPosition value in the DB is ignored', () async {
+    test('legacy mailViewButtonPosition row still loads and is left untouched',
+        () async {
       // The column is unused since #1093 but kept to avoid a migration.
-      // Rows written by older versions must still load.
+      // Rows written by older versions must still load, and updates of other
+      // preferences must not reset the legacy value.
       final db = openTestDatabase();
       final repo = UserPreferencesRepositoryImpl(db);
 
@@ -50,6 +52,11 @@ void main() {
           );
       final prefs = await repo.observePreferences().first;
       expect(prefs.menuPosition, MenuPosition.top);
+
+      await repo.updateMenuPosition(MenuPosition.bottom);
+      final row = await db.select(db.userPreferences).getSingle();
+      expect(row.menuPosition, 'bottom');
+      expect(row.mailViewButtonPosition, 'top');
 
       await db.close();
     });
