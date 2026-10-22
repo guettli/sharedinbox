@@ -273,8 +273,34 @@ class DraftRepositoryImpl implements DraftRepository {
     return {for (final r in rows) r.serverId};
   }
 
+  /// The last [syncDrafts] run per account; the next one waits for it.
+  final Map<String, Future<void>> _syncTails = {};
+
+  /// Runs one draft sync of [accountId] at a time. The background sync loop
+  /// and the "Edit draft" action can ask at once; two overlapping runs would
+  /// both push the same dirty draft (a second server copy) and both pull the
+  /// same new server draft (a second local row). A call made during a run
+  /// waits for it and then runs itself, so it still sees edits made meanwhile.
   @override
-  Future<void> syncDrafts(String accountId) async {
+  Future<void> syncDrafts(String accountId) {
+    final previous = _syncTails[accountId];
+    final run = previous == null
+        ? _syncDraftsNow(accountId)
+        : previous.then((_) => _syncDraftsNow(accountId));
+    // The tail never fails, so a failed run does not fail the next one.
+    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    _syncTails[accountId] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        if (identical(_syncTails[accountId], tail)) {
+          unawaited(_syncTails.remove(accountId));
+        }
+      }),
+    );
+    return run;
+  }
+
+  Future<void> _syncDraftsNow(String accountId) async {
     final account = await _accounts.getAccount(accountId);
     if (account == null) return;
 

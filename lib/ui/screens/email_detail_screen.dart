@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' show log;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -139,7 +140,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// mailbox-scoped fallback fetched lazily from the repo. Returns null while
   /// the fallback is still in flight or when no header is available yet.
   EmailDetailNav? _activeNav(Email? header) {
-    if (widget.nav != null) return widget.nav;
+    // An empty list only marks a step from the fallback list (_steppedNav).
+    if (widget.nav?.items.isNotEmpty ?? false) return widget.nav;
     if (header == null) return null;
     if (_fallbackNavForEmailId == widget.emailId && _fallbackNav != null) {
       return _fallbackNav;
@@ -169,53 +171,124 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     }
   }
 
-  /// Message whose draft lookup already ran, so it runs once per message.
-  String? _draftLookupDoneFor;
+  /// False until [_checkForDraft] ran. Until then neither header nor body is
+  /// loaded for display, so a draft opens in compose without a read-only view
+  /// flashing first, and without the body fetch that view needs.
+  bool _draftChecked = false;
 
-  /// A message in the Drafts folder is a draft's server copy: open it in
-  /// compose to continue editing, like "Open draft" from the Compose action,
-  /// instead of read-only. Covers every way here (folder, combined inbox,
-  /// search, prev/next). Without a local draft yet the detail view stays, with
-  /// "Edit draft" in place of Reply.
-  void _openDraftInComposeOnce(Email header, String? folderRole) {
-    if (folderRole != 'drafts' || _draftLookupDoneFor == header.id) return;
-    _draftLookupDoneFor = header.id;
-    unawaited(_openDraftInCompose(header));
+  /// The header and its folder's role, read by [_checkForDraft]. They keep
+  /// "Edit draft" usable when the body fails to load.
+  Email? _checkedHeader;
+  String? _checkedRole;
+
+  /// Whether "Edit draft" is running (a draft sync can take a while).
+  bool _editingDraft = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_checkForDraft());
   }
 
-  /// Replaces this screen with compose for [header]'s local draft. Returns
-  /// false when there is none.
+  /// A message in the Drafts folder is a draft's server copy: opened by the
+  /// user (from a folder, the combined inbox, search, a link), it goes to
+  /// compose to continue editing, like "Open draft" from the Compose action.
+  /// Reached by prev/next or after an action it stays here. Without a local
+  /// draft yet it stays here too, with "Edit draft" in place of Reply.
+  Future<void> _checkForDraft() async {
+    Email? header;
+    String? role;
+    try {
+      header = await ref.read(emailRepositoryProvider).getEmail(widget.emailId);
+      if (header != null) {
+        final mailboxes = await ref
+            .read(mailboxRepositoryProvider)
+            .observeMailboxes(header.accountId)
+            .first;
+        role = mailboxes
+            .where((m) => m.path == header!.mailboxPath)
+            .firstOrNull
+            ?.role;
+      }
+      if (header != null &&
+          role == 'drafts' &&
+          !(widget.nav?.steppedTo ?? false) &&
+          await _openDraftInCompose(header)) {
+        return;
+      }
+    } catch (e, stack) {
+      // Not fatal: the detail view loads (and reports) the message itself.
+      log('draft check failed', error: e, stackTrace: stack);
+    }
+    if (!mounted) return;
+    setState(() {
+      _draftChecked = true;
+      _checkedHeader = header;
+      _checkedRole = role;
+    });
+  }
+
+  /// Opens compose for [header]'s local draft in place of this screen.
+  /// Returns false when there is none.
   Future<bool> _openDraftInCompose(Email header) async {
     final draft =
         await ref.read(draftRepositoryProvider).findDraftForEmail(header);
     if (draft == null || !mounted) return false;
-    context.pushReplacement(
-      '/compose',
-      extra: {
-        'accountId': draft.accountId ?? header.accountId,
-        'draftId': draft.id,
-      },
-    );
+    final extra = {
+      'accountId': draft.accountId ?? header.accountId,
+      'draftId': draft.id,
+    };
+    final router = GoRouter.of(context);
+    if (router.canPop()) {
+      // Pop, then push, rather than pushReplacement: whoever pushed this
+      // screen and awaits its result (search refreshes its hits afterwards)
+      // gets it now, and back from compose returns to that list.
+      router.pop();
+      unawaited(router.push('/compose', extra: extra));
+    } else {
+      unawaited(router.pushReplacement('/compose', extra: extra));
+    }
     return true;
   }
 
   /// "Edit draft": a server draft not pulled into the local drafts yet (made
   /// by another client since the last sync) is pulled by a draft sync first.
   Future<void> _editDraft(Email header) async {
-    if (await _openDraftInCompose(header)) return;
+    if (_editingDraft) return;
+    setState(() => _editingDraft = true);
     try {
-      await ref.read(draftRepositoryProvider).syncDrafts(header.accountId);
-    } catch (_) {
-      // Reported below: the draft is still not available.
+      if (await _openDraftInCompose(header)) return;
+      try {
+        await ref.read(draftRepositoryProvider).syncDrafts(header.accountId);
+      } catch (e, stack) {
+        if (!mounted) return;
+        context.showAppSnackBar(
+          'Could not sync drafts: $e',
+          level: AppLogLevel.error,
+          event: 'email.detail.draft_sync_failed',
+          emailId: widget.emailId,
+          error: e,
+          stack: stack,
+        );
+        return;
+      }
+      if (!mounted || await _openDraftInCompose(header) || !mounted) return;
+      context.showAppSnackBar(
+        'This draft is not among the drafts on this device. It may have '
+        'been sent or deleted meanwhile; pull to refresh the folder.',
+        level: AppLogLevel.warn,
+        event: 'email.detail.draft_not_found',
+        emailId: widget.emailId,
+      );
+    } finally {
+      if (mounted) setState(() => _editingDraft = false);
     }
-    if (!mounted || await _openDraftInCompose(header) || !mounted) return;
-    context.showAppSnackBar(
-      'This draft is not synced yet. Try again after the next sync.',
-      level: AppLogLevel.warn,
-      event: 'email.detail.draft_not_synced',
-      emailId: widget.emailId,
-    );
   }
+
+  /// [widget.nav] (or the fallback list) for the message reached next by
+  /// stepping, so it stays in the detail view even when it is a draft.
+  EmailDetailNav _steppedNav() =>
+      (widget.nav ?? _fallbackNav ?? const EmailDetailNav([])).stepped();
 
   void _goToNeighbour(EmailDetailNavItem target) {
     if (!mounted) return;
@@ -223,7 +296,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       '/accounts/${target.accountId}'
       '/mailboxes/${Uri.encodeComponent(target.mailboxPath)}'
       '/emails/${Uri.encodeComponent(target.emailId)}',
-      extra: widget.nav,
+      extra: _steppedNav(),
     );
   }
 
@@ -253,6 +326,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_draftChecked) {
+      return Scaffold(
+        appBar: AppBar(),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
     final repo = ref.watch(emailRepositoryProvider);
     final detail = ref.watch(emailDetailProvider(widget.emailId));
 
@@ -305,7 +384,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             )
             .value
             ?.role;
-    if (header != null) _openDraftInComposeOnce(header, folderRole);
+    final draftHeader = header ?? _checkedHeader;
+    final isDraft = (folderRole ?? _checkedRole) == 'drafts';
 
     return Scaffold(
       appBar: AppBar(
@@ -325,12 +405,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   nextItem == null ? null : () => _goToNeighbour(nextItem),
             ),
           ],
-          if (folderRole == 'drafts')
+          if (isDraft)
             IconButton(
               icon: const Icon(Icons.edit),
               tooltip: 'Edit draft',
-              onPressed:
-                  header == null ? null : () => unawaited(_editDraft(header)),
+              onPressed: draftHeader == null || _editingDraft
+                  ? null
+                  : () => unawaited(_editDraft(draftHeader)),
             )
           else
             IconButton(
@@ -902,7 +983,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     // (search results, address filter, …) and steps through individual mails
     // rather than jumping thread-by-thread across the whole mailbox (#292).
     final providedNav = widget.nav;
-    if (providedNav != null) return providedNav.nextOf(widget.emailId);
+    if (providedNav != null && providedNav.items.isNotEmpty) {
+      return providedNav.nextOf(widget.emailId);
+    }
 
     // Fallback for deep links: walk this mailbox's individual mails, keeping
     // the historical guard that limits the hop to the same folder — the
@@ -938,7 +1021,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         '/accounts/${next.accountId}'
         '/mailboxes/${Uri.encodeComponent(next.mailboxPath)}'
         '/emails/${Uri.encodeComponent(next.emailId)}',
-        extra: widget.nav,
+        extra: _steppedNav(),
       );
     } else {
       context.pop();

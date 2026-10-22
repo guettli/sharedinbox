@@ -825,6 +825,48 @@ void main() {
       expect(await db.select(db.draftTombstones).get(), isEmpty);
     });
 
+    test('overlapping syncs of one account push a draft once', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.addAll([42, 43])
+        ..serverUids = [42];
+      // The append takes a while, as on a real server: long enough for the
+      // second sync (e.g. "Edit draft" during the background cycle) to start.
+      client.onAppend = () => Future<void>.delayed(
+            const Duration(milliseconds: 20),
+          );
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await Future.wait([repo.syncDrafts('acc-1'), repo.syncDrafts('acc-1')]);
+
+      expect(client.appendedTo, hasLength(1));
+      final rows = await db.select(db.drafts).get();
+      expect(rows.single.imapServerId, '42');
+      expect(rows.single.dirty, isFalse);
+    });
+
+    test('a failed sync does not block the next one', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..appendUids.add(42);
+      var fail = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async {
+          if (fail) throw Exception('offline');
+          return client;
+        },
+      );
+      await saveNewDraft(repo);
+
+      await expectLater(repo.syncDrafts('acc-1'), throwsException);
+      fail = false;
+      await repo.syncDrafts('acc-1');
+
+      expect(client.appendedTo, hasLength(1));
+    });
+
     test('a second sync stays with the same mailbox', () async {
       final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];

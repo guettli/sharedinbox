@@ -17,6 +17,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 
 import 'helpers.dart';
 
@@ -1225,7 +1226,7 @@ void main() {
         from: const [EmailAddress(email: 'alice@example.com')],
         to: const [EmailAddress(email: 'carol@example.com')],
         cc: const [],
-        isSeen: true,
+        isSeen: false,
         isFlagged: false,
         hasAttachment: false,
       );
@@ -1239,33 +1240,43 @@ void main() {
         totalCount: 1,
       );
 
-      Future<void> pumpDraftMail(
+      const draftBody = EmailBody(
+        emailId: 'acc-1:Drafts:5',
+        textBody: 'Read-only body',
+        attachments: [],
+      );
+
+      Future<FakeEmailRepository> pumpDraftMail(
         WidgetTester tester,
-        FakeDraftRepository drafts,
-      ) async {
+        FakeDraftRepository drafts, {
+        Object? initialExtra,
+      }) async {
+        final emails = FakeEmailRepository(
+          emailDetail: draftMail,
+          emailBody: draftBody,
+          emails: [draftMail],
+        );
         await tester.pumpWidget(
           buildApp(
             initialLocation:
                 '/accounts/acc-1/mailboxes/Drafts/emails/acc-1%3ADrafts%3A5',
+            initialExtra: initialExtra,
             overrides: [
               ..._overrides(
-                body: const EmailBody(
-                  emailId: 'acc-1:Drafts:5',
-                  textBody: 'Read-only body',
-                  attachments: [],
-                ),
-                email: draftMail,
+                body: draftBody,
                 mailboxes: FakeMailboxRepository(const [draftsMailbox]),
+                emails: emails,
               ),
               draftRepositoryProvider.overrideWithValue(drafts),
             ],
           ),
         );
         await tester.pumpAndSettle();
+        return emails;
       }
 
-      testWidgets('opens in compose to continue editing', (tester) async {
-        final drafts = FakeDraftRepository();
+      /// Adds a local draft whose server copy is [draftMail].
+      Future<void> addLocalDraft(FakeDraftRepository drafts) async {
         final saved = await drafts.saveDraft(
           accountId: 'acc-1',
           toText: 'carol@example.com',
@@ -1274,19 +1285,59 @@ void main() {
           bodyText: 'Half a thought',
         );
         drafts.draftsByEmailId[draftMail.id] = saved;
+      }
 
-        await pumpDraftMail(tester, drafts);
+      testWidgets('opens in compose; back returns to the folder', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        final emails = await pumpDraftMail(tester, drafts);
 
         expect(find.byType(EmailDetailScreen), findsNothing);
         expect(find.byType(ComposeScreen), findsOneWidget);
         expect(_editableWithText('Half a thought'), findsOneWidget);
         expect(_editableWithText('Unfinished'), findsOneWidget);
+        // Opening a draft does not mark it read.
+        expect(emails.setFlagCalls, isEmpty);
+
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsNothing);
+        expect(find.byType(EmailListScreen), findsOneWidget);
       });
 
-      testWidgets(
-          'without a local draft yet shows "Edit draft" instead of Reply, '
-          'which syncs drafts first', (tester) async {
+      testWidgets('reached by prev/next it stays in the detail view', (
+        tester,
+      ) async {
         final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        await pumpDraftMail(
+          tester,
+          drafts,
+          initialExtra: EmailDetailNav.fromEmails([draftMail]).stepped(),
+        );
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        expect(find.byTooltip('Reply'), findsNothing);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(drafts.syncedAccounts, isEmpty);
+      });
+
+      testWidgets('without a local draft "Edit draft" syncs, then opens it', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () => addLocalDraft(drafts);
         await pumpDraftMail(tester, drafts);
 
         expect(find.byType(EmailDetailScreen), findsOneWidget);
@@ -1296,7 +1347,32 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(drafts.syncedAccounts, ['acc-1']);
-        expect(find.textContaining('not synced yet'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('Half a thought'), findsOneWidget);
+      });
+
+      testWidgets('"Edit draft" says so when the draft is still not there', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('not among the drafts'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsNothing);
+      });
+
+      testWidgets('"Edit draft" shows why a draft sync failed', (tester) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () async => throw Exception('server unreachable');
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('server unreachable'), findsOneWidget);
         expect(find.byType(ComposeScreen), findsNothing);
       });
     });
