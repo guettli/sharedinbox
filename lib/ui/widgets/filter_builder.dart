@@ -251,6 +251,11 @@ class _LeafRowState extends State<_LeafRow> {
   late final TextEditingController _ctrl;
   late final TextEditingController _headerNameCtrl;
 
+  /// Whether the user has typed into the value field. An empty size gets no
+  /// error before that (a fresh condition is not a mistake yet), though
+  /// Search / Save stay disabled until it holds a size.
+  bool _valueEdited = false;
+
   @override
   void initState() {
     super.initState();
@@ -324,12 +329,17 @@ class _LeafRowState extends State<_LeafRow> {
 
   Widget _valueField() => TextField(
         controller: _ctrl,
-        onChanged: (v) => widget.onChanged(widget.leaf.copyWith(value: v)),
+        onChanged: (v) {
+          _valueEdited = true;
+          widget.onChanged(widget.leaf.copyWith(value: v));
+        },
         // A size that does not parse would match nothing; say so here, and
         // the screens disable Search / Save (FilterGroup.hasInvalidCondition).
         decoration: _leafFieldDecoration(
           widget.leaf.field == FilterField.size ? 'e.g. 1MB' : 'value',
-          errorText: widget.leaf.validationError,
+          errorText: widget.leaf.value.isEmpty && !_valueEdited
+              ? null
+              : widget.leaf.validationError,
         ),
       );
 

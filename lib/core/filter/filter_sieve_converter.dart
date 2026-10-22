@@ -34,6 +34,11 @@ class FilterSieveConverter {
         s.skip();
       }
       s.expectChar('}');
+      // The visual editor holds exactly one rule. Anything after it (a second
+      // rule, an `else`) would be lost when the editor re-serialises, so such
+      // a script stays on the Script tab.
+      s.skip();
+      if (!s.isAtEnd) return null;
       final group = switch (node) {
         final FilterGroup g => g,
         final FilterLeaf l =>

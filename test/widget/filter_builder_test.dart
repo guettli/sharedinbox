@@ -48,7 +48,8 @@ FilterGroup _headerGroup() => FilterGroup(
 
 void main() {
   group('FilterBuilderWidget size leaf', () {
-    testWidgets('shows an inline error until the size parses', (tester) async {
+    testWidgets('shows an inline error once a typed size does not parse',
+        (tester) async {
       FilterGroup? latest;
       await tester.pumpWidget(
         _harness(
@@ -58,7 +59,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text(filterSizeHint), findsOneWidget);
+      // A fresh, empty condition is not flagged yet.
+      expect(find.text(filterSizeHint), findsNothing);
 
       final value = find.byType(TextField);
       await tester.enterText(value, '1MB');
@@ -70,6 +72,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(filterSizeHint), findsOneWidget);
       expect(latest!.hasInvalidCondition, isTrue);
+
+      // Cleared after typing: flagged now.
+      await tester.enterText(value, '');
+      await tester.pumpAndSettle();
+      expect(find.text(filterSizeHint), findsOneWidget);
     });
   });
 

@@ -88,11 +88,17 @@ class SieveSerializer {
     // Unparseable values are refused by the editor before saving; writing
     // them raw keeps the script tab showing what was typed.
     if (bytes == null) return 'size $comp ${leaf.value.trim()}';
+    // Already Sieve syntax ("2048", "10k"): keep the user's spelling.
+    final typed = leaf.value.trim();
+    if (_sieveNumber.hasMatch(typed)) return 'size $comp $typed';
     return 'size $comp ${_sieveSizeNumber(bytes)}';
   }
 
+  static final _sieveNumber = RegExp(r'^\d+[KMGkmg]?$');
+
   /// [bytes] in Sieve number syntax, with the largest K/M/G multiplier that
-  /// divides it exactly, so "1MB" typed in the editor becomes `1M`.
+  /// divides it exactly, so "1MB" or "1 MiB" typed in the editor becomes
+  /// `1M`.
   String _sieveSizeNumber(int bytes) {
     for (final (unit, factor) in const [
       ('G', 1024 * 1024 * 1024),

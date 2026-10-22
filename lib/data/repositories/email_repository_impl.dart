@@ -1507,21 +1507,17 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
-    // RFC822.SIZE rides along so rows cached before schema v63 get their
-    // size for the Advanced Search size condition; it is one number per
-    // message and costs next to nothing next to FLAGS.
     final fetch = await client.uidFetchMessages(
       imap.MessageSequence.fromAll(),
-      '(FLAGS RFC822.SIZE)',
+      'FLAGS',
     );
-    final byUid = <int, ({bool seen, bool flagged, int? size})>{};
+    final byUid = <int, ({bool seen, bool flagged})>{};
     for (final msg in fetch.messages) {
       final uid = msg.uid;
       if (uid == null) continue;
       byUid[uid] = (
         seen: msg.flags?.contains(r'\Seen') ?? false,
         flagged: msg.flags?.contains(r'\Flagged') ?? false,
-        size: msg.size,
       );
     }
 
@@ -1537,13 +1533,10 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final affectedThreads = <String>{};
     var corrected = 0;
-    final sizeById = <String, int>{};
     for (final row in localRows) {
+      if (inFlightSet.contains(row.id)) continue;
       final serverFlags = byUid[row.uid];
       if (serverFlags == null) continue; // handled by _reconcileDeletedImap
-      final size = serverFlags.size;
-      if (row.sizeBytes == null && size != null) sizeById[row.id] = size;
-      if (inFlightSet.contains(row.id)) continue;
       if (serverFlags.seen == row.isSeen &&
           serverFlags.flagged == row.isFlagged) {
         continue;
@@ -1561,7 +1554,17 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxPath, tid);
     }
-    await _backfillSizes(sizeById);
+    await _backfillImapSizes(
+      client,
+      [
+        for (final row in localRows)
+          if (row.sizeBytes == null &&
+              !row.isLocal &&
+              row.uid > 0 &&
+              byUid.containsKey(row.uid))
+            row,
+      ],
+    );
 
     if (corrected > 0) {
       log(
@@ -1570,6 +1573,32 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  static const _imapSizeBackfillBatch = 500;
+
+  /// Fetches RFC822.SIZE for [rows] (cached before schema v63, still on the
+  /// server) in batches and stores it. Only these rows are asked for, so once
+  /// a mailbox is backfilled the reconcile costs nothing extra.
+  Future<void> _backfillImapSizes(
+    imap.ImapClient client,
+    List<Email> rows,
+  ) async {
+    final idByUid = {for (final r in rows) r.uid: r.id};
+    final uids = idByUid.keys.toList();
+    for (var i = 0; i < uids.length; i += _imapSizeBackfillBatch) {
+      final batch =
+          uids.sublist(i, math.min(i + _imapSizeBackfillBatch, uids.length));
+      final fetch = await client.uidFetchMessages(
+        imap.MessageSequence.fromIds(batch, isUid: true),
+        'RFC822.SIZE',
+      );
+      await _backfillSizes({
+        for (final msg in fetch.messages)
+          if (idByUid[msg.uid] != null && msg.size != null)
+            idByUid[msg.uid]!: msg.size!,
+      });
+    }
   }
 
   /// Stores the message sizes in [sizeById] (email row id → bytes) in one

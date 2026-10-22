@@ -532,8 +532,11 @@ if header :is "List-Id" "<newsletter.example.com>" {
           );
       expect(sizeTest('1MB'), contains('size :under 1M'));
       expect(sizeTest('10 k'), contains('size :under 10K'));
-      expect(sizeTest('2048'), contains('size :under 2K'));
-      expect(sizeTest('1500'), contains('size :under 1500'));
+      expect(sizeTest('1 MiB'), contains('size :under 1M'));
+      expect(sizeTest('300 B'), contains('size :under 300'));
+      // Already valid Sieve: written as typed.
+      expect(sizeTest('2048'), contains('size :under 2048'));
+      expect(sizeTest('10k'), contains('size :under 10k'));
     });
 
     test('keeps the K/M/G multiplier of a size test', () {
@@ -545,6 +548,23 @@ if size :over 1M {
       final leaf = parsed!.group.children.first as FilterLeaf;
       expect(leaf.value, '1M');
       expect(parseFilterSize(leaf.value), 1048576);
+    });
+
+    test('a script with more than one rule stays out of the visual editor', () {
+      // Re-serialising only the first rule would drop the second one.
+      const script = '''
+if size :over 1M {
+  fileinto "Big";
+}
+# spam
+if header :contains "subject" "spam" {
+  discard;
+}''';
+      expect(FilterSieveConverter().parse(script), isNull);
+      expect(
+        FilterSieveConverter().parse('if size :over 1M { discard; }\n# end\n'),
+        isNotNull,
+      );
     });
   });
 }

@@ -10172,6 +10172,7 @@ class _PreviewSyncImapClient extends FakeImapClient {
     // Like a real server, only answer INTERNALDATE when it was asked for.
     final wantsInternalDate =
         fetchContentDefinition?.contains('INTERNALDATE') ?? false;
+    final wantsSize = fetchContentDefinition?.contains('RFC822.SIZE') ?? false;
     // The periodic flag reconcile fetches `1:*`, which toList() cannot spell.
     final uids =
         sequence.containsLast() ? messages.keys.toList() : sequence.toList();
@@ -10180,7 +10181,9 @@ class _PreviewSyncImapClient extends FakeImapClient {
         if (messages[uid] != null)
           messages[uid]!.build(uid)
             ..internalDate =
-                wantsInternalDate ? messages[uid]!.internalDate : null,
+                wantsInternalDate ? messages[uid]!.internalDate : null
+            // Nor RFC822.SIZE, so a size backfill must really ask for it.
+            ..size = wantsSize ? messages[uid]!._rawMime().length : null,
     ];
     return imap.FetchImapResult(built, null);
   }
