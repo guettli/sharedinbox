@@ -4,6 +4,7 @@
 // as the real app) inside a ProviderScope whose repository providers are
 // replaced with lightweight in-memory fakes.  No database or network is used.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -943,6 +944,11 @@ Widget buildApp({
     overrides: [
       dbProvider.overrideWith((ref) {
         final db = AppDatabase(NativeDatabase.memory());
+        // The accounts and mail of a widget test live in the fake
+        // repositories, so this scratch database has no rows for the undo
+        // log, filters etc. to reference. Queued first, the pragma runs right
+        // after the open, before any statement of the screen under test.
+        unawaited(db.customStatement('PRAGMA foreign_keys = OFF'));
         ref.onDispose(db.close);
         return db;
       }),

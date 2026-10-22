@@ -17,11 +17,11 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   test('bracketed IMAP row matches bracket-less JMAP row (#406)', () async {
-    final db = openTestDatabase();
+    final db = await openTestDatabaseWithAccounts(const ['imap-1', 'jmap-1']);
     addTearDown(db.close);
 
-    // Compare talks to mailboxes and emails directly — no accounts row
-    // needed. Two mailboxes matched by role="inbox".
+    // Compare talks to mailboxes and emails directly. Two mailboxes matched
+    // by role="inbox".
     const inbox = Value('inbox');
     await db.into(db.mailboxes).insert(
           MailboxesCompanion.insert(

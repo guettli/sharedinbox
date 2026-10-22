@@ -34,7 +34,8 @@ void main() {
 
   group('NotificationRuleRepositoryImpl', () {
     test('add / list / update / delete rules', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -58,7 +59,8 @@ void main() {
     });
 
     test('rules are scoped per account', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -71,7 +73,8 @@ void main() {
 
     test('unnotifiedInboxEmails excludes non-inbox and notified mail',
         () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
       await seedInboxMailbox(db, 'acc');
@@ -105,7 +108,8 @@ void main() {
     });
 
     test('markBaseline silences the whole current inbox', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
       await seedInboxMailbox(db, 'acc');
@@ -130,7 +134,8 @@ void main() {
     });
 
     test('watchRules emits on change', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 

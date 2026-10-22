@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
+import 'db_test_helper.dart';
+
 /// Reads all column names for [tableName] from [db].
 Future<List<String>> _tableColumns(AppDatabase db, String tableName) async {
   final rows = await db.customSelect('PRAGMA table_info($tableName)').get();
@@ -14,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 61);
+      expect(db.schemaVersion, 62);
       await db.close();
     });
 
@@ -286,7 +288,8 @@ void main() {
       });
 
       final fresh = AppDatabase(NativeDatabase(dbFile));
-      await fresh.select(fresh.accounts).get();
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
       await fresh.close();
 
       final rawDb = sqlite.sqlite3.open(dbFile.path);
@@ -324,7 +327,8 @@ void main() {
       });
 
       final fresh = AppDatabase(NativeDatabase(dbFile));
-      await fresh.select(fresh.accounts).get();
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
       await fresh.close();
 
       // A v58 database (no reply_to_json) whose v60 backfill fails after the
@@ -367,7 +371,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 61);
+      expect(version.read<int>('user_version'), 62);
       await db.close();
     });
 
@@ -380,7 +384,8 @@ void main() {
       });
 
       final fresh = AppDatabase(NativeDatabase(dbFile));
-      await fresh.select(fresh.accounts).get();
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
       await fresh.close();
 
       // A v60 database: no bcc_json yet, one cached mail.
@@ -407,7 +412,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 61);
+      expect(version.read<int>('user_version'), 62);
       await db.close();
     });
 
@@ -657,6 +662,7 @@ void main() {
         expect(indexNames, contains('app_logs_account_created_at'));
         expect(indexNames, contains('app_logs_level'));
         expect(indexNames, contains('app_logs_sync_log_id'));
+        expect(indexNames, contains('app_logs_email_id'));
 
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();

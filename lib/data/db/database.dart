@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -744,6 +745,12 @@ class AppDatabase extends _$AppDatabase {
       'CREATE INDEX IF NOT EXISTS app_logs_sync_log_id '
       'ON app_logs (sync_log_id);',
     );
+    // With foreign keys on, deleting an email sets app_logs.email_id to
+    // null, which without this index scans the whole log for every email.
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_email_id '
+      'ON app_logs (email_id);',
+    );
   }
 
   @override
@@ -756,6 +763,12 @@ class AppDatabase extends _$AppDatabase {
           await _createAppLogsIndexes();
         },
         onUpgrade: _upgradeAtomically,
+        // Drift runs this after onCreate/onUpgrade, so the upgrade steps
+        // (some rebuild or re-key tables) run with SQLite's default of
+        // foreign keys off and cannot cascade. The pragma is a no-op inside
+        // a transaction, so it must run here, outside one, on every open:
+        // it is per connection, and the WorkManager isolate opens its own.
+        beforeOpen: (_) => customStatement('PRAGMA foreign_keys = ON'),
       );
 
   static const _missingAccount = 'account_id NOT IN (SELECT id FROM accounts)';
@@ -769,11 +782,12 @@ class AppDatabase extends _$AppDatabase {
 
   /// Deletes the rows that the `onDelete: cascade` (and `setNull`)
   /// references of the schema would remove for accounts that no longer
-  /// exist, and returns the ids of those accounts. SQLite enforces foreign
-  /// keys only after `PRAGMA foreign_keys = ON`, which the app runs only
-  /// after a resync, so deleting an account usually left all its mail,
-  /// mailboxes and threads behind. Drafts are kept for their text but
-  /// detached: their server ids belong to the gone account's server.
+  /// exist, and returns the ids of those accounts. Builds before schema v62
+  /// switched foreign keys on only after a resync, so deleting an account
+  /// usually left all its mail, mailboxes and threads behind; with foreign
+  /// keys on, the cascades already did most of this. Drafts are kept for
+  /// their text but detached: their server ids belong to the gone account's
+  /// server.
   /// Run it inside a transaction.
   Future<Set<String>> deleteRowsOfMissingAccounts() async {
     final gone = <String>{
@@ -851,6 +865,51 @@ class AppDatabase extends _$AppDatabase {
       );
     }
     return gone;
+  }
+
+  /// Removes every row that breaks a declared foreign key, as reported by
+  /// `PRAGMA foreign_key_check`: a reference with `onDelete: setNull` is set
+  /// to null, any other row is deleted. Repeats until the check is clean,
+  /// because a deleted row (an email of a gone account) can leave rows that
+  /// pointed at it (its body) behind. Returns the number of rows changed.
+  ///
+  /// Builds before schema v62 never switched foreign keys on outside a
+  /// resync, so their databases can hold such rows; with foreign keys on,
+  /// rewriting one of them would fail. Only looks at tables that exist, so
+  /// it is safe on any schema. Run it with foreign keys off (the upgrade
+  /// transaction): otherwise deleting a row would cascade.
+  Future<int> deleteForeignKeyOrphans() async {
+    var changed = 0;
+    while (true) {
+      final violations = await customSelect('PRAGMA foreign_key_check').get();
+      final rowIds = <(String, int), List<int>>{};
+      for (final v in violations) {
+        final rowId = v.data['rowid'];
+        if (rowId is! int) continue; // WITHOUT ROWID tables: none here.
+        final key = (v.read<String>('table'), v.read<int>('fkid'));
+        (rowIds[key] ??= []).add(rowId);
+      }
+      if (rowIds.isEmpty) return changed;
+      for (final MapEntry(key: (table, fkId), value: ids) in rowIds.entries) {
+        final fk = await customSelect(
+          'SELECT "from", on_delete FROM pragma_foreign_key_list(?) '
+          'WHERE id = ?',
+          variables: [Variable.withString(table), Variable.withInt(fkId)],
+        ).getSingle();
+        final column = fk.read<String>('from');
+        final setNull = fk.read<String>('on_delete') == 'SET NULL';
+        for (var i = 0; i < ids.length; i += 500) {
+          final chunk = ids.sublist(i, min(i + 500, ids.length)).join(',');
+          final where = 'WHERE rowid IN ($chunk)';
+          changed += await customUpdate(
+            setNull
+                ? 'UPDATE "$table" SET "$column" = NULL $where'
+                : 'DELETE FROM "$table" $where',
+            updateKind: setNull ? UpdateKind.update : UpdateKind.delete,
+          );
+        }
+      }
+    }
   }
 
   /// Runs every upgrade step and the user_version bump as one write
@@ -1467,6 +1526,12 @@ class AppDatabase extends _$AppDatabase {
       // Bcc addresses of sent mail, shown in the detail header (#1097).
       await _addColumnIfMissing(m, emails, emails.bccJson);
     }
+    if (from < 62) {
+      // Foreign keys are on from v62 (#1119). Clear the rows that older
+      // builds left breaking them first, with foreign keys still off.
+      if (await _tableExists(this, 'app_logs')) await _createAppLogsIndexes();
+      await deleteForeignKeyOrphans();
+    }
   }
 
   /// Inserts a row for [gitHash] the first time that version is seen.
@@ -1767,6 +1832,13 @@ Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
 void resetDatabasePathForTesting() => _dbPath = null;
 void setDatabasePathForTesting(String path) => _dbPath = path;
 Future<String?> androidFallbackPathForTesting() => _androidFallbackPath();
+
+/// True when [error] is SQLite refusing a write that would break a foreign
+/// key (`SQLITE_CONSTRAINT_FOREIGNKEY`), e.g. a row for an email or account
+/// that was deleted meanwhile. Matches on the message, so it also holds for
+/// the copy a background-isolate connection rethrows.
+bool isForeignKeyViolation(Object error) =>
+    error.toString().contains('FOREIGN KEY constraint failed');
 
 /// Configures PRAGMAs on a newly opened SQLite connection.
 ///

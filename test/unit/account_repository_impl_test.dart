@@ -46,7 +46,8 @@ AccountRepositoryImpl _makeRepo() =>
     AccountRepositoryImpl(openTestDatabase(), MapSecureStorage());
 
 /// Seeds an inbox mailbox, one mail with a body, its thread and an undo-log
-/// entry for [accountId], straight into [db] (no account row required).
+/// entry for [accountId], straight into [db]. Needs the account row unless
+/// run inside [withoutForeignKeys].
 Future<void> _seedMailOf(AppDatabase db, String accountId) async {
   await seedInboxMailbox(db, accountId);
   await db.into(db.emails).insert(
@@ -139,8 +140,8 @@ void main() {
 
     test('removeAccount deletes the account\'s mail and keeps others',
         () async {
-      // Foreign keys are off (SQLite's default), so the schema's cascades
-      // never fired: the mail stayed in the combined inbox.
+      // Builds before schema v62 ran with foreign keys off, so the schema's
+      // cascades never fired: the mail stayed in the combined inbox.
       final db = openTestDatabase();
       final repo = AccountRepositoryImpl(db, MapSecureStorage());
       await repo.addAccount(_account, 'pw');
@@ -151,7 +152,7 @@ void main() {
       await _seedMailOf(db, 'acc-1');
       await _seedMailOf(db, 'acc-2');
       // Left behind by an account deleted before this fix.
-      await _seedMailOf(db, 'deleted-earlier');
+      await withoutForeignKeys(db, () => _seedMailOf(db, 'deleted-earlier'));
       final threads = db.select(db.threads).watch();
       expect((await threads.first).map((t) => t.accountId).toSet(), {
         'acc-1',
@@ -227,9 +228,12 @@ void main() {
         await File(p.join(d.path, 'a.pdf')).writeAsString('x');
       }
       // A body whose email row a resync already deleted.
-      await db.into(db.emailBodies).insert(
-            EmailBodiesCompanion.insert(emailId: 'acc-1:INBOX:9'),
-          );
+      await withoutForeignKeys(
+        db,
+        () => db.into(db.emailBodies).insert(
+              EmailBodiesCompanion.insert(emailId: 'acc-1:INBOX:9'),
+            ),
+      );
 
       await repo.removeAccount('acc-1');
 

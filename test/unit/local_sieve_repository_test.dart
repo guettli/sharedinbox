@@ -1,24 +1,39 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/sieve_script.dart';
+import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 
 import 'db_test_helper.dart';
+
+/// A database with the accounts acc-1 and acc-2, and a repository on it.
+Future<(AppDatabase, LocalSieveRepository)> _open() async {
+  final db = await openTestDatabaseWithAccounts(const ['acc-1', 'acc-2']);
+  return (db, LocalSieveRepository(db));
+}
+
+/// Saves two inactive scripts for acc-1.
+Future<(SieveScript, SieveScript)> _saveTwoScripts(
+  LocalSieveRepository repo,
+) async =>
+    (
+      await repo.saveScript('acc-1', name: 'Script 1', content: 'stop;'),
+      await repo.saveScript('acc-1', name: 'Script 2', content: 'keep;'),
+    );
 
 void main() {
   configureSqliteForTests();
 
   group('LocalSieveRepository', () {
     test('listScripts returns empty list for new account', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       final scripts = await repo.listScripts('acc-1');
       expect(scripts, isEmpty);
       await db.close();
     });
 
     test('saveScript creates and retrieves a script', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       final saved = await repo.saveScript(
         'acc-1',
         name: 'My filter',
@@ -36,8 +51,7 @@ void main() {
     });
 
     test('getScriptContent returns saved content', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       const content = 'require ["fileinto"]; fileinto "Archive";';
       final saved = await repo.saveScript(
         'acc-1',
@@ -52,8 +66,7 @@ void main() {
     });
 
     test('saveScript with id updates existing script', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       final created = await repo.saveScript(
         'acc-1',
         name: 'Old name',
@@ -78,8 +91,7 @@ void main() {
     });
 
     test('deleteScript removes the script', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       final saved = await repo.saveScript(
         'acc-1',
         name: 'To delete',
@@ -95,18 +107,8 @@ void main() {
     });
 
     test('activateScript sets one script active, deactivates others', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
-      final s1 = await repo.saveScript(
-        'acc-1',
-        name: 'Script 1',
-        content: 'stop;',
-      );
-      final s2 = await repo.saveScript(
-        'acc-1',
-        name: 'Script 2',
-        content: 'keep;',
-      );
+      final (db, repo) = await _open();
+      final (s1, s2) = await _saveTwoScripts(repo);
 
       await repo.activateScript('acc-1', s1.id);
       var scripts = await repo.listScripts('acc-1');
@@ -122,18 +124,8 @@ void main() {
     });
 
     test('deactivateScript clears active flag on all scripts', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
-      final s1 = await repo.saveScript(
-        'acc-1',
-        name: 'Script 1',
-        content: 'stop;',
-      );
-      final s2 = await repo.saveScript(
-        'acc-1',
-        name: 'Script 2',
-        content: 'keep;',
-      );
+      final (db, repo) = await _open();
+      final (s1, s2) = await _saveTwoScripts(repo);
       await repo.activateScript('acc-1', s1.id);
 
       await repo.deactivateScript('acc-1');
@@ -146,8 +138,7 @@ void main() {
     });
 
     test('deactivateScript only touches the given account', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       final s1 = await repo.saveScript('acc-1', name: 'A', content: 'stop;');
       final s2 = await repo.saveScript('acc-2', name: 'B', content: 'keep;');
       await repo.activateScript('acc-1', s1.id);
@@ -164,8 +155,7 @@ void main() {
     });
 
     test('scripts are isolated per account', () async {
-      final db = openTestDatabase();
-      final repo = LocalSieveRepository(db);
+      final (db, repo) = await _open();
       await repo.saveScript('acc-1', name: 'Filter A', content: 'stop;');
       await repo.saveScript('acc-2', name: 'Filter B', content: 'keep;');
 

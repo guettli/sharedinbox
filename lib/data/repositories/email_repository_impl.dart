@@ -686,18 +686,14 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         }
 
-        await _db.into(_db.emailBodies).insertOnConflictUpdate(
-              EmailBodiesCompanion.insert(
-                emailId: emailId,
-                textBody: Value(textBody),
-                htmlBody: Value(htmlBody),
-                attachmentsJson: Value(attachmentsJson),
-                headersJson: Value(headersJson),
-                mimeTreeJson: Value(mimeTreeJson),
-                cachedAt: Value(DateTime.now()),
-                bodySize: Value(_bodySize(textBody, htmlBody)),
-              ),
-            );
+        await _cacheFetchedBody(
+          emailId: emailId,
+          textBody: textBody,
+          htmlBody: htmlBody,
+          attachmentsJson: attachmentsJson,
+          headersJson: headersJson,
+          mimeTreeJson: mimeTreeJson,
+        );
 
         // Opportunistic backfill for rows synced before we started writing
         // previews on the IMAP sync path. Costs no extra IMAP round trip.
@@ -931,6 +927,35 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// Caches a body just fetched from the server. The fetch can outlast the
+  /// email row (a sync pruned it, the user deleted it); its body is then
+  /// still shown once, but there is nothing left to cache it for.
+  Future<void> _cacheFetchedBody({
+    required String emailId,
+    required String? textBody,
+    required String? htmlBody,
+    required String attachmentsJson,
+    required String? headersJson,
+    required String? mimeTreeJson,
+  }) async {
+    try {
+      await _db.into(_db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: Value(textBody),
+              htmlBody: Value(htmlBody),
+              attachmentsJson: Value(attachmentsJson),
+              headersJson: Value(headersJson),
+              mimeTreeJson: Value(mimeTreeJson),
+              cachedAt: Value(DateTime.now()),
+              bodySize: Value(_bodySize(textBody, htmlBody)),
+            ),
+          );
+    } catch (e) {
+      if (!isForeignKeyViolation(e)) rethrow;
+    }
+  }
+
   /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all
   /// references that embed the old id — the cached body, pending changes,
   /// per-message logs, thread aggregates and undo history — in one transaction.
@@ -949,6 +974,12 @@ class EmailRepositoryImpl implements EmailRepository {
         'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
         [newId, oldId],
       );
+      // The downloaded files live in a folder named after the old id, so
+      // their rows cannot follow; keeping them would break the foreign key
+      // at COMMIT. The attachment is downloaded again when opened.
+      await (_db.delete(_db.attachmentFiles)
+            ..where((t) => t.emailId.equals(oldId)))
+          .go();
 
       await (_db.update(_db.emails)..where((t) => t.id.equals(oldId))).write(
         EmailsCompanion(
@@ -1144,18 +1175,14 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
 
-    await _db.into(_db.emailBodies).insertOnConflictUpdate(
-          EmailBodiesCompanion.insert(
-            emailId: emailId,
-            textBody: Value(textBody),
-            htmlBody: Value(htmlBody),
-            attachmentsJson: Value(attachmentsJson),
-            headersJson: Value(headersJson),
-            mimeTreeJson: Value(mimeTreeJson),
-            cachedAt: Value(DateTime.now()),
-            bodySize: Value(_bodySize(textBody, htmlBody)),
-          ),
-        );
+    await _cacheFetchedBody(
+      emailId: emailId,
+      textBody: textBody,
+      htmlBody: htmlBody,
+      attachmentsJson: attachmentsJson,
+      headersJson: headersJson,
+      mimeTreeJson: mimeTreeJson,
+    );
 
     await _backfillAddressHeaders(emailId, _parseHeaders(headersJson));
 
@@ -4666,6 +4693,9 @@ class EmailRepositoryImpl implements EmailRepository {
         mailboxPath: row.mailboxPath,
         data: {
           'permanent': true,
+          // The row's delete sets this entry's email_id to null (foreign
+          // key), so keep which mail it was in the data.
+          'emailId': emailId,
           'mailboxPath': row.mailboxPath,
           'protocol': account.type.name,
           if (row.messageId != null) 'messageId': row.messageId,
@@ -7308,14 +7338,19 @@ class EmailRepositoryImpl implements EmailRepository {
     File file,
   ) async {
     final size = await file.length();
-    await _db.into(_db.attachmentFiles).insertOnConflictUpdate(
-          AttachmentFilesCompanion.insert(
-            emailId: emailId,
-            filename: filename,
-            size: size,
-            downloadedAt: DateTime.now(),
-          ),
-        );
+    try {
+      await _db.into(_db.attachmentFiles).insertOnConflictUpdate(
+            AttachmentFilesCompanion.insert(
+              emailId: emailId,
+              filename: filename,
+              size: size,
+              downloadedAt: DateTime.now(),
+            ),
+          );
+    } catch (e) {
+      // The email was deleted while the download ran.
+      if (!isForeignKeyViolation(e)) rethrow;
+    }
   }
 
   @override

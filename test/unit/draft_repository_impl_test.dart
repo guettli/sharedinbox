@@ -394,10 +394,9 @@ void main() {
 
     test('deleteDraft of a deleted account works with foreign keys on',
         () async {
-      // clearForResync switches foreign_keys on for the shared connection;
-      // a tombstone for a missing account then fails the insert.
+      // Foreign keys are on: a tombstone for a missing account would fail
+      // the insert.
       final db = openTestDatabase();
-      await db.customStatement('PRAGMA foreign_keys = ON');
       final repo = DraftRepositoryImpl(db, _StubAccounts());
       final draft = await repo.saveDraft(
         accountId: 'gone',
@@ -487,7 +486,7 @@ void main() {
         );
 
     test('an edit during the IMAP append is pushed by the next sync', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()..appendUids.addAll([42, 43]);
       final repo = imapRepo(db, client);
       final id = await saveNewDraft(repo);
@@ -688,7 +687,7 @@ void main() {
 
     test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
         () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
       final repo = imapRepo(db, client);
       await saveNewDraft(repo);
@@ -703,7 +702,7 @@ void main() {
     test(
         'a switch of drafts mailbox re-uploads drafts instead of expunging '
         'their old UIDs there', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       // Synced by an older build into its own "Drafts" folder as UID 7, and a
       // deleted draft that was UID 9 there.
       await db.into(db.drafts).insert(
@@ -736,7 +735,7 @@ void main() {
     });
 
     test('a second sync stays with the same mailbox', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
       final repo = imapRepo(db, client);
       await saveNewDraft(repo);
@@ -755,7 +754,7 @@ void main() {
     });
 
     test('a non-ASCII drafts mailbox is addressed in modified UTF-7', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()
         ..listed = [
           // A user folder named "Drafts" is not the drafts mailbox: only the

@@ -22,7 +22,7 @@ void main() {
   });
 
   setUp(() async {
-    db = openTestDatabase();
+    db = await openTestDatabaseWithAccounts(const ['acc1']);
     mockHttpClient = MockClient();
     mockStorage = MockSecureStorage();
     final accounts = AccountRepositoryImpl(db, mockStorage);

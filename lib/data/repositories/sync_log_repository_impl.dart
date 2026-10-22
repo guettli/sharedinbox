@@ -27,39 +27,45 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     String? protocolLog,
   }) async {
     var logId = 0;
-    await _db.transaction(() async {
-      logId = await _db.into(_db.syncLogs).insert(
-            SyncLogsCompanion.insert(
-              accountId: accountId,
-              result: success ? 'ok' : 'error',
-              errorMessage: Value(errorMessage),
-              errorStackTrace: Value(stackTrace),
-              isPermanent: Value(isPermanent),
-              protocol: Value(protocol),
-              itemsSynced: Value(emailsFetched),
-              emailsSkipped: Value(emailsSkipped),
-              mailboxesSynced: Value(mailboxesSynced),
-              pendingFlushed: Value(pendingFlushed),
-              bytesTransferred: Value(bytesTransferred),
-              startedAt: startedAt,
-              finishedAt: finishedAt,
-              protocolLog: Value(protocolLog),
-            ),
-          );
-      for (final s in mailboxStats) {
-        await _db.into(_db.syncLogMailboxes).insert(
-              SyncLogMailboxesCompanion.insert(
-                syncLogId: logId,
-                mailboxPath: s.mailboxPath,
-                fetched: Value(s.fetched),
-                skipped: Value(s.skipped),
-                bytesTransferred: Value(s.bytesTransferred),
-                durationMs: Value(s.duration?.inMilliseconds),
-                mailboxName: Value(s.mailboxName),
+    try {
+      await _db.transaction(() async {
+        logId = await _db.into(_db.syncLogs).insert(
+              SyncLogsCompanion.insert(
+                accountId: accountId,
+                result: success ? 'ok' : 'error',
+                errorMessage: Value(errorMessage),
+                errorStackTrace: Value(stackTrace),
+                isPermanent: Value(isPermanent),
+                protocol: Value(protocol),
+                itemsSynced: Value(emailsFetched),
+                emailsSkipped: Value(emailsSkipped),
+                mailboxesSynced: Value(mailboxesSynced),
+                pendingFlushed: Value(pendingFlushed),
+                bytesTransferred: Value(bytesTransferred),
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                protocolLog: Value(protocolLog),
               ),
             );
-      }
-    });
+        for (final s in mailboxStats) {
+          await _db.into(_db.syncLogMailboxes).insert(
+                SyncLogMailboxesCompanion.insert(
+                  syncLogId: logId,
+                  mailboxPath: s.mailboxPath,
+                  fetched: Value(s.fetched),
+                  skipped: Value(s.skipped),
+                  bytesTransferred: Value(s.bytesTransferred),
+                  durationMs: Value(s.duration?.inMilliseconds),
+                  mailboxName: Value(s.mailboxName),
+                ),
+              );
+        }
+      });
+    } catch (e) {
+      // The account was removed while its sync ran: no entry to keep.
+      if (!isForeignKeyViolation(e)) rethrow;
+      return 0;
+    }
     return logId;
   }
 

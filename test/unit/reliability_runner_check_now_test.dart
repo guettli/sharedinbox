@@ -168,8 +168,8 @@ void main() {
       );
     }
 
-    setUp(() {
-      db = openTestDatabase();
+    setUp(() async {
+      db = await openTestDatabaseWithAccounts(const ['test-account']);
       emails = _FakeEmails();
       runner = buildRunner(emails);
     });
