@@ -95,7 +95,7 @@ c key key=Escape                     # xdotool key names: Return, ctrl+a, …
 c press x=600 y=150                  # long press: selects a mail in the list
 c drag x=200 y=150 to_x=900 to_y=150 # swipe: opens a list row's action menu
 c drag x=200 y=150 to_x=500 to_y=150 hold=1   # keep it open, then /shot
-c scroll x=640 y=400 clicks=20         # mouse wheel; drag does not scroll lists
+c scroll x=640 y=400 clicks=20       # mouse wheel; drag does not scroll lists
 c restart wipe=1                     # fresh install: no data, empty keyring
 ```
 

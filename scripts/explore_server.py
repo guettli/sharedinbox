@@ -41,7 +41,8 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
                           release over ms (default 400): a swipe, e.g. a list
                           row's actions. hold=1 keeps the button down (take a
                           /shot); the next /drag goes on from where it is and
-                          ignores its x, y; /tap and /press refuse meanwhile
+                          ignores its x, y; /tap, /press and /scroll refuse
+                          meanwhile
     POST /scroll          x, y, [clicks], [up=1] — turn the mouse wheel over
                           x, y (default 5 clicks down, at most 200): Flutter
                           desktop lists scroll by wheel, not by /drag
@@ -287,7 +288,7 @@ def _ms(params: dict, default: int) -> float:
 
 
 # Where a /drag with hold=1 left the button down, or None. The next /drag
-# goes on from there instead of pressing again; /tap and /press refuse
+# goes on from there instead of pressing again; /tap, /press and /scroll refuse
 # until it is released, since their own click would let go of it unseen.
 _held_at: tuple[int, int] | None = None
 
@@ -320,6 +321,7 @@ def press(params: dict) -> str:
 
 def scroll(params: dict) -> str:
     x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
     clicks = min(max(1, _int(params, "clicks", 5)), 200)
     # X11 wheel: button 4 is up, 5 is down. --repeat sends them as separate
     # clicks; the short delay lets Flutter handle each as its own event.
