@@ -235,6 +235,22 @@ void main() {
       final ctx = interp.execute(rules, _email(size: 1024));
       expect(ctx.isCancelled, isFalse);
     });
+
+    test('an unknown size satisfies neither :over nor :under', () {
+      final rules = [
+        for (final comp in [':over', ':under'])
+          SieveRule(
+            joinType: 'single',
+            conditions: [SizeCondition(comp, 500)],
+            actions: [DiscardAction()],
+          ),
+      ];
+      final ctx = interp.execute(
+        rules,
+        const SieveEmailContext(headers: {}),
+      );
+      expect(ctx.isCancelled, isFalse);
+    });
   });
 
   group('allof / anyof join types', () {

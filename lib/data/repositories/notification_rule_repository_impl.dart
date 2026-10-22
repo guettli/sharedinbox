@@ -181,6 +181,7 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
       listUnsubscribeHeader: row.listUnsubscribeHeader,
       isLocal: row.isLocal,
+      size: row.sizeBytes,
     );
   }
 }

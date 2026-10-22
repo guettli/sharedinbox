@@ -257,9 +257,11 @@ void main() {
         isFlagged: false,
         hasAttachment: false,
         listUnsubscribeHeader: '<mailto:x@y>',
+        size: 4096,
       );
       final m = matchableFromEmail(e);
       expect(m.subject, 'Sub');
+      expect(m.size, 4096);
       expect(m.folder, 'INBOX');
       expect(m.from.single.email, 'a@b.com');
       expect(m.headers['list-unsubscribe'], '<mailto:x@y>');

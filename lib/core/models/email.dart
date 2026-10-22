@@ -33,6 +33,10 @@ class Email {
   // own accounts. It appears in the inbox immediately for note-taking and is
   // dissolved into the real message once it arrives via sync (see #545).
   final bool isLocal;
+  // The message size in bytes as the server reports it (IMAP RFC822.SIZE,
+  // JMAP `size`); null when not known yet, e.g. mail cached before it was
+  // stored or a local virtual copy.
+  final int? size;
 
   /// When the mail was written (its Date header), or when it arrived if it
   /// has no Date header, so a date can always be shown.
@@ -63,6 +67,7 @@ class Email {
     this.snoozedFromMailboxPath,
     this.listUnsubscribeHeader,
     this.isLocal = false,
+    this.size,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -105,6 +110,7 @@ class Email {
       snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
       listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
       isLocal: (json['isLocal'] as bool?) ?? false,
+      size: json['size'] as int?,
     );
   }
 
@@ -134,6 +140,7 @@ class Email {
       'snoozedFromMailboxPath': snoozedFromMailboxPath,
       'listUnsubscribeHeader': listUnsubscribeHeader,
       'isLocal': isLocal,
+      'size': size,
     };
   }
 
@@ -162,6 +169,7 @@ class Email {
     String? snoozedFromMailboxPath,
     String? listUnsubscribeHeader,
     bool? isLocal,
+    int? size,
   }) {
     return Email(
       id: id ?? this.id,
@@ -190,6 +198,7 @@ class Email {
       listUnsubscribeHeader:
           listUnsubscribeHeader ?? this.listUnsubscribeHeader,
       isLocal: isLocal ?? this.isLocal,
+      size: size ?? this.size,
     );
   }
 }

@@ -110,6 +110,10 @@ class Emails extends Table {
   TextColumn get replyToJson => text().withDefault(const Constant('[]'))();
   // Added in schema v61: Bcc addresses, known for mail you sent (#1097).
   TextColumn get bccJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v64: the message size in bytes (IMAP RFC822.SIZE, JMAP
+  // Email `size`), for the Advanced Search size condition. Null for rows
+  // cached before v64 until a sync or reconcile pass fills it in.
+  IntColumn get sizeBytes => integer().nullable()();
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
@@ -1597,6 +1601,12 @@ class AppDatabase extends _$AppDatabase {
           0)
       ''');
       await _createListOrderIndexes();
+    }
+    if (from < 64 && await _tableExists(this, 'emails')) {
+      // Message size for the Advanced Search size condition. Existing rows
+      // stay NULL (unknown, never matches a size condition) until the
+      // periodic IMAP/JMAP reconcile backfills them.
+      await _addColumnIfMissing(m, emails, emails.sizeBytes);
     }
   }
 

@@ -241,7 +241,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
 
   Future<void> _searchStructured() async {
-    if (_filterGroup.isEmpty) return;
+    if (_filterGroup.isEmpty || _filterGroup.hasInvalidCondition) return;
     await _runSearch(
       fetch: () => ref
           .read(emailRepositoryProvider)
@@ -623,7 +623,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           ),
           const SizedBox(height: AppSpacing.md),
           FilledButton.icon(
-            onPressed: _filterGroup.isEmpty ? null : _searchStructured,
+            onPressed: _filterGroup.isEmpty || _filterGroup.hasInvalidCondition
+                ? null
+                : _searchStructured,
             icon: const Icon(Icons.search),
             label: const Text('Search'),
           ),
