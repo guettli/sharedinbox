@@ -223,7 +223,10 @@ def fill(name: str, text: str, role: str | None = "text", index: int = 0,
     """Focus a field and replace its contents."""
     focus(name, role, index=index, contains=contains, timeout=timeout)
     press("ctrl+a")
-    type_text(text)
+    if text:
+        type_text(text)
+    else:
+        press("BackSpace")  # typing nothing would leave the selection as is
 
 
 def type_text(text: str) -> None:
@@ -231,13 +234,15 @@ def type_text(text: str) -> None:
 
     Flutter's text fields do not implement the EditableText interface, so
     synthetic key events are the only route. xdotool talks to the same X server,
-    and the app receives them exactly as it would a real keyboard.
+    and the app receives them exactly as it would a real keyboard. The "--"
+    ends xdotool's options, so text that starts with "-" (a "-- " signature
+    delimiter, a negative number) is typed instead of rejected as an option.
     """
-    subprocess.run(["xdotool", "type", "--delay", "40", text], check=True)
+    subprocess.run(["xdotool", "type", "--delay", "40", "--", text], check=True)
 
 
 def press(key: str) -> None:
-    subprocess.run(["xdotool", "key", key], check=True)
+    subprocess.run(["xdotool", "key", "--", key], check=True)
 
 
 def screenshot(path: str) -> None:
