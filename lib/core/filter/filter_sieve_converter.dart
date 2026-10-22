@@ -131,7 +131,14 @@ class FilterSieveConverter {
       s.skip();
       final compTag = s.readTaggedArg();
       s.skip();
-      final numStr = s.readDigits();
+      // RFC 5228 §2.4.2.4: a number may carry a K, M or G multiplier.
+      // Keep it in the value ("1M"); [parseFilterSize] reads it the same way.
+      var numStr = s.readDigits();
+      final unit = s.peek()?.toUpperCase();
+      if (unit == 'K' || unit == 'M' || unit == 'G') {
+        s.advance();
+        numStr += unit!;
+      }
       final comp = switch (compTag.toLowerCase()) {
         ':over' => FilterComparison.over,
         ':under' => FilterComparison.under,

@@ -77,6 +77,30 @@ class _FailingStructuredRepository extends FakeEmailRepository {
       Future.error(StateError('no such column'));
 }
 
+/// Pumps [SearchScreen] opened on [filter] (advanced mode) with [emails].
+Future<void> _pumpWithFilter(
+  WidgetTester tester,
+  FilterGroup filter,
+  FakeEmailRepository emails,
+) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
+        emailRepositoryProvider.overrideWithValue(emails),
+        searchHistoryRepositoryProvider.overrideWithValue(
+          FakeSearchHistoryRepository(),
+        ),
+      ],
+      child: MaterialApp(home: SearchScreen(initialFilter: filter)),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 Future<void> _type(WidgetTester tester, String text) async {
   await tester.enterText(find.byType(TextField), text);
   await tester.pump(const Duration(milliseconds: 400));
@@ -919,32 +943,49 @@ void main() {
           ],
         );
 
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository(),
-              ),
-              emailRepositoryProvider.overrideWithValue(
-                FakeEmailRepository(structuredSearchResults: [hit]),
-              ),
-              searchHistoryRepositoryProvider.overrideWithValue(
-                FakeSearchHistoryRepository(),
-              ),
-            ],
-            child: MaterialApp(
-              home: SearchScreen(initialFilter: filter),
-            ),
-          ),
+        await _pumpWithFilter(
+          tester,
+          filter,
+          FakeEmailRepository(structuredSearchResults: [hit]),
         );
-        await tester.pumpAndSettle();
 
         // Advanced-mode AppBar title and result are visible.
         expect(find.text('Advanced Search'), findsOneWidget);
         expect(find.text('You won a prize!'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a size that is not a number shows an error and blocks Search',
+      (tester) async {
+        final fakeEmails = FakeEmailRepository();
+        await _pumpWithFilter(
+          tester,
+          FilterGroup.single(
+            FilterField.size,
+            FilterComparison.over,
+            'Alice',
+          ),
+          fakeEmails,
+        );
+
+        // Not run on open, and Search is disabled while the error shows.
+        expect(find.text(filterSizeHint), findsOneWidget);
+        expect(fakeEmails.structuredSearchCalls, isEmpty);
+        final search = find.ancestor(
+          of: find.text('Search'),
+          matching: find.byWidgetPredicate((w) => w is FilledButton),
+        );
+        expect(tester.widget<FilledButton>(search).onPressed, isNull);
+
+        await tester.enterText(find.widgetWithText(TextField, 'Alice'), '1 MB');
+        await tester.pumpAndSettle();
+        expect(find.text(filterSizeHint), findsNothing);
+        await tester.tap(search);
+        await tester.pumpAndSettle();
+        final leaf = fakeEmails.structuredSearchCalls.single.children.single
+            as FilterLeaf;
+        expect(leaf.value, '1 MB');
       },
     );
 

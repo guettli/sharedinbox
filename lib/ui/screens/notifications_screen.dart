@@ -299,7 +299,7 @@ class _RuleEditorPageState extends State<_RuleEditorPage> {
         title: const Text('Notification rule'),
         actions: [
           TextButton(
-            onPressed: _group.isEmpty
+            onPressed: _group.isEmpty || _group.hasInvalidCondition
                 ? null
                 : () {
                     final name = _nameController.text.trim();

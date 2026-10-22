@@ -8,6 +8,13 @@ Widget _harness(
   FilterGroup group,
   void Function(FilterGroup) onChanged, {
   Size size = const Size(800, 600),
+  List<FilterField> fields = const [
+    FilterField.from_,
+    FilterField.to,
+    FilterField.cc,
+    FilterField.subject,
+    FilterField.header,
+  ],
 }) {
   return MaterialApp(
     home: Scaffold(
@@ -19,13 +26,7 @@ Widget _harness(
             onChanged: onChanged,
             // The Sieve rule editor omits the folder field, matching the
             // real screen; keep everything else the visual editor supports.
-            availableFields: const [
-              FilterField.from_,
-              FilterField.to,
-              FilterField.cc,
-              FilterField.subject,
-              FilterField.header,
-            ],
+            availableFields: fields,
           ),
         ),
       ),
@@ -46,6 +47,32 @@ FilterGroup _headerGroup() => FilterGroup(
     );
 
 void main() {
+  group('FilterBuilderWidget size leaf', () {
+    testWidgets('shows an inline error until the size parses', (tester) async {
+      FilterGroup? latest;
+      await tester.pumpWidget(
+        _harness(
+          FilterGroup.single(FilterField.size, FilterComparison.over, ''),
+          (g) => latest = g,
+          fields: const [FilterField.subject, FilterField.size],
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(filterSizeHint), findsOneWidget);
+
+      final value = find.byType(TextField);
+      await tester.enterText(value, '1MB');
+      await tester.pumpAndSettle();
+      expect(find.text(filterSizeHint), findsNothing);
+      expect(latest!.hasInvalidCondition, isFalse);
+
+      await tester.enterText(value, 'Alice');
+      await tester.pumpAndSettle();
+      expect(find.text(filterSizeHint), findsOneWidget);
+      expect(latest!.hasInvalidCondition, isTrue);
+    });
+  });
+
   group('FilterBuilderWidget header leaf', () {
     testWidgets('header name and value are both editable on a narrow width',
         (tester) async {

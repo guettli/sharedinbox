@@ -325,7 +325,12 @@ class _LeafRowState extends State<_LeafRow> {
   Widget _valueField() => TextField(
         controller: _ctrl,
         onChanged: (v) => widget.onChanged(widget.leaf.copyWith(value: v)),
-        decoration: _leafFieldDecoration('value'),
+        // A size that does not parse would match nothing; say so here, and
+        // the screens disable Search / Save (FilterGroup.hasInvalidCondition).
+        decoration: _leafFieldDecoration(
+          widget.leaf.field == FilterField.size ? 'e.g. 1MB' : 'value',
+          errorText: widget.leaf.validationError,
+        ),
       );
 
   // Folder is always an exact match against the picked mailbox, so there is no
@@ -423,8 +428,11 @@ class _LeafRowState extends State<_LeafRow> {
 /// Shared decoration for the leaf-row text inputs (header name and value),
 /// hoisted out so the two nearly-identical [InputDecoration] literals don't
 /// trip the duplication detector.
-InputDecoration _leafFieldDecoration(String hint) => InputDecoration(
+InputDecoration _leafFieldDecoration(String hint, {String? errorText}) =>
+    InputDecoration(
       hintText: hint,
+      errorText: errorText,
+      errorMaxLines: 2,
       isDense: true,
       border: const OutlineInputBorder(),
       contentPadding: const EdgeInsets.symmetric(

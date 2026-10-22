@@ -1507,17 +1507,21 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
+    // RFC822.SIZE rides along so rows cached before schema v63 get their
+    // size for the Advanced Search size condition; it is one number per
+    // message and costs next to nothing next to FLAGS.
     final fetch = await client.uidFetchMessages(
       imap.MessageSequence.fromAll(),
-      'FLAGS',
+      '(FLAGS RFC822.SIZE)',
     );
-    final byUid = <int, ({bool seen, bool flagged})>{};
+    final byUid = <int, ({bool seen, bool flagged, int? size})>{};
     for (final msg in fetch.messages) {
       final uid = msg.uid;
       if (uid == null) continue;
       byUid[uid] = (
         seen: msg.flags?.contains(r'\Seen') ?? false,
         flagged: msg.flags?.contains(r'\Flagged') ?? false,
+        size: msg.size,
       );
     }
 
@@ -1533,10 +1537,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final affectedThreads = <String>{};
     var corrected = 0;
+    final sizeById = <String, int>{};
     for (final row in localRows) {
-      if (inFlightSet.contains(row.id)) continue;
       final serverFlags = byUid[row.uid];
       if (serverFlags == null) continue; // handled by _reconcileDeletedImap
+      final size = serverFlags.size;
+      if (row.sizeBytes == null && size != null) sizeById[row.id] = size;
+      if (inFlightSet.contains(row.id)) continue;
       if (serverFlags.seen == row.isSeen &&
           serverFlags.flagged == row.isFlagged) {
         continue;
@@ -1554,6 +1561,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxPath, tid);
     }
+    await _backfillSizes(sizeById);
 
     if (corrected > 0) {
       log(
@@ -1562,6 +1570,22 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  /// Stores the message sizes in [sizeById] (email row id → bytes) in one
+  /// batch: rows cached before schema v63 have none, and the first
+  /// reconcile after the upgrade can fill in a whole mailbox at once.
+  Future<void> _backfillSizes(Map<String, int> sizeById) async {
+    if (sizeById.isEmpty) return;
+    await _db.batch((b) {
+      for (final MapEntry(key: id, value: size) in sizeById.entries) {
+        b.update(
+          _db.emails,
+          EmailsCompanion(sizeBytes: Value(size)),
+          where: (t) => t.id.equals(id),
+        );
+      }
+    });
   }
 
   // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
@@ -1695,6 +1719,8 @@ class EmailRepositoryImpl implements EmailRepository {
                 ccJson: Value(_encodeAddresses(envelope.cc)),
                 replyToJson: Value(_encodeAddresses(envelope.replyTo)),
                 bccJson: Value(_encodeAddresses(envelope.bcc)),
+                sizeBytes:
+                    msg.size == null ? const Value.absent() : Value(msg.size),
                 preview: Value(
                   previewFromSnippet(msg, previewSnippetByUid[uid]),
                 ),
@@ -2551,6 +2577,7 @@ class EmailRepositoryImpl implements EmailRepository {
     'cc',
     'replyTo',
     'bcc',
+    'size',
     'keywords',
     'hasAttachment',
     'preview',
@@ -3503,6 +3530,7 @@ class EmailRepositoryImpl implements EmailRepository {
     if (toCheck.isEmpty) return;
 
     final affectedThreads = <String>{};
+    final sizeById = <String, int>{};
     var corrected = 0;
     for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
       final batch = toCheck.sublist(
@@ -3515,7 +3543,8 @@ class EmailRepositoryImpl implements EmailRepository {
           {
             'accountId': jmap.accountId,
             'ids': batch,
-            'properties': ['id', 'keywords'],
+            // `size` backfills rows cached before schema v63.
+            'properties': ['id', 'keywords', 'size'],
           },
           '0',
         ],
@@ -3527,6 +3556,8 @@ class EmailRepositoryImpl implements EmailRepository {
         final jmapId = m['id'] as String;
         final row = localByJmapId[jmapId];
         if (row == null) continue;
+        final size = m['size'];
+        if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
         final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
         final serverSeen = keywords.containsKey(r'$seen');
         final serverFlagged = keywords.containsKey(r'$flagged');
@@ -3547,6 +3578,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxJmapId, tid);
     }
+    await _backfillSizes(sizeById);
     if (corrected > 0) {
       log(
         'JMAP-sync: flag-reconcile mailbox=$mailboxJmapId corrected=$corrected '
@@ -3697,6 +3729,9 @@ class EmailRepositoryImpl implements EmailRepository {
               ccJson: Value(cc),
               replyToJson: Value(replyTo),
               bccJson: Value(bcc),
+              sizeBytes: m['size'] is int
+                  ? Value(m['size'] as int)
+                  : const Value.absent(),
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
@@ -5367,6 +5402,7 @@ class EmailRepositoryImpl implements EmailRepository {
               ccJson: Value(jsonEncode(e.cc)),
               replyToJson: Value(jsonEncode(e.replyTo)),
               bccJson: Value(jsonEncode(e.bcc)),
+              sizeBytes: Value(e.size),
               preview: Value(e.preview),
               isSeen: Value(e.isSeen),
               isFlagged: Value(e.isFlagged),
@@ -5561,6 +5597,7 @@ class EmailRepositoryImpl implements EmailRepository {
         'cc': [formatAddrs(row.ccJson)],
         if (row.messageId != null) 'message-id': [row.messageId!],
       },
+      sizeBytes: row.sizeBytes,
     );
   }
 
@@ -7596,10 +7633,23 @@ class EmailRepositoryImpl implements EmailRepository {
       FilterField.to => _jsonLike(t.toAddresses, leaf.comparison, val),
       FilterField.cc => _jsonLike(t.ccJson, leaf.comparison, val),
       FilterField.subject => _textLike(t.subject, leaf.comparison, val),
-      // Size is not stored in the local cache; skip silently.
-      FilterField.size => const Constant(true),
+      FilterField.size => _sizeCompare(t.sizeBytes, leaf),
       FilterField.header => _headerLike(leaf, t),
       FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
+    };
+  }
+
+  /// Compares the stored message size. An unparseable value matches
+  /// nothing (the editors refuse it), and so does a row whose size is unknown
+  /// (NULL: cached before schema v63 and not yet backfilled by a reconcile):
+  /// SQL `NULL > n` is not true.
+  Expression<bool> _sizeCompare(GeneratedColumn<int> col, FilterLeaf leaf) {
+    final bytes = parseFilterSize(leaf.value);
+    if (bytes == null) return const Constant(false);
+    return switch (leaf.comparison) {
+      FilterComparison.over => col.isBiggerThanValue(bytes),
+      FilterComparison.under => col.isSmallerThanValue(bytes),
+      _ => const Constant(false),
     };
   }
 
@@ -7612,7 +7662,9 @@ class EmailRepositoryImpl implements EmailRepository {
         FilterComparison.contains => col.like('%$val%'),
         FilterComparison.is_ => col.like('%"email":"$val"%'),
         FilterComparison.matches => col.like(_globToLike(val)),
-        _ => const Constant(true),
+        // over/under on a text field: the editors never offer it, but a
+        // hand-made or imported filter must not match every mail.
+        _ => const Constant(false),
       };
 
   Expression<bool> _textLike(
@@ -7624,7 +7676,9 @@ class EmailRepositoryImpl implements EmailRepository {
         FilterComparison.contains => col.like('%$val%'),
         FilterComparison.is_ => col.like(val),
         FilterComparison.matches => col.like(_globToLike(val)),
-        _ => const Constant(true),
+        // over/under on a text field: the editors never offer it, but a
+        // hand-made or imported filter must not match every mail.
+        _ => const Constant(false),
       };
 
   /// Header filters are matched against the JSON-encoded header list cached
@@ -7649,7 +7703,7 @@ class EmailRepositoryImpl implements EmailRepository {
         '%"name":"$literalNameLike","value":"${_globToLikeBang(storedValue)}"%',
       _ => null,
     };
-    if (pattern == null) return const Constant(true);
+    if (pattern == null) return const Constant(false);
     final sub = _db.selectOnly(_db.emailBodies)
       ..addColumns([_db.emailBodies.emailId])
       ..where(
@@ -8031,6 +8085,7 @@ class EmailRepositoryImpl implements EmailRepository {
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
       listUnsubscribeHeader: row.listUnsubscribeHeader,
       isLocal: row.isLocal,
+      size: row.sizeBytes,
     );
   }
 

@@ -229,7 +229,7 @@ Future<void> _notifyForNewMail(
 
   final fetch = await client.uidFetchMessages(
     imap.MessageSequence.fromIds(uids, isUid: true),
-    '(UID ENVELOPE)',
+    '(UID ENVELOPE RFC822.SIZE)',
   );
 
   final consideredIds = <String>[];
@@ -263,6 +263,7 @@ MatchableMessage _matchableFromEnvelope(imap.MimeMessage msg) {
     to: list(env?.to),
     cc: list(env?.cc),
     subject: env?.subject ?? '',
+    size: msg.size,
     folder: 'INBOX',
   );
 }

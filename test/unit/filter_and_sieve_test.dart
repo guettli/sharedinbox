@@ -82,6 +82,75 @@ void main() {
     });
   });
 
+  group('parseFilterSize', () {
+    test('reads bytes with optional binary K/M/G units', () {
+      const cases = {
+        '50000': 50000,
+        ' 42 ': 42,
+        '300 B': 300,
+        '10k': 10240,
+        '10K': 10240,
+        '10KB': 10240,
+        '1M': 1048576,
+        '1MB': 1048576,
+        '1 MB': 1048576,
+        '1 MiB': 1048576,
+        '2g': 2147483648,
+      };
+      cases.forEach((input, bytes) {
+        expect(parseFilterSize(input), bytes, reason: input);
+      });
+    });
+
+    test('rejects anything else', () {
+      for (final bad in [
+        '',
+        'Alice',
+        '1.5M',
+        '-5',
+        '1 TB',
+        '10 apples',
+        'MB',
+        '99999999999999999999',
+      ]) {
+        expect(parseFilterSize(bad), isNull, reason: bad);
+      }
+    });
+
+    test('an unparseable size makes the group invalid, at any depth', () {
+      FilterLeaf size(String v) => FilterLeaf(
+            field: FilterField.size,
+            comparison: FilterComparison.over,
+            value: v,
+          );
+      expect(size('1MB').validationError, isNull);
+      expect(size('Alice').validationError, filterSizeHint);
+      expect(size('').validationError, filterSizeHint);
+      // Text fields take any value.
+      expect(
+        FilterLeaf(
+          field: FilterField.subject,
+          comparison: FilterComparison.contains,
+          value: '',
+        ).validationError,
+        isNull,
+      );
+      final nested = FilterGroup(
+        operator: FilterOperator.or_,
+        children: [
+          size('1M'),
+          FilterGroup(operator: FilterOperator.and_, children: [size('x')]),
+        ],
+      );
+      expect(nested.hasInvalidCondition, isTrue);
+      expect(
+        FilterGroup(operator: FilterOperator.and_, children: [size('1M')])
+            .hasInvalidCondition,
+        isFalse,
+      );
+    });
+  });
+
   group('SieveSerializer', () {
     final ser = SieveSerializer();
 
@@ -452,6 +521,30 @@ if header :is "List-Id" "<newsletter.example.com>" {
       final leaf = parsed!.group.children.first as FilterLeaf;
       expect(leaf.field, FilterField.subject);
       expect(leaf.headerName, isNull);
+    });
+  });
+
+  group('Sieve size units', () {
+    test('size with a unit is written as a Sieve multiplier', () {
+      String sizeTest(String value) => SieveSerializer().serialize(
+            FilterGroup.single(FilterField.size, FilterComparison.under, value),
+            [DiscardAction()],
+          );
+      expect(sizeTest('1MB'), contains('size :under 1M'));
+      expect(sizeTest('10 k'), contains('size :under 10K'));
+      expect(sizeTest('2048'), contains('size :under 2K'));
+      expect(sizeTest('1500'), contains('size :under 1500'));
+    });
+
+    test('keeps the K/M/G multiplier of a size test', () {
+      const script = '''
+if size :over 1M {
+  discard;
+}''';
+      final parsed = FilterSieveConverter().parse(script);
+      final leaf = parsed!.group.children.first as FilterLeaf;
+      expect(leaf.value, '1M');
+      expect(parseFilterSize(leaf.value), 1048576);
     });
   });
 }
