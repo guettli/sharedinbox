@@ -75,6 +75,19 @@ void main() {
       expect(_flat(tree), ['2@0', '3@1']);
     });
 
+    test('same-second siblings are in arrival (UID) order', () {
+      final at = DateTime(2024, 1, 1, 12);
+      // Listed newest first: the tree must not keep the input order.
+      final tree = buildConversationTree([
+        _email(id: '1', messageId: 'a', sentAt: DateTime(2024)),
+        _email(id: '4', messageId: 'd', inReplyTo: 'a', sentAt: at),
+        _email(id: '3', messageId: 'c', inReplyTo: 'a', sentAt: at),
+        _email(id: '2', messageId: 'b', inReplyTo: 'a', sentAt: at),
+      ]);
+
+      expect(_flat(tree), ['1@0', '2@1', '3@1', '4@1']);
+    });
+
     test('sibling replies are ordered oldest first', () {
       final tree = buildConversationTree([
         _email(id: '1', messageId: 'a', sentAt: DateTime(2024)),

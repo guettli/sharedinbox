@@ -88,7 +88,9 @@ class _LiveMailboxCounts {
 
 class EmailRepositoryImpl implements EmailRepository {
   /// SQL `ORDER BY` of the mail search results (table alias `e`): starred
-  /// first, then [model.compareNewestFirst].
+  /// first, then [model.compareNewestFirst]. Searches span folders and
+  /// accounts, whose UIDs are not comparable; there the UID tiebreak only
+  /// makes the order deterministic.
   static const _emailListOrderSql =
       'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
 
@@ -219,6 +221,8 @@ class EmailRepositoryImpl implements EmailRepository {
       ..orderBy([
         OrderingTerm.desc(_db.threads.isFlagged),
         OrderingTerm.desc(_db.threads.latestDate),
+        // UIDs of different accounts are not comparable: across inboxes
+        // this tiebreak only makes the order deterministic.
         OrderingTerm.desc(_db.threads.latestUid),
         OrderingTerm.desc(_db.threads.id),
       ])
@@ -249,7 +253,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ///
   /// The kept copy is deterministic (IMAP preferred, then lowest account id)
   /// and keeps its original list position, preserving the query's
-  /// `isFlagged`/`latestDate` ordering.
+  /// `isFlagged`/`latestDate`/`latestUid`/`id` ordering.
   List<model.EmailThread> _dedupeCounterpartThreads(
     List<(model.EmailThread, String?)> rows,
     List<account_model.Account> accounts,
@@ -1030,11 +1034,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // threads.latest_email_id is a plain equality match; threads.email_ids_json
       // is a JSON array of email IDs — both are safe to update via REPLACE()
-      // because email IDs are unique opaque strings.
+      // because email IDs are unique opaque strings. latest_uid follows the
+      // latest email's UID, the thread list's same-second tiebreaker.
       await _db.customStatement(
-        'UPDATE threads SET latest_email_id = ?1 '
+        'UPDATE threads SET latest_email_id = ?1, latest_uid = ?3 '
         'WHERE latest_email_id = ?2',
-        [newId, oldId],
+        [newId, oldId, newUid],
       );
       await _db.customStatement(
         'UPDATE threads SET email_ids_json = '
@@ -8012,7 +8017,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) {
     // Same as observeEmailsInThread but without the mailboxPath filter, so a
     // conversation's Inbox, Sent and Archive copies are gathered together
-    // (#754).
+    // (#754). The UID tiebreak compares UIDs of different folders, so for
+    // same-second copies it only makes the order deterministic.
     return (_db.select(_db.emails)
           ..where(
             (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),

@@ -9398,8 +9398,24 @@ void main() {
               preview: const Value('Automatic reply preview'),
             ),
           );
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 'tid-616',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              latestDate: DateTime(2024),
+              latestEmailId: 'acc-1:Snoozed:6',
+              latestUid: const Value(6),
+              emailIdsJson: const Value('["acc-1:Snoozed:6"]'),
+            ),
+          );
 
       final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
+
+      // The thread row follows the re-key, its same-second tiebreaker too.
+      final thread = await r.db.select(r.db.threads).getSingle();
+      expect(thread.latestEmailId, 'acc-1:INBOX:42');
+      expect(thread.latestUid, 42);
 
       // The correct body is returned and cached under the re-keyed id — a
       // healed mismatch is not a load failure, so no loadError is set (#837).

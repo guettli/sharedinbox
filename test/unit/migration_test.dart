@@ -475,6 +475,42 @@ void main() {
       expect(indexes, isNot(contains('threads_latest_date')));
     });
 
+    test('v62→v63 tolerates latest_uid and the list indexes already present',
+        () async {
+      // An interrupted earlier upgrade can leave the v63 schema at v62.
+      final dbFile = File('test_migration_v62_list_order_rerun.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('acc-x:INBOX:9', 'acc-x', 'INBOX', 9, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (id, account_id, mailbox_path, latest_date,
+                             latest_email_id, latest_uid)
+        VALUES ('t1', 'acc-x', 'INBOX', 0, 'acc-x:INBOX:9', 0);
+      ''');
+      rawDb.execute('PRAGMA user_version = 62;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final row = await db
+          .customSelect("SELECT latest_uid FROM threads WHERE id = 't1'")
+          .getSingle();
+      expect(row.read<int>('latest_uid'), 9);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 63);
+    });
+
     test(
       'upgrade from v22 to latest adds list_unsubscribe_header and imap_server_id',
       () async {
