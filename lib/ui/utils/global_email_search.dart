@@ -9,16 +9,21 @@ import 'package:sharedinbox/core/repositories/email_repository.dart';
 /// Both queries run in parallel, then results are deduplicated by id and
 /// sorted newest-first so a single message list surfaces every match.
 ///
+/// Each source is capped at [limit], so the merge holds at least [limit]
+/// entries whenever either source may have more: a caller shows "Load more"
+/// when `result.length >= limit` and re-runs with a larger [limit].
+///
 /// Shared by the global search screen and by broadening a folder search to all
 /// folders, so both paths behave identically.
 Future<List<Email>> searchEmailsGlobalMerged(
   EmailRepository repo,
   String? accountId,
-  String query,
-) async {
+  String query, {
+  int limit = searchPageSize,
+}) async {
   final (globalHits, addressHits) = await (
-    repo.searchEmailsGlobal(accountId, query),
-    repo.getEmailsByAddress(accountId, query),
+    repo.searchEmailsGlobal(accountId, query, limit: limit),
+    repo.getEmailsByAddress(accountId, query, limit: limit),
   ).wait;
 
   final seen = <String>{};

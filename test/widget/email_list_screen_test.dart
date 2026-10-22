@@ -6,10 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
+import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 
 import 'helpers.dart';
 
@@ -29,8 +31,9 @@ class _MutableFakeEmailRepository extends FakeEmailRepository {
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  ) async =>
+    String query, {
+    int limit = searchPageSize,
+  }) async =>
       _results;
 }
 
@@ -341,6 +344,72 @@ void main() {
         expect(find.text('Found it'), findsOneWidget);
       },
     );
+
+    testWidgets(
+        'a full page of search results offers "Load more" for the next page',
+        (tester) async {
+      final repo = PagedSearchRepository(bulkSearchHits(120));
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.search));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'bulk');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+      expect(repo.limits.last, 50);
+
+      final list = find.descendant(
+        of: find.byType(EmailThreadList),
+        matching: find.byType(Scrollable),
+      );
+      await tester.scrollUntilVisible(
+        find.text('Load more'),
+        500,
+        scrollable: list.first,
+      );
+      expect(find.text('Bulk 049'), findsOneWidget);
+      expect(find.text('Bulk 050'), findsNothing);
+
+      await tester.tap(find.text('Load more'));
+      await tester.pumpAndSettle();
+      expect(repo.limits.last, 100);
+      await tester.scrollUntilVisible(
+        find.text('Bulk 099'),
+        500,
+        scrollable: list.first,
+      );
+      expect(find.text('Bulk 099'), findsOneWidget);
+
+      // Third page holds the last 20: no longer full, so no more button.
+      await tester.scrollUntilVisible(
+        find.text('Load more'),
+        500,
+        scrollable: list.first,
+      );
+      await tester.tap(find.text('Load more'));
+      await tester.pumpAndSettle();
+      expect(repo.limits.last, 150);
+      await tester.scrollUntilVisible(
+        find.text('Bulk 119'),
+        500,
+        scrollable: list.first,
+      );
+      expect(find.text('Load more'), findsNothing);
+    });
 
     testWidgets('tapping sync button triggers syncEmails', (tester) async {
       await tester.pumpWidget(

@@ -7778,41 +7778,59 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) =>
+      _searchEmailsLocal(
+        accountId: accountId,
+        mailboxPath: null,
+        query: query,
+        limit: limit,
+      );
+
+  /// Shared body of [searchEmails] and [searchEmailsGlobal]: the subject/
+  /// preview/From FTS hits merged with the note and body hits, deduplicated,
+  /// flagged then newest first, capped at [limit].
+  ///
+  /// Each source returns its own first [limit] rows in that same order, so
+  /// the first [limit] of the merge are exactly the first [limit] of the full
+  /// union — growing [limit] (the UI's "Load more") extends the list without
+  /// reordering what is already shown.
+  Future<List<model.Email>> _searchEmailsLocal({
+    required String? accountId,
+    required String? mailboxPath,
+    required String query,
+    required int limit,
+  }) async {
     final ftsQuery = _toFtsQuery(query);
-    if (ftsQuery.isEmpty) return [];
+    if (ftsQuery.isEmpty || limit <= 0) return [];
 
-    final sql = accountId != null
-        ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ?'
-            ' ORDER BY $_emailListOrderSql LIMIT 50'
-        : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ?'
-            ' ORDER BY $_emailListOrderSql LIMIT 50';
-    final variables = accountId != null
-        ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
-        : [Variable<String>(ftsQuery)];
-
-    final queryRows = await _db
-        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
-    final emailRows = await Future.wait(
-      queryRows.map((r) => _db.emails.mapFromRow(r)),
+    final subjectRows = await _searchEmailsByFts(
+      fromJoin: 'FROM email_fts f JOIN emails e ON e.rowid = f.rowid',
+      ftsTable: 'email_fts',
+      readsFrom: {_db.emails},
+      accountId: accountId,
+      mailboxPath: mailboxPath,
+      query: query,
+      limit: limit,
+      // email_fts maps 1:1 onto emails by rowid: no duplicates to collapse.
+      distinct: false,
     );
-
-    final noteRows = await _searchEmailsByNotes(accountId, null, query);
-    final bodyRows = await _searchEmailsByBody(accountId, null, query);
+    final noteRows =
+        await _searchEmailsByNotes(accountId, mailboxPath, query, limit);
+    final bodyRows =
+        await _searchEmailsByBody(accountId, mailboxPath, query, limit);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
+    for (final e in [...subjectRows, ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort((a, b) {
       if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
       return model.compareNewestFirst(a, b);
     });
-    return merged;
+    return merged.length > limit ? merged.sublist(0, limit) : merged;
   }
 
   /// Returns emails whose plaintext body matches [query] via the
@@ -7822,6 +7840,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
+    int limit,
   ) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_body_fts f'
@@ -7832,6 +7851,7 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        limit: limit,
       );
 
   /// Returns emails whose associated notes match [query] via the
@@ -7841,6 +7861,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
+    int limit,
   ) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_notes_fts f'
@@ -7852,14 +7873,15 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        limit: limit,
       );
 
   /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
   /// `e`) and returns them as models, flagged and newest first. [fromJoin] is
   /// the `FROM …` clause joining the [ftsTable] shadow index to `emails`;
   /// [ftsTable] is the virtual-table name used in the `MATCH` predicate.
-  /// Optionally filtered by [accountId] and [mailboxPath]. Shared by the
-  /// body and note search paths.
+  /// Optionally filtered by [accountId] and [mailboxPath]; at most [limit]
+  /// rows. Shared by the subject, body and note search paths.
   Future<List<model.Email>> _searchEmailsByFts({
     required String fromJoin,
     required String ftsTable,
@@ -7867,6 +7889,8 @@ class EmailRepositoryImpl implements EmailRepository {
     required String? accountId,
     required String? mailboxPath,
     required String query,
+    required int limit,
+    bool distinct = true,
   }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
@@ -7882,14 +7906,18 @@ class EmailRepositoryImpl implements EmailRepository {
       extraVars.add(Variable<String>(mailboxPath));
     }
 
-    final sql = 'SELECT DISTINCT e.* $fromJoin'
+    final sql = 'SELECT${distinct ? ' DISTINCT' : ''} e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
-        ' ORDER BY $_emailListOrderSql LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT ?';
 
     final rows = await _db
         .customSelect(
           sql,
-          variables: [Variable<String>(ftsQuery), ...extraVars],
+          variables: [
+            Variable<String>(ftsQuery),
+            ...extraVars,
+            Variable<int>(limit),
+          ],
           readsFrom: readsFrom,
         )
         .get();
@@ -7901,8 +7929,9 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async {
     final rows = await (_db.select(_db.emails)
           ..where((t) {
             final fe = _filterGroup(filter, t);
@@ -7915,7 +7944,7 @@ class EmailRepositoryImpl implements EmailRepository {
             (t) => OrderingTerm.desc(t.uid),
             (t) => OrderingTerm.desc(t.id),
           ])
-          ..limit(100))
+          ..limit(limit))
         .get();
     return rows.map(_toModel).toList();
   }
@@ -8107,28 +8136,30 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async {
+    String address, {
+    int? limit,
+  }) async {
     final pattern = '%${address.toLowerCase()}%';
-    final rows = await (_db.select(_db.emails)
-          ..where((t) {
-            Expression<bool> condition = const Constant(true);
-            if (accountId != null) {
-              condition = t.accountId.equals(accountId);
-            }
-            condition = condition &
-                (t.fromJson.like(pattern) |
-                    t.toAddresses.like(pattern) |
-                    t.ccJson.like(pattern));
-            return condition;
-          })
-          ..orderBy([
-            (t) => OrderingTerm.desc(t.isFlagged),
-            (t) => OrderingTerm.desc(t.receivedAt),
-            (t) => OrderingTerm.desc(t.uid),
-            (t) => OrderingTerm.desc(t.id),
-          ]))
-        .get();
+    final select = _db.select(_db.emails)
+      ..where((t) {
+        Expression<bool> condition = const Constant(true);
+        if (accountId != null) {
+          condition = t.accountId.equals(accountId);
+        }
+        condition = condition &
+            (t.fromJson.like(pattern) |
+                t.toAddresses.like(pattern) |
+                t.ccJson.like(pattern));
+        return condition;
+      })
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.isFlagged),
+        (t) => OrderingTerm.desc(t.receivedAt),
+        (t) => OrderingTerm.desc(t.uid),
+        (t) => OrderingTerm.desc(t.id),
+      ]);
+    if (limit != null) select.limit(limit);
+    final rows = await select.get();
     return rows.map(_toModel).toList();
   }
 
@@ -8213,40 +8244,15 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<List<model.Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  ) async {
-    final ftsQuery = _toFtsQuery(query);
-    if (ftsQuery.isEmpty) return [];
-
-    const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-        ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY $_emailListOrderSql LIMIT 50';
-    final variables = [
-      Variable<String>(ftsQuery),
-      Variable<String>(accountId),
-      Variable<String>(mailboxPath),
-    ];
-
-    final queryRows = await _db
-        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
-    final emailRows = await Future.wait(
-      queryRows.map((r) => _db.emails.mapFromRow(r)),
-    );
-
-    final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
-    final bodyRows = await _searchEmailsByBody(accountId, mailboxPath, query);
-
-    final seen = <String>{};
-    final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
-      if (seen.add(e.id)) merged.add(e);
-    }
-    merged.sort((a, b) {
-      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return model.compareNewestFirst(a, b);
-    });
-    return merged;
-  }
+    String query, {
+    int limit = searchPageSize,
+  }) =>
+      _searchEmailsLocal(
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+        limit: limit,
+      );
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 

@@ -701,8 +701,9 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   _i6.Future<List<_i3.Email>> searchEmails(
     String? accountId,
     String? mailboxPath,
-    String? query,
-  ) =>
+    String? query, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmails,
@@ -711,6 +712,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
             mailboxPath,
             query,
           ],
+          {#limit: limit},
         ),
         returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i6.Future<List<_i3.Email>>);
@@ -718,8 +720,9 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   @override
   _i6.Future<List<_i3.Email>> searchEmailsGlobal(
     String? accountId,
-    String? query,
-  ) =>
+    String? query, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsGlobal,
@@ -727,6 +730,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
             accountId,
             query,
           ],
+          {#limit: limit},
         ),
         returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i6.Future<List<_i3.Email>>);
@@ -734,8 +738,9 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   @override
   _i6.Future<List<_i3.Email>> searchEmailsStructured(
     String? accountId,
-    _i10.FilterGroup? filter,
-  ) =>
+    _i10.FilterGroup? filter, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsStructured,
@@ -743,6 +748,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
             accountId,
             filter,
           ],
+          {#limit: limit},
         ),
         returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i6.Future<List<_i3.Email>>);
@@ -750,8 +756,9 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   @override
   _i6.Future<List<_i3.Email>> getEmailsByAddress(
     String? accountId,
-    String? address,
-  ) =>
+    String? address, {
+    int? limit,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #getEmailsByAddress,
@@ -759,6 +766,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
             accountId,
             address,
           ],
+          {#limit: limit},
         ),
         returnValue: _i6.Future<List<_i3.Email>>.value(<_i3.Email>[]),
       ) as _i6.Future<List<_i3.Email>>);

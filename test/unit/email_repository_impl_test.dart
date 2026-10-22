@@ -10310,6 +10310,87 @@ void main() {
       );
     });
 
+    test('search is paged by limit instead of stopping at 50 matches',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final base = DateTime.utc(2026, 10);
+      // 120 matches: even uids hit via the subject, odd uids only via the
+      // cached body, so a page mixes both FTS sources.
+      for (var uid = 0; uid < 120; uid++) {
+        final id = 'acc-1:INBOX:$uid';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                subject: Value(uid.isEven ? 'Bulk $uid' : 'Mail $uid'),
+                receivedAt: base.add(Duration(minutes: uid)),
+                fromJson: const Value(
+                  '[{"name":null,"email":"list@example.com"}]',
+                ),
+              ),
+            );
+        if (uid.isOdd) {
+          await r.db.into(r.db.emailBodies).insert(
+                EmailBodiesCompanion.insert(
+                  emailId: id,
+                  textBody: const Value('bulk body'),
+                ),
+              );
+        }
+      }
+      List<String> newest(int n) =>
+          [for (var uid = 119; uid > 119 - n; uid--) 'acc-1:INBOX:$uid'];
+      List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
+
+      final folderPage = await r.emails.searchEmails('acc-1', 'INBOX', 'bulk');
+      expect(ids(folderPage), newest(50));
+      final folderTwoPages =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 100);
+      expect(ids(folderTwoPages), newest(100));
+      final folderAll =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 150);
+      expect(ids(folderAll), newest(120));
+
+      expect(
+        ids(await r.emails.searchEmailsGlobal('acc-1', 'bulk', limit: 100)),
+        newest(100),
+      );
+      expect(
+        ids(await r.emails.searchEmailsGlobal(null, 'bulk', limit: 150)),
+        newest(120),
+      );
+
+      final filter = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.from_,
+            comparison: FilterComparison.contains,
+            value: 'list@',
+          ),
+        ],
+      );
+      expect(
+        ids(await r.emails.searchEmailsStructured(null, filter, limit: 110)),
+        newest(110),
+      );
+
+      expect(
+        ids(
+          await r.emails
+              .getEmailsByAddress('acc-1', 'list@example.com', limit: 70),
+        ),
+        newest(70),
+      );
+      expect(
+        await r.emails.getEmailsByAddress('acc-1', 'list@example.com'),
+        hasLength(120),
+      );
+    });
+
     test('mail and thread lists are sorted by an index, not a temp sort',
         () async {
       final r = _makeRepos();
