@@ -191,12 +191,15 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     for (final username in candidates) {
       try {
         final credentials = base64.encode(utf8.encode('$username:$password'));
-        final resp = await _httpClient.get(
-          sessionUri,
-          headers: {
-            'Authorization': 'Basic $credentials',
-          },
-        ).timeout(const Duration(seconds: 10));
+        // Follows redirects by hand, re-checking https on every hop before
+        // the credentials go out again (#1104).
+        final fetched = await JmapClient.fetchSession(
+          httpClient: _httpClient,
+          sessionUrl: sessionUri,
+          credentials: credentials,
+        );
+        final resp = fetched.response;
+        final finalUri = fetched.url;
         if (resp.statusCode == 401 || resp.statusCode == 403) {
           lastError = Exception(
             'Authentication failed: wrong username or password',
@@ -211,19 +214,19 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
           session = jsonDecode(resp.body) as Map<String, dynamic>;
         } on FormatException {
           throw Exception(
-            'Not a JMAP server — unexpected response from $sessionUri',
+            'Not a JMAP server — unexpected response from $finalUri',
           );
         }
         final caps = session['capabilities'];
         if (caps is! Map || !caps.containsKey('urn:ietf:params:jmap:core')) {
           throw Exception(
-            'Not a JMAP server — missing core capability at $sessionUri',
+            'Not a JMAP server — missing core capability at $finalUri',
           );
         }
         final identityWarning = await _checkJmapIdentity(
           account,
           session,
-          sessionUri,
+          finalUri,
           credentials,
         );
         return ConnectionTestResult(

@@ -251,4 +251,162 @@ void main() {
       expect(c.accountId, 'u1');
     });
   });
+
+  group('session redirects (#1104)', () {
+    const auth = 'Basic YWxpY2VAZXhhbXBsZS5jb206aHVudGVyMg==';
+
+    /// A server that answers each URL in [redirects] with a 307 to its value
+    /// and every other URL with [session]. Records each request.
+    MockClient redirectingClient(
+      List<http.BaseRequest> seen,
+      Map<String, String> redirects, {
+      Map<String, dynamic>? session,
+    }) {
+      return MockClient((req) async {
+        seen.add(req);
+        if (req.method == 'POST') {
+          return http.Response(
+            jsonEncode({'methodResponses': <dynamic>[], 'sessionState': 'st1'}),
+            200,
+          );
+        }
+        final target = redirects[req.url.toString()];
+        if (target != null) {
+          return http.Response('', 307, headers: {'location': target});
+        }
+        return http.Response(
+          jsonEncode(session ?? _session()),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+    }
+
+    Future<JmapClient> connectWith(http.Client client, String url) =>
+        JmapClient.connect(
+          httpClient: client,
+          jmapUrl: Uri.parse(url),
+          username: 'alice@example.com',
+          password: 'hunter2',
+        );
+
+    test('follows a 307 https→https and re-sends the credentials', () async {
+      final seen = <http.BaseRequest>[];
+      final c = await connectWith(
+        redirectingClient(seen, {
+          'https://mail.example.com/.well-known/jmap':
+              'https://jmap.example.com/jmap/session',
+        }),
+        'https://mail.example.com',
+      );
+      expect(c.accountId, 'u1');
+      expect(seen.map((r) => r.url.toString()), [
+        'https://mail.example.com/.well-known/jmap',
+        'https://jmap.example.com/jmap/session',
+      ]);
+      for (final r in seen) {
+        expect(r.headers['Authorization'], auth);
+        expect(r.followRedirects, isFalse);
+      }
+    });
+
+    test('refuses an https→http redirect without contacting the http URL',
+        () async {
+      final seen = <http.BaseRequest>[];
+      await expectLater(
+        connectWith(
+          redirectingClient(seen, {
+            'https://mail.example.com/.well-known/jmap':
+                'http://mail.example.com/jmap/session',
+          }),
+          'https://mail.example.com',
+        ),
+        throwsA(
+          isA<JmapException>().having(
+            (e) => e.message,
+            'message',
+            allOf(
+              contains('http://mail.example.com/jmap/session'),
+              contains('not https'),
+            ),
+          ),
+        ),
+      );
+      expect(seen.map((r) => r.url.scheme), ['https']);
+    });
+
+    test('gives up after too many redirects', () async {
+      final seen = <http.BaseRequest>[];
+      final client = MockClient((req) async {
+        seen.add(req);
+        final n = int.parse(req.url.pathSegments.last);
+        return http.Response('', 302, headers: {'location': '${n + 1}'});
+      });
+      await expectLater(
+        connectWith(client, 'https://mail.example.com/hop/0'),
+        throwsA(
+          isA<JmapException>().having(
+            (e) => e.message,
+            'message',
+            contains('Too many redirects'),
+          ),
+        ),
+      );
+      expect(seen, hasLength(JmapClient.maxSessionRedirects + 1));
+    });
+
+    test('resolves a relative Location against the current URL', () async {
+      final seen = <http.BaseRequest>[];
+      await connectWith(
+        redirectingClient(seen, {
+          'https://mail.example.com/.well-known/jmap': '/jmap/session',
+        }),
+        'https://mail.example.com',
+      );
+      expect(
+        seen.last.url.toString(),
+        'https://mail.example.com/jmap/session',
+      );
+    });
+
+    test('resolves relative session URLs against the final URL', () async {
+      final seen = <http.BaseRequest>[];
+      final client = redirectingClient(
+        seen,
+        {
+          'https://mail.example.com/.well-known/jmap':
+              'https://jmap.example.com/jmap/session',
+        },
+        session: _session(
+          apiUrl: 'api/',
+          eventSourceUrl: 'eventsource/?types={types}&ping={ping}',
+        ),
+      );
+      final c = await connectWith(client, 'https://mail.example.com');
+      expect(
+        c.eventSourceUrl,
+        'https://jmap.example.com/jmap/eventsource/?types={types}&ping={ping}',
+      );
+      await c.call([]);
+      expect(seen.last.method, 'POST');
+      expect(seen.last.url.toString(), 'https://jmap.example.com/jmap/api/');
+    });
+
+    test('resolveSessionUrl keeps absolute and empty values as they are', () {
+      final base = Uri.parse('https://jmap.example.com/jmap/session');
+      expect(JmapClient.resolveSessionUrl(null, base), isNull);
+      expect(JmapClient.resolveSessionUrl('', base), '');
+      expect(
+        JmapClient.resolveSessionUrl(
+          'https://up.example.com/{accountId}/',
+          base,
+        ),
+        'https://up.example.com/{accountId}/',
+      );
+      expect(
+        JmapClient.resolveSessionUrl('/download/{accountId}/{blobId}', base),
+        'https://jmap.example.com/download/{accountId}/{blobId}',
+      );
+    });
+  });
 }
