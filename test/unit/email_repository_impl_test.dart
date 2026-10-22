@@ -30,7 +30,7 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'fake_imap.dart'
-    show FakeImapClient, FakeSmtpClient, SnoozeSpyImapClient;
+    show FakeImapClient, ScriptedSmtpClient, SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -465,19 +465,6 @@ class _SentCaptureImapClient extends FakeImapClient {
   }
 }
 
-/// Fake SMTP client whose `sendMessage` always succeeds, so the send path
-/// proceeds to the Sent-copy APPEND. `quit` is inherited from [FakeSmtpClient].
-class _OkSmtpClient extends FakeSmtpClient {
-  @override
-  Future<imap.SmtpResponse> sendMessage(
-    imap.MimeMessage message, {
-    bool use8BitEncoding = false,
-    imap.MailAddress? from,
-    List<imap.MailAddress>? recipients,
-  }) async =>
-      imap.SmtpResponse(const ['250 OK']);
-}
-
 /// Fake IMAP client that returns a *different* message than the row expects for
 /// a given UID — the shape produced by an optimistic snooze/unsnooze/move whose
 /// destination UID happens to collide with an unrelated message (#616). The
@@ -574,7 +561,7 @@ void main() {
         final sentImap = _SentCaptureImapClient();
         final r = _makeRepos(
           imapConnect: (a, u, p) async => sentImap,
-          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+          smtpConnect: (a, u, p) async => ScriptedSmtpClient(),
         );
         await r.accounts.addAccount(_account, 'pw');
         // This account's real Sent folder is "Sent Items" (role sent), as on
@@ -622,7 +609,7 @@ void main() {
         final sentImap = _SentCaptureImapClient();
         final r = _makeRepos(
           imapConnect: (a, u, p) async => sentImap,
-          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+          smtpConnect: (a, u, p) async => ScriptedSmtpClient(),
         );
         await r.accounts.addAccount(_account, 'pw');
         // No mailboxes synced → no role=sent folder is known.

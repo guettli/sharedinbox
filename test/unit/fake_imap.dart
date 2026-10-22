@@ -195,3 +195,26 @@ class FakeSmtpClient extends imap.SmtpClient {
   @override
   Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
 }
+
+/// Fake SMTP client whose `sendMessage` accepts the message (`250 OK`), or —
+/// with [rejectWith] — fails it the way enough_mail does for a 4xx/5xx reply,
+/// by throwing an [imap.SmtpException] carrying those response lines.
+class ScriptedSmtpClient extends FakeSmtpClient {
+  ScriptedSmtpClient({this.rejectWith});
+
+  final List<String>? rejectWith;
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async {
+    final reject = rejectWith;
+    if (reject != null) {
+      throw imap.SmtpException(this, imap.SmtpResponse(reject));
+    }
+    return imap.SmtpResponse(const ['250 OK']);
+  }
+}

@@ -6281,18 +6281,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<int> enqueueSend(String accountId, model.EmailDraft draft) async {
-    // Stamp a deterministic Message-ID so a self-send's immediately-created
-    // local message and the real message that arrives later share the same id
-    // (#545). enough_mail would otherwise generate a random one at send time.
+    // Stamp a deterministic Message-ID so a self-send's local inbox note and
+    // the real message that arrives later share the same id (#545). enough_mail
+    // would otherwise generate a random one at send time.
     final host = draft.from.email.contains('@')
         ? draft.from.email.split('@').last
         : 'localhost';
     final stampedDraft = draft.messageId != null
         ? draft
         : draft.copyWith(messageId: imap.MessageBuilder.createMessageId(host));
-    final rowId = await _outbox.enqueue(accountId, stampedDraft);
-    await _createLocalSelfMessages(accountId, stampedDraft);
-    return rowId;
+    // The self-send inbox note (#545) is NOT created here: until SMTP accepts
+    // the message it may still be rejected (unknown recipient, 5xx) or be
+    // discarded from the Sent Queue, and a note in the inbox would then look
+    // like mail that arrived although nothing was delivered. It is created by
+    // the outbox sender once the send has succeeded (see [_flushOutbox]).
+    return _outbox.enqueue(accountId, stampedDraft);
   }
 
   /// Marker inserted into a local (virtual) email row's `id` so it never
@@ -6383,12 +6386,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// For every configured account whose address is among [draft]'s recipients,
   /// insert a local "virtual" copy of the message into that account's inbox so
-  /// it shows up immediately for note-taking (#545). Dissolved into the real
+  /// it shows up right after sending for note-taking (#545), instead of only
+  /// once the next sync of the inbox fetches it. Dissolved into the real
   /// message by [_maybeDissolveLocalMessage] once it arrives via sync.
-  Future<void> _createLocalSelfMessages(
-    String accountId,
-    model.EmailDraft draft,
-  ) async {
+  ///
+  /// Only call this after the server accepted the message: a note for a mail
+  /// that was rejected or discarded would be a phantom inbox message.
+  Future<void> _createLocalSelfMessages(model.EmailDraft draft) async {
     final mid = normaliseMessageId(draft.messageId);
     if (mid == null) return;
     final recipients = <String>{
@@ -6410,6 +6414,22 @@ class EmailRepositoryImpl implements EmailRepository {
             ..limit(1))
           .getSingleOrNull();
       if (inbox == null) continue;
+
+      // A fast server can deliver the real message, and a sync can store it,
+      // before we get here. Its arrival found no note to dissolve, so a note
+      // inserted now would stay behind as a permanent duplicate. Scoped to the
+      // inbox: the Sent copy stored a moment ago shares the Message-ID.
+      final arrived = await (_db.select(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(account.id) &
+                  t.mailboxPath.equals(inbox.path) &
+                  t.isLocal.equals(false) &
+                  (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (arrived != null) continue;
 
       final now = DateTime.now();
       final emailId = '${account.id}:$_localIdMarker:$mid';
@@ -6500,6 +6520,22 @@ class EmailRepositoryImpl implements EmailRepository {
               await _sendEmailImap(account, password, job.draft, timing);
             case account_model.AccountType.jmap:
               await _sendEmailJmap(account, password, job.draft);
+          }
+          // Accepted by the server: only now may a mail to one of our own
+          // accounts show up in that inbox (#545). Best-effort, like the Sent
+          // copy — rethrowing would re-send an already-sent message.
+          try {
+            await _createLocalSelfMessages(job.draft);
+          } catch (e, stack) {
+            unawaited(
+              _appLogger?.warn(
+                'outbox.send.self_note_failed',
+                'Message sent, but adding the local inbox copy failed: $e',
+                accountId: accountId,
+                error: e,
+                stack: stack,
+              ),
+            );
           }
         } on imap.SmtpException catch (e) {
           // Permanent SMTP rejections come back as 5xx response codes — those
