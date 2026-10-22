@@ -35,6 +35,13 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
     POST /type            text — type into the focused widget
     POST /key             key — xdotool key name, e.g. Return, ctrl+a, Escape
     POST /tap             x, y — pixel click, last resort (prefer /click)
+    POST /press           x, y, [ms] — hold the button for ms (default 800,
+                          at most 10000): a long press, e.g. to select a mail
+    POST /drag            x, y, to_x, to_y, [ms], [hold=1] — press, move,
+                          release over ms (default 400): a swipe, e.g. a list
+                          row's actions. hold=1 keeps the button down (take a
+                          /shot); the next /drag goes on from where it is and
+                          ignores its x, y; /tap and /press refuse meanwhile
     POST /restart         [wipe=1] — restart the app; wipe=1 also removes its
                           data and the keyring, like a fresh install
 
@@ -54,6 +61,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -256,17 +264,88 @@ def key(params: dict) -> str:
     return "pressed\n"
 
 
-def tap(params: dict) -> str:
+def _pixels(params: dict, *keys: str) -> list[str]:
     # Whole non-negative pixels only: anything else is a caller mistake, and a
     # value starting with "-" would be read by xdotool as an option.
-    x, y = params["x"], params["y"]
-    if not (x.isdigit() and y.isdigit()):
-        raise ValueError(f"x and y must be non-negative integers, got {x!r}, {y!r}")
-    subprocess.run(["xdotool", "mousemove", x, y, "click", "1"], check=True)
+    values = [params[k] for k in keys]
+    if not all(v.isdigit() for v in values):
+        raise ValueError(f"{', '.join(keys)} must be non-negative integers, got {values!r}")
+    return values
+
+
+def _xdotool(*args: str) -> None:
+    subprocess.run(["xdotool", *args], check=True)
+
+
+def _ms(params: dict, default: int) -> float:
+    # Seconds to hold or move for. Capped well below GUI_LOCK_WAIT: the gesture
+    # holds the bus lock, and every other GUI call waits for it.
+    return min(max(0, _int(params, "ms", default)), 10_000) / 1000
+
+
+# Where a /drag with hold=1 left the button down, or None. The next /drag
+# goes on from there instead of pressing again; /tap and /press refuse
+# until it is released, since their own click would let go of it unseen.
+_held_at: tuple[int, int] | None = None
+
+
+def _refuse_while_held() -> None:
+    if _held_at is not None:
+        raise g.GuiError(
+            "the button is held by a /drag with hold=1; finish it with a /drag "
+            "without hold (or /restart) first"
+        )
+
+
+def tap(params: dict) -> str:
+    x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
+    _xdotool("mousemove", x, y, "click", "1")
     return "tapped\n"
 
 
+def press(params: dict) -> str:
+    x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
+    _xdotool("mousemove", x, y, "mousedown", "1")
+    try:
+        time.sleep(_ms(params, 800))
+    finally:
+        _xdotool("mouseup", "1")
+    return "long-pressed\n"
+
+
+def drag(params: dict) -> str:
+    global _held_at
+    to_x, to_y = (int(v) for v in _pixels(params, "to_x", "to_y"))
+    if _held_at is None:
+        x, y = (int(v) for v in _pixels(params, "x", "y"))
+        _xdotool("mousemove", str(x), str(y), "mousedown", "1")
+    else:
+        x, y = _held_at
+    _held_at = (x, y)
+    # Flutter only sees a drag when the pointer moves while down, so walk
+    # there in steps rather than jumping: one jump reads as a tap elsewhere.
+    steps = 10
+    pause = _ms(params, 400) / steps
+    try:
+        for i in range(1, steps + 1):
+            time.sleep(pause)
+            _held_at = (x + (to_x - x) * i // steps, y + (to_y - y) * i // steps)
+            _xdotool("mousemove", *map(str, _held_at))
+    finally:
+        if not _flag(params, "hold"):
+            _xdotool("mouseup", "1")
+            _held_at = None
+    return "dragged, button still down\n" if _held_at else "dragged\n"
+
+
 def restart(params: dict) -> str:
+    global _held_at
+    # Unconditionally: a /drag may be setting _held_at right now (restart
+    # does not take the bus lock), and a spare mouseup is harmless.
+    _xdotool("mouseup", "1")
+    _held_at = None
     stop_app()
     if _flag(params, "wipe"):
         failures = wipe_data()
@@ -294,6 +373,7 @@ ROUTES = {
     "/health": health, "/tree": tree, "/texts": texts, "/log": log,
     "/click": click, "/click-unnamed": click_unnamed, "/focus": focus,
     "/fill": fill, "/type": type_, "/key": key, "/tap": tap,
+    "/press": press, "/drag": drag,
     "/restart": restart,
 }
 
