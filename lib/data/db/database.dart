@@ -565,7 +565,10 @@ class UserPreferences extends Table {
   IntColumn get id => integer()();
   // 'bottom' (default) | 'top'
   TextColumn get menuPosition => text().withDefault(const Constant('bottom'))();
-  // Added in schema v35: 'bottom' (default) | 'top'
+  // Added in schema v35: 'bottom' (default) | 'top'.
+  // Unused since #1093 (the preference was removed); the column is kept to
+  // avoid a migration. Nothing in the app reads or writes it (only the v35
+  // migration still adds it).
   TextColumn get mailViewButtonPosition =>
       text().withDefault(const Constant('bottom'))();
   // Added in schema v36: 'nextMessage' (default) | 'showMailbox'
