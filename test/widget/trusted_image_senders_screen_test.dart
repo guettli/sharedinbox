@@ -127,17 +127,30 @@ void main() {
       final repo = await _pumpScreen(tester);
       await _openAddDialog(tester, 'foo');
 
-      expect(
-        find.text('Not an email address or pattern like *@example.com'),
-        findsOneWidget,
-      );
+      // Not while typing, only after trying to submit.
+      const error = 'Not an email address or pattern like *@example.com';
+      expect(find.text(error), findsNothing);
       expect(_addButton(tester).onPressed, isNull);
 
       await tester.testTextInput.receiveAction(TextInputAction.done);
       await tester.pumpAndSettle();
 
+      expect(find.text(error), findsOneWidget);
       expect(find.byType(AlertDialog), findsOneWidget);
       expect(repo.trustedImageSendersForTest, isEmpty);
+    });
+
+    testWidgets('Enter with a valid pattern adds it and closes the dialog', (
+      tester,
+    ) async {
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, 'example.com');
+
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(repo.trustedImageSendersForTest, ['*@example.com']);
     });
   });
 }

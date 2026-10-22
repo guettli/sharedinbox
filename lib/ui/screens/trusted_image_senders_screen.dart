@@ -71,6 +71,8 @@ class TrustedImageSendersScreen extends ConsumerWidget {
 
   Future<void> _showAddDialog(BuildContext context, WidgetRef ref) async {
     final controller = TextEditingController();
+    // The error is shown only once the user tried to submit, not while typing.
+    var submitAttempted = false;
 
     await showDialog<void>(
       context: context,
@@ -93,14 +95,17 @@ class TrustedImageSendersScreen extends ConsumerWidget {
                   labelText: 'Email address or pattern',
                   hintText: '*@example.com',
                   helperText: '* matches any characters, e.g. *@example.com',
-                  errorText:
-                      pattern == null && controller.text.trim().isNotEmpty
-                          ? 'Not an email address or pattern like *@example.com'
-                          : null,
+                  errorText: submitAttempted && pattern == null
+                      ? 'Not an email address or pattern like *@example.com'
+                      : null,
                 ),
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) => setState(() => submitAttempted = false),
                 onSubmitted: (_) {
-                  if (pattern != null) add();
+                  if (pattern != null) {
+                    add();
+                  } else {
+                    setState(() => submitAttempted = true);
+                  }
                 },
               ),
               actions: [

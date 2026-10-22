@@ -15,6 +15,10 @@ void main() {
       'john@example.com',
     );
     expect(senderAddress('mailto:alice@example.com'), 'alice@example.com');
+    expect(
+      senderAddress('MAILTO:alice@example.com?subject=Hi'),
+      'alice@example.com',
+    );
   });
 
   test('refuses what is not an address', () {
@@ -45,9 +49,27 @@ void main() {
       expect(trustedImageSenderPattern('b?b@example.org'), 'b?b@example.org');
     });
 
+    test('turns a bare domain into *@domain', () {
+      // Not *example.com: that would also match evilexample.com.
+      expect(trustedImageSenderPattern('Example.com'), '*@example.com');
+      expect(trustedImageSenderPattern('@example.com'), '*@example.com');
+      expect(
+        trustedImageSenderPattern('@mail.example.co.uk'),
+        '*@mail.example.co.uk',
+      );
+    });
+
+    test('drops the query of a pasted mailto: link', () {
+      expect(
+        trustedImageSenderPattern('mailto:Bob@Example.org?subject=Hi'),
+        'bob@example.org',
+      );
+    });
+
     test('refuses entries that could never match a sender', () {
       expect(trustedImageSenderPattern('foo'), isNull);
-      expect(trustedImageSenderPattern('example.com'), isNull);
+      expect(trustedImageSenderPattern('?'), isNull);
+      expect(trustedImageSenderPattern('@'), isNull);
       expect(trustedImageSenderPattern('bob@'), isNull);
       expect(trustedImageSenderPattern('a@b@c'), isNull);
       expect(trustedImageSenderPattern('bob smith@example.org'), isNull);
