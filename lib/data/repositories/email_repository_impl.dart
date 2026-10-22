@@ -1304,12 +1304,18 @@ class EmailRepositoryImpl implements EmailRepository {
         // (including Stalwart 0.14.x) do not increment HIGHESTMODSEQ when new
         // mail is delivered via SMTP, causing newly arrived messages to be
         // silently missed when modseq values appear equal.
-        final newUids = (await client.uidSearchMessages(
-              searchCriteria: 'UID ${lastUid + 1}:*',
-            ))
-                .matchingSequence
-                ?.toList() ??
-            [];
+        // RFC 3501 §6.4.4 reads `n:*` as `*:n` when n is past the largest
+        // UID, so with nothing new this still matches the newest message.
+        // Without the filter every sync fetched that message again and
+        // reported it as "1 new".
+        final newUids = ((await client.uidSearchMessages(
+                  searchCriteria: 'UID ${lastUid + 1}:*',
+                ))
+                    .matchingSequence
+                    ?.toList() ??
+                [])
+            .where((uid) => uid > lastUid)
+            .toList();
         var bytes = 0;
         if (newUids.isNotEmpty) {
           bytes = await _fetchAndUpsertImap(
@@ -1348,8 +1354,13 @@ class EmailRepositoryImpl implements EmailRepository {
           serverUids,
           serverMessageCount: selectedMailbox.messagesExists,
         );
-        final maxUid =
-            serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+        // Advance only past what was searched for and fetched above. Mail
+        // that arrived after that search already shows up in [serverUids];
+        // taking their maximum skipped it for good, since the next search
+        // starts after the checkpoint. This relies on every UID in [newUids]
+        // having been fetched above; if that fetch is ever capped or
+        // chunked, advance only to the highest UID actually fetched.
+        final maxUid = newUids.fold(lastUid, math.max);
         await _saveImapCheckpoint(
           account.id,
           resourceType,

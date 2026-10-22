@@ -213,7 +213,9 @@ class NoteRepositoryImpl implements NoteRepository {
       final pruned =
           await _pruneNotesForAccountByServerId(account.id, serverUidStrings);
 
-      final maxUid = serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+      // Only past what was fetched: a note appended after the search above is
+      // already in [serverUids] and would otherwise never be fetched.
+      final maxUid = trulyNew.fold(lastUid, math.max);
       await _saveNotesCheckpoint(account.id, {
         'uidValidity': uidValidity,
         'lastUid': maxUid,

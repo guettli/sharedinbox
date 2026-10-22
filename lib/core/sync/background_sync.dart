@@ -220,7 +220,11 @@ Future<void> _notifyForNewMail(
   await client.selectMailboxByPath('INBOX');
   final search =
       await client.uidSearchMessages(searchCriteria: 'UID $fromUid:*');
-  final uids = search.matchingSequence?.toList() ?? [];
+  // RFC 3501 reads n:* as *:n when n is past the largest UID, which can match
+  // an older message when the new one was already expunged.
+  final uids = (search.matchingSequence?.toList() ?? [])
+      .where((uid) => uid >= fromUid)
+      .toList();
   if (uids.isEmpty) return;
 
   final fetch = await client.uidFetchMessages(
