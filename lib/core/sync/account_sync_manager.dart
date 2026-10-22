@@ -1059,10 +1059,12 @@ class _AccountSync with _KickableWait {
       final changeCompleter = Completer<void>();
 
       // Any change the server reports for INBOX wakes the loop: new mail
-      // (EXISTS), a removed message (EXPUNGE, or VANISHED under QRESYNC) and
-      // a flag change made on another device (an untagged FETCH, e.g. a mail
-      // read or starred elsewhere). Flag changes used to be ignored, so they
-      // only arrived with the next full sync, up to 25 minutes later.
+      // (EXISTS), a removed message (EXPUNGE) and a flag change made on
+      // another device (an untagged FETCH, e.g. a mail read or starred
+      // elsewhere). Flag changes used to be ignored, so they only arrived
+      // with the next full sync, up to 25 minutes later. VANISHED is handled
+      // defensively only: servers send it instead of EXPUNGE after ENABLE
+      // QRESYNC, which this connection does not send today.
       //
       // The app's own flag pushes cannot echo into an endless sync loop: they
       // are only sent by flushPendingChanges() inside a sync cycle, and this

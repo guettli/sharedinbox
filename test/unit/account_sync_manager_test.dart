@@ -15,6 +15,7 @@ import 'package:test/test.dart';
 
 @GenerateMocks([AccountRepository, MailboxRepository, EmailRepository])
 import 'account_sync_manager_test.mocks.dart';
+import 'fake_imap.dart';
 import 'helpers/fake_email_repository.dart';
 
 void main() {
@@ -128,14 +129,16 @@ void main() {
   });
 
   // A flag changed on another device (`UID STORE 2 +FLAGS (\\Seen)`) is
-  // reported during IDLE as an untagged FETCH, and with QRESYNC an expunge
-  // arrives as VANISHED. The IDLE wait used to react only to EXISTS and
-  // EXPUNGE, so such changes reached the app only with the next full sync,
-  // up to 25 minutes later. Each must now wake the loop for one sync cycle,
-  // after which it goes back to IDLE (no echo loop).
+  // reported during IDLE as an untagged FETCH. The IDLE wait used to react
+  // only to EXISTS and EXPUNGE, so such changes reached the app only with the
+  // next full sync, up to 25 minutes later. It must now wake the loop for one
+  // sync cycle, after which it goes back to IDLE (no echo loop). VANISHED is
+  // only sent after ENABLE QRESYNC, which the IDLE connection does not send
+  // today; the loop listens for it defensively, covered here too. EXISTS is
+  // the control case that already worked.
   final idleEvents = <String, imap.ImapEvent Function(imap.ImapClient)>{
     'FETCH (flag change)': (c) => imap.ImapFetchEvent(imap.MimeMessage(), c),
-    'VANISHED': (c) => imap.ImapVanishedEvent(
+    'VANISHED (defensive, QRESYNC only)': (c) => imap.ImapVanishedEvent(
           imap.MessageSequence.fromId(2, isUid: true),
           c,
           isEarlier: false,
@@ -778,24 +781,11 @@ class _CountingMailboxRepository extends FakeMailboxRepositoryWithInbox {
 /// An IMAP client that never touches the network. When [fireOnIdle] is set,
 /// it reports that event on its event bus once IDLE has started, like a server
 /// pushing an untagged response.
-class _FakeIdleClient extends imap.ImapClient {
+class _FakeIdleClient extends SelectingFakeImapClient {
   _FakeIdleClient({this.fireOnIdle});
 
   final imap.ImapEvent Function(imap.ImapClient)? fireOnIdle;
   bool idleDoneCalled = false;
-
-  @override
-  Future<imap.Mailbox> selectMailboxByPath(
-    String path, {
-    bool enableCondStore = false,
-    imap.QResyncParameters? qresync,
-  }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        flags: [],
-        pathSeparator: '/',
-      );
 
   @override
   Future<void> idleStart() async {
@@ -807,7 +797,4 @@ class _FakeIdleClient extends imap.ImapClient {
 
   @override
   Future<dynamic> idleDone() async => idleDoneCalled = true;
-
-  @override
-  Future<dynamic> logout() async {}
 }
