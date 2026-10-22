@@ -103,6 +103,7 @@ MatchableMessage matchableFromEmail(Email email) {
     to: email.to.map(toMatch).toList(),
     cc: email.cc.map(toMatch).toList(),
     subject: email.subject ?? '',
+    size: email.size,
     folder: email.mailboxPath,
     headers: headers,
   );

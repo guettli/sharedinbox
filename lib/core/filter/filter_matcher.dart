@@ -17,7 +17,7 @@ class MatchableMessage {
     this.to = const [],
     this.cc = const [],
     this.subject = '',
-    this.size = 0,
+    this.size,
     this.folder = '',
     this.headers = const {},
   });
@@ -26,7 +26,10 @@ class MatchableMessage {
   final List<MatchAddress> to;
   final List<MatchAddress> cc;
   final String subject;
-  final int size;
+
+  /// The message size in bytes; null when unknown, and then no size
+  /// condition matches (the same as Advanced Search).
+  final int? size;
   final String folder;
 
   /// Raw headers keyed by lower-cased header name. May be empty when only the
@@ -73,11 +76,12 @@ bool _matchesLeaf(FilterLeaf leaf, MatchableMessage message) {
     case FilterField.folder:
       return _matchesText(leaf, message.folder);
     case FilterField.size:
-      final size = int.tryParse(leaf.value.trim());
-      if (size == null) return false;
+      final limit = parseFilterSize(leaf.value);
+      final size = message.size;
+      if (limit == null || size == null) return false;
       return switch (leaf.comparison) {
-        FilterComparison.over => message.size > size,
-        FilterComparison.under => message.size < size,
+        FilterComparison.over => size > limit,
+        FilterComparison.under => size < limit,
         _ => false,
       };
   }

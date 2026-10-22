@@ -7,7 +7,7 @@ MatchableMessage _msg({
   List<MatchAddress> to = const [],
   List<MatchAddress> cc = const [],
   String subject = '',
-  int size = 0,
+  int? size,
   String folder = '',
   Map<String, String> headers = const {},
 }) =>
@@ -119,6 +119,32 @@ void main() {
 
       expect(matchesFilter(over, _msg(size: 200)), isTrue);
       expect(matchesFilter(under, _msg(size: 50)), isTrue);
+    });
+
+    test('size accepts K/M/G suffixes (binary, like Sieve)', () {
+      bool matches(FilterComparison c, String v, int size) => matchesFilter(
+            _rule(field: FilterField.size, comparison: c, value: v),
+            _msg(size: size),
+          );
+
+      expect(matches(FilterComparison.over, '1MB', 1048577), isTrue);
+      expect(matches(FilterComparison.over, '1 MB', 1048576), isFalse);
+      expect(matches(FilterComparison.under, '10k', 10239), isTrue);
+      expect(matches(FilterComparison.under, '10K', 10240), isFalse);
+    });
+
+    test('size never matches an unknown size or an unparseable value', () {
+      for (final comp in [FilterComparison.over, FilterComparison.under]) {
+        final valid =
+            _rule(field: FilterField.size, comparison: comp, value: '100');
+        expect(matchesFilter(valid, _msg()), isFalse, reason: '$comp');
+        for (final bad in ['Alice', '', '1.5M', '-5', '10 apples']) {
+          final rule =
+              _rule(field: FilterField.size, comparison: comp, value: bad);
+          expect(matchesFilter(rule, _msg(size: 0)), isFalse);
+          expect(matchesFilter(rule, _msg(size: 1 << 30)), isFalse);
+        }
+      }
     });
 
     test('folder is', () {

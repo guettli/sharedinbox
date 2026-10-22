@@ -179,6 +179,12 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
   Future<void> _save() async {
     // Sync visual → script if on visual tab.
     if (_tabController.index == 0 && _visualSupported) {
+      // An unparseable size would be written into the script as is and break
+      // it (or never match); the condition row already shows why.
+      if (_filterGroup.hasInvalidCondition) {
+        setState(() => _error = 'Fix the highlighted condition first');
+        return;
+      }
       _contentController.text = SieveSerializer().serialize(
         _filterGroup,
         _actions,

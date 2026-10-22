@@ -269,9 +269,11 @@ Map<String, dynamic> _jmapEmail({
   String? threadId,
   List<Map<String, dynamic>>? replyTo,
   List<Map<String, dynamic>>? bcc,
+  int? size,
 }) =>
     {
       'id': id,
+      if (size != null) 'size': size,
       'mailboxIds': {mailboxId: true},
       'subject': subject,
       'sentAt': '2024-01-01T10:00:00Z',
@@ -2351,6 +2353,58 @@ void main() {
         expect(results, hasLength(2));
         expect(results[0].subject, 'Newer invoice');
         expect(results[1].subject, 'Older invoice');
+      },
+    );
+
+    test(
+      'searchEmailsStructured compares the stored size; unknown never matches',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        // small, big, and a row cached before sizes were stored (NULL).
+        for (final (uid, size) in [(1, 500), (2, 2000000), (3, null)]) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'acc-1:$uid',
+                  accountId: 'acc-1',
+                  mailboxPath: 'INBOX',
+                  uid: uid,
+                  receivedAt: DateTime(2024, 1, uid),
+                  sizeBytes: Value(size),
+                ),
+              );
+        }
+        Future<List<String>> ids(
+          FilterComparison comparison,
+          String value, {
+          FilterField field = FilterField.size,
+        }) async =>
+            (await r.emails.searchEmailsStructured(
+              'acc-1',
+              FilterGroup.single(field, comparison, value),
+            ))
+                .map((e) => e.id)
+                .toList();
+
+        expect(await ids(FilterComparison.over, '1000000'), ['acc-1:2']);
+        expect(await ids(FilterComparison.over, '1MB'), ['acc-1:2']);
+        expect(await ids(FilterComparison.under, '1 K'), ['acc-1:1']);
+        // Garbage used to match every mail.
+        expect(await ids(FilterComparison.over, 'Alice'), isEmpty);
+        expect(await ids(FilterComparison.under, ''), isEmpty);
+        // over/under on a text field (no editor offers it) matches nothing.
+        expect(
+          await ids(
+            FilterComparison.over,
+            'x',
+            field: FilterField.subject,
+          ),
+          isEmpty,
+        );
+        expect(
+          await ids(FilterComparison.under, 'x', field: FilterField.from_),
+          isEmpty,
+        );
       },
     );
 
@@ -5698,7 +5752,7 @@ void main() {
       expect(emailState.state, 'est1');
     });
 
-    test('full sync stores replyTo and bcc addresses (#919, #1097)', () async {
+    test('full sync stores replyTo, bcc and size', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
           apiResponses: _fullSyncResponses(
@@ -5715,6 +5769,7 @@ void main() {
                   bcc: [
                     {'name': 'Boss', 'email': 'boss@example.com'},
                   ],
+                  size: 2048,
                 ),
                 _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Without'),
               ],
@@ -5732,9 +5787,11 @@ void main() {
       expect(withReplyTo.replyTo.single.name, 'Support');
       expect(withReplyTo.bcc.single.email, 'boss@example.com');
       expect(withReplyTo.bcc.single.name, 'Boss');
+      expect(withReplyTo.size, 2048);
       final without = emails.firstWhere((e) => e.subject == 'Without');
       expect(without.replyTo, isEmpty);
       expect(without.bcc, isEmpty);
+      expect(without.size, isNull);
     });
 
     test('incremental sync applies created, updated, destroyed', () async {
@@ -6268,7 +6325,8 @@ void main() {
     );
 
     test(
-      'periodic reconcile prunes rows missing from Email/query',
+      'periodic reconcile prunes rows missing from Email/query and '
+      'backfills unknown sizes',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
@@ -6302,7 +6360,11 @@ void main() {
                       'accountId': 'acct1',
                       'state': 'est1',
                       'list': [
-                        {'id': 'e-live', 'keywords': <String, dynamic>{}},
+                        {
+                          'id': 'e-live',
+                          'keywords': <String, dynamic>{},
+                          'size': 4321,
+                        },
                       ],
                     },
                     '0',
@@ -6357,6 +6419,9 @@ void main() {
               .getSingleOrNull(),
           isNotNull,
         );
+        // The row cached without a size (before schema v64) gets one.
+        final live = await r.emails.getEmail('jmap-1:e-live');
+        expect(live!.size, 4321);
         final recon = await (r.db.select(r.db.syncStates)
               ..where((t) => t.resourceType.equals('JMAP:Reconcile:mbx1')))
             .getSingle();
@@ -9398,9 +9463,48 @@ void main() {
         ['support@example.com'],
       );
       expect(withReplyTo.bcc.map((a) => a.email), ['boss@example.com']);
+      // RFC822.SIZE (the fake answers the raw message length).
+      expect(withReplyTo.size, messages[42]!._rawMime().length);
       final withoutReplyTo = await r.emails.getEmail('acc-1:INBOX:43');
       expect(withoutReplyTo!.replyTo, isEmpty);
       expect(withoutReplyTo.bcc, isEmpty);
+    });
+
+    test('flag reconcile backfills the size of rows cached without one',
+        () async {
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'Old mail',
+          from: 'sender@example.com',
+          text: 'Hi',
+          messageId: '<m42@example.com>',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // As cached before schema v64, with the reconcile due again.
+      await r.db.update(r.db.emails).write(
+            const EmailsCompanion(sizeBytes: Value(null)),
+          );
+      await (r.db.delete(r.db.syncStates)
+            ..where(
+              (t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX'),
+            ))
+          .go();
+      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.size, isNull);
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(
+        (await r.emails.getEmail('acc-1:INBOX:42'))!.size,
+        messages[42]!._rawMime().length,
+      );
     });
 
     test('syncEmails derives preview from HTML when there is no text part',
@@ -10624,12 +10728,18 @@ class _PreviewSyncImapClient extends FakeImapClient {
     // Like a real server, only answer INTERNALDATE when it was asked for.
     final wantsInternalDate =
         fetchContentDefinition?.contains('INTERNALDATE') ?? false;
+    final wantsSize = fetchContentDefinition?.contains('RFC822.SIZE') ?? false;
+    // The periodic flag reconcile fetches `1:*`, which toList() cannot spell.
+    final uids =
+        sequence.containsLast() ? messages.keys.toList() : sequence.toList();
     final built = <imap.MimeMessage>[
-      for (final uid in sequence.toList())
+      for (final uid in uids)
         if (messages[uid] != null)
           messages[uid]!.build(uid)
             ..internalDate =
-                wantsInternalDate ? messages[uid]!.internalDate : null,
+                wantsInternalDate ? messages[uid]!.internalDate : null
+            // Nor RFC822.SIZE, so a size backfill must really ask for it.
+            ..size = wantsSize ? messages[uid]!._rawMime().length : null,
     ];
     return imap.FetchImapResult(built, null);
   }

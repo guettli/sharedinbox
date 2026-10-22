@@ -16,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 63);
+      expect(db.schemaVersion, 64);
       await db.close();
     });
 
@@ -135,6 +135,9 @@ void main() {
 
       // v61: Bcc addresses (#1097).
       expect(emailColumns, contains('bcc_json'));
+
+      // v64: message size for the Advanced Search size condition.
+      expect(emailColumns, contains('size_bytes'));
 
       // v55: previews poisoned by the mis-parsed partial body fetch (#680) are
       // cleared so getEmailBody's backfill can replace them; real previews are
@@ -371,7 +374,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 63);
+      expect(version.read<int>('user_version'), 64);
       await db.close();
     });
 
@@ -412,7 +415,38 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 63);
+      expect(version.read<int>('user_version'), 64);
+      await db.close();
+    });
+
+    test('v63→v64 adds a NULL emails.size_bytes to cached mail', () async {
+      final dbFile = File('test_migration_v63_size.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE emails DROP COLUMN size_bytes;')
+        ..execute(
+          'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)'
+          " VALUES ('e1', 'acc-x', 'INBOX', 1, 0);",
+        )
+        ..execute('PRAGMA user_version = 63;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      // Unknown until a sync or reconcile fills it in.
+      final row = await db
+          .customSelect("SELECT size_bytes FROM emails WHERE id = 'e1'")
+          .getSingle();
+      expect(row.read<int?>('size_bytes'), isNull);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 64);
       await db.close();
     });
 
@@ -508,7 +542,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 63);
+      expect(version.read<int>('user_version'), 64);
     });
 
     test(
@@ -1024,6 +1058,18 @@ void main() {
 
       final emailColumns = await _tableColumns(db, 'emails');
       expect(emailColumns, contains('list_unsubscribe_header'));
+      expect(emailColumns, contains('size_bytes')); // v64
+      expect(await _tableColumns(db, 'threads'), contains('latest_uid'));
+      final indexes = (await db
+              .customSelect(
+                "SELECT name FROM sqlite_master WHERE type = 'index'",
+              )
+              .get())
+          .map((r) => r.read<String>('name'));
+      expect(
+        indexes,
+        containsAll(['emails_list_order', 'threads_list_order']), // v63
+      );
 
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));

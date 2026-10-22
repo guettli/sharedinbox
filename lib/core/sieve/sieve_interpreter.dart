@@ -6,10 +6,14 @@ import 'package:sharedinbox/core/utils/glob_match.dart';
 /// A lightweight email representation used by [SieveInterpreter].
 /// Header names are lower-cased.
 class SieveEmailContext {
-  const SieveEmailContext({required this.headers, this.sizeBytes = 0});
+  const SieveEmailContext({required this.headers, this.sizeBytes});
 
   final Map<String, List<String>> headers;
-  final int sizeBytes;
+
+  /// The message size; null when unknown, and then no `size` test is true
+  /// (RFC 5228 §5.9 has no "unknown", but guessing 0 made every `:under`
+  /// match).
+  final int? sizeBytes;
 
   List<String> getHeader(String name) =>
       headers[name.toLowerCase()] ?? const [];
@@ -136,9 +140,11 @@ class SieveInterpreter {
   }
 
   bool _evalSize(SizeCondition cond, SieveEmailContext email) {
+    final size = email.sizeBytes;
+    if (size == null) return false;
     return switch (cond.comparison) {
-      ':over' => email.sizeBytes > cond.bytes,
-      ':under' => email.sizeBytes < cond.bytes,
+      ':over' => size > cond.bytes,
+      ':under' => size < cond.bytes,
       _ => false,
     };
   }
