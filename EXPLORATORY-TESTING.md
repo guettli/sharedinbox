@@ -92,6 +92,9 @@ c click name=From contains=1 role='push button' force=1   # see [disabled] below
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …
+c press x=600 y=150                  # long press: selects a mail in the list
+c drag x=200 y=150 to_x=900 to_y=150 # swipe: opens a list row's action menu
+c drag x=200 y=150 to_x=500 to_y=150 hold=1   # keep it open, then /shot
 c restart wipe=1                     # fresh install: no data, empty keyring
 ```
 
@@ -236,6 +239,11 @@ IMAP is available too, at `localhost:21430` (plaintext).
   accessibility bus (`texts` says `<app not on the accessibility bus>`) and
   `key Escape` does not reach the dialog. Recover with `c restart`; drafts are
   kept. Test attachments by seeding mail with them, or on Android.
+- **Gestures:** `press` and `drag` move the real pointer. With `hold=1` the
+  button stays down until a `drag` without it (or `restart`); give the next
+  `drag` the point where the last one ended. A `shot` right after a drag can
+  still show the frame before the last move, so nudge by a pixel first
+  (another `hold=1` drag) when you check what the pointer is over.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The
