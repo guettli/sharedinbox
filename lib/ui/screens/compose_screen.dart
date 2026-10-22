@@ -18,6 +18,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart'
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
@@ -436,6 +437,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       return;
     }
+    final invalid = [
+      ...invalidRecipients(_to.text),
+      ...invalidRecipients(_cc.text),
+    ];
+    if (invalid.isNotEmpty) {
+      context.showAppSnackBar(
+        invalid.length == 1
+            ? 'Not an email address: ${invalid.single}'
+            : 'Not email addresses: ${invalid.join(', ')}',
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
     setState(() => _sending = true);
     final messenger = context.appMessenger();
     // Set once the message is in the outbox: from then on a failure must not
@@ -447,18 +461,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final threading = await _replyThreading();
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
-        to: _to.text
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .map((e) => EmailAddress(email: e))
-            .toList(),
-        cc: _cc.text
-            .split(',')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty)
-            .map((e) => EmailAddress(email: e))
-            .toList(),
+        // Parsed into name and address here: the JMAP send path uses the
+        // address as given, so a raw "Bob <bob@x>" chunk was rejected there.
+        to: recipientAddresses(_to.text),
+        cc: recipientAddresses(_cc.text),
         subject: _subject.text,
         body: _body.text,
         attachmentFilePaths: List.unmodifiable(
