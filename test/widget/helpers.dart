@@ -1100,13 +1100,11 @@ Email testEmail({
 class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
     this.menuPosition = MenuPosition.bottom,
-    this.mailViewButtonPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
     List<String>? trustedImageSenders,
   }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
-  MenuPosition mailViewButtonPosition;
   AfterMailViewAction afterMailViewAction;
   final List<String> _trustedImageSenders;
 
@@ -1117,7 +1115,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   Stream<UserPreferences> observePreferences() => Stream.value(
         UserPreferences(
           menuPosition: menuPosition,
-          mailViewButtonPosition: mailViewButtonPosition,
           afterMailViewAction: afterMailViewAction,
         ),
       );
@@ -1125,11 +1122,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   @override
   Future<void> updateMenuPosition(MenuPosition position) async {
     menuPosition = position;
-  }
-
-  @override
-  Future<void> updateMailViewButtonPosition(MenuPosition position) async {
-    mailViewButtonPosition = position;
   }
 
   @override

@@ -69,43 +69,6 @@ class UserPreferencesScreen extends ConsumerWidget {
             const Divider(),
             ListTile(
               title: Text(
-                'Single mail view button position',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              subtitle: const Text(
-                'Where the back button is shown in the single mail view.',
-              ),
-            ),
-            RadioGroup<MenuPosition>(
-              groupValue: prefs.mailViewButtonPosition,
-              onChanged: (value) {
-                if (value == null) return;
-                unawaited(
-                  ref
-                      .read(userPreferencesRepositoryProvider)
-                      .updateMailViewButtonPosition(value),
-                );
-              },
-              child: const Column(
-                children: [
-                  RadioListTile<MenuPosition>(
-                    title: Text('Bottom (default)'),
-                    subtitle: Text(
-                      'Show the back button at the bottom of the screen.',
-                    ),
-                    value: MenuPosition.bottom,
-                  ),
-                  RadioListTile<MenuPosition>(
-                    title: Text('Top'),
-                    subtitle: Text('Show the back button in the top bar.'),
-                    value: MenuPosition.top,
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            ListTile(
-              title: Text(
                 'After mail action',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
