@@ -516,6 +516,22 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
       ) as _i6.Future<_i3.SyncEmailsResult>);
 
   @override
+  _i6.Future<_i3.ImapMailboxState?> lastImapMailboxState(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #lastImapMailboxState,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i6.Future<_i3.ImapMailboxState?>.value(),
+      ) as _i6.Future<_i3.ImapMailboxState?>);
+
+  @override
   _i6.Future<void> setFlag(
     String? emailId, {
     bool? seen,

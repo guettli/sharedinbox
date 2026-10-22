@@ -1253,6 +1253,21 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  @override
+  Future<model.ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final checkpoint =
+        await _loadImapCheckpoint(accountId, 'IMAP:$mailboxPath');
+    if (checkpoint == null) return null;
+    return model.ImapMailboxState(
+      uidNext: checkpoint['uidNext'] as int?,
+      exists: checkpoint['exists'] as int?,
+      highestModSeq: checkpoint['highestModSeq'] as int?,
+    );
+  }
+
   Future<model.SyncEmailsResult> _syncEmailsImap(
     account_model.Account account,
     String password,
@@ -1333,6 +1348,8 @@ class EmailRepositoryImpl implements EmailRepository {
           uidValidity,
           maxUid,
           highestModSeq: serverModSeq,
+          uidNext: selectedMailbox.uidNext,
+          exists: selectedMailbox.messagesExists,
         );
         // Record that we've just fetched every flag so the periodic reconcile
         // in _maybeReconcileImapFlagsMailbox doesn't repeat it immediately.
@@ -1420,6 +1437,8 @@ class EmailRepositoryImpl implements EmailRepository {
           uidValidity,
           maxUid,
           highestModSeq: serverModSeq,
+          uidNext: selectedMailbox.uidNext,
+          exists: selectedMailbox.messagesExists,
         );
         await _sweepOrphanThreads(account.id, mailboxPath);
         return model.SyncEmailsResult(
@@ -1925,12 +1944,18 @@ class EmailRepositoryImpl implements EmailRepository {
     int uidValidity,
     int lastUid, {
     int? highestModSeq,
+    int? uidNext,
+    int? exists,
   }) async {
     final data = <String, dynamic>{
       'uidValidity': uidValidity,
       'lastUid': lastUid,
     };
     if (highestModSeq != null) data['highestModSeq'] = highestModSeq;
+    // What SELECT reported, for the IDLE wait's catch-up check
+    // ([lastImapMailboxState]).
+    if (uidNext != null) data['uidNext'] = uidNext;
+    data['exists'] = exists;
     await _saveSyncState(accountId, resourceType, jsonEncode(data));
   }
 

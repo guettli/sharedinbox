@@ -57,6 +57,14 @@ abstract class EmailRepository {
   /// is performed. The result is then written back to the cache.
   Future<EmailBody> getEmailBody(String emailId, {bool forceRefresh = false});
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
+
+  /// What the last successful IMAP sync of [mailboxPath] saw when it selected
+  /// the mailbox, or null when it has not been synced over IMAP yet (or the
+  /// account is JMAP).
+  Future<ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  );
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged});
   Future<void> markAllAsRead(String accountId, String mailboxPath);
   Future<void> moveEmail(String emailId, String destMailboxPath);

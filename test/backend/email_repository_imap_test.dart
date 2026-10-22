@@ -111,6 +111,46 @@ void main() {
     expect((checkpoint['lastUid'] as int), greaterThan(0));
   });
 
+  // The IMAP IDLE wait compares its own SELECT of INBOX with what the last
+  // sync saw, to catch mail delivered while the cycle ran (which IDLE never
+  // reports). Both sides must read the same values from a real server.
+  test('lastImapMailboxState matches a later SELECT until new mail arrives',
+      () async {
+    await appendToInbox('state-1');
+    await appendToInbox('state-2');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    expect(await r.emails.lastImapMailboxState('test', 'INBOX'), isNull);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    Future<ImapMailboxState> selectInbox() async {
+      final client = await connectImap(env: env, user: user);
+      try {
+        final mbox = await client.selectMailboxByPath(
+          'INBOX',
+          enableCondStore: client.serverInfo.supports('CONDSTORE'),
+        );
+        return ImapMailboxState(
+          uidNext: mbox.uidNext,
+          exists: mbox.messagesExists,
+          highestModSeq: mbox.highestModSequence,
+        );
+      } finally {
+        await client.logout();
+      }
+    }
+
+    final synced = await r.emails.lastImapMailboxState('test', 'INBOX');
+    expect(synced, isNotNull);
+    expect(synced!.uidNext, isNotNull);
+    expect(synced.exists, 2);
+    expect((await selectInbox()).differsFrom(synced), isFalse);
+
+    await appendToInbox('state-3');
+    expect((await selectInbox()).differsFrom(synced), isTrue);
+  });
+
   test(
     'syncEmails incremental sync fetches only messages newer than checkpoint',
     () async {
