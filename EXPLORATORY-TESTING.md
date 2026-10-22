@@ -240,8 +240,9 @@ IMAP is available too, at `localhost:21430` (plaintext).
   `key Escape` does not reach the dialog. Recover with `c restart`; drafts are
   kept. Test attachments by seeding mail with them, or on Android.
 - **Gestures:** `press` and `drag` move the real pointer. With `hold=1` the
-  button stays down until a `drag` without it (or `restart`); give the next
-  `drag` the point where the last one ended. A `shot` right after a drag can
+  button stays down until a `drag` without it (or `restart`); the next
+  `drag` goes on from where the pointer is, and `tap`/`press` are refused
+  meanwhile. A `shot` right after a drag can
   still show the frame before the last move, so nudge by a pixel first
   (another `hold=1` drag) when you check what the pointer is over.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
