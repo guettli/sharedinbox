@@ -1,6 +1,9 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/data/db/database.dart'
+    show UserPreferencesCompanion;
 import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 
 import 'db_test_helper.dart';
@@ -15,7 +18,6 @@ void main() {
 
       final prefs = await repo.observePreferences().first;
       expect(prefs.menuPosition, MenuPosition.bottom);
-      expect(prefs.mailViewButtonPosition, MenuPosition.bottom);
       expect(prefs.afterMailViewAction, AfterMailViewAction.nextMessage);
       expect(prefs.prefetchMode, PrefetchMode.wifiOnly);
 
@@ -33,13 +35,21 @@ void main() {
       await db.close();
     });
 
-    test('updateMailViewButtonPosition round-trips', () async {
+    test('legacy mailViewButtonPosition value in the DB is ignored', () async {
+      // The column is unused since #1093 but kept to avoid a migration.
+      // Rows written by older versions must still load.
       final db = openTestDatabase();
       final repo = UserPreferencesRepositoryImpl(db);
 
-      await repo.updateMailViewButtonPosition(MenuPosition.top);
+      await db.into(db.userPreferences).insert(
+            const UserPreferencesCompanion(
+              id: Value(1),
+              menuPosition: Value('top'),
+              mailViewButtonPosition: Value('top'),
+            ),
+          );
       final prefs = await repo.observePreferences().first;
-      expect(prefs.mailViewButtonPosition, MenuPosition.top);
+      expect(prefs.menuPosition, MenuPosition.top);
 
       await db.close();
     });

@@ -29,16 +29,6 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   }
 
   @override
-  Future<void> updateMailViewButtonPosition(pref.MenuPosition position) async {
-    await _db.into(_db.userPreferences).insertOnConflictUpdate(
-          UserPreferencesCompanion(
-            id: const Value(_rowId),
-            mailViewButtonPosition: Value(position.name),
-          ),
-        );
-  }
-
-  @override
   Future<void> updateAfterMailViewAction(
     pref.AfterMailViewAction action,
   ) async {
@@ -100,10 +90,6 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
     return pref.UserPreferences(
       menuPosition: pref.MenuPosition.values.firstWhere(
         (e) => e.name == row.menuPosition,
-        orElse: () => pref.MenuPosition.bottom,
-      ),
-      mailViewButtonPosition: pref.MenuPosition.values.firstWhere(
-        (e) => e.name == row.mailViewButtonPosition,
         orElse: () => pref.MenuPosition.bottom,
       ),
       afterMailViewAction: pref.AfterMailViewAction.values.firstWhere(
