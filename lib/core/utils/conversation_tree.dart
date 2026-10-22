@@ -37,7 +37,11 @@ List<ConversationNode> buildConversationTree(List<Email> emails) {
   int compareByDate(Email a, Email b) {
     final da = a.sentAt ?? a.receivedAt;
     final db = b.sentAt ?? b.receivedAt;
-    return da.compareTo(db);
+    final byDate = da.compareTo(db);
+    if (byDate != 0) return byDate;
+    // Same second: arrival (UID) order, like the repository's thread query.
+    final byUid = a.uid.compareTo(b.uid);
+    return byUid != 0 ? byUid : a.id.compareTo(b.id);
   }
 
   // Index by canonical Message-ID. Cross-folder copies of the same message can

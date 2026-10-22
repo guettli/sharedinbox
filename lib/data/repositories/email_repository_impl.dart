@@ -87,6 +87,13 @@ class _LiveMailboxCounts {
 }
 
 class EmailRepositoryImpl implements EmailRepository {
+  /// SQL `ORDER BY` of the mail search results (table alias `e`): starred
+  /// first, then [model.compareNewestFirst]. Searches span folders and
+  /// accounts, whose UIDs are not comparable; there the UID tiebreak only
+  /// makes the order deterministic.
+  static const _emailListOrderSql =
+      'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
+
   EmailRepositoryImpl(
     AppDatabase db,
     this._accounts, {
@@ -154,7 +161,14 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          // Mail from the same second: highest UID (newest arrival) first.
+          // `id` makes rows with equal UIDs (JMAP, local) deterministic.
+          // Matches the `emails_list_order` index.
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -172,9 +186,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
+          // Matches the `threads_list_order` index; see [observeEmails] for
+          // the tiebreakers.
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.latestDate),
+            (t) => OrderingTerm.desc(t.latestUid),
+            (t) => OrderingTerm.desc(t.id),
           ])
           ..limit(limit))
         .watch()
@@ -203,6 +221,10 @@ class EmailRepositoryImpl implements EmailRepository {
       ..orderBy([
         OrderingTerm.desc(_db.threads.isFlagged),
         OrderingTerm.desc(_db.threads.latestDate),
+        // UIDs of different accounts are not comparable: across inboxes
+        // this tiebreak only makes the order deterministic.
+        OrderingTerm.desc(_db.threads.latestUid),
+        OrderingTerm.desc(_db.threads.id),
       ])
       ..limit(limit);
     return query.watch().asyncMap((rows) async {
@@ -231,7 +253,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ///
   /// The kept copy is deterministic (IMAP preferred, then lowest account id)
   /// and keeps its original list position, preserving the query's
-  /// `isFlagged`/`latestDate` ordering.
+  /// `isFlagged`/`latestDate`/`latestUid`/`id` ordering.
   List<model.EmailThread> _dedupeCounterpartThreads(
     List<(model.EmailThread, String?)> rows,
     List<account_model.Account> accounts,
@@ -334,9 +356,12 @@ class EmailRepositoryImpl implements EmailRepository {
           )
           // Same key as `latestDate` below, so an undated message sorts by
           // its arrival time rather than first (SQLite orders NULL lowest).
+          // Same-second mail by UID, so `latest` is the newest arrival.
           ..orderBy([
             (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .get();
 
@@ -382,6 +407,7 @@ class EmailRepositoryImpl implements EmailRepository {
             participantsJson: Value(jsonEncode(participants)),
             preview: Value(latest.preview),
             latestEmailId: latest.id,
+            latestUid: Value(latest.uid),
             emailIdsJson: Value(
               jsonEncode(threadEmails.map((e) => e.id).toList()),
             ),
@@ -1008,11 +1034,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // threads.latest_email_id is a plain equality match; threads.email_ids_json
       // is a JSON array of email IDs — both are safe to update via REPLACE()
-      // because email IDs are unique opaque strings.
+      // because email IDs are unique opaque strings. latest_uid follows the
+      // latest email's UID, the thread list's same-second tiebreaker.
       await _db.customStatement(
-        'UPDATE threads SET latest_email_id = ?1 '
+        'UPDATE threads SET latest_email_id = ?1, latest_uid = ?3 '
         'WHERE latest_email_id = ?2',
-        [newId, oldId],
+        [newId, oldId, newUid],
       );
       await _db.customStatement(
         'UPDATE threads SET email_ids_json = '
@@ -1577,7 +1604,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   static const _imapSizeBackfillBatch = 500;
 
-  /// Fetches RFC822.SIZE for [rows] (cached before schema v63, still on the
+  /// Fetches RFC822.SIZE for [rows] (cached before schema v64, still on the
   /// server) in batches and stores it. Only these rows are asked for, so once
   /// a mailbox is backfilled the reconcile costs nothing extra.
   Future<void> _backfillImapSizes(
@@ -1602,7 +1629,7 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Stores the message sizes in [sizeById] (email row id → bytes) in one
-  /// batch: rows cached before schema v63 have none, and the first
+  /// batch: rows cached before schema v64 have none, and the first
   /// reconcile after the upgrade can fill in a whole mailbox at once.
   Future<void> _backfillSizes(Map<String, int> sizeById) async {
     if (sizeById.isEmpty) return;
@@ -3572,7 +3599,7 @@ class EmailRepositoryImpl implements EmailRepository {
           {
             'accountId': jmap.accountId,
             'ids': batch,
-            // `size` backfills rows cached before schema v63.
+            // `size` backfills rows cached before schema v64.
             'properties': ['id', 'keywords', 'size'],
           },
           '0',
@@ -6347,18 +6374,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<int> enqueueSend(String accountId, model.EmailDraft draft) async {
-    // Stamp a deterministic Message-ID so a self-send's immediately-created
-    // local message and the real message that arrives later share the same id
-    // (#545). enough_mail would otherwise generate a random one at send time.
+    // Stamp a deterministic Message-ID so a self-send's local inbox note and
+    // the real message that arrives later share the same id (#545). enough_mail
+    // would otherwise generate a random one at send time.
     final host = draft.from.email.contains('@')
         ? draft.from.email.split('@').last
         : 'localhost';
     final stampedDraft = draft.messageId != null
         ? draft
         : draft.copyWith(messageId: imap.MessageBuilder.createMessageId(host));
-    final rowId = await _outbox.enqueue(accountId, stampedDraft);
-    await _createLocalSelfMessages(accountId, stampedDraft);
-    return rowId;
+    // The self-send inbox note (#545) is NOT created here: until SMTP accepts
+    // the message it may still be rejected (unknown recipient, 5xx) or be
+    // discarded from the Sent Queue, and a note in the inbox would then look
+    // like mail that arrived although nothing was delivered. It is created by
+    // the outbox sender once the send has succeeded (see [_flushOutbox]).
+    return _outbox.enqueue(accountId, stampedDraft);
   }
 
   /// Marker inserted into a local (virtual) email row's `id` so it never
@@ -6449,12 +6479,13 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// For every configured account whose address is among [draft]'s recipients,
   /// insert a local "virtual" copy of the message into that account's inbox so
-  /// it shows up immediately for note-taking (#545). Dissolved into the real
+  /// it shows up right after sending for note-taking (#545), instead of only
+  /// once the next sync of the inbox fetches it. Dissolved into the real
   /// message by [_maybeDissolveLocalMessage] once it arrives via sync.
-  Future<void> _createLocalSelfMessages(
-    String accountId,
-    model.EmailDraft draft,
-  ) async {
+  ///
+  /// Only call this after the server accepted the message: a note for a mail
+  /// that was rejected or discarded would be a phantom inbox message.
+  Future<void> _createLocalSelfMessages(model.EmailDraft draft) async {
     final mid = normaliseMessageId(draft.messageId);
     if (mid == null) return;
     final recipients = <String>{
@@ -6485,38 +6516,87 @@ class EmailRepositoryImpl implements EmailRepository {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: emailId,
-              accountId: account.id,
-              mailboxPath: inbox.path,
-              uid: 0,
-              subject: Value(draft.subject),
-              sentAt: Value(now),
-              receivedAt: now,
-              fromJson: Value(_encodeModelAddresses([draft.from])),
-              toAddresses: Value(_encodeModelAddresses(draft.to)),
-              ccJson: Value(_encodeModelAddresses(draft.cc)),
-              preview: Value(preview),
-              // Self-sent: you wrote it, so don't nag with an unread badge.
-              isSeen: const Value(true),
-              isFlagged: const Value(false),
-              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-              threadId: Value(threadId),
-              messageId: Value(mid),
-              isLocal: const Value(true),
-            ),
-          );
-      await _db.into(_db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: emailId,
-              textBody: Value(body),
-              cachedAt: Value(now),
-              bodySize: Value(_bodySize(body, null)),
-            ),
-          );
-      await _updateThread(account.id, inbox.path, threadId);
+      // One transaction: the arrival check and the insert must not interleave
+      // with a sync storing the real message, and a note must never be left
+      // half-written (row without body or thread aggregate).
+      await _db.transaction(() async {
+        // A fast server can deliver the real message, and a sync can store
+        // it, before we get here. Its arrival found no note to dissolve, so a
+        // note inserted now would stay behind as a permanent duplicate.
+        if (await _hasArrivedOutsideSent(account.id, mid)) return;
+
+        // insertOrIgnore: a second successful send of the same draft (or a
+        // replay) must not reset the star / read state / folder the user has
+        // already set on the note.
+        await _db.into(_db.emails).insert(
+              EmailsCompanion.insert(
+                id: emailId,
+                accountId: account.id,
+                mailboxPath: inbox.path,
+                uid: 0,
+                subject: Value(draft.subject),
+                sentAt: Value(now),
+                receivedAt: now,
+                fromJson: Value(_encodeModelAddresses([draft.from])),
+                toAddresses: Value(_encodeModelAddresses(draft.to)),
+                ccJson: Value(_encodeModelAddresses(draft.cc)),
+                preview: Value(preview),
+                // Self-sent: you wrote it, so don't nag with an unread badge.
+                isSeen: const Value(true),
+                isFlagged: const Value(false),
+                hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+                threadId: Value(threadId),
+                messageId: Value(mid),
+                isLocal: const Value(true),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _db.into(_db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: emailId,
+                textBody: Value(body),
+                cachedAt: Value(now),
+                bodySize: Value(_bodySize(body, null)),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _updateThread(account.id, inbox.path, threadId);
+      });
     }
+  }
+
+  /// Whether the real (synced, non-local) message with Message-ID [mid] is
+  /// already stored on [accountId] in any folder but Sent. Mirrors which
+  /// arrivals [_maybeDissolveLocalMessage] dissolves an inbox note against: a
+  /// Sent-folder row is the copy of what we sent, not the delivered message,
+  /// and a server rule may have filed the delivery somewhere other than INBOX.
+  ///
+  /// Only folders the mailbox list knows count: a sync only ever stores
+  /// messages of such a folder, whereas the Sent copy we just appended may sit
+  /// in a folder not synced yet (e.g. a freshly created "Sent"), whose missing
+  /// role must not pass it off as the delivered message.
+  Future<bool> _hasArrivedOutsideSent(String accountId, String mid) async {
+    final rows = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.mailboxPath])
+          ..where(
+            _db.emails.accountId.equals(accountId) &
+                _db.emails.isLocal.equals(false) &
+                (_db.emails.messageId.equals(mid) |
+                    _db.emails.messageId.equals('<$mid>')),
+          ))
+        .get();
+    for (final row in rows) {
+      final mailbox = await (_db.select(_db.mailboxes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.path.equals(row.read(_db.emails.mailboxPath)!),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (mailbox != null && mailbox.role != 'sent') return true;
+    }
+    return false;
   }
 
   String _encodeModelAddresses(List<model.EmailAddress> addresses) =>
@@ -6566,6 +6646,22 @@ class EmailRepositoryImpl implements EmailRepository {
               await _sendEmailImap(account, password, job.draft, timing);
             case account_model.AccountType.jmap:
               await _sendEmailJmap(account, password, job.draft);
+          }
+          // Accepted by the server: only now may a mail to one of our own
+          // accounts show up in that inbox (#545). Best-effort, like the Sent
+          // copy — rethrowing would re-send an already-sent message.
+          try {
+            await _createLocalSelfMessages(job.draft);
+          } catch (e, stack) {
+            unawaited(
+              _appLogger?.warn(
+                'outbox.send.self_note_failed',
+                'Message sent, but adding the local inbox copy failed: $e',
+                accountId: accountId,
+                error: e,
+                stack: stack,
+              ),
+            );
           }
         } on imap.SmtpException catch (e) {
           // Permanent SMTP rejections come back as 5xx response codes — those
@@ -6886,7 +6982,8 @@ class EmailRepositoryImpl implements EmailRepository {
       final appendUid =
           (uidList != null && uidList.isNotEmpty) ? uidList.first : null;
       // The draft's own id first: it is what `enqueueSend` stamped and what the
-      // self-send inbox note (#545) was keyed on, so both rows agree. The
+      // self-send inbox note (#545), created once this send returns, is keyed
+      // on, so both rows agree. The
       // header is only a fallback for a direct send that never went through the
       // outbox, and MessageBuilder can hand it back double-bracketed (#859),
       // which `normaliseMessageId` only half-strips.
@@ -7508,10 +7605,10 @@ class EmailRepositoryImpl implements EmailRepository {
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
             ' WHERE email_fts MATCH ? AND e.account_id = ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
+            ' ORDER BY $_emailListOrderSql LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
             ' WHERE email_fts MATCH ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+            ' ORDER BY $_emailListOrderSql LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -7532,7 +7629,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     merged.sort((a, b) {
       if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
+      return model.compareNewestFirst(a, b);
     });
     return merged;
   }
@@ -7606,7 +7703,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = 'SELECT DISTINCT e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT 50';
 
     final rows = await _db
         .customSelect(
@@ -7634,6 +7731,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
           ])
           ..limit(100))
         .get();
@@ -7670,7 +7769,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// Compares the stored message size. An unparseable value matches
   /// nothing (the editors refuse it), and so does a row whose size is unknown
-  /// (NULL: cached before schema v63 and not yet backfilled by a reconcile):
+  /// (NULL: cached before schema v64 and not yet backfilled by a reconcile):
   /// SQL `NULL > n` is not true.
   Expression<bool> _sizeCompare(GeneratedColumn<int> col, FilterLeaf leaf) {
     final bytes = parseFilterSize(leaf.value);
@@ -7845,6 +7944,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
           ]))
         .get();
     return rows.map(_toModel).toList();
@@ -7882,7 +7983,11 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return cond;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(100))
         .get();
 
@@ -7934,7 +8039,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -7957,7 +8062,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     merged.sort((a, b) {
       if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
+      return model.compareNewestFirst(a, b);
     });
     return merged;
   }
@@ -8051,6 +8156,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -8063,7 +8170,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) {
     // Same as observeEmailsInThread but without the mailboxPath filter, so a
     // conversation's Inbox, Sent and Archive copies are gathered together
-    // (#754).
+    // (#754). The UID tiebreak compares UIDs of different folders, so for
+    // same-second copies it only makes the order deterministic.
     return (_db.select(_db.emails)
           ..where(
             (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),
@@ -8071,6 +8179,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());

@@ -407,8 +407,9 @@ class EmailDraft {
 
   /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
   /// message. When null, the mail library generates one at send time. Set
-  /// explicitly for self-sends so the immediately-created local message and
-  /// the real message that arrives later share the same id (see #545).
+  /// explicitly for queued sends so a self-send's local inbox note (created
+  /// once the server accepted the message) and the real message that arrives
+  /// later share the same id (see #545).
   final String? messageId;
 
   /// For a reply: the parent's Message-ID and the References chain to send
@@ -663,4 +664,19 @@ class MailboxDiagnostics {
     }
     return out;
   }
+}
+
+/// Newest-first list order: by [Email.receivedAt], and mail from the same
+/// second (bulk mail, mailing lists, scripts) by UID, the IMAP arrival order,
+/// so the newest arrival comes first. [Email.id] makes the order total for
+/// rows with equal UIDs (JMAP and local rows have UID 0). The same key as the
+/// repository's SQL list queries. UIDs are only comparable within one folder:
+/// for results spanning folders or accounts the tiebreak just makes the order
+/// deterministic.
+int compareNewestFirst(Email a, Email b) {
+  final byDate = b.receivedAt.compareTo(a.receivedAt);
+  if (byDate != 0) return byDate;
+  final byUid = b.uid.compareTo(a.uid);
+  if (byUid != 0) return byUid;
+  return b.id.compareTo(a.id);
 }

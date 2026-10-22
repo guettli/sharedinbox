@@ -89,7 +89,12 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
           ..where(
             (t) => t.accountId.equals(accountId) & t.mailboxPath.isIn(paths),
           )
-          ..orderBy([(t) => OrderingTerm.asc(t.receivedAt)]))
+          // Same-second mail in arrival (UID) order.
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .get();
     final notified = await (_db.select(_db.notifiedEmails)
           ..where((t) => t.accountId.equals(accountId)))
