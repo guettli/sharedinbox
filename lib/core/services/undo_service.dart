@@ -152,15 +152,44 @@ class UndoService extends Notifier<List<UndoAction>> {
           ]);
         }
 
-        // 4. Move it back to source.
-        // This updates local DB optimistically and (if not cancelled) enqueues
-        // a reverse move on the server using the correct UID.
-        await repo.moveEmail(currentId, action.sourceMailboxPath);
+        // A move out of the Snoozed folder ends the snooze (locally and, once
+        // flushed, its server-side `snz:` keyword), so undoing it must put
+        // the snooze back rather than leave the mail in Snoozed with no wake
+        // time.
+        // Only when going back to the Snoozed folder: a stale snooze on a mail
+        // filed elsewhere (e.g. Archive) is not one to restore.
+        final snoozedUntil = original?.snoozedUntil;
+        final restoreSnooze = snoozedUntil != null &&
+            original!.mailboxPath == action.sourceMailboxPath &&
+            await repo.isSnoozedMailbox(
+              action.accountId,
+              action.sourceMailboxPath,
+            );
+
+        if (restoreSnooze && !cancelled) {
+          // The move reached the server: snoozing again moves the mail back
+          // to Snoozed and re-adds the keyword.
+          await repo.snoozeEmail(currentId, snoozedUntil);
+        } else {
+          // 4. Move it back to source.
+          // This updates local DB optimistically and (if not cancelled)
+          // enqueues a reverse move on the server using the correct UID.
+          await repo.moveEmail(currentId, action.sourceMailboxPath);
+        }
 
         if (cancelled) {
           // 5. If we successfully cancelled the original, the reverse move
           // we just enqueued is redundant.
           await repo.cancelPendingChange(currentId, 'move');
+          // The server never saw the move, so it still holds the snooze;
+          // only the optimistic local clear needs undoing.
+          if (restoreSnooze) {
+            await repo.restoreLocalSnooze(
+              currentId,
+              until: snoozedUntil,
+              fromMailboxPath: original.snoozedFromMailboxPath,
+            );
+          }
         }
       } catch (e) {
         // Best effort.

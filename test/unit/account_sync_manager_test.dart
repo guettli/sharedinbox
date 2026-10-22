@@ -17,6 +17,8 @@ import 'package:test/test.dart';
 import 'account_sync_manager_test.mocks.dart';
 import 'fake_imap.dart';
 import 'helpers/fake_email_repository.dart';
+import 'helpers/fake_mailbox_repository.dart';
+import 'helpers/fake_sync_log_repository.dart';
 
 void main() {
   late MockAccountRepository accounts;
@@ -57,7 +59,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
       expect(syncLog.logs, hasLength(1));
-      expect(syncLog.logs.first.success, isFalse);
+      expect(syncLog.logs.first, isFalse);
 
       // Kicking the loop should have no effect once it has stopped permanently.
       m.syncNow('1');
@@ -416,126 +418,22 @@ void main() {
 /// method needs bespoke behaviour here.
 class FakeEmailRepository extends FakeEmailRepositoryBase {}
 
-class _Log {
-  _Log({required this.success});
-  final bool success;
-}
+class FakeMailboxRepositoryWithInbox extends FakeMailboxRepositoryBase {
+  FakeMailboxRepositoryWithInbox()
+      : super(const [
+          Mailbox(
+            id: '1:INBOX',
+            accountId: '1',
+            path: 'INBOX',
+            name: 'INBOX',
+            unreadCount: 0,
+            totalCount: 0,
+            role: 'inbox',
+          ),
+        ]);
 
-class FakeSyncLogRepository implements SyncLogRepository {
-  final logs = <_Log>[];
-  int _nextId = 1;
-  @override
-  Future<int> log({
-    required String accountId,
-    required bool success,
-    String? errorMessage,
-    String? stackTrace,
-    bool isPermanent = false,
-    required String protocol,
-    required int emailsFetched,
-    required int emailsSkipped,
-    required int mailboxesSynced,
-    required int pendingFlushed,
-    required int bytesTransferred,
-    required DateTime startedAt,
-    required DateTime finishedAt,
-    List<MailboxSyncStats> mailboxStats = const [],
-    String? protocolLog,
-  }) async {
-    logs.add(_Log(success: success));
-    return _nextId++;
-  }
-
-  @override
-  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<String?> observeLastError(String accountId) => Stream.value(null);
-}
-
-class FakeMailboxRepositoryWithInbox implements MailboxRepository {
-  @override
-  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
-        const Mailbox(
-          id: '1:INBOX',
-          accountId: '1',
-          path: 'INBOX',
-          name: 'INBOX',
-          unreadCount: 0,
-          totalCount: 0,
-          role: 'inbox',
-        ),
-      ]);
   @override
   Future<int> syncMailboxes(String id) async => 1;
-  @override
-  Future<Mailbox?> findMailboxByRole(String id, String role) async => null;
-  @override
-  Future<void> clearForResync(String accountId) async {}
-  @override
-  Future<Mailbox> createMailboxWithRole(
-    String accountId,
-    String name,
-    String role, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-  @override
-  Future<Mailbox> createMailbox(
-    String accountId,
-    String name, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<Mailbox> renameMailbox(
-    String accountId,
-    String mailboxPath,
-    String newName,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: newName,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<Mailbox> moveMailbox(
-    String accountId,
-    String mailboxPath, {
-    required String? newParentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: mailboxPath,
-        unreadCount: 0,
-        totalCount: 0,
-      );
 }
 
 class _AccountRepositoryWithMissingPlugin implements AccountRepository {
