@@ -283,6 +283,7 @@ String kindLabel(String kind) {
     'move' => 'Move',
     'delete' => 'Delete',
     'append' => 'Append',
+    'clear_snooze' => 'Clear snooze',
     _ => kind,
   };
 }

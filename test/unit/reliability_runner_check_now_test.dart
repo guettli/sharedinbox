@@ -9,8 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
-import 'package:sharedinbox/core/repositories/account_repository.dart';
-import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/data/db/database.dart'
@@ -18,7 +16,9 @@ import 'package:sharedinbox/data/db/database.dart'
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'helpers/fake_account_repository.dart';
 import 'helpers/fake_email_repository.dart';
+import 'helpers/fake_mailbox_repository.dart';
 
 // ---------------------------------------------------------------------------
 // Minimal fakes
@@ -40,95 +40,12 @@ const _kMailbox = Mailbox(
   totalCount: 0,
 );
 
-class _FakeAccounts implements AccountRepository {
-  @override
-  Stream<List<Account>> observeAccounts() => Stream.value([_kAccount]);
-  @override
-  Future<Account?> getAccount(String id) async => _kAccount;
-  @override
-  Future<void> addAccount(Account account, String password) async {}
-  @override
-  Future<void> updateAccount(Account account, {String? password}) async {}
-  @override
-  Future<void> removeAccount(String id) async {}
-  @override
-  Future<String> getPassword(String id) async => 'secret';
+class _FakeAccounts extends FakeAccountRepository {
+  _FakeAccounts() : super([_kAccount]);
 }
 
-class _FakeMailboxes implements MailboxRepository {
-  @override
-  Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
-      Stream.value([_kMailbox]);
-  @override
-  Future<int> syncMailboxes(String accountId) async => 0;
-  @override
-  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
-      null;
-  @override
-  Future<void> clearForResync(String accountId) async {}
-  @override
-  Future<Mailbox> createMailboxWithRole(
-    String accountId,
-    String name,
-    String role, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-  @override
-  Future<Mailbox> createMailbox(
-    String accountId,
-    String name, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<Mailbox> renameMailbox(
-    String accountId,
-    String mailboxPath,
-    String newName,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: newName,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<Mailbox> moveMailbox(
-    String accountId,
-    String mailboxPath, {
-    required String? newParentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: mailboxPath,
-        unreadCount: 0,
-        totalCount: 0,
-      );
+class _FakeMailboxes extends FakeMailboxRepositoryBase {
+  _FakeMailboxes() : super([_kMailbox]);
 }
 
 class _FakeEmails extends FakeEmailRepositoryBase {
