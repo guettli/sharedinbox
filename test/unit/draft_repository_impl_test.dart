@@ -515,45 +515,75 @@ void main() {
       expect(row?.dirty, isFalse);
     });
 
-    test(
-        'an account switch during the IMAP append removes the copy it made '
-        'on the old account', () async {
+    Future<AppDatabase> dbWithTwoAccounts() async {
       final db = openTestDatabase();
       for (final id in ['acc-1', 'acc-2']) {
         await db.into(db.accounts).insert(accountRow(id));
       }
+      return db;
+    }
+
+    /// Syncs acc-1 while [meanwhile] changes its new draft during the append
+    /// (which gets UID 42). Returns the draft as it is afterwards, once the
+    /// checks common to a move and a delete have passed: UID 42 is queued
+    /// for removal, is not imported back, and the next sync expunges it.
+    Future<Draft?> raceImapAppend(
+      Future<void> Function(DraftRepositoryImpl repo, int id) meanwhile,
+    ) async {
+      final db = await dbWithTwoAccounts();
       final client = _DraftsSpyImapClient()
         ..appendUids.add(42)
         ..serverUids = [42];
       final repo = imapRepo(db, client);
       final id = await saveNewDraft(repo);
-      client.onAppend = () => editDraft(repo, id, accountId: 'acc-2');
+      client.onAppend = () => meanwhile(repo, id);
 
       await repo.syncDrafts('acc-1');
 
-      // acc-1's UID 42 must not stick to a draft of acc-2, and the pull in
-      // the same sync must not import it back as a second draft.
-      final row = await repo.getDraft(id);
-      expect(row?.accountId, 'acc-2');
-      expect(row?.imapServerId, isNull);
-      expect(row?.dirty, isTrue);
-      expect(await db.select(db.drafts).get(), hasLength(1));
+      final rows = await db.select(db.drafts).get();
+      expect(rows.where((r) => r.imapServerId == '42'), isEmpty);
+      expect(rows.length, lessThanOrEqualTo(1));
       final tombstone = (await db.select(db.draftTombstones).get()).single;
       expect(tombstone.accountId, 'acc-1');
       expect(tombstone.serverId, '42');
 
-      client.serverUids = [];
+      client
+        ..onAppend = null
+        ..serverUids = [];
       await repo.syncDrafts('acc-1');
 
       expect(client.expunged.single.toList(), [42]);
       expect(await db.select(db.draftTombstones).get(), isEmpty);
+      return rows.isEmpty ? null : rows.single;
+    }
+
+    test(
+        'an account switch during the IMAP append removes the copy it made '
+        'on the old account', () async {
+      final row = await raceImapAppend(
+        (repo, id) => editDraft(repo, id, accountId: 'acc-2'),
+      );
+      expect(row?.accountId, 'acc-2');
+      expect(row?.dirty, isTrue);
     });
 
-    test('an edit during the JMAP push is pushed by the next sync', () async {
-      final db = openTestDatabase();
-      final sets = <Map<String, dynamic>>[];
+    test('a delete during the IMAP append removes the copy it made', () async {
+      final row = await raceImapAppend((repo, id) => repo.deleteDraft(id));
+      expect(row, isNull);
+    });
+
+    /// A repo for the JMAP account acc-1 whose fake server keeps the drafts
+    /// it is sent (as M1, M2, …) and records every `Email/set` in [sets].
+    /// [duringFirstSet] runs while the first one is in flight. The server
+    /// answers no `Email/get`, so a pull may only find drafts it knows.
+    Future<(DraftRepositoryImpl, int)> jmapRepo(
+      AppDatabase db,
+      List<Map<String, dynamic>> sets,
+      Future<void> Function(DraftRepositoryImpl repo, int id) duringFirstSet,
+    ) async {
       late DraftRepositoryImpl repo;
       late int id;
+      final onServer = <String>[];
       final server = jmapFakeServer(
         accountId: 'u1',
         handle: (call) async {
@@ -570,12 +600,23 @@ void main() {
               ];
             case 'Email/set':
               sets.add(call.args);
-              if (sets.length == 1) await editDraft(repo, id);
+              final destroy = (call.args['destroy'] as List?) ?? const [];
+              onServer.removeWhere(destroy.contains);
+              if (!call.args.containsKey('create')) {
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              }
+              if (sets.length == 1) await duringFirstSet(repo, id);
+              final newId = 'M${sets.length}';
+              onServer.add(newId);
               return [
                 'Email/set',
                 {
                   'created': {
-                    'draft': {'id': 'M${sets.length}'},
+                    'draft': {'id': newId},
                   },
                 },
                 call.callId,
@@ -583,9 +624,7 @@ void main() {
             case 'Email/query':
               return [
                 'Email/query',
-                {
-                  'ids': ['M${sets.length}'],
-                },
+                {'ids': List.of(onServer)},
                 call.callId,
               ];
           }
@@ -594,6 +633,13 @@ void main() {
       );
       repo = DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
       id = await saveNewDraft(repo);
+      return (repo, id);
+    }
+
+    test('an edit during the JMAP push is pushed by the next sync', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(db, sets, editDraft);
 
       await repo.syncDrafts('acc-1');
 
@@ -609,6 +655,35 @@ void main() {
       expect(sets[1]['destroy'], ['M1']);
       expect(row?.jmapServerId, 'M2');
       expect(row?.dirty, isFalse);
+    });
+
+    test(
+        'an account switch during the JMAP push removes the copy it made '
+        'on the old account', () async {
+      final db = await dbWithTwoAccounts();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(
+        db,
+        sets,
+        (repo, id) => editDraft(repo, id, accountId: 'acc-2'),
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      // M1 is still on acc-1's server, but queued for removal: the pull
+      // must not import it back.
+      final row = await repo.getDraft(id);
+      expect(row?.accountId, 'acc-2');
+      expect(row?.jmapServerId, isNull);
+      expect(await db.select(db.drafts).get(), hasLength(1));
+      final tombstone = (await db.select(db.draftTombstones).get()).single;
+      expect(tombstone.accountId, 'acc-1');
+      expect(tombstone.serverId, 'M1');
+
+      await repo.syncDrafts('acc-1');
+
+      expect(sets.last['destroy'], ['M1']);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
     });
 
     test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',

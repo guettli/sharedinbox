@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
@@ -6,6 +8,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -22,13 +25,16 @@ class DraftRepositoryImpl implements DraftRepository {
     this._accounts, {
     ImapConnectFn? imapConnect,
     http.Client? httpClient,
+    AppLogger? appLogger,
   })  : _imapConnect = imapConnect,
-        _httpClient = httpClient;
+        _httpClient = httpClient,
+        _appLogger = appLogger;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn? _imapConnect;
   final http.Client? _httpClient;
+  final AppLogger? _appLogger;
 
   @override
   Future<SavedDraft> saveDraft({
@@ -130,12 +136,16 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   @override
-  Future<void> deleteDraft(int id) async {
-    final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
-    if (row == null) return;
-    await _tombstoneServerCopy(row);
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+  Future<void> deleteDraft(int id) {
+    // One transaction, so a push finishing in between cannot store a new
+    // server id that the tombstone then misses.
+    return _db.transaction(() async {
+      final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return;
+      await _tombstoneServerCopy(row);
+      await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    });
   }
 
   /// Queues removal of [row]'s copy on its account's server, if it has one.
@@ -197,7 +207,20 @@ class DraftRepositoryImpl implements DraftRepository {
               (t) => t.id.equals(row.id) & t.accountId.equals(accountId),
             ))
           .write(serverId);
-      if (edited == 0) await _tombstone(accountId, newServerId);
+      if (edited > 0) return;
+      if (newServerId == null || newServerId.isEmpty) {
+        // No APPENDUID: the copy cannot be addressed, so it stays behind.
+        unawaited(
+          _appLogger?.warn(
+            'draft.push.orphaned',
+            'Draft moved or deleted during push; its new server copy has '
+                'no id and cannot be removed',
+            accountId: accountId,
+          ),
+        );
+        return;
+      }
+      await _tombstone(accountId, newServerId);
     });
   }
 
