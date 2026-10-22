@@ -88,6 +88,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String _sigBlock = '';
   String? _sigAccountId;
   bool _draftRestored = false;
+
+  // The body text as last set programmatically (prefill / signature). While
+  // the body still equals it the user has not written anything yet, so the
+  // cursor is parked at the start, where the message belongs, instead of
+  // after the signature or below the quote.
+  String _programmaticBody = '';
   bool _suppressAutoSave = false;
   // Captured in initState so it remains accessible in dispose() after ref is gone.
   late final DraftRepository _draftRepo;
@@ -102,7 +108,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) {
-      _body.text = normalizeNewlines(widget.prefillBody!);
+      _setPristineBody(normalizeNewlines(widget.prefillBody!));
     }
     _accountId = widget.accountId;
     _replyToEmailId = widget.replyToEmailId;
@@ -145,9 +151,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!mounted) return;
     _sigAccountId = accountId;
     final isReply = _replyToEmailId != null;
+    // A reply keeps an empty first line above the signature to type into.
     final newBlock = signature.isEmpty
         ? ''
-        : (isReply ? '$signature\n\n' : '\n\n$signature');
+        : (isReply ? '\n\n$signature\n\n' : '\n\n$signature');
     final text = _body.text;
     final oldIndex = _sigBlock.isEmpty ? -1 : text.indexOf(_sigBlock);
     String updated;
@@ -165,8 +172,32 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (updated == text) return;
     // Programmatic edit — don't count it as the user dirtying a draft.
     _suppressAutoSave = true;
-    _body.text = updated;
+    if (_bodyIsPristine) {
+      _setPristineBody(updated);
+    } else {
+      _body.text = updated;
+    }
     _suppressAutoSave = false;
+  }
+
+  /// True while the body holds only programmatically inserted text and the
+  /// cursor has not been placed anywhere but where we parked it.
+  bool get _bodyIsPristine {
+    final sel = _body.selection;
+    return _body.text == _programmaticBody &&
+        (!sel.isValid || sel == const TextSelection.collapsed(offset: 0));
+  }
+
+  /// Sets a body the user has not touched yet, with the cursor at the start.
+  /// Focusing the body without a tap (Tab, IME "next", a screen reader) keeps
+  /// a valid selection, so typing lands above the signature / quote instead
+  /// of being glued to its end. A tap still places the cursor where tapped.
+  void _setPristineBody(String text) {
+    _programmaticBody = text;
+    _body.value = TextEditingValue(
+      text: text,
+      selection: const TextSelection.collapsed(offset: 0),
+    );
   }
 
   Future<void> _restoreDraft(int id) async {

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
@@ -547,7 +548,78 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(_bodyText(tester), 'Cheers,\nAlice\n\n> quoted original');
+      expect(_bodyText(tester), '\n\nCheers,\nAlice\n\n> quoted original');
+    });
+
+    testWidgets(
+      'Tab from Subject into the body types above the signature',
+      (tester) async {
+        await tester.pumpWidget(
+          _buildDirect(
+            screen: const ComposeScreen(),
+            overrides: _composeOverrides(accounts: const [kSignedAccount]),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.widgetWithText(TextFormField, 'Subject'));
+        await tester.pump();
+        await _typeAtCursor(tester, 'Hello');
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        await _typeAtCursor(tester, 'Typed after tab');
+
+        expect(_bodyText(tester), 'Typed after tab\n\nCheers,\nAlice');
+      },
+    );
+
+    testWidgets(
+      'focusing a reply body types above the signature and the quote',
+      (tester) async {
+        await tester.pumpWidget(
+          _buildDirect(
+            screen: const ComposeScreen(
+              replyToEmailId: 'e1',
+              prefillTo: 'bob@example.com',
+              prefillBody: '\n\n> quoted original',
+            ),
+            overrides: _composeOverrides(accounts: const [kSignedAccount]),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        _bodyFocus(tester).requestFocus();
+        await tester.pumpAndSettle();
+        await _typeAtCursor(tester, 'Thanks!');
+
+        expect(
+          _bodyText(tester),
+          'Thanks!\n\nCheers,\nAlice\n\n\n\n> quoted original',
+        );
+      },
+    );
+
+    testWidgets('keeps the cursor where the user typed in the body', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(),
+          overrides: _composeOverrides(accounts: const [kSignedAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, 'Hi');
+      _bodyFocus(tester).unfocus();
+      await tester.pumpAndSettle();
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, ' there');
+
+      expect(_bodyText(tester), 'Hi there\n\nCheers,\nAlice');
     });
 
     testWidgets('starts blank even when a saved draft exists (#1047)', (
@@ -888,6 +960,28 @@ List<Override> _composeOverrides({
 
 /// Reads the compose body text — the last [TextField] nested inside a
 /// [TextFormField] on the screen.
+/// The body field's focus node (the body is the last text field).
+FocusNode _bodyFocus(WidgetTester tester) =>
+    tester.widget<EditableText>(find.byType(EditableText).last).focusNode;
+
+/// Inserts [text] at the focused field's cursor, as a platform IME does.
+Future<void> _typeAtCursor(WidgetTester tester, String text) async {
+  final field = tester
+      .widgetList<EditableText>(find.byType(EditableText))
+      .firstWhere((e) => e.focusNode.hasFocus);
+  final value = field.controller.value;
+  final sel = value.selection;
+  final start = sel.isValid ? sel.start : value.text.length;
+  final end = sel.isValid ? sel.end : value.text.length;
+  tester.testTextInput.updateEditingValue(
+    TextEditingValue(
+      text: value.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+    ),
+  );
+  await tester.pump();
+}
+
 String _bodyText(WidgetTester tester) {
   final body = tester.widget<TextField>(
     find
