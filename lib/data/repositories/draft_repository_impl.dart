@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
@@ -6,6 +8,7 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -22,13 +25,16 @@ class DraftRepositoryImpl implements DraftRepository {
     this._accounts, {
     ImapConnectFn? imapConnect,
     http.Client? httpClient,
+    AppLogger? appLogger,
   })  : _imapConnect = imapConnect,
-        _httpClient = httpClient;
+        _httpClient = httpClient,
+        _appLogger = appLogger;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn? _imapConnect;
   final http.Client? _httpClient;
+  final AppLogger? _appLogger;
 
   @override
   Future<SavedDraft> saveDraft({
@@ -130,19 +136,25 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   @override
-  Future<void> deleteDraft(int id) async {
-    final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
-    if (row == null) return;
-    await _tombstoneServerCopy(row);
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+  Future<void> deleteDraft(int id) {
+    // One transaction, so a push finishing in between cannot store a new
+    // server id that the tombstone then misses.
+    return _db.transaction(() async {
+      final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return;
+      await _tombstoneServerCopy(row);
+      await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    });
   }
 
-  /// Queues removal of [row]'s copy on its account's server, if it has one
-  /// and the account still exists (a deleted account has no server to sync).
-  Future<void> _tombstoneServerCopy(Draft row) async {
-    final accountId = row.accountId;
-    final serverId = row.imapServerId ?? row.jmapServerId;
+  /// Queues removal of [row]'s copy on its account's server, if it has one.
+  Future<void> _tombstoneServerCopy(Draft row) =>
+      _tombstone(row.accountId, row.imapServerId ?? row.jmapServerId);
+
+  /// Queues removal of [serverId] from [accountId]'s server, if the account
+  /// still exists (a deleted account has no server to sync).
+  Future<void> _tombstone(String? accountId, String? serverId) async {
     if (accountId == null || serverId == null || serverId.isEmpty) return;
     final account = await (_db.select(_db.accounts)
           ..where((t) => t.id.equals(accountId)))
@@ -155,6 +167,70 @@ class DraftRepositoryImpl implements DraftRepository {
             createdAt: DateTime.now(),
           ),
         );
+  }
+
+  /// Stores that [row] went up to [accountId]'s server as [newServerId].
+  ///
+  /// The push runs while compose may still be open, so the row can have
+  /// changed since it was read:
+  /// - edited: the new server id is kept but the row stays dirty, so the
+  ///   next push uploads the edit and replaces the copy just made;
+  /// - moved to another account or deleted: the copy just made belongs to
+  ///   nobody, so it is queued for removal from [accountId]'s server.
+  ///
+  /// Edits are detected by content rather than `updatedAt`, which is stored
+  /// with one-second precision.
+  Future<void> _recordPush(
+    Draft row,
+    String accountId,
+    String? newServerId, {
+    required bool jmap,
+  }) {
+    final serverId = jmap
+        ? DraftsCompanion(jmapServerId: Value(newServerId))
+        : DraftsCompanion(imapServerId: Value(newServerId));
+    return _db.transaction(() async {
+      final unchanged = await (_db.update(_db.drafts)
+            ..where(
+              (t) =>
+                  t.id.equals(row.id) &
+                  t.accountId.equals(accountId) &
+                  t.toText.equals(row.toText) &
+                  t.ccText.equals(row.ccText) &
+                  t.subjectText.equals(row.subjectText) &
+                  t.bodyText.equals(row.bodyText),
+            ))
+          .write(serverId.copyWith(dirty: const Value(false)));
+      if (unchanged > 0) return;
+      final edited = await (_db.update(_db.drafts)
+            ..where(
+              (t) => t.id.equals(row.id) & t.accountId.equals(accountId),
+            ))
+          .write(serverId);
+      if (edited > 0) return;
+      if (newServerId == null || newServerId.isEmpty) {
+        // No APPENDUID: the copy cannot be addressed, so it stays behind.
+        unawaited(
+          _appLogger?.warn(
+            'draft.push.orphaned',
+            'Draft moved or deleted during push; its new server copy has '
+                'no id and cannot be removed',
+            accountId: accountId,
+          ),
+        );
+        return;
+      }
+      await _tombstone(accountId, newServerId);
+    });
+  }
+
+  /// Server ids of [accountId]'s drafts queued for removal. A pull must not
+  /// import them again before the next sync removes them.
+  Future<Set<String>> _tombstonedServerIds(String accountId) async {
+    final rows = await (_db.select(_db.draftTombstones)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    return {for (final r in rows) r.serverId};
   }
 
   @override
@@ -350,12 +426,7 @@ class DraftRepositoryImpl implements DraftRepository {
         }
       }
 
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(row.id))).write(
-        DraftsCompanion(
-          imapServerId: Value(newUid),
-          dirty: const Value(false),
-        ),
-      );
+      await _recordPush(row, account.id, newUid, jmap: false);
     }
   }
 
@@ -375,7 +446,7 @@ class DraftRepositoryImpl implements DraftRepository {
             (t) => t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
           ))
         .get();
-    final knownUids = <String>{};
+    final knownUids = await _tombstonedServerIds(accountId);
     for (final row in localRows) {
       final uid = row.imapServerId;
       if (uid != null) knownUids.add(uid);
@@ -516,12 +587,7 @@ class DraftRepositoryImpl implements DraftRepository {
       final newEmail = created?['draft'] as Map<String, dynamic>?;
       final newId = newEmail?['id'] as String?;
 
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(row.id))).write(
-        DraftsCompanion(
-          jmapServerId: Value(newId),
-          dirty: const Value(false),
-        ),
-      );
+      await _recordPush(row, account.id, newId, jmap: true);
     }
   }
 
@@ -562,7 +628,7 @@ class DraftRepositoryImpl implements DraftRepository {
       }
     }
 
-    final knownIds = <String>{};
+    final knownIds = await _tombstonedServerIds(accountId);
     for (final row in localRows) {
       final id = row.jmapServerId;
       if (id != null) knownIds.add(id);
