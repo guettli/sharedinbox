@@ -190,10 +190,26 @@ class FakeDraftRepository implements DraftRepository {
   Future<SavedDraft?> getDraft(int id) async => _drafts[id];
 
   @override
+  Future<SavedDraft?> findDraftForEmail(Email email) async =>
+      draftsByEmailId[email.id];
+
+  /// What [findDraftForEmail] resolves, keyed by message row id.
+  final Map<String, SavedDraft> draftsByEmailId = {};
+
+  /// Accounts [syncDrafts] ran for.
+  final List<String> syncedAccounts = [];
+
+  /// Runs inside [syncDrafts], e.g. to pull a draft or to fail.
+  Future<void> Function()? onSync;
+
+  @override
   Future<void> deleteDraft(int id) async => _drafts.remove(id);
 
   @override
-  Future<void> syncDrafts(String accountId) async {}
+  Future<void> syncDrafts(String accountId) async {
+    syncedAccounts.add(accountId);
+    await onSync?.call();
+  }
 }
 
 class FakeMailboxRepository implements MailboxRepository {

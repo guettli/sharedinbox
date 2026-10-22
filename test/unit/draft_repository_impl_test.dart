@@ -2,8 +2,9 @@ import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 
 import 'db_test_helper.dart';
@@ -330,6 +331,96 @@ void main() {
       );
       return draft.id;
     }
+
+    Email serverCopy({
+      String id = 'acc-1:Drafts:17',
+      String mailboxPath = 'Drafts',
+      int uid = 17,
+    }) =>
+        Email(
+          id: id,
+          accountId: 'acc-1',
+          mailboxPath: mailboxPath,
+          uid: uid,
+          receivedAt: DateTime(2026),
+          from: const [],
+          to: const [],
+          cc: const [],
+          isSeen: true,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+
+    test('findDraftForEmail resolves the IMAP server copy by UID', () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+
+      expect((await repo.findDraftForEmail(serverCopy()))?.id, draftId);
+      // The same UID in another folder is a different message.
+      expect(
+        await repo.findDraftForEmail(
+          serverCopy(id: 'acc-1:INBOX:17', mailboxPath: 'INBOX'),
+        ),
+        isNull,
+      );
+      expect(
+        await repo
+            .findDraftForEmail(serverCopy(id: 'acc-1:Drafts:18', uid: 18)),
+        isNull,
+      );
+    });
+
+    test('findDraftForEmail uses the drafts mailbox draft sync uses', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+      await db.into(db.syncStates).insert(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:DraftsMailbox',
+              state: '[Gmail]/Drafts',
+              syncedAt: DateTime(2026),
+            ),
+          );
+
+      expect(await repo.findDraftForEmail(serverCopy()), isNull);
+      expect(
+        (await repo.findDraftForEmail(
+          serverCopy(
+            id: 'acc-1:[Gmail]/Drafts:17',
+            mailboxPath: '[Gmail]/Drafts',
+          ),
+        ))
+            ?.id,
+        draftId,
+      );
+    });
+
+    test('findDraftForEmail resolves the JMAP server copy by email id',
+        () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: '',
+        ccText: '',
+        subjectText: 'JMAP draft',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(jmapServerId: Value('Mabc')),
+      );
+
+      final email = serverCopy(id: 'acc-1:Mabc', mailboxPath: 'mb-d', uid: 0);
+      expect((await repo.findDraftForEmail(email))?.id, draft.id);
+      expect(
+        await repo.findDraftForEmail(
+          serverCopy(id: 'acc-1:Mother', mailboxPath: 'mb-d', uid: 0),
+        ),
+        isNull,
+      );
+    });
 
     test(
         'switching the account of a synced draft forgets its server id '
@@ -732,6 +823,48 @@ void main() {
       expect(client.expunged, isEmpty);
       expect(client.appendedTo, ['[Gmail]/Drafts']);
       expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test('overlapping syncs of one account push a draft once', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.addAll([42, 43])
+        ..serverUids = [42];
+      // The append takes a while, as on a real server: long enough for the
+      // second sync (e.g. "Edit draft" during the background cycle) to start.
+      client.onAppend = () => Future<void>.delayed(
+            const Duration(milliseconds: 20),
+          );
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await Future.wait([repo.syncDrafts('acc-1'), repo.syncDrafts('acc-1')]);
+
+      expect(client.appendedTo, hasLength(1));
+      final rows = await db.select(db.drafts).get();
+      expect(rows.single.imapServerId, '42');
+      expect(rows.single.dirty, isFalse);
+    });
+
+    test('a failed sync does not block the next one', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..appendUids.add(42);
+      var fail = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async {
+          if (fail) throw Exception('offline');
+          return client;
+        },
+      );
+      await saveNewDraft(repo);
+
+      await expectLater(repo.syncDrafts('acc-1'), throwsException);
+      fail = false;
+      await repo.syncDrafts('acc-1');
+
+      expect(client.appendedTo, hasLength(1));
     });
 
     test('a second sync stays with the same mailbox', () async {

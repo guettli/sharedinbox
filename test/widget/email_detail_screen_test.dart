@@ -14,7 +14,10 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
+import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 
 import 'helpers.dart';
 
@@ -1210,6 +1213,169 @@ void main() {
         );
       },
     );
+
+    group('a message in the Drafts folder', () {
+      final draftMail = Email(
+        id: 'acc-1:Drafts:5',
+        accountId: 'acc-1',
+        mailboxPath: 'Drafts',
+        uid: 5,
+        subject: 'Unfinished',
+        receivedAt: DateTime(2024, 6),
+        sentAt: DateTime(2024, 6),
+        from: const [EmailAddress(email: 'alice@example.com')],
+        to: const [EmailAddress(email: 'carol@example.com')],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+      const draftsMailbox = Mailbox(
+        id: 'acc-1:Drafts',
+        accountId: 'acc-1',
+        path: 'Drafts',
+        name: 'Drafts',
+        role: 'drafts',
+        unreadCount: 0,
+        totalCount: 1,
+      );
+
+      const draftBody = EmailBody(
+        emailId: 'acc-1:Drafts:5',
+        textBody: 'Read-only body',
+        attachments: [],
+      );
+
+      Future<FakeEmailRepository> pumpDraftMail(
+        WidgetTester tester,
+        FakeDraftRepository drafts, {
+        Object? initialExtra,
+      }) async {
+        final emails = FakeEmailRepository(
+          emailDetail: draftMail,
+          emailBody: draftBody,
+          emails: [draftMail],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/Drafts/emails/acc-1%3ADrafts%3A5',
+            initialExtra: initialExtra,
+            overrides: [
+              ..._overrides(
+                body: draftBody,
+                mailboxes: FakeMailboxRepository(const [draftsMailbox]),
+                emails: emails,
+              ),
+              draftRepositoryProvider.overrideWithValue(drafts),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        return emails;
+      }
+
+      /// Adds a local draft whose server copy is [draftMail].
+      Future<void> addLocalDraft(FakeDraftRepository drafts) async {
+        final saved = await drafts.saveDraft(
+          accountId: 'acc-1',
+          toText: 'carol@example.com',
+          ccText: '',
+          subjectText: 'Unfinished',
+          bodyText: 'Half a thought',
+        );
+        drafts.draftsByEmailId[draftMail.id] = saved;
+      }
+
+      testWidgets('opens in compose; back returns to the folder', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        final emails = await pumpDraftMail(tester, drafts);
+
+        expect(find.byType(EmailDetailScreen), findsNothing);
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('Half a thought'), findsOneWidget);
+        expect(_editableWithText('Unfinished'), findsOneWidget);
+        // Opening a draft does not mark it read.
+        expect(emails.setFlagCalls, isEmpty);
+
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsNothing);
+        expect(find.byType(EmailListScreen), findsOneWidget);
+      });
+
+      testWidgets('reached by prev/next it stays in the detail view', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        await pumpDraftMail(
+          tester,
+          drafts,
+          initialExtra: EmailDetailNav.fromEmails([draftMail]).stepped(),
+        );
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        expect(find.byTooltip('Reply'), findsNothing);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(drafts.syncedAccounts, isEmpty);
+      });
+
+      testWidgets('without a local draft "Edit draft" syncs, then opens it', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () => addLocalDraft(drafts);
+        await pumpDraftMail(tester, drafts);
+
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        expect(find.byTooltip('Reply'), findsNothing);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(drafts.syncedAccounts, ['acc-1']);
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('Half a thought'), findsOneWidget);
+      });
+
+      testWidgets('"Edit draft" says so when the draft is still not there', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('not among the drafts'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsNothing);
+      });
+
+      testWidgets('"Edit draft" shows why a draft sync failed', (tester) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () async => throw Exception('server unreachable');
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('server unreachable'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsNothing);
+      });
+    });
 
     testWidgets('Archive button is present in app bar', (tester) async {
       await tester.pumpWidget(

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -136,6 +137,45 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   @override
+  Future<SavedDraft?> findDraftForEmail(model.Email email) async {
+    if (email.isLocal) return null;
+    final accountId = email.accountId;
+    // A JMAP message row is "<accountId>:<email id>". An IMAP row is
+    // "<accountId>:<mailbox>:<uid>", which never equals a JMAP email id.
+    final prefix = '$accountId:';
+    if (email.id.startsWith(prefix)) {
+      final jmapId = email.id.substring(prefix.length);
+      final row = await (_db.select(_db.drafts)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.jmapServerId.equals(jmapId),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (row != null) return _toModel(row);
+    }
+    if (email.uid <= 0) return null;
+    // IMAP UIDs only mean something in the mailbox draft sync used for them.
+    final state = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_draftsPathState),
+          ))
+        .getSingleOrNull();
+    if (email.mailboxPath != (state?.state ?? _draftsFolder)) return null;
+    final row = await (_db.select(_db.drafts)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.imapServerId.equals(email.uid.toString()),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row == null ? null : _toModel(row);
+  }
+
+  @override
   Future<void> deleteDraft(int id) {
     // One transaction, so a push finishing in between cannot store a new
     // server id that the tombstone then misses.
@@ -233,8 +273,34 @@ class DraftRepositoryImpl implements DraftRepository {
     return {for (final r in rows) r.serverId};
   }
 
+  /// The last [syncDrafts] run per account; the next one waits for it.
+  final Map<String, Future<void>> _syncTails = {};
+
+  /// Runs one draft sync of [accountId] at a time. The background sync loop
+  /// and the "Edit draft" action can ask at once; two overlapping runs would
+  /// both push the same dirty draft (a second server copy) and both pull the
+  /// same new server draft (a second local row). A call made during a run
+  /// waits for it and then runs itself, so it still sees edits made meanwhile.
   @override
-  Future<void> syncDrafts(String accountId) async {
+  Future<void> syncDrafts(String accountId) {
+    final previous = _syncTails[accountId];
+    final run = previous == null
+        ? _syncDraftsNow(accountId)
+        : previous.then((_) => _syncDraftsNow(accountId));
+    // The tail never fails, so a failed run does not fail the next one.
+    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    _syncTails[accountId] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        if (identical(_syncTails[accountId], tail)) {
+          unawaited(_syncTails.remove(accountId));
+        }
+      }),
+    );
+    return run;
+  }
+
+  Future<void> _syncDraftsNow(String accountId) async {
     final account = await _accounts.getAccount(accountId);
     if (account == null) return;
 
