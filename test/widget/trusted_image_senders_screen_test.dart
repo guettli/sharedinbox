@@ -3,51 +3,61 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'helpers.dart';
 
+Future<FakeUserPreferencesRepository> _pumpScreen(
+  WidgetTester tester, {
+  List<String> trustedImageSenders = const [],
+}) async {
+  final repo = FakeUserPreferencesRepository(
+    trustedImageSenders: [...trustedImageSenders],
+  );
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/trusted-senders',
+      overrides: baseOverrides(),
+      userPreferences: repo,
+    ),
+  );
+  await tester.pumpAndSettle();
+  return repo;
+}
+
+/// Opens the add dialog and, when given, types [text] into it.
+Future<void> _openAddDialog(WidgetTester tester, [String? text]) async {
+  await tester.tap(find.byIcon(Icons.add));
+  await tester.pumpAndSettle();
+  if (text != null) {
+    await tester.enterText(find.byType(TextField), text);
+    await tester.pumpAndSettle();
+  }
+}
+
+TextButton _addButton(WidgetTester tester) =>
+    tester.widget<TextButton>(find.widgetWithText(TextButton, 'Add'));
+
 void main() {
   group('TrustedImageSendersScreen', () {
     testWidgets('shows empty state with glob hint when no senders', (
       tester,
     ) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpScreen(tester);
 
       expect(find.textContaining('*@example.com'), findsOneWidget);
       expect(find.byIcon(Icons.add), findsOneWidget);
     });
 
-    testWidgets('lists existing senders', (tester) async {
-      final repo = FakeUserPreferencesRepository(
+    testWidgets('lists existing senders and glob patterns', (tester) async {
+      await _pumpScreen(
+        tester,
         trustedImageSenders: ['alice@example.com', '*@work.com'],
       );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-          userPreferences: repo,
-        ),
-      );
-      await tester.pumpAndSettle();
 
       expect(find.text('alice@example.com'), findsOneWidget);
       expect(find.text('*@work.com'), findsOneWidget);
     });
 
     testWidgets('add dialog shows glob hint text', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.add));
-      await tester.pumpAndSettle();
+      await _pumpScreen(tester);
+      await _openAddDialog(tester);
 
       expect(find.text('Add allowed address'), findsOneWidget);
       expect(find.textContaining('*@example.com'), findsWidgets);
@@ -55,67 +65,29 @@ void main() {
     });
 
     testWidgets('Add button is disabled when input is empty', (tester) async {
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-        ),
-      );
-      await tester.pumpAndSettle();
+      await _pumpScreen(tester);
+      await _openAddDialog(tester);
 
-      await tester.tap(find.byIcon(Icons.add));
-      await tester.pumpAndSettle();
-
-      final addButton = find.widgetWithText(TextButton, 'Add');
-      final button = tester.widget<TextButton>(addButton);
-      expect(button.onPressed, isNull);
+      expect(_addButton(tester).onPressed, isNull);
     });
 
     testWidgets('typing in dialog enables Add button and adds sender', (
       tester,
     ) async {
-      final repo = FakeUserPreferencesRepository();
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-          userPreferences: repo,
-        ),
-      );
-      await tester.pumpAndSettle();
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, '*@example.com');
 
-      await tester.tap(find.byIcon(Icons.add));
-      await tester.pumpAndSettle();
+      expect(_addButton(tester).onPressed, isNotNull);
 
-      await tester.enterText(find.byType(TextField), '*@example.com');
-      await tester.pumpAndSettle();
-
-      final addButton = find.widgetWithText(TextButton, 'Add');
-      final button = tester.widget<TextButton>(addButton);
-      expect(button.onPressed, isNotNull);
-
-      await tester.tap(addButton);
+      await tester.tap(find.widgetWithText(TextButton, 'Add'));
       await tester.pumpAndSettle();
 
       expect(repo.trustedImageSendersForTest, contains('*@example.com'));
     });
 
     testWidgets('cancel closes dialog without adding', (tester) async {
-      final repo = FakeUserPreferencesRepository();
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-          userPreferences: repo,
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      await tester.tap(find.byIcon(Icons.add));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(find.byType(TextField), 'someone@test.com');
-      await tester.pumpAndSettle();
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, 'someone@test.com');
 
       await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
       await tester.pumpAndSettle();
@@ -125,17 +97,10 @@ void main() {
     });
 
     testWidgets('delete button removes a sender', (tester) async {
-      final repo = FakeUserPreferencesRepository(
+      final repo = await _pumpScreen(
+        tester,
         trustedImageSenders: ['alice@example.com'],
       );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-          userPreferences: repo,
-        ),
-      );
-      await tester.pumpAndSettle();
 
       await tester.tap(find.byIcon(Icons.delete_outline));
       await tester.pumpAndSettle();
@@ -143,21 +108,49 @@ void main() {
       expect(repo.trustedImageSendersForTest, isEmpty);
     });
 
-    testWidgets('lists existing glob patterns', (tester) async {
-      final repo = FakeUserPreferencesRepository(
-        trustedImageSenders: ['*@example.com', 'alice@other.com'],
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/trusted-senders',
-          overrides: baseOverrides(),
-          userPreferences: repo,
-        ),
-      );
+    testWidgets('a pasted "Name <address>" is added as the bare address', (
+      tester,
+    ) async {
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, 'Bob Smith <bob@example.org>');
+
+      await tester.tap(find.widgetWithText(TextButton, 'Add'));
       await tester.pumpAndSettle();
 
-      expect(find.text('*@example.com'), findsOneWidget);
-      expect(find.text('alice@other.com'), findsOneWidget);
+      // Stored verbatim it never matched the sender's bare address.
+      expect(repo.trustedImageSendersForTest, ['bob@example.org']);
+    });
+
+    testWidgets('an entry that can never match is refused inline', (
+      tester,
+    ) async {
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, 'foo');
+
+      // Not while typing, only after trying to submit.
+      const error = 'Not an email address or pattern like *@example.com';
+      expect(find.text(error), findsNothing);
+      expect(_addButton(tester).onPressed, isNull);
+
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.text(error), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(repo.trustedImageSendersForTest, isEmpty);
+    });
+
+    testWidgets('Enter with a valid pattern adds it and closes the dialog', (
+      tester,
+    ) async {
+      final repo = await _pumpScreen(tester);
+      await _openAddDialog(tester, 'example.com');
+
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(repo.trustedImageSendersForTest, ['*@example.com']);
     });
   });
 }
