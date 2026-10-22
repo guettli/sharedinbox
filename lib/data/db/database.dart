@@ -229,7 +229,7 @@ class PendingChanges extends Table {
   TextColumn get resourceType => text()();
   TextColumn get resourceId => text()();
   // "flag_seen" | "flag_flagged" | "move" | "delete" | "snooze"
-  //   | "unsnooze"
+  //   | "unsnooze" | "clear_snooze" (strip `snz:` keywords only)
   TextColumn get changeType => text()();
   // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
   TextColumn get payload => text()();

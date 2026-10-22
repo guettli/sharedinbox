@@ -611,6 +611,22 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<int>);
 
   @override
+  _i4.Future<bool> isSnoozedMailbox(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #isSnoozedMailbox,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i4.Future<bool>.value(false),
+      ) as _i4.Future<bool>);
+
+  @override
   _i4.Future<void> restoreLocalSnooze(
     String? emailId, {
     required DateTime? until,

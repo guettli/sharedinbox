@@ -4863,9 +4863,11 @@ class EmailRepositoryImpl implements EmailRepository {
     if (await _isLocalEmail(resourceId)) return;
 
     // Collapse redundant flag changes: if an un-attempted `flag_seen` /
-    // `flag_flagged` for this message with the same payload is already queued,
-    // don't append a duplicate. Only flag changes are de-duped — move / delete /
-    // snooze carry ordering semantics and must not be collapsed here (#644).
+    // `flag_flagged` / `clear_snooze` for this message with the same payload is
+    // already queued, don't append a duplicate (the wake-up re-queues a
+    // `clear_snooze` each time sync reads a stale snooze back). Only these are
+    // de-duped — move / delete / snooze carry ordering semantics and must not
+    // be collapsed here (#644).
     if (changeType == 'flag_seen' ||
         changeType == 'flag_flagged' ||
         changeType == 'clear_snooze') {
@@ -4992,6 +4994,16 @@ class EmailRepositoryImpl implements EmailRepository {
     final accountId = row.accountId;
     final destPath = await _snoozedMailboxPath(accountId);
 
+    // A queued keyword cleanup from an earlier stale snooze would strip the
+    // keyword this snooze is about to add.
+    await (_db.delete(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(row.id) &
+                t.changeType.equals('clear_snooze'),
+          ))
+        .go();
+
     // Optimistic local update.
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
@@ -5010,6 +5022,9 @@ class EmailRepositoryImpl implements EmailRepository {
         'src': row.mailboxPath,
         'dest': destPath,
         'until': until.toIso8601String(),
+        // Lets the IMAP flush re-find a stale UID by Message-ID, as a move
+        // does (#1048).
+        if (row.messageId != null) 'messageId': row.messageId,
       }),
     );
 
@@ -5056,6 +5071,15 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   @override
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
+      _isSnoozedPath(mailboxPath, await _snoozedMailboxPath(accountId));
+
+  /// Whether [mailboxPath] is the Snoozed folder at [snoozedPath], or the
+  /// literal `Snoozed` a snooze queued before that folder was known uses.
+  static bool _isSnoozedPath(String mailboxPath, String snoozedPath) =>
+      mailboxPath == snoozedPath || mailboxPath == 'Snoozed';
+
+  @override
   Future<int> wakeUpEmails(String accountId) async {
     final now = DateTime.now();
     final expired = await (_db.select(_db.emails)
@@ -5075,7 +5099,7 @@ class EmailRepositoryImpl implements EmailRepository {
       // Inbox. One the user (or another client) filed elsewhere since keeps
       // its place; its stale snooze is dropped, and so is the server-side
       // `snz:` keyword sync would otherwise keep reading back.
-      if (row.mailboxPath != snoozedPath && row.mailboxPath != 'Snoozed') {
+      if (!_isSnoozedPath(row.mailboxPath, snoozedPath)) {
         await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
           const EmailsCompanion(
             snoozedUntil: Value(null),
@@ -6006,7 +6030,9 @@ class EmailRepositoryImpl implements EmailRepository {
           mailboxPath: mailboxPath,
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
-          clearSnooze: payload['clearSnooze'] == true,
+          beforeMove: payload['clearSnooze'] == true
+              ? (s) => _removeImapSnoozeFlags(client, s)
+              : null,
         );
       case 'delete':
         await client.uidMarkDeleted(seq);
@@ -6021,14 +6047,30 @@ class EmailRepositoryImpl implements EmailRepository {
         try {
           await client.createMailbox(dest);
         } catch (_) {}
-        await client.uidStore(seq, [keyword], action: imap.StoreAction.add);
+        Future<void> tag(imap.MessageSequence s) async {
+          await client.uidStore(s, [keyword], action: imap.StoreAction.add);
+        }
+
+        await tag(seq);
         final snoozeResult = await client.uidMove(seq, targetMailboxPath: dest);
-        await _remapEmailAfterImapMove(
+        final located = await _remapEmailAfterImapMove(
           client,
           oldId: row.resourceId,
           sourceUid: uid,
           destMailboxPath: dest,
           moveResult: snoozeResult,
+        );
+        if (located) return;
+        // A stale UID (e.g. Undo re-snoozing a row rebuilt from its snapshot)
+        // makes STORE + MOVE silent no-ops: re-find the message like a move.
+        await _retryImapMoveByMessageId(
+          client,
+          row: row,
+          staleUid: uid,
+          mailboxPath: mailboxPath,
+          destMailboxPath: dest,
+          messageId: payload['messageId'] as String?,
+          beforeMove: tag,
         );
       case 'unsnooze':
         final dest = payload['dest'] as String;
@@ -6046,22 +6088,70 @@ class EmailRepositoryImpl implements EmailRepository {
           moveResult: unsnoozeResult,
         );
       case 'clear_snooze':
-        await _removeImapSnoozeFlags(client, seq);
+        await _clearImapSnoozeFlags(
+          client,
+          row: row,
+          uid: uid,
+          mailboxPath: mailboxPath,
+        );
     }
   }
 
   /// Removes every `snz:` snooze keyword from the message at [seq] in the
   /// selected mailbox, so a later sync does not read the snooze back.
-  Future<void> _removeImapSnoozeFlags(
+  /// Returns false when no message exists at [seq] (a stale UID).
+  Future<bool> _removeImapSnoozeFlags(
     imap.ImapClient client,
     imap.MessageSequence seq,
   ) async {
     final fetch = await client.uidFetchMessages(seq, 'FLAGS');
-    if (fetch.messages.isEmpty) return;
+    if (fetch.messages.isEmpty) return false;
     final flags = fetch.messages.first.flags ?? [];
     final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
-    if (snzFlags.isEmpty) return;
+    if (snzFlags.isEmpty) return true;
     await client.uidStore(seq, snzFlags, action: imap.StoreAction.remove);
+    return true;
+  }
+
+  /// IMAP `clear_snooze`: strips the `snz:` flags at the queued UID or, when
+  /// that UID went stale, at the message re-found by Message-ID. Logs a
+  /// warning when it cannot be found at all; the change is not retried since
+  /// a missing message has no keyword to keep reading back.
+  Future<void> _clearImapSnoozeFlags(
+    imap.ImapClient client, {
+    required PendingChangeRow row,
+    required int uid,
+    required String mailboxPath,
+  }) async {
+    if (await _removeImapSnoozeFlags(
+      client,
+      imap.MessageSequence.fromId(uid, isUid: true),
+    )) {
+      return;
+    }
+    final local = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    final found =
+        await _searchUidByMessageId(client, mailboxPath, local?.messageId);
+    if (found != null &&
+        found != uid &&
+        await _removeImapSnoozeFlags(
+          client,
+          imap.MessageSequence.fromId(found, isUid: true),
+        )) {
+      return;
+    }
+    unawaited(
+      _appLogger?.warn(
+        'email.snooze_cleanup_missed',
+        'Could not clear the snooze keyword: UID $uid is gone from '
+            '$mailboxPath and the message was not found by Message-ID',
+        accountId: row.accountId,
+        emailId: row.resourceId,
+        mailboxPath: mailboxPath,
+      ),
+    );
   }
 
   /// Handles a `UID MOVE` that reported OK but whose message could not be
@@ -6070,7 +6160,9 @@ class EmailRepositoryImpl implements EmailRepository {
   /// queued before the original move re-keyed the row) would otherwise be
   /// dropped as "applied" while the message stays put (#1048).
   ///
-  /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one.
+  /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one,
+  /// running [beforeMove] on it first (snooze flag edits ride along).
+  /// Shared by `move` and `snooze`.
   /// Throws [StateError] when the message cannot be found, so the change is
   /// retried and the failure lands in the App Log instead of vanishing.
   /// Without any Message-ID to verify against, keeps the old behaviour and
@@ -6082,7 +6174,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String mailboxPath,
     required String destMailboxPath,
     required String? messageId,
-    bool clearSnooze = false,
+    Future<void> Function(imap.MessageSequence seq)? beforeMove,
   }) async {
     final local = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(row.resourceId)))
@@ -6101,7 +6193,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     await client.selectUnicodeMailboxByPath(mailboxPath);
     final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
-    if (clearSnooze) await _removeImapSnoozeFlags(client, resolvedSeq);
+    await beforeMove?.call(resolvedSeq);
     final result = await client.uidMove(
       resolvedSeq,
       targetMailboxPath: destMailboxPath,

@@ -156,9 +156,15 @@ class UndoService extends Notifier<List<UndoAction>> {
         // flushed, its server-side `snz:` keyword), so undoing it must put
         // the snooze back rather than leave the mail in Snoozed with no wake
         // time.
+        // Only when going back to the Snoozed folder: a stale snooze on a mail
+        // filed elsewhere (e.g. Archive) is not one to restore.
         final snoozedUntil = original?.snoozedUntil;
         final restoreSnooze = snoozedUntil != null &&
-            original!.mailboxPath == action.sourceMailboxPath;
+            original!.mailboxPath == action.sourceMailboxPath &&
+            await repo.isSnoozedMailbox(
+              action.accountId,
+              action.sourceMailboxPath,
+            );
 
         if (restoreSnooze && !cancelled) {
           // The move reached the server: snoozing again moves the mail back

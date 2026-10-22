@@ -534,4 +534,42 @@ void main() {
       });
     }
   }
+
+  // The re-snooze is only for a mail going back to the Snoozed folder: a mail
+  // filed elsewhere that still carries a stale snooze is moved back plainly.
+  test('Undo of a move out of Archive does not re-snooze a stale snooze',
+      () async {
+    const emailId = 'acc1:101';
+    await (db.update(db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        mailboxPath: const Value('Archive'),
+        snoozedUntil: Value(DateTime(2030)),
+      ),
+    );
+    final original = (await repo.getEmail(emailId))!;
+
+    await repo.moveEmail(emailId, 'Trash');
+    // The move reached the server.
+    await db.delete(db.pendingChanges).go();
+
+    final undo = container.read(undoServiceProvider.notifier);
+    await undo.pushAction(
+      UndoAction(
+        id: 'undo-archive',
+        accountId: 'acc1',
+        type: UndoType.move,
+        emailIds: const [emailId],
+        sourceMailboxPath: 'Archive',
+        destinationMailboxPath: 'Trash',
+        originalEmails: [original],
+      ),
+    );
+    await undo.undo();
+
+    final email = (await repo.getEmail(emailId))!;
+    expect(email.mailboxPath, 'Archive');
+    expect(email.snoozedUntil, isNull);
+    final changes = await db.select(db.pendingChanges).get();
+    expect(changes.map((c) => c.changeType), ['move']);
+  });
 }

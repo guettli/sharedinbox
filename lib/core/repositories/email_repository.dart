@@ -172,6 +172,9 @@ abstract class EmailRepository {
   /// Returns the number of emails woken up.
   Future<int> wakeUpEmails(String accountId);
 
+  /// Whether [mailboxPath] is [accountId]'s Snoozed folder.
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath);
+
   /// Puts a snooze back on [emailId] locally only, without queuing anything.
   /// For an Undo whose move out of the Snoozed folder was cancelled before it
   /// reached the server: the server never lost the snooze, but the optimistic

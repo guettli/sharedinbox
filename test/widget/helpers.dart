@@ -506,6 +506,10 @@ class FakeEmailRepository implements EmailRepository {
   Future<void> moveEmail(String emailId, String destMailboxPath) async {}
 
   @override
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
+      false;
+
+  @override
   Future<void> restoreLocalSnooze(
     String emailId, {
     required DateTime until,
