@@ -106,6 +106,8 @@ class Emails extends Table {
   TextColumn get ccJson => text().withDefault(const Constant('[]'))();
   // Added in schema v59: RFC 5322 Reply-To addresses (#919).
   TextColumn get replyToJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v61: Bcc addresses, known for mail you sent (#1097).
+  TextColumn get bccJson => text().withDefault(const Constant('[]'))();
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
@@ -1460,6 +1462,10 @@ class AppDatabase extends _$AppDatabase {
             FROM emails WHERE has_attachment = 1
           )
       ''');
+    }
+    if (from < 61 && await _tableExists(this, 'emails')) {
+      // Bcc addresses of sent mail, shown in the detail header (#1097).
+      await _addColumnIfMissing(m, emails, emails.bccJson);
     }
   }
 

@@ -14,7 +14,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 60);
+      expect(db.schemaVersion, 61);
       await db.close();
     });
 
@@ -130,6 +130,9 @@ void main() {
 
       // v59: Reply-To addresses (#919).
       expect(emailColumns, contains('reply_to_json'));
+
+      // v61: Bcc addresses (#1097).
+      expect(emailColumns, contains('bcc_json'));
 
       // v55: previews poisoned by the mis-parsed partial body fetch (#680) are
       // cleared so getEmailBody's backfill can replace them; real previews are
@@ -364,7 +367,47 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 60);
+      expect(version.read<int>('user_version'), 61);
+      await db.close();
+    });
+
+    test('v60→v61 adds emails.bcc_json, tolerating it already present',
+        () async {
+      final dbFile = File('test_migration_v60_bcc.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.select(fresh.accounts).get();
+      await fresh.close();
+
+      // A v60 database: no bcc_json yet, one cached mail.
+      var rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('ALTER TABLE emails DROP COLUMN bcc_json;');
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('e1', 'acc-x', 'Sent', 1, 0);
+      ''');
+      rawDb.execute('PRAGMA user_version = 60;');
+      rawDb.close();
+
+      var db = AppDatabase(NativeDatabase(dbFile));
+      final row = await db
+          .customSelect("SELECT bcc_json FROM emails WHERE id = 'e1'")
+          .getSingle();
+      expect(row.read<String>('bcc_json'), '[]');
+      await db.close();
+
+      // An interrupted earlier upgrade can leave the column at v60 already.
+      rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('PRAGMA user_version = 60;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 61);
       await db.close();
     });
 

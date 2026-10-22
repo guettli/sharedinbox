@@ -526,7 +526,12 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
       );
       rethrow;
     }
-    final header = results[0] as Email?;
+    var header = results[0] as Email?;
+    // getEmailBody may backfill Reply-To/Bcc from the body's headers, after
+    // the parallel getEmail read the row; re-read so this open shows it.
+    if (header != null && (header.replyTo.isEmpty || header.bcc.isEmpty)) {
+      header = await repo.getEmail(_emailId) ?? header;
+    }
     // Only mark as read on the false→true transition. Re-opening an
     // already-read message must not re-enqueue a flag change or re-log it (#644;
     // setFlag itself also short-circuits, this just avoids the round-trip).
@@ -536,7 +541,7 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
     if (header != null) {
       unawaited(_prefetchNextEmailBody(repo, header));
     }
-    return (results[0] as Email?, results[1] as EmailBody);
+    return (header, results[1] as EmailBody);
   }
 
   Future<void> _prefetchNextEmailBody(

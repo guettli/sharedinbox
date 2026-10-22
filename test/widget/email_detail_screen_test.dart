@@ -57,6 +57,7 @@ List<Override> _overrides({
   Email? email,
   List<Account> accounts = const [kTestAccount],
   FakeMailboxRepository? mailboxes,
+  FakeEmailRepository? emails,
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
@@ -66,7 +67,11 @@ List<Override> _overrides({
         mailboxes ?? FakeMailboxRepository(),
       ),
       emailRepositoryProvider.overrideWithValue(
-        FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
+        emails ??
+            FakeEmailRepository(
+              emailDetail: email ?? testEmail(),
+              emailBody: body,
+            ),
       ),
     ];
 
@@ -159,12 +164,15 @@ void main() {
       expect(find.textContaining('bob@example.com'), findsOneWidget);
     });
 
-    testWidgets('shows the Cc recipients in the header', (tester) async {
+    testWidgets('shows the Cc and then the Bcc recipients in the header', (
+      tester,
+    ) async {
       final email = testEmail().copyWith(
         cc: const [
           EmailAddress(name: 'Carol', email: 'carol@example.com'),
           EmailAddress(email: 'dave@example.com'),
         ],
+        bcc: const [EmailAddress(name: 'Boss', email: 'boss@example.com')],
       );
       await tester.pumpWidget(
         buildApp(
@@ -181,13 +189,35 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('Cc: Carol <carol@example.com>, dave@example.com'),
-        findsOneWidget,
-      );
+      final cc = find.text('Cc: Carol <carol@example.com>, dave@example.com');
+      final bcc = find.text('Bcc: Boss <boss@example.com>');
+      expect(cc, findsOneWidget);
+      expect(bcc, findsOneWidget);
+      expect(tester.getTopLeft(bcc).dy, greaterThan(tester.getTopLeft(cc).dy));
     });
 
-    testWidgets('shows no Cc line when there is no Cc', (tester) async {
+    testWidgets('shows a Bcc the body load backfilled on this open', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+            emails: _BackfillingEmailRepository(testEmail()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bcc: boss@example.com'), findsOneWidget);
+    });
+
+    testWidgets('shows no Cc or Bcc line when there is none', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -203,6 +233,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Cc:'), findsNothing);
+      expect(find.textContaining('Bcc:'), findsNothing);
     });
 
     testWidgets('shows attachment section when email has attachments', (
@@ -2595,5 +2626,36 @@ class _GatedDeleteEmailRepository extends FakeEmailRepository {
   Future<String?> deleteEmail(String emailId) async {
     await gate.future;
     return null;
+  }
+}
+
+/// Like a real repository whose getEmailBody backfills Bcc from the body's
+/// headers: the row only has it once the body load has run.
+class _BackfillingEmailRepository extends FakeEmailRepository {
+  _BackfillingEmailRepository(this._current)
+      : super(
+          emailDetail: _current,
+          emailBody: const EmailBody(
+            emailId: 'acc-1:42',
+            textBody: 'Hi',
+            attachments: [],
+          ),
+        );
+
+  Email _current;
+
+  @override
+  Future<Email?> getEmail(String emailId) async => _current;
+
+  @override
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async {
+    await Future<void>.delayed(Duration.zero);
+    _current = _current.copyWith(
+      bcc: const [EmailAddress(email: 'boss@example.com')],
+    );
+    return super.getEmailBody(emailId, forceRefresh: forceRefresh);
   }
 }

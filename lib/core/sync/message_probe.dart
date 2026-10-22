@@ -31,6 +31,8 @@ class RemoteMessageSnapshot {
     this.from = const [],
     this.to = const [],
     this.cc = const [],
+    this.replyTo = const [],
+    this.bcc = const [],
     this.inReplyTo,
     this.references,
     this.listUnsubscribeHeader,
@@ -53,6 +55,8 @@ class RemoteMessageSnapshot {
   final List<EmailAddress> from;
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
+  final List<EmailAddress> replyTo;
+  final List<EmailAddress> bcc;
   final String? inReplyTo;
   final String? references;
   final String? listUnsubscribeHeader;
@@ -206,6 +210,8 @@ class MessageProbeImpl implements MessageProbe {
           from: _fromImapAddresses(envelope?.from),
           to: _fromImapAddresses(envelope?.to),
           cc: _fromImapAddresses(envelope?.cc),
+          replyTo: _fromImapAddresses(envelope?.replyTo),
+          bcc: _fromImapAddresses(envelope?.bcc),
           inReplyTo: normaliseMessageId(envelope?.inReplyTo),
           references: headers['references']?.trim(),
           listUnsubscribeHeader: headers['list-unsubscribe']?.trim(),
@@ -344,6 +350,8 @@ class MessageProbeImpl implements MessageProbe {
         from: _fromJmapAddresses(data['from'] as List<dynamic>?),
         to: _fromJmapAddresses(data['to'] as List<dynamic>?),
         cc: _fromJmapAddresses(data['cc'] as List<dynamic>?),
+        replyTo: _fromJmapAddresses(data['replyTo'] as List<dynamic>?),
+        bcc: _fromJmapAddresses(data['bcc'] as List<dynamic>?),
         inReplyTo: _joinJmapStringList(data['inReplyTo'] as List<dynamic>?),
         references: _joinJmapStringList(data['references'] as List<dynamic>?),
         listUnsubscribeHeader:
@@ -375,6 +383,8 @@ class LocalMessageSnapshot {
     required this.from,
     required this.to,
     required this.cc,
+    this.replyTo = const [],
+    this.bcc = const [],
     required this.inReplyTo,
     required this.references,
     required this.listUnsubscribeHeader,
@@ -393,6 +403,8 @@ class LocalMessageSnapshot {
   final List<EmailAddress> from;
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
+  final List<EmailAddress> replyTo;
+  final List<EmailAddress> bcc;
   final String? inReplyTo;
   final String? references;
   final String? listUnsubscribeHeader;
@@ -438,6 +450,12 @@ MessageComparison compareMessage(
   diff('from', _addressesToKey(local.from), _addressesToKey(remote.from));
   diff('to', _addressesToKey(local.to), _addressesToKey(remote.to));
   diff('cc', _addressesToKey(local.cc), _addressesToKey(remote.cc));
+  diff(
+    'replyTo',
+    _addressesToKey(local.replyTo),
+    _addressesToKey(remote.replyTo),
+  );
+  diff('bcc', _addressesToKey(local.bcc), _addressesToKey(remote.bcc));
   diff(
     'inReplyTo',
     normaliseMessageId(local.inReplyTo),

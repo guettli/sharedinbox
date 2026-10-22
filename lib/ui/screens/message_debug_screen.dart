@@ -247,6 +247,8 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       ('from', email.fromJson),
       ('to', email.toAddresses),
       ('cc', email.ccJson),
+      ('replyTo', email.replyToJson),
+      ('bcc', email.bccJson),
       ('preview', email.preview ?? ''),
       ('isSeen', email.isSeen.toString()),
       ('isFlagged', email.isFlagged.toString()),

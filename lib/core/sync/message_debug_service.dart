@@ -94,6 +94,8 @@ class MessageDebugEmail {
     required this.fromJson,
     required this.toAddresses,
     required this.ccJson,
+    this.replyToJson = '[]',
+    this.bccJson = '[]',
     required this.preview,
     required this.isSeen,
     required this.isFlagged,
@@ -117,6 +119,8 @@ class MessageDebugEmail {
   final String fromJson;
   final String toAddresses;
   final String ccJson;
+  final String replyToJson;
+  final String bccJson;
   final String? preview;
   final bool isSeen;
   final bool isFlagged;
@@ -207,6 +211,8 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
             fromJson: email.fromJson,
             toAddresses: email.toAddresses,
             ccJson: email.ccJson,
+            replyToJson: email.replyToJson,
+            bccJson: email.bccJson,
             preview: email.preview,
             isSeen: email.isSeen,
             isFlagged: email.isFlagged,
@@ -268,6 +274,8 @@ LocalMessageSnapshot buildLocalMessageSnapshot(
     from: decodeMessageDebugAddresses(email.fromJson),
     to: decodeMessageDebugAddresses(email.toAddresses),
     cc: decodeMessageDebugAddresses(email.ccJson),
+    replyTo: decodeMessageDebugAddresses(email.replyToJson),
+    bcc: decodeMessageDebugAddresses(email.bccJson),
     inReplyTo: email.inReplyTo,
     references: email.references,
     listUnsubscribeHeader: email.listUnsubscribeHeader,
@@ -305,6 +313,8 @@ String buildMessageDebugMarkdown(
     ('from', email.fromJson),
     ('to', email.toAddresses),
     ('cc', email.ccJson),
+    ('replyTo', email.replyToJson),
+    ('bcc', email.bccJson),
     ('preview', email.preview ?? ''),
     ('isSeen', email.isSeen.toString()),
     ('isFlagged', email.isFlagged.toString()),
