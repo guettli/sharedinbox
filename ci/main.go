@@ -519,6 +519,18 @@ func (m *Ci) Deployer(sshKey *dagger.Secret, knownHosts *dagger.Secret) *dagger.
 
 // Stalwart mail server service for backend and integration tests.
 func (m *Ci) Stalwart() *dagger.Service {
+	return m.stalwart("stalwart")
+}
+
+// stalwart builds the Stalwart service with server.hostname set to hostname.
+// Stalwart puts that name into the URLs of its JMAP session (apiUrl, …), so it
+// must be the name the client reaches the server by: "stalwart" for tests that
+// connect over the service binding, "localhost" for the explore service, where
+// the app goes through a localhost forward and refuses a non-localhost http
+// apiUrl. stalwart-dev/config.toml already says "localhost", so that variant
+// runs the config unchanged. Each hostname is its own service instance, so the
+// explore service does not share a Stalwart with concurrent test runs.
+func (m *Ci) stalwart(hostname string) *dagger.Service {
 	stalwartSrc := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"stalwart-dev/"},
 	})
@@ -535,7 +547,7 @@ func (m *Ci) Stalwart() *dagger.Service {
 	return dag.Container().
 		From("stalwartlabs/stalwart:v0.14.1").
 		WithFile("/etc/stalwart/config.toml.orig", config).
-		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"stalwart\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
+		WithExec([]string{"/bin/sh", "-c", "sed -e 's/hostname = \"localhost\"/hostname = \"" + hostname + "\"/' /etc/stalwart/config.toml.orig > /etc/stalwart/config.toml"}).
 		WithDirectory("/tmp/stalwart", dataDir).
 		WithExposedPort(8080). // JMAP
 		WithExposedPort(1430). // IMAP
@@ -547,7 +559,12 @@ func (m *Ci) Stalwart() *dagger.Service {
 
 // WithStalwart binds the Stalwart service and sets test environment variables.
 func (m *Ci) WithStalwart(container *dagger.Container) *dagger.Container {
-	stalwart := m.Stalwart()
+	return withStalwartService(container, m.Stalwart())
+}
+
+// withStalwartService binds stalwart as host "stalwart" and sets the test
+// environment variables.
+func withStalwartService(container *dagger.Container, stalwart *dagger.Service) *dagger.Container {
 	return container.
 		WithServiceBinding("stalwart", stalwart).
 		WithEnvVariable("STALWART_IMAP_HOST", "stalwart").
@@ -645,7 +662,14 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 	return m.Base().
 		WithDirectory("/src", m.Source, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
-		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; echo \"Hygiene check passed.\""}).
+		WithExec([]string{"/bin/bash", "-c", "FORBIDDEN=\".ssh .bashrc .config .local .cache .gitconfig .android Android .gradle .pub-cache .dartServer .flutter .dart-cli-completion .atuin .bash_logout .profile .zcompdump .zshrc snap .emulator_console_auth_token .lesshst .metadata .tmux.conf\"; for f in $FORBIDDEN; do if [ -e \"$f\" ]; then echo \"ERROR: Forbidden file/dir found in source: $f\"; exit 1; fi; done; " +
+			// A raw NUL byte makes grep treat the whole file as binary: searches
+			// (and grep-based checks such as CheckLayers) then silently skip it.
+			// Write the escape \u0000 in Dart strings instead.
+			// grep exits 1 for "no match" but 2 when it fails itself (e.g. no -P
+			// support); only the former may pass.
+			"rc=0; NUL=$(grep -rlaP '\\x00' --include='*.dart' --exclude-dir=.dart_tool --exclude-dir=build .) || rc=$?; if [ $rc -gt 1 ]; then echo \"ERROR: NUL check: grep failed ($rc)\"; exit 1; fi; if [ -n \"$NUL\" ]; then echo \"ERROR: raw NUL byte in source (use an escape such as \\\\u0000):\"; echo \"$NUL\"; exit 1; fi; " +
+			"echo \"Hygiene check passed.\""}).
 		Stdout(ctx)
 }
 
@@ -1599,25 +1623,10 @@ func (m *Ci) GuiTestRelease(
 	}
 	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/gui_driver.py", "scripts/gui_release_test.py",
-			"scripts/gui_test_entrypoint.sh"},
+			"scripts/gui_session.sh", "scripts/gui_test_entrypoint.sh"},
 	})
 
-	ctr := dag.Container().
-		From("ubuntu:24.04").
-		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
-		WithExec([]string{"/bin/sh", "-c",
-			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
-				"ca-certificates curl socat " +
-				// the app's own runtime dependencies (README's apt line)
-				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
-				// virtual display + screenshots
-				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
-				// accessibility: at-spi plus the GSettings machinery Flutter
-				// consults before it will build a semantics tree at all
-				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
-				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
-		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
-		WithExec([]string{"install", "-d", "-o", "tester", "/shots"}).
+	ctr := guiRuntime().
 		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
 		WithUser("tester").
 		WithEnvVariable("HOME", "/home/tester").
@@ -1645,6 +1654,74 @@ func (m *Ci) GuiTestRelease(
 	return m.WithStalwart(ctr).
 		WithExec([]string{"bash", "/src/scripts/gui_test_entrypoint.sh"}).
 		Stdout(ctx)
+}
+
+// guiRuntime is a clean Ubuntu with what a Linux build of the app needs to run
+// (but not to build) plus a virtual display and the accessibility stack that
+// scripts/gui_driver.py drives it through. Runs as the unprivileged "tester"
+// user with /shots writable; see scripts/gui_session.sh for the bring-up.
+func guiRuntime() *dagger.Container {
+	return dag.Container().
+		From("ubuntu:24.04").
+		WithEnvVariable("DEBIAN_FRONTEND", "noninteractive").
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"ca-certificates curl socat " +
+				// the app's own runtime dependencies (README's apt line)
+				"libgtk-3-0t64 libsecret-1-0 libgcrypt20 libjsoncpp25 zenity xdg-utils " +
+				// virtual display + screenshots
+				"xvfb xauth libosmesa6 libegl1 imagemagick x11-utils xdotool " +
+				// accessibility: at-spi plus the GSettings machinery Flutter
+				// consults before it will build a semantics tree at all
+				"at-spi2-core python3-pyatspi python3-gi gir1.2-atspi-2.0 " +
+				"dbus-x11 libglib2.0-bin gsettings-desktop-schemas dconf-service"}).
+		WithExec([]string{"useradd", "-m", "-s", "/bin/bash", "tester"}).
+		WithExec([]string{"install", "-d", "-o", "tester", "/shots"})
+}
+
+// ExploreLinux runs a debug build of the current source on a virtual desktop
+// next to a throwaway Stalwart, for exploratory testing by an agent (see
+// EXPLORATORY-TESTING.md). It is a long-running service, not a check:
+//
+//	task explore-linux
+//
+// Port 8765 is scripts/explore_server.py, an HTTP API that drives the app
+// through its accessibility tree; 1430/1025/8080 reach Stalwart's IMAP, SMTP
+// and JMAP, to seed and inspect the mailbox the app syncs. The task maps them
+// to offset host ports so they do not collide with `task stalwart`.
+//
+// A debug build on purpose: framework assertions stay on, so a misuse that a
+// release build silently tolerates shows up in /log.
+func (m *Ci) ExploreLinux() *dagger.Service {
+	bundle := m.setup(m.linuxSrc()).
+		WithExec([]string{"flutter", "build", "linux", "--debug"}).
+		Directory("build/linux/x64/debug/bundle")
+	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
+		Include: []string{"scripts/gui_driver.py", "scripts/gui_session.sh",
+			"scripts/explore_entrypoint.sh", "scripts/explore_server.py"},
+	})
+	ctr := guiRuntime().
+		// A Secret Service, so flutter_secure_storage can save an account
+		// password. Only here: in the release test it would register a D-Bus
+		// activatable keyring whose first-use prompt could cover the app.
+		// Without an emoji font every emoji renders as an empty box, which
+		// looks like an app bug in screenshots.
+		WithExec([]string{"/bin/sh", "-c",
+			"apt-get -qq update && apt-get install -y -qq --no-install-recommends " +
+				"gnome-keyring fonts-noto-color-emoji"}).
+		WithDirectory("/app", bundle, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithDirectory("/src", scripts, dagger.ContainerWithDirectoryOpts{Owner: "tester"}).
+		WithUser("tester").
+		WithEnvVariable("HOME", "/home/tester").
+		WithExposedPort(8765). // explore_server.py
+		WithExposedPort(1430). // IMAP, forwarded to Stalwart
+		WithExposedPort(1025). // SMTP
+		WithExposedPort(8080)  // JMAP
+	// JMAP session URLs must name localhost: the app reaches Stalwart through
+	// the localhost forward and refuses a plain-http apiUrl to any other host.
+	return withStalwartService(ctr, m.stalwart("localhost")).AsService(dagger.ContainerAsServiceOpts{
+		Args: []string{"bash", "/src/scripts/explore_entrypoint.sh"},
+	})
 }
 
 // CheckMiseInstall installs a published release with mise inside a clean

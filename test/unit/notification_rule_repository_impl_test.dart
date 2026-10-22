@@ -6,15 +6,10 @@ import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.
 
 import 'db_test_helper.dart';
 
-FilterGroup _fromIs(String address) => FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.from_,
-          comparison: FilterComparison.is_,
-          value: address,
-        ),
-      ],
+FilterGroup _fromIs(String address) => FilterGroup.single(
+      FilterField.from_,
+      FilterComparison.is_,
+      address,
     );
 
 Future<void> _seedInbox(AppDatabase db, String accountId) async {

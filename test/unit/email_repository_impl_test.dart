@@ -1078,6 +1078,48 @@ void main() {
       expect(threads.first.emailIds, ['acc-1:1', 'acc-1:2']);
     });
 
+    test('a rebuilt thread carries hasAttachment from its messages', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      // Two messages of one thread: uid 7 has an attachment and stays on the
+      // server, uid 5 is gone. Reconciling deletes uid 5 and rebuilds the
+      // thread row from what is left.
+      for (final (uid, att) in [(5, false), (7, true)]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                receivedAt: DateTime(2024, 1, uid),
+                threadId: const Value('tid-att'),
+                hasAttachment: Value(att),
+              ),
+            );
+      }
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 'tid-att',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              latestDate: DateTime(2024, 1, 7),
+              latestEmailId: 'acc-1:INBOX:7',
+            ),
+          );
+
+      await r.emails.reconcileDeletedImapForTest(
+        'acc-1',
+        'INBOX',
+        const [7],
+        serverMessageCount: 1,
+      );
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(threads.single.messageCount, 1);
+      expect(threads.single.hasAttachment, isTrue);
+    });
+
     test('observeThreads returns starred threads before unstarred', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -1749,6 +1791,70 @@ void main() {
       final words = await r.emails.searchEmailsGlobal(null, 'foo com');
       expect(words.map((e) => e.id), containsAll(['acc-1:1', 'acc-1:2']));
       expect(words, hasLength(2));
+    });
+
+    test('searchEmailsGlobal finds words with non-ASCII letters', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      final subjects = [
+        'Grüße von Jürgen Müller',
+        'Привет из Москвы',
+        'Write to info@bäcker.de',
+      ];
+      for (final (i, subject) in subjects.indexed) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                subject: Value(subject),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      // An ASCII-only word split used to turn 'Müller' into the phrase
+      // "M ller" and 'Привет' into an empty query.
+      for (final (query, id) in [
+        ('Müller', 'acc-1:0'),
+        ('grüße', 'acc-1:0'),
+        ('Jürgen Mül', 'acc-1:0'),
+        ('Привет', 'acc-1:1'),
+        ('москв', 'acc-1:1'),
+        ('Mu\u0308ller', 'acc-1:0'), // decomposed ü, as some keyboards send
+        ('bäcker.de', 'acc-1:2'),
+      ]) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(results.map((e) => e.id), [id], reason: query);
+      }
+    });
+
+    test('searchEmailsGlobal treats AND, OR and NOT as words', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('NOT urgent: lunch OR dinner'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Unquoted, FTS5 read these as operators and threw a syntax error.
+      for (final query in ['NOT urgent', 'lunch OR', 'AND']) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(
+          results.map((e) => e.id),
+          query == 'AND' ? isEmpty : ['acc-1:1'],
+          reason: query,
+        );
+      }
     });
 
     test('searchEmailsGlobal matches a single word only in the body', () async {
@@ -8653,6 +8759,120 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('a mail read on another device is no longer bold in the list',
+        () async {
+      final client = _CondstoreImapClient(
+        messages: {
+          42: _PreviewTestMessage(
+            subject: 'Lunch tomorrow?',
+            from: 'alice@example.com',
+            text: 'Noon?',
+            messageId: '<m42@example.com>',
+          ),
+        },
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+      expect((await r.db.select(r.db.threads).getSingle()).hasUnread, isTrue);
+
+      // Another client sets \Seen and \Flagged; HIGHESTMODSEQ moves on.
+      client
+        ..flags[42] = [r'\Seen', r'\Flagged']
+        ..modSeq = 2;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final email = await r.db.select(r.db.emails).getSingle();
+      expect(email.isSeen, isTrue);
+      // The list reads the thread row, which used to keep the old state.
+      final thread = await r.db.select(r.db.threads).getSingle();
+      expect(thread.hasUnread, isFalse);
+      expect(thread.isFlagged, isTrue);
+    });
+
+    test(
+        'syncEmails dates mail by INTERNALDATE, not the fetch time, '
+        'when it has no Date header', () async {
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'No Date header',
+          from: 'sender@example.com',
+          text: 'Body',
+          messageId: '<m42@example.com>',
+          hasDateHeader: false,
+          internalDate: '15-Oct-2026 14:22:10 +0200',
+        ),
+        43: _PreviewTestMessage(
+          subject: 'Dated',
+          from: 'sender@example.com',
+          text: 'Body',
+          messageId: '<m43@example.com>',
+          internalDate: '16-Jun-2024 08:00:00 +0000',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final undated = await r.emails.getEmail('acc-1:INBOX:42');
+      expect(undated!.sentAt, isNull);
+      final arrived = DateTime.utc(2026, 10, 15, 12, 22, 10);
+      expect(undated.receivedAt.toUtc(), arrived);
+      final thread = (await r.emails.observeThreads('acc-1', 'INBOX').first)
+          .singleWhere((t) => t.subject == 'No Date header');
+      expect(thread.latestDate.toUtc(), arrived);
+
+      // receivedAt is the server's arrival time; the Date header stays sentAt.
+      final dated = await r.emails.getEmail('acc-1:INBOX:43');
+      expect(dated!.sentAt!.toUtc(), DateTime.utc(2024, 6, 15, 12));
+      expect(dated.receivedAt.toUtc(), DateTime.utc(2024, 6, 16, 8));
+    });
+
+    test(
+        'syncEmails makes an undated message the thread latest when it '
+        'arrived last', () async {
+      // The reply has no Date header but the latest INTERNALDATE.
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'Topic',
+          from: 'a@example.com',
+          text: 'First',
+          messageId: '<m42@example.com>',
+          internalDate: '15-Jun-2024 12:00:00 +0000',
+        ),
+        43: _PreviewTestMessage(
+          subject: 'Re: Topic',
+          from: 'b@example.com',
+          text: 'Second',
+          messageId: '<m43@example.com>',
+          inReplyTo: '<m42@example.com>',
+          hasDateHeader: false,
+          internalDate: '17-Jun-2024 09:00:00 +0000',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      final thread = threads.single;
+      expect(thread.messageCount, 2);
+      expect(thread.latestEmailId, 'acc-1:INBOX:43');
+      expect(thread.latestDate.toUtc(), DateTime.utc(2024, 6, 17, 9));
+    });
+
     test('syncEmails stores the Reply-To envelope addresses (#919)', () async {
       final messages = {
         42: _PreviewTestMessage(
@@ -9531,8 +9751,20 @@ class _PreviewTestMessage {
     this.text,
     this.html,
     this.replyTo,
+    this.hasDateHeader = true,
+    this.internalDate,
+    this.inReplyTo,
   });
 
+  /// The envelope's In-Reply-To, threading this message under that one.
+  final String? inReplyTo;
+
+  /// False builds a message whose envelope carries no Date.
+  final bool hasDateHeader;
+
+  /// The raw IMAP `INTERNALDATE` the fetch returns, e.g.
+  /// `15-Oct-2026 12:22:10 +0000`; null when the server sent none.
+  final String? internalDate;
   final String subject;
   final String from;
   final String messageId;
@@ -9570,13 +9802,15 @@ class _PreviewTestMessage {
       ..uid = uid
       ..size = rawMime.length
       ..flags = <String>[]
+      ..internalDate = internalDate
       ..envelope = imap.Envelope(
-        date: DateTime.utc(2024, 6, 15, 12),
+        date: hasDateHeader ? DateTime.utc(2024, 6, 15, 12) : null,
         subject: subject,
         from: [imap.MailAddress(null, from)],
         to: const [imap.MailAddress(null, 'alice@example.com')],
         replyTo: replyTo == null ? null : [imap.MailAddress(null, replyTo!)],
         messageId: messageId,
+        inReplyTo: inReplyTo,
       );
     return msg;
   }
@@ -9657,11 +9891,56 @@ class _PreviewSyncImapClient extends FakeImapClient {
     int? changedSinceModSequence,
     Duration? responseTimeout,
   }) async {
+    // Like a real server, only answer INTERNALDATE when it was asked for.
+    final wantsInternalDate =
+        fetchContentDefinition?.contains('INTERNALDATE') ?? false;
     final built = <imap.MimeMessage>[
       for (final uid in sequence.toList())
-        if (messages[uid] != null) messages[uid]!.build(uid),
+        if (messages[uid] != null)
+          messages[uid]!.build(uid)
+            ..internalDate =
+                wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] with CONDSTORE: SELECT reports [modSeq], and a
+/// `FLAGS` fetch with CHANGEDSINCE returns the [flags] of every message, the
+/// way a server answers once something changed.
+class _CondstoreImapClient extends _PreviewSyncImapClient {
+  _CondstoreImapClient({required super.messages});
+
+  int modSeq = 1;
+  final Map<int, List<String>> flags = {};
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      (await super.selectMailboxByPath(path))..highestModSequence = modSeq;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    if (changedSinceModSequence == null) {
+      return super.uidFetchMessages(sequence, fetchContentDefinition);
+    }
+    return imap.FetchImapResult(
+      [
+        for (final uid in messages.keys)
+          imap.MimeMessage()
+            ..uid = uid
+            ..flags = flags[uid] ?? [],
+      ],
+      null,
+    );
   }
 }
 

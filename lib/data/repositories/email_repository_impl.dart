@@ -27,12 +27,16 @@ import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/push_status.dart';
 import 'package:sharedinbox/core/utils/cid_utils.dart';
 import 'package:sharedinbox/core/utils/email_preview.dart';
+import 'package:sharedinbox/core/utils/imap_date.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/core/utils/mail_body_decode.dart';
 import 'package:sharedinbox/core/utils/mail_header_decode.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
@@ -40,6 +44,7 @@ import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_snippet.dart';
+import 'package:sharedinbox/data/imap/reply_headers.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
@@ -263,7 +268,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // Stable per-group key: the lowest account id across the group.
       final groupIds = [account.id, for (final c in counterparts) c.id]..sort();
-      final dedupKey = '${groupIds.first} $mid';
+      final dedupKey = '${groupIds.first}\u0000$mid';
 
       final existingIndex = keptIndexByKey[dedupKey];
       if (existingIndex == null) {
@@ -305,6 +310,7 @@ class EmailRepositoryImpl implements EmailRepository {
       messageCount: row.messageCount,
       hasUnread: row.hasUnread,
       isFlagged: row.isFlagged,
+      hasAttachment: row.hasAttachment,
       participants: parseAddresses(row.participantsJson),
       preview: row.preview,
       latestEmailId: row.latestEmailId,
@@ -326,8 +332,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.mailboxPath.equals(mailboxPath) &
                 t.threadId.equals(threadId),
           )
+          // Same key as `latestDate` below, so an undated message sorts by
+          // its arrival time rather than first (SQLite orders NULL lowest).
           ..orderBy([
-            (t) => OrderingTerm.asc(t.sentAt),
+            (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
             (t) => OrderingTerm.asc(t.receivedAt),
           ]))
         .get();
@@ -370,6 +378,7 @@ class EmailRepositoryImpl implements EmailRepository {
             messageCount: Value(threadEmails.length),
             hasUnread: Value(threadEmails.any((e) => !e.isSeen)),
             isFlagged: Value(threadEmails.any((e) => e.isFlagged)),
+            hasAttachment: Value(threadEmails.any((e) => e.hasAttachment)),
             participantsJson: Value(jsonEncode(participants)),
             preview: Value(latest.preview),
             latestEmailId: latest.id,
@@ -623,7 +632,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 contentInfos
                     .map(
                       (a) => {
-                        'filename': a.fileName ?? '',
+                        'filename': mimePartFileName(
+                              a.contentDisposition,
+                              a.contentType,
+                            ) ??
+                            '',
                         'contentType': a.contentType?.mediaType.text ?? '',
                         // ContentInfo.fetchId is empty for parts that aren't
                         // addressable (e.g. a non-multipart message whose
@@ -1400,18 +1413,36 @@ class EmailRepositoryImpl implements EmailRepository {
       changedSinceModSequence: sinceModSeq,
     );
     final inFlightSet = await _inFlightFlagResourceIds(account.id);
-    for (final msg in result.messages) {
-      final uid = msg.uid;
-      if (uid == null) continue;
-      final emailId = '${account.id}:$mailboxPath:$uid';
-      if (inFlightSet.contains(emailId)) continue;
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(
-          isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-          isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
-        ),
-      );
-    }
+    // One transaction, and only rows whose flags really changed: a modseq
+    // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
+    // thousands of messages after a long time offline.
+    await _db.transaction(() async {
+      final affectedThreads = <String>{};
+      for (final msg in result.messages) {
+        final uid = msg.uid;
+        if (uid == null) continue;
+        final emailId = '${account.id}:$mailboxPath:$uid';
+        if (inFlightSet.contains(emailId)) continue;
+        final row = await (_db.select(_db.emails)
+              ..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+        if (row == null) continue;
+        final seen = msg.flags?.contains(r'\Seen') ?? false;
+        final flagged = msg.flags?.contains(r'\Flagged') ?? false;
+        if (row.isSeen == seen && row.isFlagged == flagged) continue;
+        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+            .write(
+          EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
+        );
+        affectedThreads.add(row.threadId ?? row.id);
+      }
+      // The message list reads unread/starred state from the thread row, so
+      // a mail read, unread, starred or unstarred on another device kept its
+      // old look here although its own row was already up to date.
+      for (final tid in affectedThreads) {
+        await _updateThread(account.id, mailboxPath, tid);
+      }
+    });
   }
 
   static const _imapFlagReconcileInterval = Duration(minutes: 15);
@@ -1509,8 +1540,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // separately by [_fetchPreviewSnippetsSafely]: enough_mail's response
     // tokeniser mis-parses any partial `BODY.PEEK[…]<0.n>` item, so asking for
     // it here would set the message body to the literal string `0>` (#680).
-    const fetchItems = '(UID FLAGS ENVELOPE BODYSTRUCTURE RFC822.SIZE '
-        'BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
+    const fetchItems = '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE '
+        'RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1615,7 +1646,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 uid: uid,
                 subject: Value(subject),
                 sentAt: Value(envelope.date),
-                receivedAt: envelope.date ?? DateTime.now(),
+                // The server's arrival time, like JMAP `receivedAt`. Never
+                // the local fetch time when the server knows better: mail
+                // without a Date header used to be re-dated to "now" on every
+                // re-fetch, so a resync or reinstall moved it to the top.
+                receivedAt: parseImapDateTime(msg.internalDate) ??
+                    envelope.date ??
+                    DateTime.now(),
                 fromJson: Value(_encodeAddresses(envelope.from)),
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
@@ -1625,6 +1662,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 ),
                 isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
                 isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+                // enough_mail counts parts with Content-Disposition: attachment;
+                // JMAP's hasAttachment (below) is server-defined, so the two
+                // protocols may disagree on e.g. inline images.
                 hasAttachment: Value(msg.hasAttachments()),
                 threadId: Value(threadId),
                 messageId: Value(msgId),
@@ -3613,6 +3653,8 @@ class EmailRepositoryImpl implements EmailRepository {
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
+              // Server-defined (RFC 8621); IMAP instead counts
+              // Content-Disposition: attachment parts.
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
               threadId: Value(jmapThreadId),
               messageId: Value(jmapMessageId),
@@ -6651,12 +6693,14 @@ class EmailRepositoryImpl implements EmailRepository {
     SendTiming timing,
   ) async {
     final builder = imap.MessageBuilder()
-      ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-      ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
-      ..subject = draft.subject
+      ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
+      ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+      ..subject = encodeUnstructuredHeader(draft.subject)
+      ..subjectEncoding = imap.HeaderEncoding.none
       ..messageId = draft.messageId
       ..text = draft.body;
+    addReplyHeaders(builder, draft);
     for (final filePath in draft.attachmentFilePaths) {
       final file = File(filePath);
       final mediaType = imap.MediaType.guessFromFileName(filePath);
@@ -6940,6 +6984,12 @@ class EmailRepositoryImpl implements EmailRepository {
       // JMAP messageId is an array of bracket-less ids (RFC 8621 §4.1.2.3).
       if (draft.messageId != null)
         'messageId': [normaliseMessageId(draft.messageId)],
+      // Same bracket-less array form for the reply headers (RFC 8621 §4.1.2.3).
+      if (normaliseMessageId(draft.inReplyTo) case final inReplyTo?)
+        'inReplyTo': [inReplyTo],
+      if (normaliseDraftReferences(draft.references) case final refs
+          when refs.isNotEmpty)
+        'references': refs,
       'bodyValues': {
         bodyPartId: {
           'value': draft.body,
@@ -7146,7 +7196,7 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     await dir.create(recursive: true);
 
-    final file = File(p.join(dir.path, attachment.filename));
+    final file = File(p.join(dir.path, safeFileName(attachment.filename)));
     if (await file.exists()) {
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
@@ -7594,9 +7644,9 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Converts a user query string into an FTS5 match expression.
   ///
   /// The query is first split on whitespace into the chunks the user actually
-  /// typed. A plain chunk (`foo`) becomes a prefix term (`foo*`) so partial
-  /// words still match while typing. A punctuated chunk (`foo.com`) is turned
-  /// into an adjacent phrase (`"foo com" *`): the default `unicode61`
+  /// typed. Each chunk becomes a quoted prefix phrase: `foo` → `"foo" *`, so
+  /// partial words still match while typing. A punctuated chunk (`foo.com`)
+  /// becomes the adjacent phrase `"foo com" *`: the default `unicode61`
   /// tokenizer splits on the punctuation on the index side too, so requiring
   /// the tokens to stay adjacent is the closest FTS5 can get to an exact
   /// "foo.com" match — and, unlike the old `foo* com*`, it no longer matches
@@ -7604,18 +7654,27 @@ class EmailRepositoryImpl implements EmailRepository {
   /// `*` keeps prefix matching on the last token (`foo.co` → `"foo co" *`).
   /// Separate chunks are still combined with FTS5's implicit AND, so
   /// `foo com` finds mails containing both words anywhere.
+  ///
+  /// The quotes keep a typed `AND`, `OR` or `NOT` a plain word: unquoted, FTS5
+  /// reads it as an operator and the search fails with a syntax error.
+  ///
+  /// Every Unicode letter, mark and digit counts as part of a word. Dart's
+  /// `\w` is ASCII-only, so `Müller` used to become the phrase `"M ller"` and
+  /// `Привет` an empty query, and neither found anything. unicode61 does not
+  /// split CJK text into words, so there only a prefix of the whole run
+  /// matches (`東京` finds `東京駅`, `駅` does not).
   static String _toFtsQuery(String query) {
     final terms = <String>[];
     for (final chunk in query.trim().split(RegExp(r'\s+'))) {
       final tokens =
-          chunk.split(RegExp(r'[^\w]+')).where((t) => t.isNotEmpty).toList();
+          chunk.split(_nonWordChars).where((t) => t.isNotEmpty).toList();
       if (tokens.isEmpty) continue;
-      terms.add(
-        tokens.length == 1 ? '${tokens.single}*' : '"${tokens.join(' ')}" *',
-      );
+      terms.add('"${tokens.join(' ')}" *');
     }
     return terms.join(' ');
   }
+
+  static final _nonWordChars = RegExp(r'[^\p{L}\p{M}\p{N}_]+', unicode: true);
 
   @override
   Future<List<model.Email>> getEmailsByAddress(
@@ -8197,7 +8256,7 @@ Map<String, dynamic> _mimePartToJson(imap.MimePart part) {
   final encoding = rawEncoding?.split(';').first.trim().toLowerCase();
   return {
     'contentType': ct?.mediaType.text ?? 'application/octet-stream',
-    'filename': disposition?.filename ?? ct?.parameters['name'],
+    'filename': mimePartFileName(disposition, ct),
     'size': disposition?.size,
     'encoding': encoding,
     'children': (part.parts ?? []).map(_mimePartToJson).toList(),

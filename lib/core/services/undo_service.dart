@@ -27,7 +27,9 @@ class UndoService extends Notifier<List<UndoAction>> {
 
   Future<void> pushAction(UndoAction action) async {
     await _ready;
-    final newList = [...state, action];
+    // The DB replaces a row with the same id (undoing an action twice pushes
+    // its inverse again), so state must not keep the older copy either.
+    final newList = [...state.where((a) => a.id != action.id), action];
     while (newList.length > _maxHistory) {
       newList.removeAt(0);
     }
@@ -48,6 +50,32 @@ class UndoService extends Notifier<List<UndoAction>> {
     return history.where((a) => a.id == action.id).firstOrNull ?? action;
   }
 
+  /// Marks [action] (the persisted copy, see [_reload]) undone, in state and
+  /// DB. Undoing an inverse (`<id>-inv`) re-applies the action it reverted,
+  /// whose own inverse it may be in turn, so the marks alternate up the
+  /// chain: the parent stands again, the grandparent is undone again, ...
+  Future<void> _markUndone(UndoAction action) async {
+    final repo = ref.read(undoRepositoryProvider);
+    final now = DateTime.now();
+    var id = action.id;
+    DateTime? mark = now;
+    while (true) {
+      await repo.setUndoneAt(id, mark);
+      final (current, m) = (id, mark);
+      state = [
+        for (final a in state)
+          if (a.id != current)
+            a
+          else
+            // Take the persisted copy's (possibly re-keyed) email ids.
+            (a.id == action.id ? action : a).withUndoneAt(m),
+      ];
+      if (!id.endsWith(UndoAction.inverseSuffix)) break;
+      id = id.substring(0, id.length - UndoAction.inverseSuffix.length);
+      mark = mark == null ? now : null;
+    }
+  }
+
   Future<void> clear() async {
     await _ready;
     state = [];
@@ -62,7 +90,11 @@ class UndoService extends Notifier<List<UndoAction>> {
 
     final UndoAction inMemory;
     if (actionId == null) {
-      inMemory = state.last;
+      // The most recent action whose effect still stands; an undone entry
+      // without an inverse would otherwise be undone over and over.
+      final standing = state.where((a) => a.undoneAt == null);
+      if (standing.isEmpty) return;
+      inMemory = standing.last;
     } else {
       try {
         inMemory = state.firstWhere((a) => a.id == actionId);
@@ -135,6 +167,8 @@ class UndoService extends Notifier<List<UndoAction>> {
       }
     }
 
+    await _markUndone(action);
+
     // Add a reverse action so the undo log always retains a record and the
     // user can re-apply the original operation. sourceMailboxPath on the
     // inverse is the original destination (e.g. Trash) so that undoing the
@@ -144,7 +178,7 @@ class UndoService extends Notifier<List<UndoAction>> {
     if (inverseDest != null) {
       await pushAction(
         UndoAction(
-          id: '${action.id}-inv',
+          id: '${action.id}${UndoAction.inverseSuffix}',
           accountId: action.accountId,
           type: UndoType.move,
           emailIds: action.emailIds,

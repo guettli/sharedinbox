@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/notification_rule.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
+import 'package:sharedinbox/ui/widgets/text_prompt_dialog.dart';
 
 /// Per-account "pop up for these mails" configuration. New mail is silent by
 /// default; the user turns on the master switch and adds rules describing which
@@ -166,22 +167,25 @@ class NotificationsScreen extends ConsumerWidget {
   }
 
   Future<void> _addSender(BuildContext context, WidgetRef ref) async {
-    final address = await _promptText(
+    final address = await showTextPrompt(
       context,
+      confirmLabel: 'Add',
       title: 'Add sender',
-      label: 'Email address',
+      labelText: 'Email address',
       keyboardType: TextInputType.emailAddress,
     );
-    if (address == null || address.trim().isEmpty) return;
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.from_,
-          comparison: FilterComparison.is_,
-          value: address.trim(),
-        ),
-      ],
+    if (address == null) return;
+    final sender = senderAddress(address);
+    if (sender == null) {
+      if (context.mounted) {
+        context.showAppSnackBar('Not an email address: $address');
+      }
+      return;
+    }
+    final filter = FilterGroup.single(
+      FilterField.from_,
+      FilterComparison.is_,
+      sender,
     );
     await ref.read(notificationRuleRepositoryProvider).addRule(
           accountId,
@@ -190,21 +194,17 @@ class NotificationsScreen extends ConsumerWidget {
   }
 
   Future<void> _addSubjectKeyword(BuildContext context, WidgetRef ref) async {
-    final text = await _promptText(
+    final text = await showTextPrompt(
       context,
+      confirmLabel: 'Add',
       title: 'Add mailing list / subject keyword',
-      label: 'Subject contains',
+      labelText: 'Subject contains',
     );
-    if (text == null || text.trim().isEmpty) return;
-    final filter = FilterGroup(
-      operator: FilterOperator.and_,
-      children: [
-        FilterLeaf(
-          field: FilterField.subject,
-          comparison: FilterComparison.contains,
-          value: text.trim(),
-        ),
-      ],
+    if (text == null) return;
+    final filter = FilterGroup.single(
+      FilterField.subject,
+      FilterComparison.contains,
+      text,
     );
     await ref.read(notificationRuleRepositoryProvider).addRule(
           accountId,
@@ -234,38 +234,6 @@ class NotificationsScreen extends ConsumerWidget {
       await repo.updateRule(rule.id, result.filter, name: result.name);
     }
     if (context.mounted) context.showAppSnackBar('Rule saved');
-  }
-
-  Future<String?> _promptText(
-    BuildContext context, {
-    required String title,
-    required String label,
-    TextInputType? keyboardType,
-  }) {
-    final controller = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: keyboardType,
-          decoration: InputDecoration(labelText: label),
-          onSubmitted: (v) => Navigator.pop(ctx, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
   }
 }
 
@@ -366,4 +334,17 @@ class _RuleEditorPageState extends State<_RuleEditorPage> {
       ),
     );
   }
+}
+
+/// The bare address in what was typed into "Add sender": `alice@example.com`,
+/// a pasted `Alice <alice@example.com>` or `mailto:alice@example.com`. Null
+/// when it is not an address. The rule compares it with the sender's bare
+/// address (`From is …`), so anything else could never match.
+@visibleForTesting
+String? senderAddress(String input) {
+  final bracketed = RegExp(r'<([^<>]*)>\s*$').firstMatch(input.trim());
+  final address = (bracketed?.group(1) ?? input)
+      .trim()
+      .replaceFirst(RegExp('^mailto:', caseSensitive: false), '');
+  return RegExp(r'^[^\s@<>]+@[^\s@<>]+$').hasMatch(address) ? address : null;
 }

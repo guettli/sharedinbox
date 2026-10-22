@@ -116,6 +116,129 @@ void main() {
       },
     );
 
+    testWidgets('New key replaces the shown key and clears the error', (
+      tester,
+    ) async {
+      final keys = FakeShareKeyRepository(freshKeys: true);
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(shareKeyRepository: keys),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('encryptedCodeField')),
+        'not-a-valid-qr-code',
+      );
+      await tester.tap(find.text('Import'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Import failed:'), findsWidgets);
+
+      await tester.tap(find.byKey(const Key('newKeyButton')));
+      await tester.pumpAndSettle();
+
+      expect(keys.createCount, 2);
+      expect(find.byKey(const Key('pubKeyQrCode')), findsOneWidget);
+      // The snackbar may still show the old error; the page must not.
+      expect(
+        find.descendant(
+          of: find.byType(SingleChildScrollView),
+          matching: find.textContaining('Import failed:'),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('an expired key refuses to scan or import', (tester) async {
+      final fresh = await ShareEncryptionService.generateKeyPair();
+      final expired = ShareKeyMaterial(
+        keyId: fresh.keyId,
+        publicKeyBytes: fresh.publicKeyBytes,
+        privateKeyBytes: fresh.privateKeyBytes,
+        expiresAt: DateTime.now().toUtc().subtract(const Duration(seconds: 1)),
+      );
+      final accountRepo = FakeAccountRepository();
+
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/receive',
+          overrides: baseOverrides(
+            accountRepository: accountRepo,
+            shareKeyRepository: FakeShareKeyRepository(material: expired),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('This key has expired'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('encryptedCodeField')), findsNothing);
+      expect(find.textContaining('This key has expired.'), findsOneWidget);
+      expect(find.byKey(const Key('newKeyButton')), findsOneWidget);
+      expect(accountRepo.accounts, isEmpty);
+    });
+
+    testWidgets(
+      'step 2 — importing two accounts at once gives each its own id',
+      (tester) async {
+        final material = await ShareEncryptionService.generateKeyPair();
+        final accountRepo = FakeAccountRepository();
+
+        AccountPayload payload(String id, String email) => AccountPayload(
+              accountJson: Account(
+                id: id,
+                displayName: email,
+                email: email,
+                imapHost: 'imap.example.com',
+                smtpHost: 'smtp.example.com',
+              ).toJson(),
+              password: 'secret',
+            );
+
+        final encryptedQr = await ShareEncryptionService.encryptAccounts(
+          recipientKeyId: material.keyId,
+          recipientPublicKeyBytes: material.publicKeyBytes,
+          accounts: [
+            payload('src-1', 'alice@example.com'),
+            payload('src-2', 'bob@example.com'),
+          ],
+        );
+
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation: '/accounts/receive',
+            overrides: baseOverrides(
+              accountRepository: accountRepo,
+              shareKeyRepository: FakeShareKeyRepository(material: material),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('scanEncryptedButton')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('encryptedCodeField')),
+          encryptedQr,
+        );
+        await tester.tap(find.text('Import'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Imported 2 accounts successfully.'), findsOneWidget);
+        expect(
+          accountRepo.accounts.map((a) => a.email),
+          ['alice@example.com', 'bob@example.com'],
+        );
+        expect(accountRepo.accounts.map((a) => a.id).toSet(), hasLength(2));
+      },
+    );
+
     testWidgets(
       'step 2 — invalid encrypted QR shows error and returns to pub-key step',
       (tester) async {

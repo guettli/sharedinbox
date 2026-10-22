@@ -7,7 +7,10 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
+import 'package:sharedinbox/data/imap/reply_headers.dart';
 
 /// Backoff schedule (in seconds). Capped at the last entry — once `attempts`
 /// exceeds the table length we wait this long between every further retry.
@@ -43,6 +46,10 @@ class OutboxRepositoryImpl implements OutboxRepository {
       'subject': draft.subject,
       'body': draft.body,
       if (draft.messageId != null) 'messageId': draft.messageId,
+      // The send path rebuilds the message from this envelope, so the reply
+      // headers have to survive here too, not only in the stored MIME.
+      if (draft.inReplyTo != null) 'inReplyTo': draft.inReplyTo,
+      if (draft.references.isNotEmpty) 'references': draft.references,
     });
     final attachmentsJson = jsonEncode(draft.attachmentFilePaths);
     return _db.into(_db.outbox).insert(
@@ -213,6 +220,9 @@ model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
     body: env['body'] as String? ?? '',
     attachmentFilePaths: atts.cast<String>(),
     messageId: env['messageId'] as String?,
+    inReplyTo: env['inReplyTo'] as String?,
+    references:
+        (env['references'] as List<dynamic>? ?? const []).cast<String>(),
   );
 }
 
@@ -239,12 +249,15 @@ OutboxMessage _rowToMessage(OutboxRow row) {
 }
 
 imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
-  return imap.MessageBuilder()
-    ..from = [imap.MailAddress(draft.from.name, draft.from.email)]
-    ..to = draft.to.map((a) => imap.MailAddress(a.name, a.email)).toList()
-    ..cc = draft.cc.map((a) => imap.MailAddress(a.name, a.email)).toList()
-    ..subject = draft.subject
+  final builder = imap.MessageBuilder()
+    ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
+    ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+    ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+    ..subject = encodeUnstructuredHeader(draft.subject)
+    ..subjectEncoding = imap.HeaderEncoding.none
     ..messageId = draft.messageId
     ..text = draft.body
     ..addHeader('User-Agent', 'sharedinbox/$appVersion');
+  addReplyHeaders(builder, draft);
+  return builder;
 }

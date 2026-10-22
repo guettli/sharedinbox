@@ -69,6 +69,59 @@ void main() {
       expect(htmlToPlain('&lt;tr&gt; &lt;td&gt;cell'), 'cell');
     });
 
+    test('keeps escaped text that is not a tag', () {
+      expect(htmlToPlain('Prices &lt;50%&gt; off'), 'Prices <50%> off');
+      expect(
+        htmlToPlain('From: John &lt;john@example.com&gt;<br>Sent: Monday'),
+        'From: John <john@example.com>\nSent: Monday',
+      );
+      expect(
+        htmlToPlain('if a &lt; b &amp;&amp; c &gt; d'),
+        'if a < b && c > d',
+      );
+    });
+
+    test('sets table cells and blocks apart', () {
+      expect(
+        htmlToPlain(
+          '<table><tr><td>Item</td><td>Price</td></tr>'
+          '<tr><td>Mug</td><td>5 &euro;</td></tr></table>',
+        ),
+        'Item Price\nMug 5 €',
+      );
+      expect(htmlToPlain('<div>one</div><div>two</div>'), 'one\ntwo');
+    });
+
+    test('drops comments, doctype and Word markup', () {
+      expect(
+        htmlToPlain('<!DOCTYPE html><!--[if mso]><table><![endif]-->Hi'),
+        'Hi',
+      );
+      expect(
+        htmlToPlain('<![if !supportLists]>1.<![endif]>Item'),
+        '1.Item',
+      );
+      expect(
+        htmlToPlain(
+          '<?xml:namespace prefix = o ns="urn:schemas-microsoft-com" />Hi',
+        ),
+        'Hi',
+      );
+      // Cut off by truncation before the comment ends.
+      expect(htmlToPlain('<p>a<!--[if mso]><table><tr><td>'), 'a');
+    });
+
+    test('treats <BR> like <br>', () {
+      expect(htmlToPlain('a<BR>b<Br/>c'), 'a\nb\nc');
+    });
+
+    test('stays fast on a body full of unclosed tags', () {
+      final watch = Stopwatch()..start();
+      htmlToPlain('<a ' * 40000);
+      htmlToPlain('<!--' * 40000);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+    });
+
     test('decodes &quot;', () {
       expect(htmlToPlain('say &quot;hi&quot;'), 'say "hi"');
     });
@@ -100,8 +153,40 @@ void main() {
       expect(htmlToPlain('a &amp;lt; b'), 'a &lt; b');
     });
 
+    test('decodes Latin-1 and Windows-1252 named entities', () {
+      expect(
+        htmlToPlain('Gr&uuml;&szlig;e aus K&ouml;ln, caf&eacute; &Auml;rger'),
+        'Grüße aus Köln, café Ärger',
+      );
+      expect(
+        htmlToPlain('&bdquo;Hallo&ldquo; &ndash; 5&nbsp;&euro; &bull;'),
+        '„Hallo“ – 5 € •',
+      );
+    });
+
+    test('decodes names with digits and upper-case legacy names', () {
+      expect(htmlToPlain('&frac12; &sup2; &frac34;'), '½ ² ¾');
+      expect(htmlToPlain('&QUOT;x&QUOT; &COPY;'), '"x" ©');
+    });
+
+    test('reads numeric 128-159 as Windows-1252, like browsers', () {
+      expect(htmlToPlain('a &#150; b &#147;c&#148; &#128;'), 'a – b “c” €');
+    });
+
+    test('a decoded &amp; never starts another reference', () {
+      expect(htmlToPlain('&amp;#38;lt;b&amp;#38;gt;'), '&#38;lt;b&#38;gt;');
+    });
+
+    test('leaves an unknown named entity as written', () {
+      expect(htmlToPlain('a &bogus; b &AUML; c'), 'a &bogus; b &AUML; c');
+    });
+
+    test('decodes &amp; once, also before a named entity', () {
+      expect(htmlToPlain('&amp;auml; &amp;#228;'), '&auml; &#228;');
+    });
+
     test('leaves a malformed numeric entity as written (#682)', () {
-      expect(htmlToPlain('x&#;y'), 'x&#;y');
+      expect(htmlToPlain('x&#;y &#0; z'), 'x&#;y &#0; z');
     });
 
     test('trims surrounding whitespace', () {
@@ -124,6 +209,142 @@ void main() {
       expect(result, contains('Hello Alice,'));
       expect(result, contains('Best regards,'));
       expect(result, contains('Bob'));
+    });
+  });
+
+  group('htmlHasRemoteResources', () {
+    test('false for markup without any images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<h1>Hi</h1><p>A <a href="https://example.com">link</a>.</p>',
+        ),
+        isFalse,
+      );
+    });
+
+    test('false for inline cid: and data: images', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:logo@x"><img src="data:image/png;base64,AAAA">',
+        ),
+        isFalse,
+      );
+    });
+
+    test('true for an http(s) img src, quoted or not', () {
+      expect(
+        htmlHasRemoteResources('<img src="https://x.test/a.png">'),
+        isTrue,
+      );
+      expect(htmlHasRemoteResources("<IMG SRC='http://x.test/a.png'>"), isTrue);
+      expect(htmlHasRemoteResources('<img src=https://x.test/a.png>'), isTrue);
+    });
+
+    test('true for a protocol-relative src', () {
+      expect(htmlHasRemoteResources('<img src="//x.test/pixel.gif">'), isTrue);
+    });
+
+    test('true for srcset and legacy background attributes', () {
+      expect(
+        htmlHasRemoteResources('<img srcset="https://x.test/a.png 2x">'),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources('<td background="https://x.test/bg.jpg">'),
+        isTrue,
+      );
+    });
+
+    test('true for CSS url(), including entity-quoted ones', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:url(https://x.test/bg.jpg)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background-image:url(&quot;https://x.test/b.jpg&quot;)">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for SVG <image>/<feImage> href and xlink:href', () {
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><image xlink:href="https://x.test/a.png"/></svg>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<svg><filter><feImage href="//x.test/a.png"/></filter></svg>',
+        ),
+        isTrue,
+      );
+    });
+
+    test('false for a plain <a href> link', () {
+      expect(
+        htmlHasRemoteResources('<svg><a href="https://x.test/">x</a></svg>'),
+        isFalse,
+      );
+    });
+
+    test('true for CSS image-set() with bare strings', () {
+      expect(
+        htmlHasRemoteResources(
+          '<style>.h{background:image-set("https://x.test/a.png" 1x)}</style>',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:-webkit-image-set(&quot;a.png&quot; 1x, '
+          '&quot;https://x.test/b.png&quot; 2x)">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for a remote srcset candidate that is not the first', () {
+      expect(
+        htmlHasRemoteResources(
+          '<img src="cid:a" srcset="a.png 1x, https://x.test/b.png 2x">',
+        ),
+        isTrue,
+      );
+    });
+
+    test('true for url() quoted with hex entities', () {
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#x22;https://x.test/b.jpg&#x22;)">',
+        ),
+        isTrue,
+      );
+      expect(
+        htmlHasRemoteResources(
+          '<div style="background:url(&#X27;//x.test/b.jpg&#X27;)">',
+        ),
+        isTrue,
+      );
+    });
+
+    // Not a parser: a lazy-load attribute like data-src= also matches, which
+    // only shows the button needlessly (the WebView would not fetch it).
+    test('documented false positive: data-src', () {
+      expect(
+        htmlHasRemoteResources('<img src="cid:a" data-src="https://x.test/a">'),
+        isTrue,
+      );
     });
   });
 }

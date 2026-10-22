@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ClickHouse package ships one multi-call binary that dispatches on argv[0], so
 # `clickhouse-client` is a symlink to it.
 ARG GRPCURL_VERSION=1.9.4
-ARG CLICKHOUSE_VERSION=26.9.14.10
+ARG CLICKHOUSE_VERSION=26.9.21.9
 RUN set -eux; \
     deb_arch="$(dpkg --print-architecture)"; \
     case "$deb_arch" in \
@@ -120,7 +120,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # image IS the worker and agentloop calls the acpx baked in here, so this pin
 # must match the acpx version of the agentloop release you run (currently
 # 0.13.0); Renovate tracks it (renovate.json). A skew breaks the agent runner.
-RUN npm install -g acpx@0.19.4
+RUN npm install -g acpx@0.19.6
 
 # Flutter / Dart / fvm are intentionally absent (see the header). Install guard
 # shims so a stray `flutter …` / `dart …` / `fvm …` fails LOUDLY with a pointer

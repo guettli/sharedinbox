@@ -7,6 +7,16 @@ Uint8List _bytes(List<int> head, {int pad = 0}) =>
     Uint8List.fromList([...head, ...List<int>.filled(pad, 0)]);
 
 void main() {
+  group('normalizeNewlines', () {
+    test('turns CRLF and lone CR into LF and keeps LF', () {
+      expect(normalizeNewlines('a\r\nb\rc\nd'), 'a\nb\nc\nd');
+    });
+
+    test('a CR right before CRLF becomes a blank line', () {
+      expect(normalizeNewlines('a\r\r\nb'), 'a\n\nb');
+    });
+  });
+
   group('fmtSize', () {
     test('formats bytes', () {
       expect(fmtSize(0), '0 B');

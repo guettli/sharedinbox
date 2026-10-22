@@ -13,7 +13,12 @@ class UndoAction {
     this.destinationMailboxRole,
     this.originalEmails = const [],
     DateTime? timestamp,
+    this.undoneAt,
   }) : timestamp = timestamp ?? DateTime.now();
+
+  /// Suffix of the id of the inverse action an undo pushes; undoing that
+  /// inverse re-applies the action whose id it extends.
+  static const inverseSuffix = '-inv';
 
   final String id;
   final String accountId;
@@ -28,6 +33,9 @@ class UndoAction {
   final String? destinationMailboxRole;
   final DateTime timestamp;
 
+  /// When this action was last undone, or null while its effect stands.
+  final DateTime? undoneAt;
+
   /// Full email data for restoring hard-deleted rows (e.g. IMAP move/delete).
   final List<Email> originalEmails;
 
@@ -41,6 +49,7 @@ class UndoAction {
       destinationMailboxPath: json['destinationMailboxPath'] as String?,
       destinationMailboxRole: json['destinationMailboxRole'] as String?,
       timestamp: DateTime.parse(json['timestamp'] as String),
+      undoneAt: DateTime.tryParse(json['undoneAt'] as String? ?? ''),
       originalEmails: (json['originalEmails'] as List<dynamic>)
           .map((e) => Email.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -57,9 +66,24 @@ class UndoAction {
       'destinationMailboxPath': destinationMailboxPath,
       'destinationMailboxRole': destinationMailboxRole,
       'timestamp': timestamp.toIso8601String(),
+      if (undoneAt != null) 'undoneAt': undoneAt!.toIso8601String(),
       'originalEmails': originalEmails.map((e) => e.toJson()).toList(),
     };
   }
+
+  /// A copy of this action with [undoneAt] set (or cleared when null).
+  UndoAction withUndoneAt(DateTime? undoneAt) => UndoAction(
+        id: id,
+        accountId: accountId,
+        type: type,
+        emailIds: emailIds,
+        sourceMailboxPath: sourceMailboxPath,
+        destinationMailboxPath: destinationMailboxPath,
+        destinationMailboxRole: destinationMailboxRole,
+        originalEmails: originalEmails,
+        timestamp: timestamp,
+        undoneAt: undoneAt,
+      );
 
   String get description {
     final count = emailIds.length;

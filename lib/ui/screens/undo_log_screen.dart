@@ -158,6 +158,13 @@ class _UndoActionTile extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              if (action.undoneAt case final undoneAt?)
+                Text(
+                  'Undone • ${_timeFmt.format(undoneAt.toLocal())}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontStyle: FontStyle.italic,
+                      ),
+                ),
             ],
           );
         },
@@ -174,7 +181,9 @@ class _UndoActionTile extends ConsumerWidget {
             );
           }
         },
-        child: const Text('Undo'),
+        // An undone entry stays so a failed undo (e.g. reverted by a sync)
+        // can be retried; say so instead of offering a plain "Undo".
+        child: Text(action.undoneAt == null ? 'Undo' : 'Undo again'),
       ),
     );
   }

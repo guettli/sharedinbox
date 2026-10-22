@@ -116,4 +116,20 @@ void main() {
       expect(split.visible, '');
     });
   });
+
+  group('quoteText', () {
+    test('prefixes every line', () {
+      expect(quoteText('Hi\n\nBye'), '> Hi\n> \n> Bye');
+    });
+
+    test('drops the carriage returns of CRLF and lone CR line breaks', () {
+      final quoted = quoteText('Hi there\r\nsecond\rthird\r\n');
+      expect(quoted, '> Hi there\n> second\n> third');
+      expect(quoted.contains('\r'), isFalse);
+    });
+
+    test('trims leading and trailing blank lines', () {
+      expect(quoteText('\r\n\r\nHi\r\n\r\n'), '> Hi');
+    });
+  });
 }

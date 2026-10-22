@@ -31,6 +31,10 @@ class Email {
   // dissolved into the real message once it arrives via sync (see #545).
   final bool isLocal;
 
+  /// When the mail was written (its Date header), or when it arrived if it
+  /// has no Date header, so a date can always be shown.
+  DateTime get date => sentAt ?? receivedAt;
+
   const Email({
     required this.id,
     required this.accountId,
@@ -189,6 +193,7 @@ class EmailThread {
   final int messageCount;
   final bool hasUnread;
   final bool isFlagged;
+  final bool hasAttachment;
   final String latestEmailId;
   final String? preview;
   final String accountId;
@@ -205,6 +210,7 @@ class EmailThread {
     required this.messageCount,
     required this.hasUnread,
     required this.isFlagged,
+    this.hasAttachment = false,
     required this.latestEmailId,
     this.preview,
     required this.emailIds,
@@ -221,6 +227,7 @@ class EmailThread {
         messageCount: 1,
         hasUnread: !e.isSeen,
         isFlagged: e.isFlagged,
+        hasAttachment: e.hasAttachment,
         latestEmailId: e.id,
         preview: e.preview,
         emailIds: [e.id],
@@ -385,6 +392,13 @@ class EmailDraft {
   /// the real message that arrives later share the same id (see #545).
   final String? messageId;
 
+  /// For a reply: the parent's Message-ID and the References chain to send
+  /// (RFC 5322 §3.6.4), bracket-less like every stored id (see
+  /// `message_id_utils.dart`). Without them the recipient's client cannot
+  /// thread the reply. Build them with `replyThreading`.
+  final String? inReplyTo;
+  final List<String> references;
+
   const EmailDraft({
     required this.from,
     required this.to,
@@ -393,6 +407,8 @@ class EmailDraft {
     required this.body,
     this.attachmentFilePaths = const [],
     this.messageId,
+    this.inReplyTo,
+    this.references = const [],
   });
 
   EmailDraft copyWith({String? messageId}) => EmailDraft(
@@ -403,6 +419,8 @@ class EmailDraft {
         body: body,
         attachmentFilePaths: attachmentFilePaths,
         messageId: messageId ?? this.messageId,
+        inReplyTo: inReplyTo,
+        references: references,
       );
 }
 

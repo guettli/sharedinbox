@@ -260,6 +260,46 @@ void main() {
     },
   );
 
+  test('a reply sends inReplyTo and references on the Email/set create',
+      () async {
+    final server = _strictJmapServer();
+    final r = makeRepo(server.client);
+    await r.accounts.addAccount(_jmapAccount, 'pw');
+
+    final base = _draft();
+    await r.emails.sendEmail(
+      _jmapAccount.id,
+      EmailDraft(
+        from: base.from,
+        to: base.to,
+        cc: base.cc,
+        subject: 'Re: ${base.subject}',
+        body: base.body,
+        // Bracketed on purpose: the create must not send `<x>` ids.
+        inReplyTo: '<parent@example.com>',
+        references: const ['<root@example.com>', 'parent@example.com'],
+      ),
+    );
+
+    final creates = [
+      for (final body in server.requests())
+        for (final call in (body['methodCalls'] as List<dynamic>).cast<List>())
+          if (call[0] == 'Email/set' &&
+              (call[1] as Map<String, dynamic>).containsKey('create'))
+            ...((call[1] as Map<String, dynamic>)['create']
+                    as Map<String, dynamic>)
+                .values
+                .cast<Map<String, dynamic>>(),
+    ];
+    expect(creates, hasLength(1));
+    // RFC 8621 §4.1.2.3: arrays of bracket-less ids.
+    expect(creates.single['inReplyTo'], ['parent@example.com']);
+    expect(
+      creates.single['references'],
+      ['root@example.com', 'parent@example.com'],
+    );
+  });
+
   test(
       'strict server rejects an under-declared submission call (guards the '
       'guard)', () async {

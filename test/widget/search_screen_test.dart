@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,6 +54,33 @@ Future<FakeSearchHistoryRepository> pumpSearchWithFoobarResult(
     ),
   );
   return history;
+}
+
+/// Lets a test decide how each simple search ends: [onGlobal] runs in place
+/// of the canned results, e.g. to throw the way an FTS5 syntax error used to.
+class _ScriptedSearchRepository extends FakeEmailRepository {
+  _ScriptedSearchRepository({super.searchResults});
+
+  Future<List<Email>> Function(String query)? onGlobal;
+
+  @override
+  Future<List<Email>> searchEmailsGlobal(String? accountId, String query) =>
+      onGlobal?.call(query) ?? super.searchEmailsGlobal(accountId, query);
+}
+
+class _FailingStructuredRepository extends FakeEmailRepository {
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter,
+  ) =>
+      Future.error(StateError('no such column'));
+}
+
+Future<void> _type(WidgetTester tester, String text) async {
+  await tester.enterText(find.byType(TextField), text);
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -135,6 +164,67 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('No results'), findsOneWidget);
+    });
+
+    testWidgets('a failed search says so and drops the old results', (
+      tester,
+    ) async {
+      final emails = _ScriptedSearchRepository(
+        searchResults: [testEmail(subject: 'Foobar mail')],
+      );
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        emails: emails,
+      );
+
+      await _type(tester, 'foobar');
+      expect(find.textContaining('Foobar mail'), findsOneWidget);
+
+      emails.onGlobal = (_) => throw StateError('fts5: syntax error');
+      await _type(tester, 'foobar mai');
+      expect(find.text('Search failed.'), findsOneWidget);
+      expect(find.text('View in application log'), findsOneWidget);
+      expect(find.text('Type 3+ characters to search'), findsNothing);
+      expect(find.textContaining('Foobar mail'), findsNothing);
+
+      // The next search that works replaces the failure.
+      emails.onGlobal = null;
+      await _type(tester, 'foobar mail');
+      expect(find.text('Search failed.'), findsNothing);
+      expect(find.textContaining('Foobar mail'), findsOneWidget);
+
+      // So does going below three characters.
+      emails.onGlobal = (_) => throw StateError('fts5: syntax error');
+      await _type(tester, 'foobar ma');
+      await _type(tester, 'fo');
+      expect(find.text('Search failed.'), findsNothing);
+      expect(find.text('Type 3+ characters to search'), findsOneWidget);
+    });
+
+    testWidgets('a slow older search cannot overwrite a newer one', (
+      tester,
+    ) async {
+      final slow = Completer<List<Email>>();
+      final emails = _ScriptedSearchRepository()
+        ..onGlobal = (query) => query == 'foo'
+            ? slow.future
+            : Future.value([testEmail(subject: 'Foobar mail')]);
+      await pumpSearchScreen(
+        tester,
+        history: FakeSearchHistoryRepository(),
+        emails: emails,
+      );
+
+      await tester.enterText(find.byType(TextField), 'foo');
+      await tester.pump(const Duration(milliseconds: 400));
+      await _type(tester, 'foobar');
+      expect(find.textContaining('Foobar mail'), findsOneWidget);
+
+      slow.completeError(StateError('fts5: syntax error'));
+      await tester.pumpAndSettle();
+      expect(find.text('Search failed.'), findsNothing);
+      expect(find.textContaining('Foobar mail'), findsOneWidget);
     });
 
     testWidgets('shows email results in the unified message list', (
@@ -773,6 +863,45 @@ void main() {
       expect(find.text('alpha'), findsNothing);
       expect(find.text('beta'), findsOneWidget);
       expect(await history.getRecentSearches(), ['beta']);
+    });
+
+    testWidgets('a failed advanced search says so', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              _FailingStructuredRepository(),
+            ),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+          child: MaterialApp(
+            home: SearchScreen(
+              initialFilter: FilterGroup(
+                operator: FilterOperator.and_,
+                children: [
+                  FilterLeaf(
+                    field: FilterField.from_,
+                    comparison: FilterComparison.is_,
+                    value: 'spam@bad.com',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Advanced Search'), findsOneWidget);
+      expect(find.text('Search failed.'), findsOneWidget);
     });
 
     testWidgets(

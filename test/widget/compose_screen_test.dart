@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -205,6 +206,30 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('refuses to send to something that is not an address', (
+      tester,
+    ) async {
+      final email = FakeEmailRepository();
+      await _pumpComposeAndSend(
+        tester,
+        email: email,
+        beforeSend: () => tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com, not-an-address',
+        ),
+      );
+
+      // Sending used to drop the bad entry and mail only Bob.
+      expect(find.text('Not an email address: not-an-address'), findsOneWidget);
+      expect(email.sentEmailAccountId, isNull);
+      expect(email.sendNowRowIds, isEmpty);
+      expect(find.byType(ComposeScreen), findsOneWidget);
+
+      // Let the SnackBar auto-dismiss so no timer leaks into teardown.
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets(
       'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {
@@ -221,6 +246,230 @@ void main() {
           reason: 'compose must attempt the send now, not just enqueue it',
         );
         expect(find.text('Message sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'sending right after typing leaves no draft behind',
+      (tester) async {
+        // Typing and pressing Send within the auto-save delay left the field
+        // dirty; when the screen closed, dispose saved the sent message back
+        // as a new draft, which then synced to the server's Drafts folder.
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository();
+        await _pumpComposeAndSend(tester, email: email, drafts: drafts);
+
+        expect(email.sendNowRowIds, isNotEmpty);
+        expect(await drafts.remaining(), isEmpty);
+      },
+    );
+
+    testWidgets(
+      'a reply carries In-Reply-To and References to the original',
+      (tester) async {
+        // Without these the recipient's client cannot thread the answer, and
+        // neither can this app once the copy in Sent syncs back.
+        final email = FakeEmailRepository(emails: [_originalEmail]);
+        await _pumpComposeAndSend(tester, email: email, replyToEmailId: 'orig');
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, 'reply-1@example.com');
+        expect(draft.references, ['root@example.com', 'reply-1@example.com']);
+      },
+    );
+
+    testWidgets(
+      'sending deletes the auto-saved draft and does not write it back',
+      (tester) async {
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository();
+        await _pumpComposeAndSend(
+          tester,
+          email: email,
+          drafts: drafts,
+          beforeSend: () async {
+            // Let the auto-save land, then edit again so the field is dirty
+            // once more when Send is pressed.
+            await tester.pump(const Duration(seconds: 3));
+            expect(await drafts.remaining(), hasLength(1));
+            await tester.enterText(
+              find.widgetWithText(TextFormField, 'Subject'),
+              'Final subject',
+            );
+            await tester.pump();
+          },
+        );
+
+        expect(await drafts.remaining(), isEmpty);
+
+        // Let the "Draft saved" indicator and the SnackBar time out so no
+        // timer leaks into teardown.
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'sending a reply deletes its auto-saved draft',
+      (tester) async {
+        // Reply drafts are hidden from listNewMessageDrafts, so look the row
+        // up by id: it must be gone, not merely filtered out.
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository();
+        await _pumpComposeAndSend(
+          tester,
+          email: email,
+          drafts: drafts,
+          replyToEmailId: 'email-1',
+          beforeSend: () async {
+            await tester.pump(const Duration(seconds: 3));
+            final saved = await drafts.remaining();
+            expect(saved, hasLength(1));
+            expect(saved.single.replyToEmailId, 'email-1');
+            await tester.enterText(
+              find.widgetWithText(TextFormField, 'Subject'),
+              'Re: hello',
+            );
+            await tester.pump();
+          },
+        );
+
+        expect(email.sendNowRowIds, isNotEmpty);
+        expect(drafts.savedIds, isNotEmpty);
+        expect(await drafts.remaining(), isEmpty);
+
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'sending while an auto-save is still writing leaves no draft behind',
+      (tester) async {
+        // The auto-save had started but not yet returned the new row's id
+        // when Send was pressed: send saw no draft to delete, and the save
+        // then landed after the screen closed.
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository();
+        final gate = await _pumpComposeWithHeldSave(
+          tester,
+          drafts: drafts,
+          email: email,
+        );
+        expect(drafts.pendingSaves, 1);
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+        await tester.pump();
+        gate.complete();
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+
+        expect(email.sendNowRowIds, isNotEmpty);
+        expect(drafts.savedIds, isNotEmpty);
+        expect(await drafts.remaining(), isEmpty);
+        expect(find.text('home'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a reply resumed from its draft alone is still sent threaded',
+      (tester) async {
+        // Opened from the drafts list the route carries only the draftId, so
+        // the link to the original has to come from the saved draft.
+        final drafts = FakeDraftRepository();
+        final saved = await drafts.saveDraft(
+          accountId: kTestAccount.id,
+          replyToEmailId: 'orig',
+          toText: 'alice@example.com',
+          ccText: '',
+          subjectText: 'Re: Project kickoff',
+          bodyText: 'Draft body',
+        );
+        final email = FakeEmailRepository(emails: [_originalEmail]);
+        final router = _homeAndCompose();
+        await tester.pumpWidget(
+          _wrap(
+            router: router,
+            overrides: _composeOverrides(drafts: drafts, email: email),
+          ),
+        );
+        await tester.pumpAndSettle();
+        unawaited(router.push('/compose', extra: {'draftId': saved.id}));
+        await tester.pumpAndSettle();
+
+        // An edit re-saves the draft; it must stay a reply draft.
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Draft body'),
+          'Edited body',
+        );
+        await tester.pump(const Duration(seconds: 3));
+        expect((await drafts.getDraft(saved.id))?.replyToEmailId, 'orig');
+        // Let the "Draft saved" indicator's hide timer run out.
+        await tester.pump(const Duration(seconds: 2));
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pumpAndSettle();
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, 'reply-1@example.com');
+        expect(draft.references, ['root@example.com', 'reply-1@example.com']);
+      },
+    );
+
+    testWidgets(
+      'a failed in-flight auto-save does not fail the send',
+      (tester) async {
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository();
+        final gate = await _pumpComposeWithHeldSave(
+          tester,
+          drafts: drafts,
+          email: email,
+        );
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+        gate.completeError(StateError('disk full'));
+        await tester.pump();
+        await tester.pump();
+
+        expect(find.textContaining('Queue failed'), findsNothing);
+        expect(find.text('Message sent'), findsOneWidget);
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+        expect(find.text('home'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a send that throws after queueing closes instead of inviting a resend',
+      (tester) async {
+        final drafts = _TrackingDraftRepository();
+        final email = FakeEmailRepository()
+          ..sendNowError = StateError('No password stored');
+        await _pumpComposeAndSend(tester, email: email, drafts: drafts);
+
+        expect(find.textContaining('Queue failed'), findsNothing);
+        expect(find.textContaining('Queued — will retry'), findsOneWidget);
+        expect(find.text('home'), findsOneWidget);
+        expect(await drafts.remaining(), isEmpty);
+
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'a reply whose original cannot be read is sent unthreaded',
+      (tester) async {
+        final email = _ThrowingGetEmailRepository();
+        await _pumpComposeAndSend(tester, email: email, replyToEmailId: 'orig');
+
+        final draft = email.sentEmailDraft!;
+        expect(draft.inReplyTo, isNull);
+        expect(draft.references, isEmpty);
+        expect(find.textContaining('Queue failed'), findsNothing);
       },
     );
 
@@ -316,6 +565,37 @@ void main() {
         findsOneWidget,
       );
       expect(_bodyText(tester), 'Draft body');
+    });
+
+    testWidgets('prefilled and restored bodies lose their carriage returns', (
+      tester,
+    ) async {
+      // A mailto body (%0D%0A) or a reply quote of a CRLF mail.
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(prefillBody: 'one\r\ntwo\rthree'),
+          overrides: _composeOverrides(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'one\ntwo\nthree');
+
+      // A draft pulled from the server.
+      final drafts = FakeDraftRepository();
+      final saved = await drafts.saveDraft(
+        toText: '',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: 'Hi\r\n\r\n> quoted\r\n',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: drafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'Hi\n\n> quoted\n');
     });
 
     testWidgets('typing before a slow restore is not overwritten (#1047)', (
@@ -454,7 +734,57 @@ void main() {
       expect(await fakeDrafts.getDraft(saved.id), isNull);
       expect(await fakeDrafts.listNewMessageDrafts(), isEmpty);
     });
+
+    testWidgets('discard waits for an in-flight auto-save', (tester) async {
+      final fakeDrafts = _TrackingDraftRepository();
+      final saved = await _pumpRestoredDraftFromHome(tester, fakeDrafts);
+
+      final gate = fakeDrafts.gate = Completer<void>();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Restored subject'),
+        'Edited subject',
+      );
+      await tester.pump(const Duration(seconds: 3));
+      expect(fakeDrafts.pendingSaves, 1);
+
+      await tester.tap(find.byTooltip('Discard draft'));
+      await tester.pump();
+      gate.complete();
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+
+      // The held save did not land after the delete and resurrect the row.
+      expect(await fakeDrafts.getDraft(saved.id), isNull);
+      expect(find.text('home'), findsOneWidget);
+    });
   });
+}
+
+/// The message the reply tests answer: itself a reply to `root@example.com`.
+final _originalEmail = Email(
+  id: 'orig',
+  accountId: kTestAccount.id,
+  mailboxPath: 'INBOX',
+  uid: 1,
+  subject: 'Re: Project kickoff',
+  receivedAt: DateTime(2026, 10, 18),
+  from: const [EmailAddress(email: 'alice@example.com')],
+  to: [EmailAddress(email: kTestAccount.email)],
+  cc: const [],
+  isSeen: true,
+  isFlagged: false,
+  hasAttachment: false,
+  messageId: 'reply-1@example.com',
+  inReplyTo: 'root@example.com',
+  references: 'root@example.com',
+);
+
+/// A [FakeEmailRepository] whose [getEmail] fails, as a broken local store
+/// would.
+class _ThrowingGetEmailRepository extends FakeEmailRepository {
+  @override
+  Future<Email?> getEmail(String emailId) async =>
+      throw StateError('database is locked');
 }
 
 /// A [FakeDraftRepository] that records which draft ids were deleted so tests
@@ -466,6 +796,31 @@ class _RecordingDraftRepository extends FakeDraftRepository {
   Future<void> deleteDraft(int id) async {
     deleted.add(id);
     return super.deleteDraft(id);
+  }
+}
+
+/// A [_RecordingDraftRepository] whose saves block on [gate] while one is
+/// set, so a test can act while an auto-save is still writing.
+class _TrackingDraftRepository extends _RecordingDraftRepository {
+  Completer<void>? gate;
+  int pendingSaves = 0;
+
+  @override
+  Future<void> beforeSave() async {
+    final g = gate;
+    if (g == null) return;
+    pendingSaves++;
+    try {
+      await g.future;
+    } finally {
+      pendingSaves--;
+    }
+  }
+
+  /// The saved rows that still exist, reply drafts included.
+  Future<List<SavedDraft>> remaining() async {
+    final rows = [for (final id in savedIds) await getDraft(id)];
+    return rows.whereType<SavedDraft>().toList();
   }
 }
 
@@ -547,23 +902,62 @@ Future<SavedDraft> _pumpRestoredDraftFromHome(
 Future<void> _pumpComposeAndSend(
   WidgetTester tester, {
   required FakeEmailRepository email,
+  FakeDraftRepository? drafts,
+  String? replyToEmailId,
+  Future<void> Function()? beforeSend,
+}) async {
+  await _openComposeWithRecipient(
+    tester,
+    email: email,
+    drafts: drafts,
+    replyToEmailId: replyToEmailId,
+  );
+  await tester.pump();
+  await beforeSend?.call();
+
+  await tester.tap(find.byIcon(Icons.send));
+  await tester.pumpAndSettle();
+}
+
+/// Opens compose from a home route and types a recipient — the common start
+/// of [_pumpComposeAndSend] and [_pumpComposeWithHeldSave].
+Future<void> _openComposeWithRecipient(
+  WidgetTester tester, {
+  required FakeEmailRepository email,
+  FakeDraftRepository? drafts,
+  String? replyToEmailId,
 }) async {
   final router = _homeAndCompose();
   await tester.pumpWidget(
-    _wrap(router: router, overrides: _composeOverrides(email: email)),
+    _wrap(
+      router: router,
+      overrides: _composeOverrides(email: email, drafts: drafts),
+    ),
   );
   await tester.pumpAndSettle();
-  unawaited(router.push('/compose'));
+  unawaited(
+    router.push('/compose', extra: {'replyToEmailId': replyToEmailId}),
+  );
   await tester.pumpAndSettle();
 
   await tester.enterText(
     find.widgetWithText(TextFormField, 'To'),
     'bob@example.com',
   );
-  await tester.pump();
+}
 
-  await tester.tap(find.byIcon(Icons.send));
-  await tester.pumpAndSettle();
+/// Opens a new compose from a home route and types a recipient, so the
+/// auto-save starts and then holds on [drafts]' gate. Returns that gate.
+Future<Completer<void>> _pumpComposeWithHeldSave(
+  WidgetTester tester, {
+  required _TrackingDraftRepository drafts,
+  required FakeEmailRepository email,
+}) async {
+  // Nothing saves before the first edit, so the gate can be set up front.
+  final gate = drafts.gate = Completer<void>();
+  await _openComposeWithRecipient(tester, email: email, drafts: drafts);
+  await tester.pump(const Duration(seconds: 3));
+  return gate;
 }
 
 /// Pumps the compose screen reached from a home route so discard can pop back.
@@ -583,9 +977,13 @@ Future<void> _pumpComposeFromHome(
 /// somewhere to land. The scaffolding is shared with the other tests that need
 /// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
 GoRouter _homeAndCompose() => homeAndComposeRouter(
-      compose: (state) => ComposeScreen(
-        draftId: (state.extra as Map<String, dynamic>?)?['draftId'] as int?,
-      ),
+      compose: (state) {
+        final extra = state.extra as Map<String, dynamic>?;
+        return ComposeScreen(
+          draftId: extra?['draftId'] as int?,
+          replyToEmailId: extra?['replyToEmailId'] as String?,
+        );
+      },
     );
 
 Widget _buildRouter({

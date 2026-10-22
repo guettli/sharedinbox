@@ -1,7 +1,34 @@
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
+
+import 'fake_imap.dart';
+
+/// Serves one message for `MessageProbeImpl`'s IMAP branch, returning its
+/// INTERNALDATE only when the FETCH asked for it, like a real server.
+class _ProbeImapClient extends SelectingFakeImapClient {
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) async {
+    final msg = imap.MimeMessage()
+      ..uid = messageUid
+      ..flags = <String>[]
+      ..envelope = imap.Envelope(
+        date: DateTime.utc(2024, 6, 15, 12),
+        subject: 'Hello',
+      );
+    if (fetchContentDefinition.contains('INTERNALDATE')) {
+      msg.internalDate = '16-Jun-2024 10:00:00 +0200';
+    }
+    return imap.FetchImapResult([msg], null);
+  }
+}
 
 LocalMessageSnapshot _local({
   String mailboxPath = 'INBOX',
@@ -163,6 +190,31 @@ void main() {
         _remote(),
       );
       expect(result.diffs.map((d) => d.field), contains('attachmentCount'));
+    });
+  });
+
+  group('MessageProbeImpl IMAP', () {
+    test('reports receivedAt from INTERNALDATE, like the sync', () async {
+      final probe = MessageProbeImpl(
+        imapConnect: (Account _, String __, String ___) async =>
+            _ProbeImapClient(),
+      );
+      final result = await probe.fetch(
+        account: const Account(
+          id: 'acc-1',
+          displayName: 'Alice',
+          email: 'alice@example.com',
+          imapHost: 'imap.example.com',
+          smtpHost: 'smtp.example.com',
+        ),
+        password: 'pw',
+        mailboxPath: 'INBOX',
+        emailId: 'acc-1:INBOX:42',
+        uid: 42,
+      );
+      expect(result.error, isNull);
+      expect(result.snapshot!.sentAt, DateTime.utc(2024, 6, 15, 12));
+      expect(result.snapshot!.receivedAt, DateTime.utc(2024, 6, 16, 8));
     });
   });
 }

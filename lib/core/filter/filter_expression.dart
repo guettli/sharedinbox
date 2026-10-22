@@ -99,4 +99,18 @@ final class FilterGroup extends FilterNode {
 
   static FilterGroup empty() =>
       FilterGroup(operator: FilterOperator.and_, children: []);
+
+  /// A group holding one condition, the shape of a quick rule such as
+  /// "From is <address>".
+  static FilterGroup single(
+    FilterField field,
+    FilterComparison comparison,
+    String value,
+  ) =>
+      FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(field: field, comparison: comparison, value: value),
+        ],
+      );
 }
