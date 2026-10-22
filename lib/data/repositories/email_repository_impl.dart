@@ -6415,22 +6415,6 @@ class EmailRepositoryImpl implements EmailRepository {
           .getSingleOrNull();
       if (inbox == null) continue;
 
-      // A fast server can deliver the real message, and a sync can store it,
-      // before we get here. Its arrival found no note to dissolve, so a note
-      // inserted now would stay behind as a permanent duplicate. Scoped to the
-      // inbox: the Sent copy stored a moment ago shares the Message-ID.
-      final arrived = await (_db.select(_db.emails)
-            ..where(
-              (t) =>
-                  t.accountId.equals(account.id) &
-                  t.mailboxPath.equals(inbox.path) &
-                  t.isLocal.equals(false) &
-                  (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
-            )
-            ..limit(1))
-          .getSingleOrNull();
-      if (arrived != null) continue;
-
       final now = DateTime.now();
       final emailId = '${account.id}:$_localIdMarker:$mid';
       final threadId =
@@ -6439,38 +6423,87 @@ class EmailRepositoryImpl implements EmailRepository {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: emailId,
-              accountId: account.id,
-              mailboxPath: inbox.path,
-              uid: 0,
-              subject: Value(draft.subject),
-              sentAt: Value(now),
-              receivedAt: now,
-              fromJson: Value(_encodeModelAddresses([draft.from])),
-              toAddresses: Value(_encodeModelAddresses(draft.to)),
-              ccJson: Value(_encodeModelAddresses(draft.cc)),
-              preview: Value(preview),
-              // Self-sent: you wrote it, so don't nag with an unread badge.
-              isSeen: const Value(true),
-              isFlagged: const Value(false),
-              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-              threadId: Value(threadId),
-              messageId: Value(mid),
-              isLocal: const Value(true),
-            ),
-          );
-      await _db.into(_db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: emailId,
-              textBody: Value(body),
-              cachedAt: Value(now),
-              bodySize: Value(_bodySize(body, null)),
-            ),
-          );
-      await _updateThread(account.id, inbox.path, threadId);
+      // One transaction: the arrival check and the insert must not interleave
+      // with a sync storing the real message, and a note must never be left
+      // half-written (row without body or thread aggregate).
+      await _db.transaction(() async {
+        // A fast server can deliver the real message, and a sync can store
+        // it, before we get here. Its arrival found no note to dissolve, so a
+        // note inserted now would stay behind as a permanent duplicate.
+        if (await _hasArrivedOutsideSent(account.id, mid)) return;
+
+        // insertOrIgnore: a second successful send of the same draft (or a
+        // replay) must not reset the star / read state / folder the user has
+        // already set on the note.
+        await _db.into(_db.emails).insert(
+              EmailsCompanion.insert(
+                id: emailId,
+                accountId: account.id,
+                mailboxPath: inbox.path,
+                uid: 0,
+                subject: Value(draft.subject),
+                sentAt: Value(now),
+                receivedAt: now,
+                fromJson: Value(_encodeModelAddresses([draft.from])),
+                toAddresses: Value(_encodeModelAddresses(draft.to)),
+                ccJson: Value(_encodeModelAddresses(draft.cc)),
+                preview: Value(preview),
+                // Self-sent: you wrote it, so don't nag with an unread badge.
+                isSeen: const Value(true),
+                isFlagged: const Value(false),
+                hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+                threadId: Value(threadId),
+                messageId: Value(mid),
+                isLocal: const Value(true),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _db.into(_db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: emailId,
+                textBody: Value(body),
+                cachedAt: Value(now),
+                bodySize: Value(_bodySize(body, null)),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _updateThread(account.id, inbox.path, threadId);
+      });
     }
+  }
+
+  /// Whether the real (synced, non-local) message with Message-ID [mid] is
+  /// already stored on [accountId] in any folder but Sent. Mirrors which
+  /// arrivals [_maybeDissolveLocalMessage] dissolves an inbox note against: a
+  /// Sent-folder row is the copy of what we sent, not the delivered message,
+  /// and a server rule may have filed the delivery somewhere other than INBOX.
+  ///
+  /// Only folders the mailbox list knows count: a sync only ever stores
+  /// messages of such a folder, whereas the Sent copy we just appended may sit
+  /// in a folder not synced yet (e.g. a freshly created "Sent"), whose missing
+  /// role must not pass it off as the delivered message.
+  Future<bool> _hasArrivedOutsideSent(String accountId, String mid) async {
+    final rows = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.mailboxPath])
+          ..where(
+            _db.emails.accountId.equals(accountId) &
+                _db.emails.isLocal.equals(false) &
+                (_db.emails.messageId.equals(mid) |
+                    _db.emails.messageId.equals('<$mid>')),
+          ))
+        .get();
+    for (final row in rows) {
+      final mailbox = await (_db.select(_db.mailboxes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.path.equals(row.read(_db.emails.mailboxPath)!),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (mailbox != null && mailbox.role != 'sent') return true;
+    }
+    return false;
   }
 
   String _encodeModelAddresses(List<model.EmailAddress> addresses) =>
@@ -6856,7 +6889,8 @@ class EmailRepositoryImpl implements EmailRepository {
       final appendUid =
           (uidList != null && uidList.isNotEmpty) ? uidList.first : null;
       // The draft's own id first: it is what `enqueueSend` stamped and what the
-      // self-send inbox note (#545) was keyed on, so both rows agree. The
+      // self-send inbox note (#545), created once this send returns, is keyed
+      // on, so both rows agree. The
       // header is only a fallback for a direct send that never went through the
       // outbox, and MessageBuilder can hand it back double-bracketed (#859),
       // which `normaliseMessageId` only half-strips.

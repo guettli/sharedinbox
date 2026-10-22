@@ -39,26 +39,31 @@ const _account = Account(
 Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
     Future.error(UnsupportedError('IMAP unavailable in unit tests'));
 
-/// [smtpRejectWith], when set, makes SMTP refuse every message with those
-/// response lines; otherwise SMTP accepts. IMAP stays unavailable, so the
-/// best-effort Sent-copy APPEND fails quietly after a successful send.
-_Repos _makeRepos({List<String>? smtpRejectWith}) {
+/// [smtpRejects] scripts the SMTP replies: the n-th send attempt is refused
+/// with the n-th entry's response lines; once they run out, SMTP accepts. IMAP
+/// stays unavailable, so the best-effort Sent-copy APPEND fails quietly after
+/// a successful send.
+_Repos _makeRepos({List<List<String>> smtpRejects = const []}) {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+  final pending = List.of(smtpRejects);
   final emails = EmailRepositoryImpl(
     db,
     accounts,
     imapConnect: _noImapConnect,
-    smtpConnect: (a, u, p) async =>
-        ScriptedSmtpClient(rejectWith: smtpRejectWith),
+    smtpConnect: (a, u, p) async => ScriptedSmtpClient(
+      rejectWith: pending.isEmpty ? null : pending.removeAt(0),
+    ),
   );
   return (db: db, accounts: accounts, emails: emails);
 }
 
 /// Repos with the account registered and an INBOX mailbox seeded — the minimum
 /// needed for a self-send to land somewhere.
-Future<_Repos> _reposWithInbox({List<String>? smtpRejectWith}) async {
-  final r = _makeRepos(smtpRejectWith: smtpRejectWith);
+Future<_Repos> _reposWithInbox({
+  List<List<String>> smtpRejects = const [],
+}) async {
+  final r = _makeRepos(smtpRejects: smtpRejects);
   await r.accounts.addAccount(_account, 'pw');
   await _seedMailbox(r.db, 'INBOX', 'inbox');
   return r;
@@ -89,6 +94,11 @@ EmailDraft _draftTo(String recipient, {String subject = 'note'}) => EmailDraft(
       subject: subject,
       body: 'remember milk',
     );
+
+/// A note to self with a fixed Message-ID, so a test can pre-seed rows that
+/// match it.
+EmailDraft _selfDraft(String messageId) =>
+    _draftTo('alice@example.com').copyWith(messageId: messageId);
 
 Future<List<Email>> _inbox(_Repos r) =>
     r.emails.observeEmails('acc-1', 'INBOX').first;
@@ -130,6 +140,24 @@ Future<String> _arriveAndDissolve(
   String mailboxPath = 'INBOX',
   int uid = 42,
 }) async {
+  final id = await _storeArrived(r, messageId, mailboxPath, uid);
+  await r.emails.maybeDissolveLocalMessageForTest(
+    'acc-1',
+    mailboxPath,
+    id,
+    messageId,
+  );
+  return id;
+}
+
+/// Inserts the row the sync engine writes for a synced (non-local) message
+/// with [messageId] in [mailboxPath], returning its id.
+Future<String> _storeArrived(
+  _Repos r,
+  String messageId,
+  String mailboxPath,
+  int uid,
+) async {
   final id = 'acc-1:$mailboxPath:$uid';
   await r.db.into(r.db.emails).insert(
         EmailsCompanion.insert(
@@ -144,12 +172,6 @@ Future<String> _arriveAndDissolve(
           isSeen: const Value(false),
         ),
       );
-  await r.emails.maybeDissolveLocalMessageForTest(
-    'acc-1',
-    mailboxPath,
-    id,
-    messageId,
-  );
   return id;
 }
 
@@ -204,7 +226,9 @@ void main() {
       // To: self plus an address the server does not know, so the whole
       // message is refused with a 5xx and nothing is delivered to anyone.
       final r = await _reposWithInbox(
-        smtpRejectWith: ['550 5.1.2 Mailbox does not exist.'],
+        smtpRejects: [
+          ['550 5.1.2 Mailbox does not exist.'],
+        ],
       );
       const draft = EmailDraft(
         from: EmailAddress(email: 'alice@example.com'),
@@ -228,35 +252,77 @@ void main() {
       expect((await r.db.select(r.db.outbox).get()).single.status, 'failed');
     });
 
-    test('no virtual message when the real one already arrived', () async {
-      final r = await _reposWithInbox();
-      const draft = EmailDraft(
-        from: EmailAddress(email: 'alice@example.com'),
-        to: [EmailAddress(email: 'alice@example.com')],
-        cc: [],
-        subject: 'note',
-        body: 'remember milk',
-        messageId: '<fast-1@example.com>',
+    test('a transient failure creates the note only on the later success',
+        () async {
+      final r = await _reposWithInbox(
+        smtpRejects: [
+          ['451 4.3.0 Try again later'],
+        ],
       );
-      // A sync stored the delivered message before the sender got to add the
-      // note; a note now would never dissolve and stay a duplicate.
-      await r.db.into(r.db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'acc-1:INBOX:42',
-              accountId: 'acc-1',
-              mailboxPath: 'INBOX',
-              uid: 42,
-              receivedAt: DateTime(2024, 6),
-              subject: const Value('note'),
-              messageId: const Value('fast-1@example.com'),
-            ),
-          );
 
-      expect(await _enqueueAndSend(r, draft), SendNowOutcome.sent);
+      expect(
+        await _enqueueAndSend(r, _draftTo('alice@example.com')),
+        SendNowOutcome.transientFailed,
+      );
+      expect(await _inbox(r), isEmpty, reason: 'not accepted yet');
+
+      // The backoff elapses and the retry goes through.
+      await r.db.update(r.db.outbox).write(
+            const OutboxCompanion(nextAttemptAt: Value(null)),
+          );
+      final rowId = (await r.db.select(r.db.outbox).get()).single.id;
+      expect(
+        (await r.emails.sendNow('acc-1', outboxRowId: rowId)).outcome,
+        SendNowOutcome.sent,
+      );
 
       final inbox = await _inbox(r);
       expect(inbox, hasLength(1));
-      expect(inbox.single.isLocal, isFalse);
+      expect(inbox.single.isLocal, isTrue);
+    });
+
+    test('a repeated send keeps the user edits on the note', () async {
+      final r = await _reposWithInbox();
+      final draft = _selfDraft('<twice-1@example.com>');
+      await _enqueueAndSend(r, draft);
+      final note = (await _inbox(r)).single;
+      await r.emails.setFlag(note.id, flagged: true);
+
+      await _enqueueAndSend(r, draft);
+
+      final inbox = await _inbox(r);
+      expect(inbox, hasLength(1));
+      expect(inbox.single.isFlagged, isTrue, reason: 'star must survive');
+    });
+
+    test('no virtual message when the real one already arrived', () async {
+      final r = await _reposWithInbox();
+      // A sync stored the delivered message before the sender got to add the
+      // note — filed by a server rule into a custom folder, not INBOX; a note
+      // now would never dissolve and stay a duplicate.
+      await _seedMailbox(r.db, 'Notes', 'custom');
+      await _storeArrived(r, 'fast-1@example.com', 'Notes', 42);
+
+      expect(
+        await _enqueueAndSend(r, _selfDraft('<fast-1@example.com>')),
+        SendNowOutcome.sent,
+      );
+
+      expect(await _inbox(r), isEmpty);
+    });
+
+    test('the Sent copy alone does not count as arrived', () async {
+      final r = await _reposWithInbox();
+      await _seedMailbox(r.db, 'Sent', 'sent');
+      await _storeArrived(r, 'sent-1@example.com', 'Sent', 7);
+      // Also a copy in a folder not synced yet (e.g. a just-created "Sent"
+      // fallback): unknown, so it cannot be the delivered message either.
+      await _storeArrived(r, 'sent-1@example.com', 'Sent Items', 8);
+      final draft = _selfDraft('<sent-1@example.com>');
+
+      await _enqueueAndSend(r, draft);
+
+      expect((await _inbox(r)).single.isLocal, isTrue);
     });
 
     test('does not create a virtual message for a mail to someone else',
