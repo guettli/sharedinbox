@@ -26,6 +26,6 @@ Future<List<Email>> searchEmailsGlobalMerged(
   for (final e in [...globalHits, ...addressHits]) {
     if (seen.add(e.id)) merged.add(e);
   }
-  merged.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+  merged.sort(compareNewestFirst);
   return merged;
 }

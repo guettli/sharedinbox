@@ -9581,6 +9581,149 @@ void main() {
       expect(d.conclusions.first, contains('Could not reach the server'));
     });
   });
+
+  // Bulk mail, mailing lists and scripted mail often arrive within one
+  // second, so their INTERNALDATE (and often their Date header) are equal.
+  // Lists must then still be newest arrival first, not in whatever order
+  // SQLite returns rows with equal sort keys.
+  group('same-second mail ordering', () {
+    const sameSecond = '15-Oct-2026 12:22:10 +0000';
+
+    Map<int, _PreviewTestMessage> bulk(int count, {bool oneThread = false}) => {
+          for (var uid = 1; uid <= count; uid++)
+            uid: _PreviewTestMessage(
+              subject: oneThread ? 'Re: Bulk' : 'Bulk $uid',
+              from: 'list@example.com',
+              messageId: '<bulk-$uid@example.com>',
+              inReplyTo: oneThread && uid > 1 ? '<bulk-1@example.com>' : null,
+              text: 'Body $uid',
+              internalDate: sameSecond,
+            ),
+        };
+
+    test('mail and thread lists show the newest arrival first', () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            _PreviewSyncImapClient(messages: bulk(5)),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedInboxMailbox(r.db, 'acc-1');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      const newestFirst = [
+        'acc-1:INBOX:5',
+        'acc-1:INBOX:4',
+        'acc-1:INBOX:3',
+        'acc-1:INBOX:2',
+        'acc-1:INBOX:1',
+      ];
+      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(emails.map((e) => e.id), newestFirst);
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(threads.map((t) => t.latestEmailId), newestFirst);
+      final inbox = await r.emails.observeAllInboxThreads().first;
+      expect(inbox.map((t) => t.latestEmailId), newestFirst);
+    });
+
+    test(
+        'a conversation is oldest arrival first and its row shows the newest '
+        'message', () async {
+      // The fetch answers newest first, so the rows are stored in reverse
+      // arrival order: the order must not depend on that.
+      final messages = bulk(3, oneThread: true);
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            _ReversedFetchImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final thread =
+          (await r.emails.observeThreads('acc-1', 'INBOX').first).single;
+      expect(thread.messageCount, 3);
+      expect(thread.latestEmailId, 'acc-1:INBOX:3');
+      expect(thread.preview, contains('Body 3'));
+      const oldestFirst = ['acc-1:INBOX:1', 'acc-1:INBOX:2', 'acc-1:INBOX:3'];
+      final inThread = await r.emails
+          .observeEmailsInThread('acc-1', 'INBOX', thread.threadId)
+          .first;
+      expect(inThread.map((e) => e.id), oldestFirst);
+      final across = await r.emails
+          .observeThreadAcrossFolders('acc-1', thread.threadId)
+          .first;
+      expect(across.map((e) => e.id), oldestFirst);
+    });
+
+    test('search results show the newest arrival first', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final at = DateTime.utc(2026, 10, 15, 12, 22, 10);
+      for (var uid = 1; uid <= 4; uid++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                subject: Value('Bulk $uid'),
+                receivedAt: at,
+                fromJson: const Value(
+                  '[{"name":null,"email":"list@example.com"}]',
+                ),
+              ),
+            );
+      }
+      const newestFirst = [
+        'acc-1:INBOX:4',
+        'acc-1:INBOX:3',
+        'acc-1:INBOX:2',
+        'acc-1:INBOX:1',
+      ];
+
+      List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
+      for (final results in [
+        await r.emails.searchEmails('acc-1', 'INBOX', 'Bulk'),
+        await r.emails.searchEmailsGlobal('acc-1', 'Bulk'),
+        await r.emails.searchEmailsGlobal(null, 'Bulk'),
+      ]) {
+        expect(ids(results), newestFirst);
+      }
+      expect(
+        ids(await r.emails.getEmailsByAddress('acc-1', 'list@example.com')),
+        newestFirst,
+      );
+    });
+
+    test('mail and thread lists are sorted by an index, not a temp sort',
+        () async {
+      final r = _makeRepos();
+      const scope = [Variable<String>('acc-1'), Variable<String>('INBOX')];
+      Future<String> plan(String sql) async {
+        final rows = await r.db
+            .customSelect('EXPLAIN QUERY PLAN $sql', variables: scope)
+            .get();
+        return [for (final row in rows) row.read<String>('detail')].join('\n');
+      }
+
+      final emailsPlan = await plan(
+        'SELECT * FROM emails WHERE account_id = ? AND mailbox_path = ? '
+        'ORDER BY received_at DESC, uid DESC, id DESC LIMIT 50',
+      );
+      expect(emailsPlan, contains('emails_list_order'));
+      expect(emailsPlan, isNot(contains('TEMP B-TREE')));
+
+      final threadsPlan = await plan(
+        'SELECT * FROM threads WHERE account_id = ? AND mailbox_path = ? '
+        'ORDER BY is_flagged DESC, latest_date DESC, latest_uid DESC, '
+        'id DESC LIMIT 50',
+      );
+      expect(threadsPlan, contains('threads_list_order'));
+      expect(threadsPlan, isNot(contains('TEMP B-TREE')));
+    });
+  });
 }
 
 // ── Fakes for folder diagnostics tests (#511) ────────────────────────────────
@@ -10076,6 +10219,28 @@ class _PreviewSyncImapClient extends FakeImapClient {
                 wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] whose fetch answers newest first, so sync stores
+/// the rows in reverse arrival order.
+class _ReversedFetchImapClient extends _PreviewSyncImapClient {
+  _ReversedFetchImapClient({required super.messages});
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final result = await super.uidFetchMessages(
+      sequence,
+      fetchContentDefinition,
+      changedSinceModSequence: changedSinceModSequence,
+      responseTimeout: responseTimeout,
+    );
+    return imap.FetchImapResult(result.messages.reversed.toList(), null);
   }
 }
 
