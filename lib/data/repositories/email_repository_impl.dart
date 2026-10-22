@@ -5424,12 +5424,19 @@ class EmailRepositoryImpl implements EmailRepository {
       appliedIds = const {};
     }
 
+    // LocalSieveApplied is keyed on the Message-ID, which survives moves, so
+    // the automatic run can only remember mail that has one and skips the
+    // rest. The preview and the explicit "apply now" remember nothing, so
+    // they take every inbox mail, with or without a Message-ID.
     final inboxEmails = await (_db.select(_db.emails)
           ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.mailboxPath.equals(inboxPath) &
-                t.messageId.isNotNull(),
+            (t) {
+              final inInbox = t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(inboxPath);
+              return skipAlreadyApplied
+                  ? inInbox & t.messageId.isNotNull()
+                  : inInbox;
+            },
           ))
         .get();
 
@@ -5438,7 +5445,7 @@ class EmailRepositoryImpl implements EmailRepository {
     var matched = 0;
 
     for (final row in inboxEmails) {
-      final msgId = row.messageId!;
+      final msgId = row.messageId;
       if (skipAlreadyApplied && appliedIds.contains(msgId)) continue;
 
       final emailCtx = _buildSieveContext(row);
@@ -5447,8 +5454,10 @@ class EmailRepositoryImpl implements EmailRepository {
       try {
         result = interpreter.execute(rules, emailCtx);
       } catch (e) {
-        log('Sieve interpreter error for message $msgId: $e');
-        if (enqueueActions) await _markSieveApplied(accountId, msgId);
+        log('Sieve interpreter error for message ${msgId ?? row.id}: $e');
+        if (enqueueActions && msgId != null) {
+          await _markSieveApplied(accountId, msgId);
+        }
         continue;
       }
 
@@ -5463,7 +5472,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
       if (!enqueueActions) continue;
 
-      await _markSieveApplied(accountId, msgId);
+      if (msgId != null) await _markSieveApplied(accountId, msgId);
 
       if (result.isCancelled) {
         await _enqueueSieveDelete(account, row);
