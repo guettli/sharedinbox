@@ -296,10 +296,22 @@ server round-trip; if it had already been flushed, a compensating move is queued
 ## 8a. Local self-sent "virtual" messages
 
 A mail addressed to one of the user's own accounts appears in that account's inbox
-**immediately** so it can be starred, noted or filed while the real message is still in
-flight (#545). `enqueueSend` stamps a deterministic RFC 5322 `Message-ID`, queues the
-send as usual, and additionally writes a row to `emails` with `is_local = 1`, `uid = 0`
-and that Message-ID.
+**as soon as the server accepted it**, so it can be starred, noted or filed while the
+real message is still in flight (#545). `enqueueSend` stamps a deterministic RFC 5322
+`Message-ID` and queues the send as usual. Once the outbox sender's send succeeded —
+SMTP accepted the message (IMAP) or the `EmailSubmission` was created (JMAP) — it writes
+a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
+
+- **Never before acceptance**: a send that SMTP/JMAP rejects, that keeps failing, or that
+  is discarded from the Sent Queue leaves no inbox row behind — otherwise the user would
+  see a "received" mail that was never delivered. Trade-off: a note to self queued while
+  offline appears once it is actually sent, not at queue time.
+- **Already arrived**: the row is skipped when the real message (non-local, same
+  Message-ID, in a known folder whose role is not `sent`) is already stored, since its
+  arrival had nothing to dissolve. Check and insert run in one transaction, and the
+  insert is `insertOrIgnore` so a repeated send never resets the user's edits.
+- **Best-effort**: a failure to write the row is logged, never rethrown — the message is
+  already sent and must not be sent again.
 
 - **Not pruned**: local rows have no server UID, so both deletion-reconciliation passes
   (`_reconcileDeletedImap`, `_pruneJmapMailboxToServerIds`) skip `is_local` rows.

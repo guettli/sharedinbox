@@ -398,8 +398,9 @@ class EmailDraft {
 
   /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
   /// message. When null, the mail library generates one at send time. Set
-  /// explicitly for self-sends so the immediately-created local message and
-  /// the real message that arrives later share the same id (see #545).
+  /// explicitly for queued sends so a self-send's local inbox note (created
+  /// once the server accepted the message) and the real message that arrives
+  /// later share the same id (see #545).
   final String? messageId;
 
   /// For a reply: the parent's Message-ID and the References chain to send

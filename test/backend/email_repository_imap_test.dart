@@ -243,7 +243,7 @@ void main() {
     );
   });
 
-  // #565: a mail-to-self shows a local copy immediately; starring it must
+  // #565: a mail-to-self shows a local copy once sent; starring it must
   // survive the very sync that delivers the real message. The delivery
   // advances HIGHESTMODSEQ, so the incremental sync runs the CONDSTORE flag
   // refresh (_refreshFlagsImap) right after the dissolve carries the star
@@ -282,15 +282,16 @@ void main() {
     );
     expect(outboxId, isNonZero);
 
-    // The virtual copy appears in the inbox immediately; star it.
+    // Actually send it: once SMTP accepted it, the virtual copy appears in
+    // the inbox (not before, #545); star it.
+    await r.emails.flushOutbox('test', user.password);
     final local = (await r.emails.observeEmails('test', 'INBOX').first)
         .firstWhere((e) => e.subject == subject);
     expect(local.isLocal, isTrue, reason: 'mail-to-self shows a local copy');
     await r.emails.setFlag(local.id, flagged: true);
 
-    // Actually send it, then sync until the delivered message dissolves the
-    // virtual copy into the real one.
-    await r.emails.flushOutbox('test', user.password);
+    // Sync until the delivered message dissolves the virtual copy into the
+    // real one.
 
     var arrived = false;
     var stillStarred = false;
