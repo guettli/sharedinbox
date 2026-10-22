@@ -44,7 +44,8 @@ class _ImapAccounts extends _StubAccounts {
 }
 
 /// Records which folder draft sync creates, selects and appends to.
-class _DraftsSpyImapClient extends SelectingFakeImapClient {
+class _DraftsSpyImapClient extends SelectingFakeImapClient
+    with StubMailboxList {
   final created = <String>[];
   final selected = <String>[];
   final appendedTo = <String?>[];
@@ -52,12 +53,7 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient {
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
     created.add(path);
-    return imap.Mailbox(
-      encodedName: path,
-      encodedPath: path,
-      pathSeparator: '/',
-      flags: [],
-    );
+    return fakeMailbox(path);
   }
 
   @override
@@ -86,14 +82,7 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient {
   List<imap.Mailbox> listed = [];
 
   @override
-  Future<List<imap.Mailbox>> listMailboxes({
-    String path = '""',
-    bool recursive = false,
-    List<String>? mailboxPatterns,
-    List<String>? selectionOptions,
-    List<imap.ReturnOption>? returnOptions,
-  }) async =>
-      listed;
+  List<imap.Mailbox> get listedMailboxes => listed;
 
   @override
   Future<imap.StoreImapResult> uidMarkDeleted(
@@ -106,12 +95,7 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient {
   @override
   Future<imap.Mailbox> uidExpunge(imap.MessageSequence sequence) async {
     expunged.add(sequence);
-    return imap.Mailbox(
-      encodedName: 'x',
-      encodedPath: 'x',
-      pathSeparator: '/',
-      flags: [],
-    );
+    return fakeMailbox('x');
   }
 
   @override
@@ -433,15 +417,19 @@ void main() {
       expect(tombstones, isEmpty);
     });
 
-    test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
-        () async {
-      final db = openTestDatabase();
-      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
-      final repo = DraftRepositoryImpl(
-        db,
-        _ImapAccounts(),
-        imapConnect: (_, __, ___) async => client,
-      );
+    /// A repo for the IMAP account whose connections all go to [client].
+    DraftRepositoryImpl imapRepo(
+      AppDatabase db,
+      _DraftsSpyImapClient client,
+    ) =>
+        DraftRepositoryImpl(
+          db,
+          _ImapAccounts(),
+          imapConnect: (_, __, ___) async => client,
+        );
+
+    /// Saves a not yet synced draft for the IMAP account acc-1.
+    Future<void> saveImapDraft(DraftRepositoryImpl repo) async {
       await repo.saveDraft(
         accountId: 'acc-1',
         toText: 'alice@example.com',
@@ -449,6 +437,14 @@ void main() {
         subjectText: 'Hi',
         bodyText: 'Draft',
       );
+    }
+
+    test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
+        () async {
+      final db = openTestDatabase();
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
+      final repo = imapRepo(db, client);
+      await saveImapDraft(repo);
 
       await repo.syncDrafts('acc-1');
 
@@ -481,11 +477,7 @@ void main() {
             ),
           );
       final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
-      final repo = DraftRepositoryImpl(
-        db,
-        _ImapAccounts(),
-        imapConnect: (_, __, ___) async => client,
-      );
+      final repo = imapRepo(db, client);
 
       await repo.syncDrafts('acc-1');
 
@@ -499,18 +491,8 @@ void main() {
     test('a second sync stays with the same mailbox', () async {
       final db = openTestDatabase();
       final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
-      final repo = DraftRepositoryImpl(
-        db,
-        _ImapAccounts(),
-        imapConnect: (_, __, ___) async => client,
-      );
-      await repo.saveDraft(
-        accountId: 'acc-1',
-        toText: 'alice@example.com',
-        ccText: '',
-        subjectText: 'Hi',
-        bodyText: 'Draft',
-      );
+      final repo = imapRepo(db, client);
+      await saveImapDraft(repo);
 
       await repo.syncDrafts('acc-1');
       await repo.syncDrafts('acc-1');
@@ -544,18 +526,8 @@ void main() {
             flags: [imap.MailboxFlag.drafts],
           ),
         ];
-      final repo = DraftRepositoryImpl(
-        db,
-        _ImapAccounts(),
-        imapConnect: (_, __, ___) async => client,
-      );
-      await repo.saveDraft(
-        accountId: 'acc-1',
-        toText: 'alice@example.com',
-        ccText: '',
-        subjectText: 'Hi',
-        bodyText: 'Draft',
-      );
+      final repo = imapRepo(db, client);
+      await saveImapDraft(repo);
 
       await repo.syncDrafts('acc-1');
 

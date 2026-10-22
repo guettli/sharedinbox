@@ -26,16 +26,34 @@ class SelectingFakeImapClient extends FakeImapClient {
     bool enableCondStore = false,
     imap.QResyncParameters? qresync,
   }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        pathSeparator: '/',
-        flags: [],
-      );
+      fakeMailbox(path);
+}
+
+/// An empty, flagless mailbox at [path].
+imap.Mailbox fakeMailbox(String path) => imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+
+/// Answers LIST with [listedMailboxes].
+mixin StubMailboxList on imap.ImapClient {
+  List<imap.Mailbox> get listedMailboxes;
+
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) async =>
+      listedMailboxes;
 }
 
 /// Spy IMAP client that records snooze-related operations and succeeds silently.
-class SnoozeSpyImapClient extends FakeImapClient {
+class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
   SnoozeSpyImapClient({
     this.copyUidValidity,
     this.copyUidSourceToTarget = const {},
@@ -76,13 +94,6 @@ class SnoozeSpyImapClient extends FakeImapClient {
   /// Every `uidMove` as `'<selected mailbox>:<uids>-><target>'`.
   final List<String> moves = [];
 
-  imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        pathSeparator: '/',
-        flags: [],
-      );
-
   @override
   Future<imap.Mailbox> selectMailboxByPath(
     String path, {
@@ -90,20 +101,20 @@ class SnoozeSpyImapClient extends FakeImapClient {
     imap.QResyncParameters? qresync,
   }) async {
     selectedMailbox = path;
-    return _fakeMailbox(path);
+    return fakeMailbox(path);
   }
 
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
     createdMailbox = path;
-    return _fakeMailbox(path);
+    return fakeMailbox(path);
   }
 
   @override
   Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
     renamedFromEncodedPath = box.encodedPath;
     renamedToName = newName;
-    return _fakeMailbox(newName);
+    return fakeMailbox(newName);
   }
 
   @override
@@ -113,14 +124,7 @@ class SnoozeSpyImapClient extends FakeImapClient {
   }
 
   @override
-  Future<List<imap.Mailbox>> listMailboxes({
-    String path = '""',
-    bool recursive = false,
-    List<String>? mailboxPatterns,
-    List<String>? selectionOptions,
-    List<imap.ReturnOption>? returnOptions,
-  }) async =>
-      [_fakeMailbox('INBOX')];
+  List<imap.Mailbox> get listedMailboxes => [fakeMailbox('INBOX')];
 
   @override
   Future<imap.StoreImapResult> uidStore(
