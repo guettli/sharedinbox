@@ -15,6 +15,7 @@ import 'package:test/test.dart';
 
 @GenerateMocks([AccountRepository, MailboxRepository, EmailRepository])
 import 'account_sync_manager_test.mocks.dart';
+import 'fake_imap.dart';
 import 'helpers/fake_email_repository.dart';
 
 void main() {
@@ -126,6 +127,53 @@ void main() {
     expect(mailboxes.calls, 2);
     expect(connectsBeforeSecondCycle, 0, reason: 'IDLE was not entered');
   });
+
+  // A flag changed on another device (`UID STORE 2 +FLAGS (\\Seen)`) is
+  // reported during IDLE as an untagged FETCH. The IDLE wait used to react
+  // only to EXISTS and EXPUNGE, so such changes reached the app only with the
+  // next full sync, up to 25 minutes later. It must now wake the loop for one
+  // sync cycle, after which it goes back to IDLE (no echo loop). VANISHED is
+  // only sent after ENABLE QRESYNC, which the IDLE connection does not send
+  // today; the loop listens for it defensively, covered here too. EXISTS is
+  // the control case that already worked.
+  final idleEvents = <String, imap.ImapEvent Function(imap.ImapClient)>{
+    'FETCH (flag change)': (c) => imap.ImapFetchEvent(imap.MimeMessage(), c),
+    'VANISHED (defensive, QRESYNC only)': (c) => imap.ImapVanishedEvent(
+          imap.MessageSequence.fromId(2, isUid: true),
+          c,
+          isEarlier: false,
+        ),
+    'EXISTS': (c) => imap.ImapMessagesExistEvent(3, 2, c),
+  };
+  for (final MapEntry(key: name, value: makeEvent) in idleEvents.entries) {
+    test('an IMAP IDLE $name event wakes the loop for one sync cycle',
+        () async {
+      final mailboxes = _CountingMailboxRepository();
+      final clients = <_FakeIdleClient>[];
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        mailboxes,
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        imapConnect: (_, __, ___) async {
+          // Only the first IDLE session sees a change from another device.
+          final client =
+              _FakeIdleClient(fireOnIdle: clients.isEmpty ? makeEvent : null);
+          clients.add(client);
+          return client;
+        },
+      );
+      addTearDown(m.dispose);
+
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      expect(mailboxes.calls, 2, reason: 'the $name event triggered a sync');
+      expect(clients, hasLength(2), reason: 'the loop went back to IDLE');
+      expect(clients.first.idleDoneCalled, isTrue);
+      expect(clients.last.idleDoneCalled, isFalse, reason: 'still idling');
+    });
+  }
 
   // The JMAP loop waits on push (EventSource) instead of IDLE; a mid-cycle
   // kick must skip that wait the same way.
@@ -717,4 +765,36 @@ class _OneFolderFailsEmailRepository extends FakeEmailRepositoryBase {
       bytesTransferred: 0,
     );
   }
+}
+
+/// Counts sync cycles (one [syncMailboxes] call each).
+class _CountingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  int calls = 0;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    calls++;
+    return 1;
+  }
+}
+
+/// An IMAP client that never touches the network. When [fireOnIdle] is set,
+/// it reports that event on its event bus once IDLE has started, like a server
+/// pushing an untagged response.
+class _FakeIdleClient extends SelectingFakeImapClient {
+  _FakeIdleClient({this.fireOnIdle});
+
+  final imap.ImapEvent Function(imap.ImapClient)? fireOnIdle;
+  bool idleDoneCalled = false;
+
+  @override
+  Future<void> idleStart() async {
+    final make = fireOnIdle;
+    if (make != null) {
+      Timer(const Duration(milliseconds: 10), () => eventBus.fire(make(this)));
+    }
+  }
+
+  @override
+  Future<dynamic> idleDone() async => idleDoneCalled = true;
 }
