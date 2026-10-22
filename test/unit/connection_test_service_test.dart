@@ -292,7 +292,8 @@ void main() {
       jmapUrl: 'https://example.com',
     );
 
-    test('follows an https redirect and probes the final apiUrl', () async {
+    test('follows a same-origin redirect and probes the final apiUrl',
+        () async {
       final seen = <http.BaseRequest>[];
       final svc = ConnectionTestServiceImpl(
         MockClient((req) async {
@@ -301,7 +302,7 @@ void main() {
             return http.Response(
               '',
               307,
-              headers: {'location': 'https://jmap.example.com/s/session'},
+              headers: {'location': '/s/session'},
             );
           }
           if (req.method == 'POST') {
@@ -320,8 +321,8 @@ void main() {
       expect(result.identityWarning, isNull);
       expect(seen.map((r) => '${r.method} ${r.url}'), [
         'GET https://example.com/.well-known/jmap',
-        'GET https://jmap.example.com/s/session',
-        'POST https://jmap.example.com/s/api/',
+        'GET https://example.com/s/session',
+        'POST https://example.com/s/api/',
       ]);
       expect(seen.every((r) => r.headers['Authorization'] != null), isTrue);
     });
@@ -341,9 +342,34 @@ void main() {
       );
       await expectLater(
         svc.testConnection(redirectAccount, 'pw'),
-        throwsA(predicate((e) => e.toString().contains('not https'))),
+        throwsA(predicate((e) => e.toString().contains('another origin'))),
       );
       expect(seen.every((u) => u.scheme == 'https'), isTrue);
+    });
+
+    test('refuses a cross-origin redirect, naming the target', () async {
+      final seen = <Uri>[];
+      final svc = ConnectionTestServiceImpl(
+        MockClient((req) async {
+          seen.add(req.url);
+          return http.Response(
+            '',
+            307,
+            headers: {'location': '//jmap.example.net/session'},
+          );
+        }),
+      );
+      await expectLater(
+        svc.testConnection(redirectAccount, 'pw'),
+        throwsA(
+          predicate(
+            (e) => e.toString().contains(
+                  'enter https://jmap.example.net/session as the JMAP URL',
+                ),
+          ),
+        ),
+      );
+      expect(seen.every((u) => u.host == 'example.com'), isTrue);
     });
   });
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -290,19 +291,19 @@ void main() {
           password: 'hunter2',
         );
 
-    test('follows a 307 https→https and re-sends the credentials', () async {
+    test('follows a same-origin 307 and re-sends the credentials', () async {
       final seen = <http.BaseRequest>[];
       final c = await connectWith(
         redirectingClient(seen, {
           'https://mail.example.com/.well-known/jmap':
-              'https://jmap.example.com/jmap/session',
+              'https://mail.example.com/jmap/session',
         }),
         'https://mail.example.com',
       );
       expect(c.accountId, 'u1');
       expect(seen.map((r) => r.url.toString()), [
         'https://mail.example.com/.well-known/jmap',
-        'https://jmap.example.com/jmap/session',
+        'https://mail.example.com/jmap/session',
       ]);
       for (final r in seen) {
         expect(r.headers['Authorization'], auth);
@@ -327,12 +328,93 @@ void main() {
             'message',
             allOf(
               contains('http://mail.example.com/jmap/session'),
-              contains('not https'),
+              contains('another origin'),
             ),
           ),
         ),
       );
       expect(seen.map((r) => r.url.scheme), ['https']);
+    });
+
+    /// Expects [connectWith] on `https://mail.example.com` answering
+    /// `307 → location` to fail with a message containing [message], having
+    /// sent exactly the first request.
+    Future<void> expectRefused(String location, String message) async {
+      final seen = <http.BaseRequest>[];
+      await expectLater(
+        connectWith(
+          redirectingClient(seen, {
+            'https://mail.example.com/.well-known/jmap': location,
+          }),
+          'https://mail.example.com',
+        ),
+        throwsA(
+          isA<JmapException>().having(
+            (e) => e.message,
+            'message',
+            contains(message),
+          ),
+        ),
+      );
+      expect(seen.map((r) => r.url.toString()), [
+        'https://mail.example.com/.well-known/jmap',
+      ]);
+    }
+
+    test('refuses a cross-origin redirect and names the target', () async {
+      await expectRefused(
+        'https://evil.example/jmap/session',
+        'enter https://evil.example/jmap/session as the JMAP URL',
+      );
+    });
+
+    test('refuses a protocol-relative redirect to another host', () async {
+      await expectRefused(
+        '//evil.example/x',
+        'https://evil.example/x',
+      );
+    });
+
+    test('refuses a redirect to another port or to http localhost', () async {
+      await expectRefused('https://mail.example.com:8443/s', 'another origin');
+      await expectRefused('http://127.0.0.1/s', 'another origin');
+    });
+
+    test('wraps an unparsable Location in JmapException', () async {
+      await expectRefused('http://[::1', 'invalid location');
+    });
+
+    test('returns a 3xx without Location as is', () async {
+      final client = MockClient((_) async => http.Response('', 307));
+      await expectLater(
+        connectWith(client, 'https://mail.example.com'),
+        throwsA(
+          isA<JmapException>().having(
+            (e) => e.message,
+            'message',
+            contains('HTTP 307'),
+          ),
+        ),
+      );
+    });
+
+    test('the whole fetch is bounded by the deadline', () async {
+      var requests = 0;
+      final client = MockClient((req) async {
+        requests++;
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        return http.Response('', 302, headers: {'location': '/again'});
+      });
+      await expectLater(
+        JmapClient.fetchSession(
+          httpClient: client,
+          sessionUrl: Uri.parse('https://mail.example.com/s'),
+          credentials: 'x',
+          deadline: const Duration(milliseconds: 50),
+        ),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(requests, lessThan(JmapClient.maxSessionRedirects));
     });
 
     test('gives up after too many redirects', () async {
@@ -375,7 +457,7 @@ void main() {
         seen,
         {
           'https://mail.example.com/.well-known/jmap':
-              'https://jmap.example.com/jmap/session',
+              'https://mail.example.com/jmap/session',
         },
         session: _session(
           apiUrl: 'api/',
@@ -385,11 +467,11 @@ void main() {
       final c = await connectWith(client, 'https://mail.example.com');
       expect(
         c.eventSourceUrl,
-        'https://jmap.example.com/jmap/eventsource/?types={types}&ping={ping}',
+        'https://mail.example.com/jmap/eventsource/?types={types}&ping={ping}',
       );
       await c.call([]);
       expect(seen.last.method, 'POST');
-      expect(seen.last.url.toString(), 'https://jmap.example.com/jmap/api/');
+      expect(seen.last.url.toString(), 'https://mail.example.com/jmap/api/');
     });
 
     test('resolveSessionUrl keeps absolute and empty values as they are', () {

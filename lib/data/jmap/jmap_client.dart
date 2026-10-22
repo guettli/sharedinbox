@@ -373,21 +373,36 @@ class JmapClient {
   /// Most redirect hops [fetchSession] follows before giving up.
   static const maxSessionRedirects = 5;
 
+  /// Upper bound for one whole [fetchSession], all hops together. Each hop
+  /// alone is bounded by its `timeout`; without this, hops × per-hop timeout
+  /// (× the retries in [connect]) could stall a sync cycle for minutes.
+  static const sessionFetchDeadline = Duration(seconds: 30);
+
   /// GETs the JMAP Session object at [sessionUrl] with Basic [credentials],
-  /// following redirects by hand.
+  /// following redirects by hand (#1104).
   ///
-  /// package:http (dart:io `HttpClient`) follows redirects on its own and
-  /// re-sends the `Authorization` header to the same host (or a subdomain)
-  /// without looking at the scheme, so an https session URL that redirects to
-  /// http would leak the credentials in cleartext. RFC 8620 §2.2 expects `/.well-known/jmap` to
-  /// redirect (Stalwart answers `307 → /jmap/session`), so this is the common
-  /// path. Here every hop — the first included — must pass [isSecureUrl]
-  /// before the credentials go out, a relative `Location` resolves against the
-  /// current URL, and at most [maxSessionRedirects] hops are followed (#1104).
+  /// RFC 8620 §2.2 expects `/.well-known/jmap` to redirect (Stalwart answers
+  /// `307 → /jmap/session`), so this is the common path, not an edge case.
+  /// Following by hand is defence in depth: the credential rule no longer
+  /// depends on the SDK's redirect policy (current dart:io drops
+  /// `Authorization` on cross-origin redirects, but older SDKs that pubspec
+  /// still allows matched only host/subdomain, ignoring the scheme), and the
+  /// URL the redirects end at is known, so relative URLs in the session can be
+  /// resolved against it.
   ///
-  /// Returns the last response (any status) and the URL it came from. Throws
-  /// [JmapException] on an insecure hop or too many redirects. [timeout] bounds
-  /// each hop, including reading its body.
+  /// The rules: every hop, the first included, must pass [isSecureUrl]; a
+  /// redirect is followed — with the credentials — only to the same origin
+  /// (scheme, host and port) as the current URL. A cross-origin `Location`
+  /// (another host, a protocol-relative `//host/…`, an https→http downgrade
+  /// even to localhost) fails with a [JmapException] naming the target, so
+  /// the user can enter it as the JMAP URL deliberately. A relative `Location`
+  /// resolves against the current URL; at most [maxSessionRedirects] hops are
+  /// followed.
+  ///
+  /// Returns the last response (any status; a 3xx without `Location` is
+  /// returned as is) and the URL it came from. [timeout] bounds each hop,
+  /// including reading its body, and [deadline] the whole fetch; both throw
+  /// [TimeoutException].
   ///
   /// Shared by [connect] and ConnectionTestService, the two callers that send
   /// credentials to the session URL.
@@ -396,17 +411,22 @@ class JmapClient {
     required Uri sessionUrl,
     required String credentials,
     Duration timeout = metadataTimeout,
+    Duration deadline = sessionFetchDeadline,
   }) async {
+    if (!isSecureUrl(sessionUrl)) {
+      throw JmapException(
+        'JMAP URL must use https ($sessionUrl) — refusing to send credentials '
+        'over cleartext. http is allowed only for a localhost dev server.',
+      );
+    }
+    final elapsed = Stopwatch()..start();
     var url = sessionUrl;
     for (var redirects = 0;; redirects++) {
-      if (!isSecureUrl(url)) {
-        throw JmapException(
-          redirects == 0
-              ? 'JMAP URL must use https ($url) — refusing to send credentials '
-                  'over cleartext. http is allowed only for a localhost dev '
-                  'server.'
-              : 'JMAP session URL $sessionUrl redirected to $url, which is not '
-                  'https — refusing to send credentials over cleartext.',
+      final remaining = deadline - elapsed.elapsed;
+      if (remaining <= Duration.zero) {
+        throw TimeoutException(
+          'JMAP session fetch from $sessionUrl took longer than $deadline',
+          deadline,
         );
       }
       final request = http.Request('GET', url)
@@ -414,7 +434,7 @@ class JmapClient {
         ..headers['Authorization'] = 'Basic $credentials';
       final resp = await Future(
         () async => http.Response.fromStream(await httpClient.send(request)),
-      ).timeout(timeout);
+      ).timeout(remaining < timeout ? remaining : timeout);
       final location = resp.headers['location'];
       if (!_isRedirect(resp.statusCode) || location == null) {
         return JmapSessionResponse(response: resp, url: url);
@@ -425,9 +445,28 @@ class JmapClient {
           '(more than $maxSessionRedirects).',
         );
       }
-      url = url.resolve(location);
+      final Uri next;
+      try {
+        next = url.resolve(location);
+      } on FormatException {
+        throw JmapException(
+          'JMAP session URL $url redirects to an invalid location '
+          '("$location").',
+        );
+      }
+      if (!_isSameOrigin(url, next)) {
+        throw JmapException(
+          'The server redirects the JMAP session from $url to $next — '
+          'refusing to send credentials to another origin. If that is the '
+          'right server, enter $next as the JMAP URL.',
+        );
+      }
+      url = next;
     }
   }
+
+  static bool _isSameOrigin(Uri a, Uri b) =>
+      a.scheme == b.scheme && a.host == b.host && a.port == b.port;
 
   static bool _isRedirect(int status) =>
       status == 301 ||
