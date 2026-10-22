@@ -594,10 +594,89 @@ void main() {
 
         expect(
           _bodyText(tester),
-          'Thanks!\n\nCheers,\nAlice\n\n\n\n> quoted original',
+          'Thanks!\n\nCheers,\nAlice\n\n> quoted original',
         );
       },
     );
+
+    testWidgets('a forward is typed above the quote, signature after it', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(
+            prefillBody: '\n\n— On x, y wrote:\n> q',
+          ),
+          overrides: _composeOverrides(accounts: const [kSignedAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, 'FYI');
+
+      expect(
+        _bodyText(tester),
+        'FYI\n\n— On x, y wrote:\n> q\n\nCheers,\nAlice',
+      );
+    });
+
+    testWidgets('a prefilled mailto body is continued before the signature', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(prefillBody: 'Hello'),
+          overrides: _composeOverrides(accounts: const [kSignedAccount]),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, ' world');
+
+      expect(_bodyText(tester), 'Hello world\n\nCheers,\nAlice');
+    });
+
+    testWidgets('switching account after focusing keeps the cursor on top', (
+      tester,
+    ) async {
+      await _pumpTwoSignedAccounts(tester);
+
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _switchToBob(tester);
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, 'Typed');
+
+      expect(_bodyText(tester), 'Typed\n\nBye,\nBob');
+    });
+
+    testWidgets('switching account after typing keeps the user cursor', (
+      tester,
+    ) async {
+      await _pumpTwoSignedAccounts(
+        tester,
+        replyToEmailId: 'e1',
+        prefillBody: '\n\n> ab',
+      );
+
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, 'Hi');
+      // The user clicks into the quote, between "a" and "b".
+      final ctrl = _bodyController(tester);
+      ctrl.selection = TextSelection.collapsed(offset: ctrl.text.length - 1);
+      await _switchToBob(tester);
+      _bodyFocus(tester).requestFocus();
+      await tester.pumpAndSettle();
+      await _typeAtCursor(tester, 'X');
+
+      expect(_bodyText(tester), 'Hi\n\nBye,\nBob\n\n> aXb');
+    });
 
     testWidgets('keeps the cursor where the user typed in the body', (
       tester,
@@ -958,8 +1037,47 @@ List<Override> _composeOverrides({
   ];
 }
 
-/// Reads the compose body text — the last [TextField] nested inside a
-/// [TextFormField] on the screen.
+const _kBobAccount = Account(
+  id: 'acc-2',
+  displayName: 'Bob',
+  email: 'bob@example.com',
+  imapHost: 'imap.example.com',
+  smtpHost: 'smtp.example.com',
+  signature: 'Bye,\nBob',
+);
+
+/// Compose from [kSignedAccount] with [_kBobAccount] as a second choice.
+Future<void> _pumpTwoSignedAccounts(
+  WidgetTester tester, {
+  String? replyToEmailId,
+  String? prefillBody,
+}) async {
+  await tester.pumpWidget(
+    _buildDirect(
+      screen: ComposeScreen(
+        accountId: kSignedAccount.id,
+        replyToEmailId: replyToEmailId,
+        prefillBody: prefillBody,
+      ),
+      overrides: _composeOverrides(
+        accounts: const [kSignedAccount, _kBobAccount],
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// Picks [_kBobAccount] in the From dropdown.
+Future<void> _switchToBob(WidgetTester tester) async {
+  await tester.tap(find.byType(DropdownButtonFormField<String>));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(accountFromLabel(_kBobAccount)).last);
+  await tester.pumpAndSettle();
+}
+
+TextEditingController _bodyController(WidgetTester tester) =>
+    tester.widget<EditableText>(find.byType(EditableText).last).controller;
+
 /// The body field's focus node (the body is the last text field).
 FocusNode _bodyFocus(WidgetTester tester) =>
     tester.widget<EditableText>(find.byType(EditableText).last).focusNode;
@@ -982,6 +1100,8 @@ Future<void> _typeAtCursor(WidgetTester tester, String text) async {
   await tester.pump();
 }
 
+/// Reads the compose body text — the last [TextField] nested inside a
+/// [TextFormField] on the screen.
 String _bodyText(WidgetTester tester) {
   final body = tester.widget<TextField>(
     find

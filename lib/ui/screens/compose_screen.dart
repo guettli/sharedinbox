@@ -91,9 +91,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   // The body text as last set programmatically (prefill / signature). While
   // the body still equals it the user has not written anything yet, so the
-  // cursor is parked at the start, where the message belongs, instead of
+  // cursor is parked at [_parkOffset], where the message belongs, instead of
   // after the signature or below the quote.
   String _programmaticBody = '';
+  int _parkOffset = 0;
   bool _suppressAutoSave = false;
   // Captured in initState so it remains accessible in dispose() after ref is gone.
   late final DraftRepository _draftRepo;
@@ -104,6 +105,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   void initState() {
     super.initState();
     _draftRepo = ref.read(draftRepositoryProvider);
+    // Before the body prefill: a reply parks the cursor at the top.
+    _replyToEmailId = widget.replyToEmailId;
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
@@ -111,7 +114,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _setPristineBody(normalizeNewlines(widget.prefillBody!));
     }
     _accountId = widget.accountId;
-    _replyToEmailId = widget.replyToEmailId;
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
@@ -137,8 +139,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   /// Inserts the selected account's signature into the body, swapping out any
-  /// previously inserted one. For a reply the signature sits above the quoted
-  /// text so the user writes between it and the quote; otherwise it is appended.
+  /// previously inserted one. A new message gets it appended
+  /// (`<text>\n\n<signature>`). A reply gets it above the quoted text, after
+  /// an empty first line the user types into (`\n\n<signature>\n\n<quote>`;
+  /// the quote's own leading blank lines provide the separator when present).
+  /// While the user has not touched the body the cursor stays parked where the
+  /// message belongs ([_parkOffset]); otherwise their cursor is shifted along.
   Future<void> _applySignatureForAccount(String? accountId) async {
     // A restored draft already carries its body verbatim — never rewrite it.
     if (_draftRestored) return;
@@ -151,29 +157,49 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!mounted) return;
     _sigAccountId = accountId;
     final isReply = _replyToEmailId != null;
-    // A reply keeps an empty first line above the signature to type into.
-    final newBlock = signature.isEmpty
-        ? ''
-        : (isReply ? '\n\n$signature\n\n' : '\n\n$signature');
     final text = _body.text;
     final oldIndex = _sigBlock.isEmpty ? -1 : text.indexOf(_sigBlock);
-    String updated;
+    // The range of [text] the new block replaces: the old block, or an empty
+    // range at the start (reply) / end (new message).
+    final int from;
+    final int to;
     if (oldIndex >= 0) {
-      updated =
-          text.replaceRange(oldIndex, oldIndex + _sigBlock.length, newBlock);
-    } else if (newBlock.isEmpty) {
-      updated = text;
-    } else if (isReply) {
-      updated = '$newBlock$text';
+      from = oldIndex;
+      to = oldIndex + _sigBlock.length;
     } else {
-      updated = '$text$newBlock';
+      from = isReply ? 0 : text.length;
+      to = from;
     }
+    final after = text.substring(to);
+    final String newBlock;
+    if (signature.isEmpty) {
+      newBlock = '';
+    } else if (isReply) {
+      newBlock = after.startsWith('\n') || after.isEmpty
+          ? '\n\n$signature'
+          : '\n\n$signature\n\n';
+    } else {
+      newBlock = '\n\n$signature';
+    }
+    final updated = text.replaceRange(from, to, newBlock);
+    final pristine = _bodyIsPristine;
+    final sel = _body.selection;
     _sigBlock = newBlock;
     if (updated == text) return;
     // Programmatic edit — don't count it as the user dirtying a draft.
     _suppressAutoSave = true;
-    if (_bodyIsPristine) {
-      _setPristineBody(updated);
+    if (pristine) {
+      _setPristineBody(updated, base: text.replaceRange(from, to, ''));
+    } else if (sel.isValid) {
+      int shift(int o) =>
+          o <= from ? o : (o >= to ? o + newBlock.length - (to - from) : from);
+      _body.value = TextEditingValue(
+        text: updated,
+        selection: TextSelection(
+          baseOffset: shift(sel.baseOffset),
+          extentOffset: shift(sel.extentOffset),
+        ),
+      );
     } else {
       _body.text = updated;
     }
@@ -185,18 +211,26 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool get _bodyIsPristine {
     final sel = _body.selection;
     return _body.text == _programmaticBody &&
-        (!sel.isValid || sel == const TextSelection.collapsed(offset: 0));
+        (!sel.isValid || sel == TextSelection.collapsed(offset: _parkOffset));
   }
 
-  /// Sets a body the user has not touched yet, with the cursor at the start.
+  /// Sets a body the user has not touched yet, with the cursor parked where
+  /// the message belongs. [base] is the body without the signature block.
   /// Focusing the body without a tap (Tab, IME "next", a screen reader) keeps
   /// a valid selection, so typing lands above the signature / quote instead
   /// of being glued to its end. A tap still places the cursor where tapped.
-  void _setPristineBody(String text) {
+  void _setPristineBody(String text, {String? base}) {
+    final b = base ?? text;
+    // A reply, a forward ("\n\n— On … wrote:") or an empty body is written
+    // at the top. A prefilled message text (mailto body) is continued, so the
+    // cursor goes after it — before an appended signature.
+    _parkOffset = _replyToEmailId != null || b.isEmpty || b.startsWith('\n')
+        ? 0
+        : b.length;
     _programmaticBody = text;
     _body.value = TextEditingValue(
       text: text,
-      selection: const TextSelection.collapsed(offset: 0),
+      selection: TextSelection.collapsed(offset: _parkOffset),
     );
   }
 
