@@ -28,6 +28,8 @@ void main({List<Override> overrides = const []}) {
     runZonedGuarded(
       () async {
         WidgetsFlutterBinding.ensureInitialized();
+        // Captured here, in the zone the binding was initialized in.
+        final crashScreen = CrashScreenInstaller(Zone.current);
 
         // Dart's async machinery propagates stack traces in chain format
         // (with '===== asynchronous gap =====' separators). Flutter's
@@ -74,10 +76,12 @@ void main({List<Override> overrides = const []}) {
           );
           if (_isWidgetTreeError(details)) return;
           if (transient) return;
-          runApp(
-            CrashScreen(
-              exception: details.exception,
-              stackTrace: details.stack,
+          crashScreen.install(
+            () => runApp(
+              CrashScreen(
+                exception: details.exception,
+                stackTrace: details.stack,
+              ),
             ),
           );
         };

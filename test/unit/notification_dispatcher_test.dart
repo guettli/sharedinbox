@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -89,7 +90,10 @@ void main() {
     late List<Map<String, String>> fired;
     late NotificationDispatcher dispatcher;
 
-    Future<void> setup({required bool enabled}) async {
+    Future<void> setup({
+      required bool enabled,
+      ShowNotification? show,
+    }) async {
       db = openTestDatabase();
       addTearDown(db.close);
       accounts = AccountRepositoryImpl(db, MapSecureStorage());
@@ -98,19 +102,20 @@ void main() {
       dispatcher = NotificationDispatcher(
         rules: rules,
         accounts: accounts,
-        show: ({
-          required String accountId,
-          required String emailId,
-          required String title,
-          required String body,
-        }) async {
-          fired.add({
-            'accountId': accountId,
-            'emailId': emailId,
-            'title': title,
-            'body': body,
-          });
-        },
+        show: show ??
+            ({
+              required String accountId,
+              required String emailId,
+              required String title,
+              required String body,
+            }) async {
+              fired.add({
+                'accountId': accountId,
+                'emailId': emailId,
+                'title': title,
+                'body': body,
+              });
+            },
       );
       await _seedAccount(accounts, enabled: enabled);
       await _seedInboxAndMail(db);
@@ -151,6 +156,61 @@ void main() {
       await dispatcher.dispatchForAccount('acc');
 
       expect(fired, hasLength(1));
+    });
+
+    test('fires once when two dispatches overlap', () async {
+      await setup(enabled: true);
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await Future.wait([
+        dispatcher.dispatchForAccount('acc'),
+        dispatcher.dispatchForAccount('acc'),
+      ]);
+
+      expect(fired, hasLength(1));
+    });
+
+    // #1107: mail is marked notified before the show, so a show that fails
+    // or never answers cannot make the same mail alert on every sync.
+    test('a throwing show still leaves the mail marked notified', () async {
+      await setup(
+        enabled: true,
+        show: ({
+          required String accountId,
+          required String emailId,
+          required String title,
+          required String body,
+        }) async =>
+            throw StateError('org.freedesktop.Notifications not provided'),
+      );
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await expectLater(
+        dispatcher.dispatchForAccount('acc'),
+        throwsA(isA<StateError>()),
+      );
+      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
+    });
+
+    test('a hanging show still leaves the mail marked notified', () async {
+      final shown = Completer<void>();
+      await setup(
+        enabled: true,
+        show: ({
+          required String accountId,
+          required String emailId,
+          required String title,
+          required String body,
+        }) {
+          shown.complete();
+          return Completer<void>().future;
+        },
+      );
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      unawaited(dispatcher.dispatchForAccount('acc'));
+      await shown.future;
+      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
     });
   });
 

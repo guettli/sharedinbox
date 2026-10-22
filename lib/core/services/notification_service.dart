@@ -1,10 +1,19 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/crash_logger.dart';
+import 'package:sharedinbox/core/services/notification_guard.dart';
 
 const _kChannelId = 'new_mail';
 const _kChannelName = 'New mail';
+
+/// Bounds the Linux plugin initialization, which runs before the first frame.
+/// Android's init (channel setup, permission request) is not bounded: it may
+/// legitimately wait for the user.
+const _kLinuxInitTimeout = Duration(seconds: 10);
 
 final _plugin = FlutterLocalNotificationsPlugin();
 bool _initialized = false;
@@ -46,7 +55,7 @@ Future<void> initNotifications() async {
   try {
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const linux = LinuxInitializationSettings(defaultActionName: 'Open');
-    await _plugin.initialize(
+    final init = _plugin.initialize(
       settings: const InitializationSettings(android: android, linux: linux),
       onDidReceiveNotificationResponse: (response) {
         final payload = response.payload;
@@ -55,22 +64,35 @@ Future<void> initNotifications() async {
         }
       },
     );
+    await (Platform.isLinux ? init.timeout(_kLinuxInitTimeout) : init);
     await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
+    // No probe for a Linux notification daemon here: one that starts late or
+    // restarts would leave notifications off for the whole session. Without a
+    // daemon Notify fails at once, and guardNotificationShow absorbs that.
     _initialized = true;
   } on MissingPluginException {
     // Plugin not registered on this device; notifications silently disabled.
-  } catch (_) {
-    // Unexpected initialization failure; notifications silently disabled.
+  } catch (e, st) {
+    final message = 'Notifications disabled: initialization failed: $e';
+    debugPrint(message);
+    logUncaught(
+      'notification.init_failed',
+      message,
+      e,
+      st,
+      level: AppLogLevel.warn,
+    );
   }
 }
 
 /// Shows a single new-mail notification. [title] is typically the sender and
 /// [body] the subject line. [payload] travels back to [onNotificationTap] when
 /// the user taps the notification. [id] keeps distinct messages from
-/// collapsing into one slot.
+/// collapsing into one slot. Never throws: a failing or hanging backend is
+/// logged and skipped (see [guardNotificationShow]).
 Future<void> showNewMailNotification({
   required String title,
   required String body,
@@ -78,20 +100,22 @@ Future<void> showNewMailNotification({
   String? payload,
 }) async {
   if (!notificationsSupported || !_initialized) return;
-  await _plugin.show(
-    id: id ?? (title + body).hashCode & 0x7FFFFFFF,
-    title: title,
-    body: body,
-    payload: payload,
-    notificationDetails: const NotificationDetails(
-      android: AndroidNotificationDetails(
-        _kChannelId,
-        _kChannelName,
-        channelDescription: 'Notifications for new incoming mail',
-        importance: Importance.high,
-        priority: Priority.high,
+  await guardNotificationShow(
+    () => _plugin.show(
+      id: id ?? (title + body).hashCode & 0x7FFFFFFF,
+      title: title,
+      body: body,
+      payload: payload,
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _kChannelId,
+          _kChannelName,
+          channelDescription: 'Notifications for new incoming mail',
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        linux: LinuxNotificationDetails(),
       ),
-      linux: LinuxNotificationDetails(),
     ),
   );
 }
