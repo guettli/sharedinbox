@@ -38,8 +38,10 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
     POST /restart         [wipe=1] — restart the app; wipe=1 also removes its
                           data and the keyring, like a fresh install
 
-A lookup waits up to `timeout` seconds (default 20) for its node; the server
-handles one request at a time, so a long wait blocks every other call. Driver
+A lookup waits up to `timeout` seconds (default 20) for its node. Only one
+request at a time talks to the accessibility bus, so a long wait blocks the
+other GUI calls (refused as "busy" after 30 s); /health, /log and /shot always
+answer, and /restart does not wait for the bus. Driver
 errors come back as HTTP 409 with the message, which for "not found" includes
 the accessibility tree (truncated at 400 nodes); anything unexpected is a 500
 with the traceback.
@@ -51,8 +53,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -274,6 +277,19 @@ def restart(params: dict) -> str:
     return "restarted\n" + health(params)
 
 
+# Requests are served on their own threads, but only one at a time may talk to
+# the accessibility bus. A slow lookup then blocks the other GUI routes, but not
+# the ones below: /health, /log and /shot show what the app is doing, and
+# /restart (which does not touch the bus) kills it, which also ends a stuck
+# walk. A lookup itself is bounded by its timeout, checked per node.
+_GUI_LOCK = threading.Lock()
+# Restarts must not overlap either: two would start two apps, one orphaned.
+_RESTART_LOCK = threading.Lock()
+LOCK_FREE = {"/health", "/log", "/shot"}
+# A GUI call that cannot get the bus within this long is refused rather than
+# queued: run later, it would act on whatever screen is up by then.
+GUI_LOCK_WAIT = 30.0
+
 ROUTES = {
     "/health": health, "/tree": tree, "/texts": texts, "/log": log,
     "/click": click, "/click-unnamed": click_unnamed, "/focus": focus,
@@ -317,7 +333,22 @@ class Handler(BaseHTTPRequestHandler):
             if route is None:
                 self._send(404, (__doc__ or "").encode())
                 return
-            self._send(200, route(params).encode())
+            if path in LOCK_FREE:
+                body = route(params)
+            elif path == "/restart":
+                with _RESTART_LOCK:
+                    body = route(params)
+            else:
+                if not _GUI_LOCK.acquire(timeout=GUI_LOCK_WAIT):
+                    raise g.GuiError(
+                        f"busy: another call has held the accessibility bus for "
+                        f"over {GUI_LOCK_WAIT:.0f}s; check /shot and /log, or /restart"
+                    )
+                try:
+                    body = route(params)
+                finally:
+                    _GUI_LOCK.release()
+            self._send(200, body.encode())
         except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
         except Exception:  # noqa: BLE001 — e.g. GLib.GError when a node vanishes mid-walk
@@ -334,7 +365,7 @@ def main() -> None:
     start_keyring()
     start_app()
     print(f"explore server on :{PORT}, app {APP}", flush=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":
