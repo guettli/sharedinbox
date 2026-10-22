@@ -26,6 +26,7 @@ import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/ui/utils/global_email_search.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
@@ -10316,7 +10317,10 @@ void main() {
       await r.accounts.addAccount(_account, 'pw');
       final base = DateTime.utc(2026, 10);
       // 120 matches: even uids hit via the subject, odd uids only via the
-      // cached body, so a page mixes both FTS sources.
+      // cached body, so a page mixes both FTS sources. Uids divisible by 4
+      // hit via both (deduplicated before the page is cut), and a few old
+      // flagged mails from either source must lead every page.
+      const flagged = {3, 10, 57};
       for (var uid = 0; uid < 120; uid++) {
         final id = 'acc-1:INBOX:$uid';
         await r.db.into(r.db.emails).insert(
@@ -10327,12 +10331,13 @@ void main() {
                 uid: uid,
                 subject: Value(uid.isEven ? 'Bulk $uid' : 'Mail $uid'),
                 receivedAt: base.add(Duration(minutes: uid)),
+                isFlagged: Value(flagged.contains(uid)),
                 fromJson: const Value(
                   '[{"name":null,"email":"list@example.com"}]',
                 ),
               ),
             );
-        if (uid.isOdd) {
+        if (uid.isOdd || uid % 4 == 0) {
           await r.db.into(r.db.emailBodies).insert(
                 EmailBodiesCompanion.insert(
                   emailId: id,
@@ -10341,8 +10346,13 @@ void main() {
               );
         }
       }
-      List<String> newest(int n) =>
-          [for (var uid = 119; uid > 119 - n; uid--) 'acc-1:INBOX:$uid'];
+      // Flagged first (newest first among them), then the rest newest first.
+      final listOrder = [
+        for (final uid in [57, 10, 3]) 'acc-1:INBOX:$uid',
+        for (var uid = 119; uid >= 0; uid--)
+          if (!flagged.contains(uid)) 'acc-1:INBOX:$uid',
+      ];
+      List<String> newest(int n) => listOrder.take(n).toList();
       List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
 
       final folderPage = await r.emails.searchEmails('acc-1', 'INBOX', 'bulk');
@@ -10389,6 +10399,22 @@ void main() {
         await r.emails.getEmailsByAddress('acc-1', 'list@example.com'),
         hasLength(120),
       );
+
+      // The merged all-folders search (FTS + address hits, the same mails
+      // twice over) pages with the same stable prefix.
+      for (final limit in [50, 100, 150]) {
+        expect(
+          ids(
+            await searchEmailsGlobalMerged(
+              r.emails,
+              'acc-1',
+              'list@example.com',
+              limit: limit,
+            ),
+          ),
+          newest(limit),
+        );
+      }
     });
 
     test('mail and thread lists are sorted by an index, not a temp sort',

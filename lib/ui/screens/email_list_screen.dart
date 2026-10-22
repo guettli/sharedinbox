@@ -71,6 +71,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   // re-runs the query, so a common term no longer silently stops at 50.
   int _searchLimit = searchPageSize;
   bool _searchLoadingMore = false;
+  // Whether the last fetch filled its page (more matches may exist). Kept
+  // from the fetch result, not the live list length, so rows a batch action
+  // removes locally do not hide "Load more".
+  bool _searchLastPageFull = false;
 
   // Incremented on every search start; stale completions are ignored when the
   // generation has advanced (prevents out-of-order IMAP responses from
@@ -135,6 +139,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       if (mounted && generation == _searchGeneration) {
         setState(() {
           _searchResults = results;
+          _searchLastPageFull = results.length >= _searchLimit;
           _lastSettledQuery = q;
         });
       }
@@ -167,8 +172,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   /// A full page means more matches may exist (same rule as the folder list).
-  bool get _searchHasMore =>
-      (_searchResults?.length ?? 0) >= _searchLimit && !_searchLoadingMore;
+  bool get _searchHasMore => _searchLastPageFull && !_searchLoadingMore;
 
   /// "Load more" on search results: grows [_searchLimit] by a page and re-runs
   /// the active query. The current results stay on screen (no spinner) so the
@@ -184,7 +188,26 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
     try {
       final results = await _runScopedSearch(query);
       if (mounted && generation == _searchGeneration) {
-        setState(() => _searchResults = results);
+        setState(() {
+          _searchResults = results;
+          _searchLastPageFull = results.length >= _searchLimit;
+        });
+      }
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Loading more search results failed',
+              screen: 'EmailListScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
+      // Keep the results already shown; the button comes back for a retry.
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchLimit -= searchPageSize);
+        context.showAppSnackBar('Could not load more results.');
       }
     } finally {
       if (mounted && generation == _searchGeneration) {
@@ -628,7 +651,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       _searchController.clear();
       return;
     }
-    setState(() => _searchResults = remaining);
+    setState(() {
+      _searchResults = remaining;
+      _searchLastPageFull = remaining.length >= _searchLimit;
+    });
   }
 
   void _onAfterBatchAction(List<String> actedThreadIds) {

@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
+import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/folder_scope_dialog.dart';
@@ -70,6 +71,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   int _limit = searchPageSize;
   Future<List<Email>> Function(int limit)? _activeFetch;
   bool _loadingMore = false;
+
+  /// Whether the last fetch filled its page (more matches may exist). Kept
+  /// from the fetch result, not the live [_results] length, so rows a batch
+  /// action removes locally do not hide "Load more".
+  bool _lastPageFull = false;
 
   /// Accounts the user has deactivated on the current result set. Purely a
   /// client-side view filter over [_results] — deactivating an account hides
@@ -283,6 +289,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
+          _lastPageFull = emails.length >= _limit;
           _resetViewFilters();
           _loading = false;
         });
@@ -305,10 +312,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   /// A full page means more matches may exist (same rule as the folder list).
   /// Judged on the fetched [_results], not the client-side filtered view.
-  bool get _hasMore =>
-      _activeFetch != null &&
-      !_loadingMore &&
-      (_results?.length ?? 0) >= _limit;
+  bool get _hasMore => _activeFetch != null && !_loadingMore && _lastPageFull;
 
   /// "Load more": re-runs the active search with one more page. The current
   /// results and view filters stay on screen meanwhile; a newer search or a
@@ -326,6 +330,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
+          _lastPageFull = emails.length >= _limit;
           _loadingMore = false;
         });
       }
@@ -347,6 +352,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           _loadingMore = false;
           _limit -= searchPageSize;
         });
+        context.showAppSnackBar('Could not load more results.');
       }
     }
   }
@@ -532,11 +538,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         Expanded(
           child: visible.isEmpty
               ? Center(
-                  child: Text(
-                    folderFiltered
-                        ? 'No mail matches the folder filter'
-                        : 'No accounts selected — tap an account to '
-                            'show its mail',
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        folderFiltered
+                            ? 'No mail matches the folder filter'
+                            : 'No accounts selected — tap an account to '
+                                'show its mail',
+                      ),
+                      // The filter hides every fetched row, but later pages
+                      // may still hold matching mail.
+                      if (_hasMore)
+                        TextButton(
+                          onPressed: () => unawaited(_loadMore()),
+                          child: const Text('Load more'),
+                        ),
+                    ],
                   ),
                 )
               : _buildResultsList(visible),

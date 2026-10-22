@@ -680,3 +680,12 @@ int compareNewestFirst(Email a, Email b) {
   if (byUid != 0) return byUid;
   return b.id.compareTo(a.id);
 }
+
+/// The order of every mail list and search: flagged first, then
+/// [compareNewestFirst]. The same key as the repository's
+/// `_emailListOrderSql`, so lists merged from several SQL queries (each
+/// sorted and limited by that key) keep a stable prefix when paged.
+int compareFlaggedThenNewest(Email a, Email b) {
+  if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+  return compareNewestFirst(a, b);
+}

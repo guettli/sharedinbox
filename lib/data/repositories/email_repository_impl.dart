@@ -7826,10 +7826,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in [...subjectRows, ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) {
-      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return model.compareNewestFirst(a, b);
-    });
+    merged.sort(model.compareFlaggedThenNewest);
     return merged.length > limit ? merged.sublist(0, limit) : merged;
   }
 
