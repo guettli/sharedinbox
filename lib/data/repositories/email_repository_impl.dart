@@ -1999,6 +1999,12 @@ class EmailRepositoryImpl implements EmailRepository {
         'WHERE data_json LIKE ?3',
         ['"$oldId"', '"$newId"', '%"$oldId"%'],
       );
+      // Like [_rekeyEmailRow]: the per-message logs follow the message;
+      // dropping the source row would set their email_id to null.
+      await _db.customStatement(
+        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
     });
   }
 
@@ -8275,6 +8281,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // Disable FK constraints so EmailBodies rows survive the emails deletion.
     // When emails are re-inserted after the next sync with the same IDs, the
     // cached body content will be reused without a network round-trip.
+    // The pragma is per connection: other statements that run until the
+    // finally block are unchecked too.
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
@@ -8307,7 +8315,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     // Disable FK constraints so EmailBodies rows survive the emails deletion —
     // re-inserting emails with the same IDs after the next sync reuses the
-    // cached body without a network round-trip.
+    // cached body without a network round-trip. The pragma is per connection:
+    // other statements that run until the finally block are unchecked too.
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {

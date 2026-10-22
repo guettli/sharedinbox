@@ -663,6 +663,8 @@ void main() {
         expect(indexNames, contains('app_logs_level'));
         expect(indexNames, contains('app_logs_sync_log_id'));
         expect(indexNames, contains('app_logs_email_id'));
+        // v62: foreign-key child index for bulk sync-log deletes.
+        expect(indexNames, contains('sync_log_mailboxes_sync_log_id'));
 
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();

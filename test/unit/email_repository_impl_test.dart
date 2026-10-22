@@ -8512,6 +8512,15 @@ void main() {
               }),
             ),
           );
+      await r.db.into(r.db.appLogs).insert(
+            AppLogsCompanion.insert(
+              createdAt: DateTime(2024),
+              level: 'info',
+              event: 'email.open',
+              message: 'opened',
+              emailId: const Value('acc-1:INBOX:1'),
+            ),
+          );
 
       // Checkpoint so the sync goes incremental and reconciliation runs.
       await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -8544,6 +8553,12 @@ void main() {
           .getSingle();
       expect(undo.dataJson, contains('acc-1:Archive:100'));
       expect(undo.dataJson, isNot(contains('acc-1:INBOX:1')));
+      // The per-message log follows too, instead of losing its email.
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(
+        logs.where((l) => l.event == 'email.open').map((l) => l.emailId),
+        ['acc-1:Archive:100'],
+      );
     });
 
     test('a genuine deletion (no matching server id elsewhere) is removed',

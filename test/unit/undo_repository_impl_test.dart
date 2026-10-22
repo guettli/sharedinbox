@@ -194,5 +194,16 @@ void main() {
 
       await db.close();
     });
+
+    test('pushAndTrim drops an action of an account removed meanwhile',
+        () async {
+      final db = openTestDatabase();
+      final repo = UndoRepositoryImpl(db);
+
+      await repo.pushAndTrim(_action('a'), maxHistory: 10);
+
+      expect(await repo.getHistory(), isEmpty);
+      await db.close();
+    });
   });
 }

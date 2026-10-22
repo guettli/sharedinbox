@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:developer' show log;
+
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
@@ -69,10 +71,16 @@ class UndoRepositoryImpl implements UndoRepository {
     UndoAction action, {
     required int maxHistory,
   }) async {
-    await _db.transaction(() async {
-      await saveAction(action);
-      await trim(maxHistory: maxHistory);
-    });
+    try {
+      await _db.transaction(() async {
+        await saveAction(action);
+        await trim(maxHistory: maxHistory);
+      });
+    } catch (e) {
+      // The account was removed meanwhile: nothing to undo there any more.
+      if (!isForeignKeyViolation(e)) rethrow;
+      log('undo: dropped action ${action.id} of a removed account');
+    }
   }
 
   @override

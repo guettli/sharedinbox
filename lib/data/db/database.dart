@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' show log;
 import 'dart:io';
 import 'dart:math' show min;
 
@@ -756,6 +757,18 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Indexes for foreign keys whose parent rows are deleted in bulk. With
+  /// foreign keys on, each deleted parent looks up its children; without
+  /// an index that is a full scan per parent (removing an account deletes
+  /// all its sync logs). Other bulk-deleted parents are covered by primary
+  /// keys (email_bodies, attachment_files) and the app_logs indexes.
+  Future<void> _createForeignKeyIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS sync_log_mailboxes_sync_log_id '
+      'ON sync_log_mailboxes (sync_log_id);',
+    );
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
@@ -764,6 +777,7 @@ class AppDatabase extends _$AppDatabase {
           await _createEmailNotesFts();
           await _createEmailBodyFts();
           await _createAppLogsIndexes();
+          await _createForeignKeyIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -893,6 +907,7 @@ class AppDatabase extends _$AppDatabase {
         (rowIds[key] ??= []).add(rowId);
       }
       if (rowIds.isEmpty) return changed;
+      var changedThisRound = 0;
       for (final MapEntry(key: (table, fkId), value: ids) in rowIds.entries) {
         final fk = await customSelect(
           'SELECT "from", on_delete FROM pragma_foreign_key_list(?) '
@@ -904,13 +919,20 @@ class AppDatabase extends _$AppDatabase {
         for (var i = 0; i < ids.length; i += 500) {
           final chunk = ids.sublist(i, min(i + 500, ids.length)).join(',');
           final where = 'WHERE rowid IN ($chunk)';
-          changed += await customUpdate(
+          changedThisRound += await customUpdate(
             setNull
                 ? 'UPDATE "$table" SET "$column" = NULL $where'
                 : 'DELETE FROM "$table" $where',
             updateKind: setNull ? UpdateKind.update : UpdateKind.delete,
           );
         }
+      }
+      changed += changedThisRound;
+      if (changedThisRound == 0) {
+        // Cannot happen with this schema; never spin. Writes touching the
+        // rows left would still fail, but the app opens.
+        log('foreign keys: ${violations.length} violations left unresolved');
+        return changed;
       }
     }
   }
@@ -1533,6 +1555,9 @@ class AppDatabase extends _$AppDatabase {
       // Foreign keys are on from v62 (#1119). Clear the rows that older
       // builds left breaking them first, with foreign keys still off.
       if (await _tableExists(this, 'app_logs')) await _createAppLogsIndexes();
+      if (await _tableExists(this, 'sync_log_mailboxes')) {
+        await _createForeignKeyIndexes();
+      }
       await deleteForeignKeyOrphans();
     }
   }

@@ -146,5 +146,15 @@ void main() {
       final next = await repo.watchRules('acc').first;
       expect(next, hasLength(1));
     });
+
+    test('markNotified for an account removed meanwhile is dropped', () async {
+      final db = openTestDatabase();
+      addTearDown(db.close);
+      final repo = NotificationRuleRepositoryImpl(db);
+
+      await repo.markNotified('gone', ['gone:INBOX:1']);
+
+      expect(await db.select(db.notifiedEmails).get(), isEmpty);
+    });
   });
 }

@@ -40,13 +40,15 @@ void main() {
     addTearDown(db.close);
     expect(await _foreignKeysPragma(db), 1);
     expect(await _violations(db), isEmpty);
-    // Deleting an email nulls its log references: indexed, not a scan.
+    // Cascades from bulk-deleted parents use indexes, not scans.
     expect(
       await _ids(
         db,
-        "SELECT name FROM sqlite_master WHERE name = 'app_logs_email_id'",
+        'SELECT name FROM sqlite_master WHERE name IN '
+        "('app_logs_email_id', 'sync_log_mailboxes_sync_log_id') "
+        'ORDER BY name',
       ),
-      ['app_logs_email_id'],
+      ['app_logs_email_id', 'sync_log_mailboxes_sync_log_id'],
     );
   });
 
