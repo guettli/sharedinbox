@@ -16,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 62);
+      expect(db.schemaVersion, 63);
       await db.close();
     });
 
@@ -207,12 +207,12 @@ void main() {
       expect(
         indexNames,
         containsAll([
-          'emails_received_at', // v18
+          'emails_list_order', // v63, replaces v18's emails_received_at
           'emails_thread_id', // v18
           'pending_changes_account_id', // v18
           'emails_snoozed_until', // v22
           'mailboxes_account_id', // v25
-          'threads_latest_date', // v25
+          'threads_list_order', // v63, replaces v25's threads_latest_date
           'emails_server_email_id', // v53
           'emails_account_thread', // v57
         ]),
@@ -371,7 +371,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 62);
+      expect(version.read<int>('user_version'), 63);
       await db.close();
     });
 
@@ -412,8 +412,103 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 62);
+      expect(version.read<int>('user_version'), 63);
       await db.close();
+    });
+
+    test(
+        'v62→v63 adds threads.latest_uid from the latest email and the list '
+        'order indexes', () async {
+      final dbFile = File('test_migration_v62_list_order.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      // A v62 database: threads without latest_uid, the old list indexes.
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('DROP INDEX emails_list_order;');
+      rawDb.execute('DROP INDEX threads_list_order;');
+      rawDb.execute('ALTER TABLE threads DROP COLUMN latest_uid;');
+      rawDb.execute(
+        'CREATE INDEX emails_received_at ON emails '
+        '(account_id, mailbox_path, received_at DESC);',
+      );
+      rawDb.execute(
+        'CREATE INDEX threads_latest_date ON threads '
+        '(account_id, mailbox_path, latest_date DESC);',
+      );
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('acc-x:INBOX:7', 'acc-x', 'INBOX', 7, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (id, account_id, mailbox_path, latest_date,
+                             latest_email_id)
+        VALUES ('t1', 'acc-x', 'INBOX', 0, 'acc-x:INBOX:7'),
+               ('t2', 'acc-x', 'INBOX', 0, 'gone');
+      ''');
+      rawDb.execute('PRAGMA user_version = 62;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final rows = await db
+          .customSelect('SELECT id, latest_uid FROM threads ORDER BY id')
+          .get();
+      expect(
+        {for (final r in rows) r.read<String>('id'): r.read<int>('latest_uid')},
+        {'t1': 7, 't2': 0},
+      );
+      final indexes = {
+        for (final r in await db
+            .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .get())
+          r.read<String>('name'),
+      };
+      expect(indexes, containsAll(['emails_list_order', 'threads_list_order']));
+      expect(indexes, isNot(contains('emails_received_at')));
+      expect(indexes, isNot(contains('threads_latest_date')));
+    });
+
+    test('v62→v63 tolerates latest_uid and the list indexes already present',
+        () async {
+      // An interrupted earlier upgrade can leave the v63 schema at v62.
+      final dbFile = File('test_migration_v62_list_order_rerun.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('acc-x:INBOX:9', 'acc-x', 'INBOX', 9, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (id, account_id, mailbox_path, latest_date,
+                             latest_email_id, latest_uid)
+        VALUES ('t1', 'acc-x', 'INBOX', 0, 'acc-x:INBOX:9', 0);
+      ''');
+      rawDb.execute('PRAGMA user_version = 62;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final row = await db
+          .customSelect("SELECT latest_uid FROM threads WHERE id = 't1'")
+          .getSingle();
+      expect(row.read<int>('latest_uid'), 9);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 63);
     });
 
     test(
@@ -583,14 +678,15 @@ void main() {
         final draftColumns = await _tableColumns(db, 'drafts');
         expect(draftColumns, contains('imap_server_id'));
 
-        // v25: new indexes on mailboxes and threads.
+        // v25: new indexes on mailboxes and threads (v63 replaces the
+        // threads one with threads_list_order).
         final allIndexes = await db
             .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
             .get();
         final indexNames =
             allIndexes.map((r) => r.read<String>('name')).toSet();
         expect(indexNames, contains('mailboxes_account_id'));
-        expect(indexNames, contains('threads_latest_date'));
+        expect(indexNames, contains('threads_list_order'));
 
         // v26: FTS5 virtual table and triggers.
         final allTriggers = await db

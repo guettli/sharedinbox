@@ -87,6 +87,13 @@ class _LiveMailboxCounts {
 }
 
 class EmailRepositoryImpl implements EmailRepository {
+  /// SQL `ORDER BY` of the mail search results (table alias `e`): starred
+  /// first, then [model.compareNewestFirst]. Searches span folders and
+  /// accounts, whose UIDs are not comparable; there the UID tiebreak only
+  /// makes the order deterministic.
+  static const _emailListOrderSql =
+      'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
+
   EmailRepositoryImpl(
     AppDatabase db,
     this._accounts, {
@@ -154,7 +161,14 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          // Mail from the same second: highest UID (newest arrival) first.
+          // `id` makes rows with equal UIDs (JMAP, local) deterministic.
+          // Matches the `emails_list_order` index.
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -172,9 +186,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
+          // Matches the `threads_list_order` index; see [observeEmails] for
+          // the tiebreakers.
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.latestDate),
+            (t) => OrderingTerm.desc(t.latestUid),
+            (t) => OrderingTerm.desc(t.id),
           ])
           ..limit(limit))
         .watch()
@@ -203,6 +221,10 @@ class EmailRepositoryImpl implements EmailRepository {
       ..orderBy([
         OrderingTerm.desc(_db.threads.isFlagged),
         OrderingTerm.desc(_db.threads.latestDate),
+        // UIDs of different accounts are not comparable: across inboxes
+        // this tiebreak only makes the order deterministic.
+        OrderingTerm.desc(_db.threads.latestUid),
+        OrderingTerm.desc(_db.threads.id),
       ])
       ..limit(limit);
     return query.watch().asyncMap((rows) async {
@@ -231,7 +253,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ///
   /// The kept copy is deterministic (IMAP preferred, then lowest account id)
   /// and keeps its original list position, preserving the query's
-  /// `isFlagged`/`latestDate` ordering.
+  /// `isFlagged`/`latestDate`/`latestUid`/`id` ordering.
   List<model.EmailThread> _dedupeCounterpartThreads(
     List<(model.EmailThread, String?)> rows,
     List<account_model.Account> accounts,
@@ -334,9 +356,12 @@ class EmailRepositoryImpl implements EmailRepository {
           )
           // Same key as `latestDate` below, so an undated message sorts by
           // its arrival time rather than first (SQLite orders NULL lowest).
+          // Same-second mail by UID, so `latest` is the newest arrival.
           ..orderBy([
             (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .get();
 
@@ -382,6 +407,7 @@ class EmailRepositoryImpl implements EmailRepository {
             participantsJson: Value(jsonEncode(participants)),
             preview: Value(latest.preview),
             latestEmailId: latest.id,
+            latestUid: Value(latest.uid),
             emailIdsJson: Value(
               jsonEncode(threadEmails.map((e) => e.id).toList()),
             ),
@@ -1008,11 +1034,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // threads.latest_email_id is a plain equality match; threads.email_ids_json
       // is a JSON array of email IDs — both are safe to update via REPLACE()
-      // because email IDs are unique opaque strings.
+      // because email IDs are unique opaque strings. latest_uid follows the
+      // latest email's UID, the thread list's same-second tiebreaker.
       await _db.customStatement(
-        'UPDATE threads SET latest_email_id = ?1 '
+        'UPDATE threads SET latest_email_id = ?1, latest_uid = ?3 '
         'WHERE latest_email_id = ?2',
-        [newId, oldId],
+        [newId, oldId, newUid],
       );
       await _db.customStatement(
         'UPDATE threads SET email_ids_json = '
@@ -7512,10 +7539,10 @@ class EmailRepositoryImpl implements EmailRepository {
     final sql = accountId != null
         ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
             ' WHERE email_fts MATCH ? AND e.account_id = ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
+            ' ORDER BY $_emailListOrderSql LIMIT 50'
         : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
             ' WHERE email_fts MATCH ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+            ' ORDER BY $_emailListOrderSql LIMIT 50';
     final variables = accountId != null
         ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
         : [Variable<String>(ftsQuery)];
@@ -7536,7 +7563,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     merged.sort((a, b) {
       if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
+      return model.compareNewestFirst(a, b);
     });
     return merged;
   }
@@ -7610,7 +7637,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final sql = 'SELECT DISTINCT e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT 50';
 
     final rows = await _db
         .customSelect(
@@ -7638,6 +7665,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
           ])
           ..limit(100))
         .get();
@@ -7832,6 +7861,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
           ]))
         .get();
     return rows.map(_toModel).toList();
@@ -7869,7 +7900,11 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return cond;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(100))
         .get();
 
@@ -7921,7 +7956,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
         ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT 50';
     final variables = [
       Variable<String>(ftsQuery),
       Variable<String>(accountId),
@@ -7944,7 +7979,7 @@ class EmailRepositoryImpl implements EmailRepository {
     }
     merged.sort((a, b) {
       if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
+      return model.compareNewestFirst(a, b);
     });
     return merged;
   }
@@ -8038,6 +8073,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -8050,7 +8087,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) {
     // Same as observeEmailsInThread but without the mailboxPath filter, so a
     // conversation's Inbox, Sent and Archive copies are gathered together
-    // (#754).
+    // (#754). The UID tiebreak compares UIDs of different folders, so for
+    // same-second copies it only makes the order deterministic.
     return (_db.select(_db.emails)
           ..where(
             (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),
@@ -8058,6 +8096,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());

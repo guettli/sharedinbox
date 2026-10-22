@@ -79,7 +79,7 @@ class BodyCacheService {
       'SELECT e.id FROM emails e '
       'LEFT JOIN email_bodies eb ON eb.email_id = e.id '
       'WHERE eb.email_id IS NULL '
-      'ORDER BY e.received_at DESC '
+      'ORDER BY e.received_at DESC, e.uid DESC, e.id DESC '
       'LIMIT ?',
       variables: [Variable.withInt(_batchSize)],
     ).get();

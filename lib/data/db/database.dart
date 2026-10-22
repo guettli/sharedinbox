@@ -205,6 +205,10 @@ class Threads extends Table {
   TextColumn get preview => text().nullable()();
   TextColumn get latestEmailId => text()();
   TextColumn get emailIdsJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v63: IMAP UID of [latestEmailId], the tiebreaker for
+  // threads whose latest message is from the same second (0 for JMAP and
+  // local rows).
+  IntColumn get latestUid => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {accountId, mailboxPath, id};
@@ -769,6 +773,27 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Indexes that hand the mail list and the thread list their rows already
+  /// in display order, so a `LIMIT 50` page reads 50 index entries instead
+  /// of sorting the whole folder. They cover the full `ORDER BY`, tiebreakers
+  /// included: mail from the same second sorts by UID, newest arrival first
+  /// (see `EmailRepositoryImpl.observeEmails` / `observeThreads`). They
+  /// replace `emails_received_at` and `threads_latest_date`, which only the
+  /// v18/v25 upgrades created — fresh installs had no list index at all.
+  Future<void> _createListOrderIndexes() async {
+    await customStatement('DROP INDEX IF EXISTS emails_received_at;');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS emails_list_order ON emails '
+      '(account_id, mailbox_path, received_at DESC, uid DESC, id DESC);',
+    );
+    await customStatement('DROP INDEX IF EXISTS threads_latest_date;');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS threads_list_order ON threads '
+      '(account_id, mailbox_path, is_flagged DESC, latest_date DESC, '
+      'latest_uid DESC, id DESC);',
+    );
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
@@ -778,6 +803,7 @@ class AppDatabase extends _$AppDatabase {
           await _createEmailBodyFts();
           await _createAppLogsIndexes();
           await _createForeignKeyIndexes();
+          await _createListOrderIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -1559,6 +1585,18 @@ class AppDatabase extends _$AppDatabase {
         await _createForeignKeyIndexes();
       }
       await deleteForeignKeyOrphans();
+    }
+    if (from < 63 &&
+        await _tableExists(this, 'threads') &&
+        await _tableExists(this, 'emails')) {
+      // Same-second mail sorts newest arrival first (by UID).
+      await _addColumnIfMissing(m, threads, threads.latestUid);
+      await customStatement('''
+        UPDATE threads SET latest_uid = COALESCE(
+          (SELECT e.uid FROM emails e WHERE e.id = threads.latest_email_id),
+          0)
+      ''');
+      await _createListOrderIndexes();
     }
   }
 

@@ -656,3 +656,18 @@ class MailboxDiagnostics {
     return out;
   }
 }
+
+/// Newest-first list order: by [Email.receivedAt], and mail from the same
+/// second (bulk mail, mailing lists, scripts) by UID, the IMAP arrival order,
+/// so the newest arrival comes first. [Email.id] makes the order total for
+/// rows with equal UIDs (JMAP and local rows have UID 0). The same key as the
+/// repository's SQL list queries. UIDs are only comparable within one folder:
+/// for results spanning folders or accounts the tiebreak just makes the order
+/// deterministic.
+int compareNewestFirst(Email a, Email b) {
+  final byDate = b.receivedAt.compareTo(a.receivedAt);
+  if (byDate != 0) return byDate;
+  final byUid = b.uid.compareTo(a.uid);
+  if (byUid != 0) return byUid;
+  return b.id.compareTo(a.id);
+}
