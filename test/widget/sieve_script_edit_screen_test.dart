@@ -52,6 +52,7 @@ void main() {
   }) async {
     final db = openTestDatabase();
     addTearDown(db.close);
+    await tester.runAsync(() => seedAccountRow(db, 'acc-1'));
     final repo = LocalSieveRepository(db);
     if (existing != null) {
       await tester.runAsync(() async {

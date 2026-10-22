@@ -34,7 +34,8 @@ void main() {
 
   group('NotificationRuleRepositoryImpl', () {
     test('add / list / update / delete rules', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -58,7 +59,8 @@ void main() {
     });
 
     test('rules are scoped per account', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -71,7 +73,8 @@ void main() {
 
     test('unnotifiedInboxEmails excludes non-inbox and notified mail',
         () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
       await seedInboxMailbox(db, 'acc');
@@ -105,7 +108,8 @@ void main() {
     });
 
     test('markBaseline silences the whole current inbox', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
       await seedInboxMailbox(db, 'acc');
@@ -130,7 +134,8 @@ void main() {
     });
 
     test('watchRules emits on change', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -140,6 +145,16 @@ void main() {
       await repo.addRule('acc', _fromIs('a@x.com'));
       final next = await repo.watchRules('acc').first;
       expect(next, hasLength(1));
+    });
+
+    test('markNotified for an account removed meanwhile is dropped', () async {
+      final db = openTestDatabase();
+      addTearDown(db.close);
+      final repo = NotificationRuleRepositoryImpl(db);
+
+      await repo.markNotified('gone', ['gone:INBOX:1']);
+
+      expect(await db.select(db.notifiedEmails).get(), isEmpty);
     });
   });
 }

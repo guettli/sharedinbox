@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
@@ -5,6 +6,17 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 
 import 'db_test_helper.dart';
+
+Future<void> _insertSyncLog(AppDatabase db, int id) =>
+    db.into(db.syncLogs).insert(
+          SyncLogsCompanion.insert(
+            id: Value(id),
+            accountId: 'acc1',
+            result: 'ok',
+            startedAt: DateTime(2026),
+            finishedAt: DateTime(2026),
+          ),
+        );
 
 void main() {
   configureSqliteForTests();
@@ -15,24 +27,13 @@ void main() {
   setUp(() async {
     db = openTestDatabase();
     repo = AppLogRepositoryImpl(db);
-    await db.into(db.accounts).insert(
-          AccountsCompanion.insert(
-            id: 'acc1',
-            displayName: 'Test',
-            email: 'test@example.com',
-            imapHost: 'imap.example.com',
-            imapPort: 993,
-            imapSsl: true,
-            smtpHost: 'smtp.example.com',
-            smtpPort: 587,
-            smtpSsl: true,
-          ),
-        );
+    await seedAccountRow(db, 'acc1');
   });
 
   tearDown(() => db.close());
 
   test('insert stores level, event, message, context and dataJson', () async {
+    await _insertSyncLog(db, 42);
     final id = await repo.insert(
       level: AppLogLevel.warn,
       event: 'sync.retry',
@@ -95,19 +96,7 @@ void main() {
   });
 
   test('watchEntries filters by account', () async {
-    await db.into(db.accounts).insert(
-          AccountsCompanion.insert(
-            id: 'acc2',
-            displayName: 'Other',
-            email: 'other@example.com',
-            imapHost: 'imap.example.com',
-            imapPort: 993,
-            imapSsl: true,
-            smtpHost: 'smtp.example.com',
-            smtpPort: 587,
-            smtpSsl: true,
-          ),
-        );
+    await seedAccountRow(db, 'acc2');
     await repo.insert(
       level: AppLogLevel.info,
       event: 'a',
@@ -127,6 +116,8 @@ void main() {
   });
 
   test('watchEntries filters by syncLogId', () async {
+    await _insertSyncLog(db, 1);
+    await _insertSyncLog(db, 2);
     await repo.insert(
       level: AppLogLevel.info,
       event: 'a',
@@ -143,6 +134,26 @@ void main() {
     final entries =
         await repo.watchEntries(const AppLogFilter(syncLogId: 1)).first;
     expect(entries.map((e) => e.event).toList(), ['a']);
+  });
+
+  test('insert keeps an entry whose email is gone, without the reference',
+      () async {
+    await _insertSyncLog(db, 7);
+    final id = await repo.insert(
+      level: AppLogLevel.info,
+      event: 'email.delete',
+      message: 'Permanently deleted',
+      accountId: 'acc1',
+      emailId: 'acc1:INBOX:deleted',
+      syncLogId: 7,
+    );
+    expect(id, isNotNull);
+
+    final row = (await db.select(db.appLogs).get()).single;
+    expect(row.event, 'email.delete');
+    expect(row.emailId, isNull);
+    expect(row.accountId, 'acc1');
+    expect(row.syncLogId, 7);
   });
 
   test('watchEntries filters by emailId', () async {

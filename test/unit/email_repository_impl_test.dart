@@ -3152,10 +3152,12 @@ void main() {
       final all = await r.db.select(r.db.appLogs).get();
       final deleteRows = all.where((e) => e.event == 'email.delete').toList();
       expect(deleteRows, hasLength(1));
-      expect(deleteRows.single.emailId, 'acc-1:5');
+      // The row is gone, so only the data still names it.
+      expect(deleteRows.single.emailId, isNull);
       final data =
           jsonDecode(deleteRows.single.dataJson!) as Map<String, dynamic>;
       expect(data['permanent'], true);
+      expect(data['emailId'], 'acc-1:5');
     });
 
     // A bulk delete runs in one transaction and kicks the sync loop once,
@@ -3840,6 +3842,15 @@ void main() {
                 textBody: const Value('cached body'),
               ),
             );
+        // A downloaded attachment: its folder is named after the old id.
+        await r.db.into(r.db.attachmentFiles).insert(
+              AttachmentFilesCompanion.insert(
+                emailId: oldId,
+                filename: 'a.pdf',
+                size: 1,
+                downloadedAt: DateTime(2024),
+              ),
+            );
         await r.db.into(r.db.pendingChanges).insert(
               PendingChangesCompanion.insert(
                 accountId: 'acc-1',
@@ -3873,6 +3884,9 @@ void main() {
         expect(bodies, hasLength(1));
         expect(bodies.first.emailId, newId);
         expect(bodies.first.textBody, 'cached body');
+        // With foreign keys on, the attachment row of the old id would fail
+        // the re-key at COMMIT; it is dropped instead.
+        expect(await r.db.select(r.db.attachmentFiles).get(), isEmpty);
       },
     );
 
@@ -8498,6 +8512,15 @@ void main() {
               }),
             ),
           );
+      await r.db.into(r.db.appLogs).insert(
+            AppLogsCompanion.insert(
+              createdAt: DateTime(2024),
+              level: 'info',
+              event: 'email.open',
+              message: 'opened',
+              emailId: const Value('acc-1:INBOX:1'),
+            ),
+          );
 
       // Checkpoint so the sync goes incremental and reconciliation runs.
       await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -8530,6 +8553,12 @@ void main() {
           .getSingle();
       expect(undo.dataJson, contains('acc-1:Archive:100'));
       expect(undo.dataJson, isNot(contains('acc-1:INBOX:1')));
+      // The per-message log follows too, instead of losing its email.
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(
+        logs.where((l) => l.event == 'email.open').map((l) => l.emailId),
+        ['acc-1:Archive:100'],
+      );
     });
 
     test('a genuine deletion (no matching server id elsewhere) is removed',

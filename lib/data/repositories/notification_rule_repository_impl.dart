@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' show log;
 
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -104,20 +105,26 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
   Future<void> markNotified(String accountId, List<String> emailIds) async {
     if (emailIds.isEmpty) return;
     final now = DateTime.now();
-    await _db.batch((b) {
-      b.insertAll(
-        _db.notifiedEmails,
-        [
-          for (final id in emailIds)
-            NotifiedEmailsCompanion.insert(
-              accountId: accountId,
-              emailId: id,
-              notifiedAt: now,
-            ),
-        ],
-        mode: InsertMode.insertOrIgnore,
-      );
-    });
+    try {
+      await _db.batch((b) {
+        b.insertAll(
+          _db.notifiedEmails,
+          [
+            for (final id in emailIds)
+              NotifiedEmailsCompanion.insert(
+                accountId: accountId,
+                emailId: id,
+                notifiedAt: now,
+              ),
+          ],
+          mode: InsertMode.insertOrIgnore,
+        );
+      });
+    } catch (e) {
+      // The account was removed meanwhile; its mail needs no marks.
+      if (!isForeignKeyViolation(e)) rethrow;
+      log('notifications: account $accountId removed, marks dropped');
+    }
   }
 
   @override
