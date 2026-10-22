@@ -1955,7 +1955,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // What SELECT reported, for the IDLE wait's catch-up check
     // ([lastImapMailboxState]).
     if (uidNext != null) data['uidNext'] = uidNext;
-    data['exists'] = exists;
+    if (exists != null) data['exists'] = exists;
     await _saveSyncState(accountId, resourceType, jsonEncode(data));
   }
 
