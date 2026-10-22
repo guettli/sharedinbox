@@ -518,7 +518,9 @@ class EmailRepositoryImpl implements EmailRepository {
           prefetch: prefetch,
           cacheAgeSeconds: age.inSeconds,
         );
-        return _bodyRowToModel(cached);
+        final body = _bodyRowToModel(cached);
+        await _backfillAddressHeaders(emailId, body.headers);
+        return body;
       }
     }
 
@@ -728,28 +730,12 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
-        // Same opportunistic backfill for address headers stored only since
-        // a later schema: Reply-To (#919), so mail cached before replies to
-        // the right address once opened, and Bcc of sent mail (#1097).
-        String? backfillAddresses(String stored, String header) {
-          if (stored != '[]' && stored.isNotEmpty) return null;
-          final addresses = msg.decodeHeaderMailAddressValue(header);
-          if (addresses == null || addresses.isEmpty) return null;
-          return _encodeAddresses(addresses);
-        }
-
-        final replyTo = backfillAddresses(emailRow.replyToJson, 'Reply-To');
-        final bcc = backfillAddresses(emailRow.bccJson, 'Bcc');
-        if (replyTo != null || bcc != null) {
-          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-              .write(
-            EmailsCompanion(
-              replyToJson:
-                  replyTo == null ? const Value.absent() : Value(replyTo),
-              bccJson: bcc == null ? const Value.absent() : Value(bcc),
-            ),
-          );
-        }
+        // Same opportunistic backfill for Reply-To and Bcc.
+        await _backfillAddressHeaders(
+          emailId,
+          _parseHeaders(headersJson),
+          row: emailRow,
+        );
 
         _logBodyLoaded(
           emailId: emailId,
@@ -1170,6 +1156,8 @@ class EmailRepositoryImpl implements EmailRepository {
             bodySize: Value(_bodySize(textBody, htmlBody)),
           ),
         );
+
+    await _backfillAddressHeaders(emailId, _parseHeaders(headersJson));
 
     _logBodyLoaded(
       emailId: emailId,
@@ -8033,6 +8021,51 @@ class EmailRepositoryImpl implements EmailRepository {
             .map(_mimePartFromJson)
             .toList(),
       );
+
+  /// Opportunistic backfill for address headers stored only since a later
+  /// schema: Reply-To (#919), so mail cached before replies to the right
+  /// address, and Bcc (#1097). Fills only empty columns, from the body's
+  /// [headers] already at hand (fresh fetch or cache), so it costs no network
+  /// round trip. [row] saves the lookup when the caller has it.
+  Future<void> _backfillAddressHeaders(
+    String emailId,
+    List<model.EmailHeader> headers, {
+    Email? row,
+  }) async {
+    const names = {'reply-to', 'bcc'};
+    final relevant = [
+      for (final h in headers)
+        if (names.contains(h.name.toLowerCase())) h,
+    ];
+    if (relevant.isEmpty) return;
+    final emailRow = row ??
+        await (_db.select(_db.emails)..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+    if (emailRow == null) return;
+    bool isEmpty(String stored) => stored.isEmpty || stored == '[]';
+    if (!isEmpty(emailRow.replyToJson) && !isEmpty(emailRow.bccJson)) return;
+
+    // Let enough_mail parse and RFC 2047-decode the raw header values.
+    final msg = imap.MimeMessage.parseFromText(
+      '${relevant.map((h) => '${h.name}: ${h.value}').join('\r\n')}\r\n\r\n',
+    );
+    String? decode(String stored, String header) {
+      if (!isEmpty(stored)) return null;
+      final addresses = msg.decodeHeaderMailAddressValue(header);
+      if (addresses == null || addresses.isEmpty) return null;
+      return _encodeAddresses(addresses);
+    }
+
+    final replyTo = decode(emailRow.replyToJson, 'Reply-To');
+    final bcc = decode(emailRow.bccJson, 'Bcc');
+    if (replyTo == null && bcc == null) return;
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        replyToJson: replyTo == null ? const Value.absent() : Value(replyTo),
+        bccJson: bcc == null ? const Value.absent() : Value(bcc),
+      ),
+    );
+  }
 
   List<model.EmailHeader> _parseHeaders(String? jsonStr) {
     if (jsonStr == null || jsonStr.isEmpty) return [];

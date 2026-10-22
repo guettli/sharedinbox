@@ -9187,6 +9187,71 @@ void main() {
       expect(email!.replyTo.map((a) => a.email), ['existing@example.com']);
       expect(email.bcc.map((a) => a.email), ['kept@example.com']);
     });
+
+    test('a cached body backfills an empty Bcc from its headers', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            throw StateError('a cache hit must not connect'),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Sent:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:Sent:1',
+              textBody: const Value('Hi'),
+              headersJson: Value(
+                jsonEncode([
+                  {'name': 'From', 'value': 'me@example.com'},
+                  {'name': 'Bcc', 'value': '=?UTF-8?Q?B=C3=B6ss?= <b@x.com>'},
+                ]),
+              ),
+              mimeTreeJson: const Value('{}'),
+              cachedAt: Value(DateTime.now()),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:Sent:1');
+
+      final email = await r.emails.getEmail('acc-1:Sent:1');
+      expect(email!.bcc.single.email, 'b@x.com');
+      expect(email.bcc.single.name, 'Böss');
+      expect(email.replyTo, isEmpty);
+    });
+
+    test('restoreEmails keeps Bcc and Reply-To', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final email = Email(
+        id: 'acc-1:Sent:1',
+        accountId: 'acc-1',
+        mailboxPath: 'Sent',
+        uid: 1,
+        receivedAt: DateTime(2024),
+        from: const [EmailAddress(email: 'me@example.com')],
+        to: const [],
+        cc: const [],
+        replyTo: const [EmailAddress(email: 'help@example.com')],
+        bcc: const [EmailAddress(name: 'Boss', email: 'boss@example.com')],
+        isSeen: true,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      await r.emails.restoreEmails([email]);
+
+      final restored = await r.emails.getEmail('acc-1:Sent:1');
+      expect(restored!.bcc.single.email, 'boss@example.com');
+      expect(restored.bcc.single.name, 'Boss');
+      expect(restored.replyTo.single.email, 'help@example.com');
+    });
   });
 
   group('getEmailBody identity guard (#616)', () {

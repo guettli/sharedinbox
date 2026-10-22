@@ -13,8 +13,8 @@ class Email {
   // RFC 5322 Reply-To addresses; empty when the header is absent. Replies go
   // here instead of [from] when set (#919).
   final List<EmailAddress> replyTo;
-  // Bcc addresses; only known for mail you sent (the server keeps the header
-  // in Sent), empty otherwise (#1097).
+  // Bcc addresses; empty when the message carries none, which is usual for
+  // received mail. Typically set on copies of mail you sent (#1097).
   final List<EmailAddress> bcc;
   final String? preview;
   final bool isSeen;
