@@ -2,6 +2,7 @@ import 'package:sharedinbox/core/filter/filter_matcher.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
+import 'package:sharedinbox/core/services/notification_guard.dart';
 
 /// Callback that actually surfaces one OS notification. Injected so the
 /// dispatcher can be unit-tested without the platform plugin.
@@ -20,13 +21,16 @@ class NotificationDispatcher {
     required NotificationRuleRepository rules,
     required AccountRepository accounts,
     required ShowNotification show,
+    Duration showTimeout = kNotificationShowTimeout,
   })  : _rules = rules,
         _accounts = accounts,
-        _show = show;
+        _show = show,
+        _showTimeout = showTimeout;
 
   final NotificationRuleRepository _rules;
   final AccountRepository _accounts;
   final ShowNotification _show;
+  final Duration _showTimeout;
 
   /// Evaluates the account's rules against every inbox message not yet
   /// considered, firing a notification for each match. Safe (and cheap) to
@@ -47,11 +51,16 @@ class NotificationDispatcher {
       consideredIds.add(email.id);
       final message = matchableFromEmail(email);
       if (rules.any((r) => matchesFilter(r.filter, message))) {
-        await _show(
-          accountId: accountId,
-          emailId: email.id,
-          title: notificationTitle(email),
-          body: notificationBody(email),
+        // A failing or hanging backend must neither escape (#1107) nor skip
+        // markNotified below, or the same mail is retried on every sync.
+        await guardNotificationShow(
+          () => _show(
+            accountId: accountId,
+            emailId: email.id,
+            title: notificationTitle(email),
+            body: notificationBody(email),
+          ),
+          timeout: _showTimeout,
         );
       }
     }

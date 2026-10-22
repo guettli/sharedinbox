@@ -28,6 +28,14 @@ void main({List<Override> overrides = const []}) {
     runZonedGuarded(
       () async {
         WidgetsFlutterBinding.ensureInitialized();
+        // The zone the binding was initialized in. Async errors reach
+        // FlutterError.onError from the runZonedGuarded handler, which runs in
+        // the parent zone; calling runApp there trips the debug "Zone
+        // mismatch" check, which reports a FlutterError back into onError,
+        // which called runApp again — a synchronous loop that froze the app
+        // (#1107). So the crash screen is always installed from this zone.
+        final appZone = Zone.current;
+        var showingCrashScreen = false;
 
         // Dart's async machinery propagates stack traces in chain format
         // (with '===== asynchronous gap =====' separators). Flutter's
@@ -74,12 +82,22 @@ void main({List<Override> overrides = const []}) {
           );
           if (_isWidgetTreeError(details)) return;
           if (transient) return;
-          runApp(
-            CrashScreen(
-              exception: details.exception,
-              stackTrace: details.stack,
-            ),
-          );
+          // An error raised while installing the crash screen must not
+          // recurse into installing it again.
+          if (showingCrashScreen) return;
+          showingCrashScreen = true;
+          try {
+            appZone.run(
+              () => runApp(
+                CrashScreen(
+                  exception: details.exception,
+                  stackTrace: details.stack,
+                ),
+              ),
+            );
+          } finally {
+            showingCrashScreen = false;
+          }
         };
 
         await initDatabasePath();

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
@@ -6,6 +7,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/services/notification_dispatcher.dart';
+import 'package:sharedinbox/core/services/notification_guard.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -89,7 +91,11 @@ void main() {
     late List<Map<String, String>> fired;
     late NotificationDispatcher dispatcher;
 
-    Future<void> setup({required bool enabled}) async {
+    Future<void> setup({
+      required bool enabled,
+      ShowNotification? show,
+      Duration showTimeout = kNotificationShowTimeout,
+    }) async {
       db = openTestDatabase();
       addTearDown(db.close);
       accounts = AccountRepositoryImpl(db, MapSecureStorage());
@@ -98,19 +104,21 @@ void main() {
       dispatcher = NotificationDispatcher(
         rules: rules,
         accounts: accounts,
-        show: ({
-          required String accountId,
-          required String emailId,
-          required String title,
-          required String body,
-        }) async {
-          fired.add({
-            'accountId': accountId,
-            'emailId': emailId,
-            'title': title,
-            'body': body,
-          });
-        },
+        showTimeout: showTimeout,
+        show: show ??
+            ({
+              required String accountId,
+              required String emailId,
+              required String title,
+              required String body,
+            }) async {
+              fired.add({
+                'accountId': accountId,
+                'emailId': emailId,
+                'title': title,
+                'body': body,
+              });
+            },
       );
       await _seedAccount(accounts, enabled: enabled);
       await _seedInboxAndMail(db);
@@ -151,6 +159,48 @@ void main() {
       await dispatcher.dispatchForAccount('acc');
 
       expect(fired, hasLength(1));
+    });
+
+    // #1107: on Linux without a notification daemon the plugin throws
+    // DBusServiceUnknownException. That must not escape dispatchForAccount
+    // (it froze the app via FlutterError.onError) nor skip markNotified.
+    test('a throwing show neither escapes nor skips markNotified', () async {
+      var calls = 0;
+      await setup(
+        enabled: true,
+        show: ({
+          required String accountId,
+          required String emailId,
+          required String title,
+          required String body,
+        }) async {
+          calls++;
+          throw StateError('org.freedesktop.Notifications not provided');
+        },
+      );
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await expectLater(dispatcher.dispatchForAccount('acc'), completes);
+      expect(calls, 1);
+      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
+    });
+
+    test('a hanging show times out and markNotified still runs', () async {
+      await setup(
+        enabled: true,
+        showTimeout: const Duration(milliseconds: 50),
+        show: ({
+          required String accountId,
+          required String emailId,
+          required String title,
+          required String body,
+        }) =>
+            Completer<void>().future,
+      );
+      await rules.addRule('acc', _subjectContains('deploy'));
+
+      await expectLater(dispatcher.dispatchForAccount('acc'), completes);
+      expect(await rules.unnotifiedInboxEmails('acc'), isEmpty);
     });
   });
 
