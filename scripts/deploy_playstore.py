@@ -15,6 +15,11 @@ TRACKS = ("alpha",)
 _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 _UPLOAD_BASE = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
 _MAX_UPLOAD_ATTEMPTS = 3
+# How often the whole deploy is restarted in a fresh edit after Play deleted
+# the open one (see _edit_was_deleted).
+_MAX_EDIT_ATTEMPTS = 3
+_EDIT_RETRY_DELAY_SECONDS = 30
+_EDIT_DELETED_MESSAGE = "This Edit has been deleted"
 # Env var pointing at the R8 mapping file (build/app/outputs/mapping/release/mapping.txt).
 # CI (ci/main.go UploadToPlayStore) sets this. Mandatory: uploading a release
 # without a matching mapping file breaks Play Console's stack-trace
@@ -125,6 +130,23 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
     return resp.json() if resp.content else {}
 
 
+def _edit_was_deleted(exc):
+    """Whether ``exc`` (or anything in its cause chain) is Play reporting that
+    our open edit no longer exists.
+
+    Play keeps a single open edit per app: when anyone else inserts one -- the
+    Firebase workflow's track lookup does, see fetch_playstore_apks.py -- the
+    edit we are filling is deleted under us and every later call on it fails
+    with 400 FAILED_PRECONDITION "This Edit has been deleted." Re-sending to
+    that edit cannot help, but the whole deploy in a fresh edit can (#1124).
+    """
+    while exc is not None:
+        if _EDIT_DELETED_MESSAGE in str(exc):
+            return True
+        exc = exc.__cause__
+    return False
+
+
 def main():
     config_json = os.environ.get("PLAY_STORE_CONFIG_JSON")
     if not config_json:
@@ -135,12 +157,46 @@ def main():
         print(f"Error: AAB not found at {AAB_PATH}", file=sys.stderr)
         sys.exit(1)
 
+    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
+    if not mapping_path:
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
+            "its R8 mapping file so Play Console can deobfuscate crash traces.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not os.path.exists(mapping_path):
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
+            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     creds = service_account.Credentials.from_service_account_info(
         json.loads(config_json),
         scopes=["https://www.googleapis.com/auth/androidpublisher"],
     )
     session = AuthorizedSession(creds)
 
+    for edit_attempt in range(_MAX_EDIT_ATTEMPTS):
+        try:
+            _publish(session, mapping_path)
+            return
+        except Exception as exc:
+            if not _edit_was_deleted(exc) or edit_attempt == _MAX_EDIT_ATTEMPTS - 1:
+                raise
+            print(
+                f"Play edit was deleted under us (attempt {edit_attempt + 1} of "
+                f"{_MAX_EDIT_ATTEMPTS}) -- another client opened an edit. "
+                f"Starting over in a fresh edit in {_EDIT_RETRY_DELAY_SECONDS}s…"
+            )
+            time.sleep(_EDIT_RETRY_DELAY_SECONDS)
+
+
+def _publish(session, mapping_path):
+    """Upload the AAB and its mapping into a fresh edit, assign it to TRACKS and
+    commit."""
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
     _raise_for_status(edit_resp, "creating the Play edit")
     edit_id = edit_resp.json()["id"]
@@ -181,21 +237,6 @@ def main():
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
-    if not mapping_path:
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
-            "its R8 mapping file so Play Console can deobfuscate crash traces.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not os.path.exists(mapping_path):
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
-            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     mapping_size = os.path.getsize(mapping_path)
     last_exc = None
     uploaded = False
@@ -208,6 +249,8 @@ def main():
             break
         except Exception as exc:
             last_exc = exc
+            if _edit_was_deleted(exc):
+                break  # the edit is gone; main() restarts in a fresh one
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
                 delay = 10 * (2 ** attempt)
                 print(

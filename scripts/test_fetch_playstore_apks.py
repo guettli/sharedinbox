@@ -570,6 +570,36 @@ class TestMainWritesPendingMarkerWhenPlayNotReady(unittest.TestCase):
             )
 
 
+class TestMainPinnedVersionCode(unittest.TestCase):
+    """Regression for #1124: resolving the track opens a Play edit, and Play
+    keeps one open edit per app, so polling it every minute deleted the edit a
+    concurrent deploy was uploading into. With PLAY_APKS_VERSION_CODE set,
+    main() must fetch that versionCode without touching the track."""
+
+    def _run(self, env):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            patches = _patches(
+                dest_dir,
+                version_code=200,
+                list_apks=TimeoutError("not yet"),
+                env=env,
+            )
+            resolve = patches[4]
+            with resolve as resolve_mock:
+                _with_patches(patches[:4] + patches[5:], fetch_playstore_apks.main)
+            return resolve_mock, (Path(dest_dir) / "PENDING").read_text().strip()
+
+    def test_pinned_version_code_skips_the_track_lookup(self):
+        resolve_mock, pending = self._run({"PLAY_APKS_VERSION_CODE": "321\n"})
+        resolve_mock.assert_not_called()
+        self.assertEqual(pending, "321")
+
+    def test_unpinned_resolves_the_track(self):
+        resolve_mock, pending = self._run({"PLAY_APKS_VERSION_CODE": ""})
+        resolve_mock.assert_called_once()
+        self.assertEqual(pending, "200")
+
+
 class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
     """Regression for #422: the poll can run for well over an hour, and by the
     time it times out ``dest_dir`` may have been reclaimed underneath the long

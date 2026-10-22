@@ -53,6 +53,9 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 # testing; the non-CI default keeps a short in-process poll for ad-hoc runs.
 _POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "300"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
+# When set, fetch this versionCode instead of resolving the track's latest one
+# (which needs a Play edit — see main()).
+_PINNED_VERSION_CODE_ENV = "PLAY_APKS_VERSION_CODE"
 
 # Play only generates downloadable split APKs for a release it is actually
 # serving. A "draft" release (uploaded but never rolled out) never gets a
@@ -401,8 +404,17 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
-    print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    # The wrapper pins the versionCode it resolved on its first attempt, so
+    # later polls skip the track lookup. That lookup has to open a Play edit,
+    # and Play keeps one open edit per app: polling it every minute kept
+    # deleting the edit a concurrent deploy was uploading into (#1124).
+    pinned = os.environ.get(_PINNED_VERSION_CODE_ENV, "").strip()
+    if pinned:
+        version_code = int(pinned)
+        print(f"Using pinned {TRACK} versionCode: {version_code}", file=sys.stderr)
+    else:
+        version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
+        print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
     try:
         listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)

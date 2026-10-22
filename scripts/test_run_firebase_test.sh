@@ -51,9 +51,11 @@ cat >"$SCRATCH/dagger" <<EOF
 n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
 
 # The loop passes the dest dir as \`-o <dir>\`; mirror Dagger's export into it.
+# Record each attempt's --version-code so tests can check the pinning (#1124).
 dest=""
 while [ \$# -gt 0 ]; do
     if [ "\$1" = "-o" ]; then dest="\$2"; fi
+    if [ "\$1" = "--version-code" ]; then echo "[\$2]" >>"$SCRATCH/version_codes"; fi
     shift
 done
 
@@ -102,6 +104,7 @@ chmod +x "$SCRATCH/sleep"
 run_fetch() {
     local plan="$1" budget="${2:-3600}"
     echo 0 >"$SCRATCH/attempts"
+    : >"$SCRATCH/version_codes"
     rm -rf "$SCRATCH/apks"
     mkdir -p "$SCRATCH/apks"
     PATH="$SCRATCH:$PATH" \
@@ -141,6 +144,17 @@ elif [ "$attempts" -ne 3 ]; then
     _fail "pending: expected 3 attempts (got $attempts)" "$out"
 elif ! printf '%s' "$out" | grep -q "Play still generating split APKs"; then
     _fail "pending: should log that Play is still generating" "$out"
+else
+    _pass
+fi
+
+# --- Later attempts reuse the first attempt's versionCode (#1124) --------------
+# Resolving the track opens a Play edit, which deletes a concurrent deploy's
+# open edit — so only the first attempt may resolve it.
+out=$(run_fetch "pending pending ready")
+codes=$(tr '\n' ' ' <"$SCRATCH/version_codes")
+if [ "$codes" != "[] [1790309773] [1790309773] " ]; then
+    _fail "pin: expected an unpinned first attempt, then the resolved versionCode (got: $codes)" "$out"
 else
     _pass
 fi
