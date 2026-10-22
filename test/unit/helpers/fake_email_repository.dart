@@ -46,6 +46,13 @@ class FakeEmailRepositoryBase implements EmailRepository {
   Future<void> markAllAsRead(String a, String m) async {}
   @override
   Future<void> moveEmail(String id, String dest) async {}
+
+  @override
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  }) async {}
   @override
   Future<String?> deleteEmail(String id) async => null;
 

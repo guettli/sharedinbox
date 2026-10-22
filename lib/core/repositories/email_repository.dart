@@ -172,6 +172,16 @@ abstract class EmailRepository {
   /// Returns the number of emails woken up.
   Future<int> wakeUpEmails(String accountId);
 
+  /// Puts a snooze back on [emailId] locally only, without queuing anything.
+  /// For an Undo whose move out of the Snoozed folder was cancelled before it
+  /// reached the server: the server never lost the snooze, but the optimistic
+  /// move cleared it from the local row.
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  });
+
   /// Restores previously deleted/moved emails to the local database.
   /// Used for the "Undo" feature when the original rows were hard-deleted (IMAP).
   Future<void> restoreEmails(List<Email> emails);

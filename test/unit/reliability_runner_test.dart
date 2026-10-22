@@ -1,15 +1,14 @@
-import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
-import 'package:sharedinbox/core/repositories/account_repository.dart';
-import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
-import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 
+import 'helpers/fake_account_repository.dart';
 import 'helpers/fake_email_repository.dart';
+import 'helpers/fake_mailbox_repository.dart';
+import 'helpers/fake_sync_log_repository.dart';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -20,103 +19,25 @@ Account _account({String id = 'a1'}) => Account(
       imapHost: 'localhost',
     );
 
-class _FakeAccounts implements AccountRepository {
-  final List<Account> accounts;
-  _FakeAccounts([Account? account]) : accounts = [account ?? _account()];
-
-  @override
-  Stream<List<Account>> observeAccounts() => Stream.value(accounts);
-  @override
-  Future<Account?> getAccount(String id) async => accounts
-      .cast<Account?>()
-      .firstWhere((a) => a?.id == id, orElse: () => null);
-  @override
-  Future<void> addAccount(Account account, String password) async {}
-  @override
-  Future<void> updateAccount(Account account, {String? password}) async {}
-  @override
-  Future<void> removeAccount(String id) async {}
-  @override
-  Future<String> getPassword(String id) async => 'secret';
+class _FakeAccounts extends FakeAccountRepository {
+  _FakeAccounts([Account? account]) : super([account ?? _account()]);
 }
 
-class _FakeMailboxes implements MailboxRepository {
-  final List<Mailbox> mailboxes;
-  _FakeMailboxes([this.mailboxes = const []]);
-  @override
-  Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
-      Stream.value(mailboxes);
-  @override
-  Future<int> syncMailboxes(String accountId) async => 0;
-  @override
-  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
-      null;
-  @override
-  Future<void> clearForResync(String accountId) async {}
-  @override
-  Future<Mailbox> createMailboxWithRole(
-    String accountId,
-    String name,
-    String role, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-  @override
-  Future<Mailbox> createMailbox(
-    String accountId,
-    String name, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<Mailbox> renameMailbox(
-    String accountId,
-    String mailboxPath,
-    String newName,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: newName,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<Mailbox> moveMailbox(
-    String accountId,
-    String mailboxPath, {
-    required String? newParentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: mailboxPath,
-        unreadCount: 0,
-        totalCount: 0,
-      );
+class _FakeMailboxes extends FakeMailboxRepositoryBase {
+  _FakeMailboxes([super.mailboxes]);
 }
+
+/// Mailboxes for account `a1` holding just its INBOX.
+_FakeMailboxes _inboxOnly() => _FakeMailboxes([
+      const Mailbox(
+        id: 'INBOX',
+        accountId: 'a1',
+        path: 'INBOX',
+        name: 'Inbox',
+        unreadCount: 0,
+        totalCount: 0,
+      ),
+    ]);
 
 class _CountingEmails extends FakeEmailRepositoryBase {
   int syncCount = 0;
@@ -140,39 +61,6 @@ class _CountingEmails extends FakeEmailRepositoryBase {
   }
 }
 
-class _FakeSyncLog implements SyncLogRepository {
-  final logs = <bool>[];
-  int _nextId = 1;
-  @override
-  Future<int> log({
-    required String accountId,
-    required bool success,
-    String? errorMessage,
-    String? stackTrace,
-    bool isPermanent = false,
-    required String protocol,
-    required int emailsFetched,
-    required int emailsSkipped,
-    required int mailboxesSynced,
-    required int pendingFlushed,
-    required int bytesTransferred,
-    required DateTime startedAt,
-    required DateTime finishedAt,
-    List<MailboxSyncStats> mailboxStats = const [],
-    String? protocolLog,
-  }) async {
-    logs.add(success);
-    return _nextId++;
-  }
-
-  @override
-  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<String?> observeLastError(String accountId) => Stream.value(null);
-}
-
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 void main() {
@@ -182,19 +70,10 @@ void main() {
         final emails = _CountingEmails(
           syncError: Exception('connection refused'),
         );
-        final syncLog = _FakeSyncLog();
+        final syncLog = FakeSyncLogRepository();
         final manager = AccountSyncManager(
           _FakeAccounts(),
-          _FakeMailboxes([
-            const Mailbox(
-              id: 'INBOX',
-              accountId: 'a1',
-              path: 'INBOX',
-              name: 'Inbox',
-              unreadCount: 0,
-              totalCount: 0,
-            ),
-          ]),
+          _inboxOnly(),
           emails,
           syncLog: syncLog,
           imapConnect: (_, __, ___) async =>
@@ -228,7 +107,7 @@ void main() {
     test('backoff resets to 5 s after a successful sync', () {
       fakeAsync((async) {
         int callCount = 0;
-        final syncLog = _FakeSyncLog();
+        final syncLog = FakeSyncLogRepository();
 
         var failsLeft = 5;
         final customEmails = _OverrideEmails(
@@ -244,16 +123,7 @@ void main() {
 
         final manager = AccountSyncManager(
           _FakeAccounts(),
-          _FakeMailboxes([
-            const Mailbox(
-              id: 'INBOX',
-              accountId: 'a1',
-              path: 'INBOX',
-              name: 'Inbox',
-              unreadCount: 0,
-              totalCount: 0,
-            ),
-          ]),
+          _inboxOnly(),
           customEmails,
           syncLog: syncLog,
           imapConnect: (_, __, ___) async =>
@@ -289,7 +159,7 @@ void main() {
         final accounts = _FakeAccounts()
           ..accounts.add(_account(id: 'a2'))
           ..accounts.add(_account(id: 'a3'));
-        final syncLog = _FakeSyncLog();
+        final syncLog = FakeSyncLogRepository();
         final manager = AccountSyncManager(
           accounts,
           _FakeMailboxes([

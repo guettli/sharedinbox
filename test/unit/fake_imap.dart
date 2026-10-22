@@ -66,8 +66,9 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
   /// When non-null, the flags a `UID FETCH … FLAGS` reports for the message.
   final List<String>? messageFlags;
 
-  /// Every flag removed via `UID STORE -FLAGS`, in call order.
-  final List<String> removedFlags = [];
+  /// Every `UID STORE` and `UID MOVE`, in call order, as
+  /// `'store <add|remove|…> <uids> <flags>'` / `'move <mailbox>:<uids>-><target>'`.
+  final List<String> calls = [];
 
   String? selectedMailbox;
   String? createdMailbox;
@@ -141,7 +142,9 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     bool? silent,
     int? unchangedSinceModSequence,
   }) async {
-    if (action == imap.StoreAction.remove) removedFlags.addAll(flags);
+    calls.add(
+      'store ${action?.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
+    );
     return imap.StoreImapResult();
   }
 
@@ -156,6 +159,7 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     moves.add(
       '$selectedMailbox:${sequence.toList().join(',')}->$targetMailboxPath',
     );
+    calls.add('move ${moves.last}');
     final result = imap.GenericImapResult();
     if (copyUidValidity != null && copyUidSourceToTarget.isNotEmpty) {
       final sources = sequence.toList();

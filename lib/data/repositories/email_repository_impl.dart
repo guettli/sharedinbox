@@ -1450,6 +1450,7 @@ class EmailRepositoryImpl implements EmailRepository {
                     'move',
                     'snooze',
                     'unsnooze',
+                    'clear_snooze',
                     'delete',
                   ],
                 ),
@@ -3928,6 +3929,8 @@ class EmailRepositoryImpl implements EmailRepository {
         return 'snooze';
       case 'unsnooze':
         return 'unsnooze';
+      case 'clear_snooze':
+        return 'snooze cleanup';
       default:
         return '"${row.changeType}" change';
     }
@@ -4799,7 +4802,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // `flag_flagged` for this message with the same payload is already queued,
     // don't append a duplicate. Only flag changes are de-duped — move / delete /
     // snooze carry ordering semantics and must not be collapsed here (#644).
-    if (changeType == 'flag_seen' || changeType == 'flag_flagged') {
+    if (changeType == 'flag_seen' ||
+        changeType == 'flag_flagged' ||
+        changeType == 'clear_snooze') {
       final existing = await (_db.select(_db.pendingChanges)
             ..where(
               (t) =>
@@ -5004,13 +5009,20 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final row in expired) {
       // Only a mail still waiting in the Snoozed folder goes back to the
       // Inbox. One the user (or another client) filed elsewhere since keeps
-      // its place; its stale snooze is just dropped locally.
+      // its place; its stale snooze is dropped, and so is the server-side
+      // `snz:` keyword sync would otherwise keep reading back.
       if (row.mailboxPath != snoozedPath && row.mailboxPath != 'Snoozed') {
         await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
           const EmailsCompanion(
             snoozedUntil: Value(null),
             snoozedFromMailboxPath: Value(null),
           ),
+        );
+        await _enqueueChange(
+          accountId,
+          row.id,
+          'clear_snooze',
+          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
         );
         continue;
       }
@@ -5023,6 +5035,20 @@ class EmailRepositoryImpl implements EmailRepository {
       woken++;
     }
     return woken;
+  }
+
+  @override
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  }) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        snoozedUntil: Value(until),
+        snoozedFromMailboxPath: Value(fromMailboxPath),
+      ),
+    );
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that
@@ -5914,6 +5940,7 @@ class EmailRepositoryImpl implements EmailRepository {
           mailboxPath: mailboxPath,
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
+          clearSnooze: payload['clearSnooze'] == true,
         );
       case 'delete':
         await client.uidMarkDeleted(seq);
@@ -5952,6 +5979,8 @@ class EmailRepositoryImpl implements EmailRepository {
           destMailboxPath: dest,
           moveResult: unsnoozeResult,
         );
+      case 'clear_snooze':
+        await _removeImapSnoozeFlags(client, seq);
     }
   }
 
@@ -5987,6 +6016,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String mailboxPath,
     required String destMailboxPath,
     required String? messageId,
+    bool clearSnooze = false,
   }) async {
     final local = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(row.resourceId)))
@@ -6004,8 +6034,10 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await client.selectUnicodeMailboxByPath(mailboxPath);
+    final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
+    if (clearSnooze) await _removeImapSnoozeFlags(client, resolvedSeq);
     final result = await client.uidMove(
-      imap.MessageSequence.fromId(resolvedUid, isUid: true),
+      resolvedSeq,
       targetMailboxPath: destMailboxPath,
     );
     final located = await _remapEmailAfterImapMove(
@@ -6301,6 +6333,19 @@ class EmailRepositoryImpl implements EmailRepository {
             'Email/set',
             setArgs({
               'update': {jmapEmailId: update},
+            }),
+            '0',
+          ],
+        ]);
+
+      case 'clear_snooze':
+        final removals = await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId);
+        if (removals.isEmpty) return;
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {jmapEmailId: removals},
             }),
             '0',
           ],

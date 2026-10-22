@@ -457,4 +457,81 @@ void main() {
     expect(email.snoozedUntil, isNull);
     expect(email.snoozedFromMailboxPath, isNull);
   });
+
+  // Undoing a move out of the Snoozed folder used to leave the mail in Snoozed
+  // with no wake time: the move ends the snooze (and, once flushed, strips its
+  // server keyword), and the plain reverse move did not bring it back.
+  for (final jmap in [false, true]) {
+    for (final flushed in [false, true]) {
+      final proto = jmap ? 'JMAP' : 'IMAP';
+      final when = flushed ? 'after' : 'before';
+      test(
+          'Undo of a $proto move out of Snoozed restores the snooze '
+          '($when the move flushed)', () async {
+        var accountId = 'acc1';
+        var emailId = 'acc1:101';
+        if (jmap) {
+          accountId = 'jmap1';
+          emailId = 'jmap1:e101';
+          await accounts.addAccount(
+            const Account(
+              id: 'jmap1',
+              displayName: 'Alice JMAP',
+              email: 'alice@example.com',
+              type: AccountType.jmap,
+              jmapUrl: 'https://jmap.example.com/',
+              imapHost: 'imap.example.com',
+              smtpHost: 'smtp.example.com',
+            ),
+            'password',
+          );
+          await db.into(db.emails).insert(
+                EmailsCompanion.insert(
+                  id: emailId,
+                  accountId: accountId,
+                  mailboxPath: 'INBOX',
+                  uid: 0,
+                  receivedAt: DateTime.now(),
+                ),
+              );
+        }
+        final until = DateTime(2030);
+        await repo.snoozeEmail(emailId, until);
+        // The snooze reached the server.
+        await db.delete(db.pendingChanges).go();
+        final original = (await repo.getEmail(emailId))!;
+
+        await repo.moveEmail(emailId, 'Archive');
+        if (flushed) await db.delete(db.pendingChanges).go();
+
+        final undo = container.read(undoServiceProvider.notifier);
+        await undo.pushAction(
+          UndoAction(
+            id: 'undo-snz',
+            accountId: accountId,
+            type: UndoType.move,
+            emailIds: [emailId],
+            sourceMailboxPath: 'Snoozed',
+            destinationMailboxPath: 'Archive',
+            originalEmails: [original],
+          ),
+        );
+        await undo.undo();
+
+        final email = (await repo.getEmail(emailId))!;
+        expect(email.mailboxPath, 'Snoozed');
+        expect(email.snoozedUntil, until);
+        final changes =
+            (await db.select(db.pendingChanges).get()).map((c) => c.changeType);
+        if (flushed) {
+          // The server lost the snooze with the move: snooze it again there.
+          expect(changes, ['snooze']);
+        } else {
+          // The move was cancelled, so the server never lost the snooze.
+          expect(changes, isEmpty);
+          expect(email.snoozedFromMailboxPath, 'INBOX');
+        }
+      });
+    }
+  }
 }
