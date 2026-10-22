@@ -41,6 +41,9 @@ class FakeEmailRepositoryBase implements EmailRepository {
   Future<SyncEmailsResult> syncEmails(String a, String m) async =>
       SyncEmailsResult.zero;
   @override
+  Future<ImapMailboxState?> lastImapMailboxState(String a, String m) async =>
+      null;
+  @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
   @override
   Future<void> markAllAsRead(String a, String m) async {}

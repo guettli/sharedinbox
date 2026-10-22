@@ -507,6 +507,13 @@ class FakeEmailRepository implements EmailRepository {
   ) async =>
       SyncEmailsResult.zero;
 
+  @override
+  Future<ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  ) async =>
+      null;
+
   /// Records every [setFlag] call so tests can assert on batch behaviour.
   final List<({String emailId, bool? seen, bool? flagged})> setFlagCalls = [];
 

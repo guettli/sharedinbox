@@ -111,6 +111,55 @@ void main() {
     expect((checkpoint['lastUid'] as int), greaterThan(0));
   });
 
+  // The IMAP IDLE wait compares its own SELECT of INBOX with what the last
+  // sync saw, to catch mail delivered while the cycle ran (which IDLE never
+  // reports). Both sides must read the same values from a real server.
+  test('lastImapMailboxState matches a later SELECT until new mail arrives',
+      () async {
+    await appendToInbox('state-1');
+    await appendToInbox('state-2');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    expect(await r.emails.lastImapMailboxState('test', 'INBOX'), isNull);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final synced = await r.emails.lastImapMailboxState('test', 'INBOX');
+    expect(synced, isNotNull);
+    expect(synced!.uidNext, isNotNull);
+    expect(synced.exists, 2);
+    expect((await _selectInbox(env, user)).differsFrom(synced), isFalse);
+
+    await appendToInbox('state-3');
+    expect((await _selectInbox(env, user)).differsFrom(synced), isTrue);
+  });
+
+  // The app's own flag change is flushed before the cycle selects INBOX, so
+  // the state that sync stores must already include it: otherwise every
+  // flag change would cost the IDLE wait a needless catch-up cycle (pins
+  // HIGHESTMODSEQ stability on Stalwart).
+  test('own flag change flushed before a sync leaves no INBOX state diff',
+      () async {
+    await appendToInbox('own-flag');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    await r.emails.setFlag(emails.first.id, seen: true, flagged: true);
+    await r.emails.flushPendingChanges('test', user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final synced = await r.emails.lastImapMailboxState('test', 'INBOX');
+    final current = await _selectInbox(env, user);
+    expect(
+      current.differsFrom(synced!),
+      isFalse,
+      reason: '$synced vs $current',
+    );
+  });
+
   test(
     'syncEmails incremental sync fetches only messages newer than checkpoint',
     () async {
@@ -842,4 +891,25 @@ void main() {
       expect(downloaded, equals(attachmentBytes));
     },
   );
+}
+
+/// INBOX as a fresh SELECT reports it, like the IDLE connection sees it.
+Future<ImapMailboxState> _selectInbox(
+  StalwartEnv env,
+  StalwartTestUser user,
+) async {
+  final client = await connectImap(env: env, user: user);
+  try {
+    final mbox = await client.selectMailboxByPath(
+      'INBOX',
+      enableCondStore: client.serverInfo.supports('CONDSTORE'),
+    );
+    return ImapMailboxState(
+      uidNext: mbox.uidNext,
+      exists: mbox.messagesExists,
+      highestModSeq: mbox.highestModSequence,
+    );
+  } finally {
+    await client.logout();
+  }
 }

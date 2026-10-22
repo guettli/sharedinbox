@@ -468,6 +468,33 @@ class SyncEmailsResult {
       );
 }
 
+/// The mailbox state an IMAP SELECT reported: the next UID to be assigned,
+/// the message count (EXISTS) and, with CONDSTORE, the HIGHESTMODSEQ. Any of
+/// them is null when the server did not report it.
+///
+/// The sync stores what it saw when it selected a mailbox; the IDLE wait
+/// compares it with its own SELECT to catch changes made in between, which
+/// IDLE itself never reports.
+class ImapMailboxState {
+  const ImapMailboxState({this.uidNext, this.exists, this.highestModSeq});
+
+  final int? uidNext;
+  final int? exists;
+  final int? highestModSeq;
+
+  /// Whether [other] reports a different value for any field both know.
+  bool differsFrom(ImapMailboxState other) {
+    bool differs(int? a, int? b) => a != null && b != null && a != b;
+    return differs(uidNext, other.uidNext) ||
+        differs(exists, other.exists) ||
+        differs(highestModSeq, other.highestModSeq);
+  }
+
+  @override
+  String toString() => 'ImapMailboxState(uidNext: $uidNext, '
+      'exists: $exists, highestModSeq: $highestModSeq)';
+}
+
 class ReliabilityResult {
   const ReliabilityResult({
     required this.missingLocally,
