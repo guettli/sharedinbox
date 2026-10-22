@@ -283,6 +283,96 @@ void main() {
     });
   });
 
+  group('ConnectionTestServiceImpl JMAP session redirects (#1104)', () {
+    const redirectAccount = Account(
+      id: 'acc-r',
+      displayName: 'Alice',
+      email: 'alice@example.com',
+      type: AccountType.jmap,
+      jmapUrl: 'https://example.com',
+    );
+
+    test('follows a same-origin redirect and probes the final apiUrl',
+        () async {
+      final seen = <http.BaseRequest>[];
+      final svc = ConnectionTestServiceImpl(
+        MockClient((req) async {
+          seen.add(req);
+          if (req.url.path == '/.well-known/jmap') {
+            return http.Response(
+              '',
+              307,
+              headers: {'location': '/s/session'},
+            );
+          }
+          if (req.method == 'POST') {
+            return http.Response(_identityResponse(['alice@example.com']), 200);
+          }
+          return http.Response(
+            _jmapSubmissionSessionJson.replaceFirst(
+              '"https://example.com/jmap/"',
+              '"api/"',
+            ),
+            200,
+          );
+        }),
+      );
+      final result = await svc.testConnection(redirectAccount, 'pw');
+      expect(result.identityWarning, isNull);
+      expect(seen.map((r) => '${r.method} ${r.url}'), [
+        'GET https://example.com/.well-known/jmap',
+        'GET https://example.com/s/session',
+        'POST https://example.com/s/api/',
+      ]);
+      expect(seen.every((r) => r.headers['Authorization'] != null), isTrue);
+    });
+
+    test('refuses an https→http redirect without sending to the http URL',
+        () async {
+      final seen = <Uri>[];
+      final svc = ConnectionTestServiceImpl(
+        MockClient((req) async {
+          seen.add(req.url);
+          return http.Response(
+            '',
+            301,
+            headers: {'location': 'http://example.com/jmap/session'},
+          );
+        }),
+      );
+      await expectLater(
+        svc.testConnection(redirectAccount, 'pw'),
+        throwsA(predicate((e) => e.toString().contains('another origin'))),
+      );
+      expect(seen.every((u) => u.scheme == 'https'), isTrue);
+    });
+
+    test('refuses a cross-origin redirect, naming the target', () async {
+      final seen = <Uri>[];
+      final svc = ConnectionTestServiceImpl(
+        MockClient((req) async {
+          seen.add(req.url);
+          return http.Response(
+            '',
+            307,
+            headers: {'location': '//jmap.example.net/session'},
+          );
+        }),
+      );
+      await expectLater(
+        svc.testConnection(redirectAccount, 'pw'),
+        throwsA(
+          predicate(
+            (e) => e.toString().contains(
+                  'enter https://jmap.example.net/session as the JMAP URL',
+                ),
+          ),
+        ),
+      );
+      expect(seen.every((u) => u.host == 'example.com'), isTrue);
+    });
+  });
+
   group('ConnectionTestServiceImpl JMAP identity', () {
     test('no warning when an identity matches the account email', () async {
       final svc = _makeJmapIdentityService(
