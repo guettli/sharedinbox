@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _draftsFolder = 'Drafts';
@@ -188,15 +189,29 @@ class DraftRepositoryImpl implements DraftRepository {
       password,
     );
     try {
-      try {
-        await client.createMailbox(_draftsFolder);
-      } catch (_) {
-        // Already exists.
+      // The mailbox the server flags as SPECIAL-USE \Drafts: "[Gmail]/Drafts",
+      // "INBOX.Drafts", "Entwürfe". Only the server's flag counts, not a
+      // folder that merely has "Drafts" in its name ("Projects/Drafts"). A
+      // server that flags none keeps the "Drafts" folder used so far.
+      final rolePath = await _serverDraftsMailboxPath(client);
+      final draftsPath = rolePath ?? _draftsFolder;
+      if (rolePath == null) {
+        try {
+          await client.createMailbox(_draftsFolder);
+        } catch (_) {
+          // Already exists.
+        }
       }
-      await client.selectMailboxByPath(_draftsFolder);
+      // Stored paths are decoded Unicode; the wire wants modified UTF-7.
+      final encodedPath = encodeImapMailboxPath(
+        draftsPath,
+        client.serverInfo.pathSeparator ?? '/',
+      );
+      await client.selectMailboxByPath(encodedPath);
+      await _forgetUidsFromOtherMailbox(account.id, draftsPath);
 
       await _pushTombstonesImap(client, account.id);
-      await _pushDirtyImap(client, account);
+      await _pushDirtyImap(client, account, encodedPath);
       await _pullDraftsImap(client, account.id);
     } finally {
       await client.logout();
@@ -228,9 +243,71 @@ class DraftRepositoryImpl implements DraftRepository {
     }
   }
 
+  static const _draftsPathState = 'IMAP:DraftsMailbox';
+
+  /// Draft rows and tombstones carry IMAP UIDs, which only mean something in
+  /// the mailbox they came from. When the drafts mailbox in use changes (an
+  /// account synced before the server's own drafts mailbox was used always
+  /// had "Drafts"), expunging those UIDs in the new mailbox could delete
+  /// unrelated messages there. Instead the local drafts are pushed again as
+  /// new messages and the tombstones are dropped; the old copies stay in the
+  /// old folder.
+  Future<void> _forgetUidsFromOtherMailbox(
+    String accountId,
+    String draftsPath,
+  ) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_draftsPathState),
+          ))
+        .getSingleOrNull();
+    final previousPath = row?.state ?? _draftsFolder;
+    if (previousPath != draftsPath) {
+      await _db.transaction(() async {
+        await (_db.update(_db.drafts)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
+              ))
+            .write(
+          const DraftsCompanion(imapServerId: Value(null), dirty: Value(true)),
+        );
+        await (_db.delete(_db.draftTombstones)
+              ..where((t) => t.accountId.equals(accountId)))
+            .go();
+      });
+    }
+    if (row?.state != draftsPath) {
+      await _db.into(_db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: accountId,
+              resourceType: _draftsPathState,
+              state: draftsPath,
+              syncedAt: DateTime.now(),
+            ),
+          );
+    }
+  }
+
+  /// The mailbox the server lists with the SPECIAL-USE `\Drafts` flag, if any.
+  Future<String?> _serverDraftsMailboxPath(imap.ImapClient client) async {
+    try {
+      final boxes = await client.listMailboxes(recursive: true);
+      for (final box in boxes) {
+        if (box.isDrafts) return box.path;
+      }
+    } catch (_) {
+      // LIST failed; fall back to "Drafts".
+    }
+    return null;
+  }
+
   Future<void> _pushDirtyImap(
     imap.ImapClient client,
     account_model.Account account,
+    String draftsPath,
   ) async {
     final dirty = await (_db.select(_db.drafts)
           ..where((t) => t.accountId.equals(account.id) & t.dirty.equals(true)))
@@ -248,7 +325,7 @@ class DraftRepositoryImpl implements DraftRepository {
 
       final appendResult = await client.appendMessage(
         mime,
-        targetMailboxPath: _draftsFolder,
+        targetMailboxPath: draftsPath,
         flags: [r'\Draft'],
       );
       final uidList =
