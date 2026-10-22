@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -51,6 +52,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Timer? _debounce;
   List<Email>? _results;
   bool _loading = false;
+
+  /// True when the last search threw, so the body says so instead of falling
+  /// back to the "Type 3+ characters" hint or keeping an older result list.
+  bool _failed = false;
+
+  /// Bumped by every search and every reset. A search whose number is no
+  /// longer current when it completes is dropped, so a slow older query can
+  /// neither replace newer results nor report a failure nobody waits for.
+  int _searchSeq = 0;
   bool _fieldFocused = false;
 
   /// Accounts the user has deactivated on the current result set. Purely a
@@ -167,8 +177,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void _toggleAdvanced() {
     setState(() {
       _advancedMode = !_advancedMode;
-      _results = null;
-      _resetViewFilters();
+      _clearResults();
     });
   }
 
@@ -189,10 +198,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void _onChanged(String value) {
     _debounce?.cancel();
     if (value.trim().length < 3) {
-      setState(() {
-        _results = null;
-        _resetViewFilters();
-      });
+      setState(_clearResults);
       return;
     }
     _debounce = Timer(
@@ -224,46 +230,42 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     unawaited(_search(query));
   }
 
-  Future<void> _search(String query) async {
-    setState(() => _loading = true);
-    try {
-      final merged = await searchEmailsGlobalMerged(
-        ref.read(emailRepositoryProvider),
-        _effectiveAccountId,
-        query,
+  Future<void> _search(String query) => _runSearch(
+        fetch: () => searchEmailsGlobalMerged(
+          ref.read(emailRepositoryProvider),
+          _effectiveAccountId,
+          query,
+        ),
+        logLabel: 'Search failed',
+        warnMessage: 'Global search failed',
       );
-
-      if (mounted) {
-        setState(() {
-          _results = merged;
-          _resetViewFilters();
-          _loading = false;
-        });
-      }
-    } catch (e, stack) {
-      log('Search failed: $e');
-      unawaited(
-        ref.read(appLoggerProvider).warn(
-              'search.failed',
-              'Global search failed',
-              screen: 'SearchScreen',
-              accountId: widget.accountId,
-              error: e,
-              stack: stack,
-            ),
-      );
-      if (mounted) setState(() => _loading = false);
-    }
-  }
 
   Future<void> _searchStructured() async {
     if (_filterGroup.isEmpty) return;
-    setState(() => _loading = true);
-    try {
-      final emails = await ref
+    await _runSearch(
+      fetch: () => ref
           .read(emailRepositoryProvider)
-          .searchEmailsStructured(_effectiveAccountId, _filterGroup);
-      if (mounted) {
+          .searchEmailsStructured(_effectiveAccountId, _filterGroup),
+      logLabel: 'Structured search failed',
+      warnMessage: 'Structured search failed',
+    );
+  }
+
+  /// Runs [fetch], shows its results, and marks the screen failed on error.
+  /// Results or failures from a search superseded by a newer one are dropped.
+  Future<void> _runSearch({
+    required Future<List<Email>> Function() fetch,
+    required String logLabel,
+    required String warnMessage,
+  }) async {
+    final seq = ++_searchSeq;
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final emails = await fetch();
+      if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
           _resetViewFilters();
@@ -271,18 +273,18 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         });
       }
     } catch (e, stack) {
-      log('Structured search failed: $e');
+      log('$logLabel: $e');
       unawaited(
         ref.read(appLoggerProvider).warn(
               'search.failed',
-              'Structured search failed',
+              warnMessage,
               screen: 'SearchScreen',
               accountId: widget.accountId,
               error: e,
               stack: stack,
             ),
       );
-      if (mounted) setState(() => _loading = false);
+      if (mounted && seq == _searchSeq) setState(_markFailed);
     }
   }
 
@@ -314,10 +316,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     tooltip: 'Clear search',
                     onPressed: () {
                       _ctrl.clear();
-                      setState(() {
-                        _results = null;
-                        _resetViewFilters();
-                      });
+                      setState(_clearResults);
                     },
                   ),
                 IconButton(
@@ -391,9 +390,45 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
   }
 
+  /// Drops the current results, any failure and any search still running.
+  /// Only call inside [setState].
+  void _clearResults() {
+    _searchSeq++;
+    _loading = false;
+    _results = null;
+    _failed = false;
+    _resetViewFilters();
+  }
+
+  /// Only call inside [setState].
+  void _markFailed() {
+    _loading = false;
+    _results = null;
+    _resetViewFilters();
+    _failed = true;
+  }
+
+  /// What the body shows after a failed search, with a way to the log entry.
+  Widget _buildFailure() {
+    return Padding(
+      padding: const EdgeInsets.all(AppSpacing.xl),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Search failed.'),
+          TextButton(
+            onPressed: () => unawaited(context.push('/accounts/app-log')),
+            child: const Text('View in application log'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildBody() {
     if (_advancedMode) return _buildAdvancedBody();
     if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_failed) return Center(child: _buildFailure());
     if (_results == null) {
       if (_fieldFocused && _ctrl.text.isEmpty) {
         return _buildHistoryPanel();
@@ -583,8 +618,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             accountId: _effectiveAccountId,
             onChanged: (g) => setState(() {
               _filterGroup = g;
-              _results = null;
-              _resetViewFilters();
+              _clearResults();
             }),
           ),
           const SizedBox(height: AppSpacing.md),
@@ -612,6 +646,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         padding: EdgeInsets.only(top: AppSpacing.xl),
         child: Center(child: CircularProgressIndicator()),
       );
+    } else if (_failed) {
+      resultsRegion = Center(child: _buildFailure());
     } else if (_results == null) {
       resultsRegion = const SizedBox.shrink();
     } else {

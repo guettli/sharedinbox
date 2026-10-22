@@ -6,7 +6,10 @@ import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/utils/mail_header_encode.dart';
+import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
@@ -39,18 +42,30 @@ class DraftRepositoryImpl implements DraftRepository {
   }) async {
     final now = DateTime.now();
     if (id != null) {
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
-        DraftsCompanion(
-          accountId: Value(accountId),
-          replyToEmailId: Value(replyToEmailId),
-          toText: Value(toText),
-          ccText: Value(ccText),
-          subjectText: Value(subjectText),
-          bodyText: Value(bodyText),
-          updatedAt: Value(now),
-          dirty: const Value(true),
-        ),
-      );
+      await _db.transaction(() async {
+        final old = await (_db.select(_db.drafts)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        // The server ids belong to the old account's mailbox. Kept across a
+        // switch of the From account, the next push would expunge that UID
+        // from the new account's Drafts folder — someone else's draft.
+        final switched = old != null && old.accountId != accountId;
+        if (switched) await _tombstoneServerCopy(old);
+        await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
+          DraftsCompanion(
+            accountId: Value(accountId),
+            replyToEmailId: Value(replyToEmailId),
+            toText: Value(toText),
+            ccText: Value(ccText),
+            subjectText: Value(subjectText),
+            bodyText: Value(bodyText),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+            imapServerId: switched ? const Value(null) : const Value.absent(),
+            jmapServerId: switched ? const Value(null) : const Value.absent(),
+          ),
+        );
+      });
       final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
           .getSingleOrNull();
       if (row != null) return _toModel(row);
@@ -119,18 +134,27 @@ class DraftRepositoryImpl implements DraftRepository {
     final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     if (row == null) return;
+    await _tombstoneServerCopy(row);
+    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+  }
+
+  /// Queues removal of [row]'s copy on its account's server, if it has one
+  /// and the account still exists (a deleted account has no server to sync).
+  Future<void> _tombstoneServerCopy(Draft row) async {
     final accountId = row.accountId;
     final serverId = row.imapServerId ?? row.jmapServerId;
-    if (accountId != null && serverId != null && serverId.isNotEmpty) {
-      await _db.into(_db.draftTombstones).insert(
-            DraftTombstonesCompanion.insert(
-              accountId: accountId,
-              serverId: serverId,
-              createdAt: DateTime.now(),
-            ),
-          );
-    }
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    if (accountId == null || serverId == null || serverId.isEmpty) return;
+    final account = await (_db.select(_db.accounts)
+          ..where((t) => t.id.equals(accountId)))
+        .getSingleOrNull();
+    if (account == null) return;
+    await _db.into(_db.draftTombstones).insert(
+          DraftTombstonesCompanion.insert(
+            accountId: accountId,
+            serverId: serverId,
+            createdAt: DateTime.now(),
+          ),
+        );
   }
 
   @override
@@ -291,10 +315,11 @@ class DraftRepositoryImpl implements DraftRepository {
 
     for (final row in dirty) {
       final builder = imap.MessageBuilder()
-        ..from = [imap.MailAddress(account.displayName, account.email)]
+        ..from = [HeaderMailAddress(account.displayName, account.email)]
         ..to = _parseAddresses(row.toText)
         ..cc = _parseAddresses(row.ccText)
-        ..subject = row.subjectText
+        ..subject = encodeUnstructuredHeader(row.subjectText)
+        ..subjectEncoding = imap.HeaderEncoding.none
         ..text = row.bodyText;
       final mime = builder.buildMimeMessage();
 
@@ -645,25 +670,20 @@ class DraftRepositoryImpl implements DraftRepository {
 
   // ── Helpers ─────────────────────────────────────────────────────────────
 
-  List<imap.MailAddress> _parseAddresses(String text) {
-    if (text.trim().isEmpty) return [];
-    return text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .map((s) => imap.MailAddress('', s))
-        .toList();
-  }
+  // A draft keeps what was typed, even an entry that is not an address yet
+  // ("bob" on the way to "bob@example.com"); only sending refuses those.
+  List<imap.MailAddress> _parseAddresses(String text) => [
+        for (final r in parseRecipients(text))
+          HeaderMailAddress(r.address.name, r.address.email),
+      ];
 
-  List<Map<String, dynamic>> _parseAddressesJmap(String text) {
-    if (text.trim().isEmpty) return [];
-    return text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .map((s) => {'email': s})
-        .toList();
-  }
+  List<Map<String, dynamic>> _parseAddressesJmap(String text) => [
+        for (final r in parseRecipients(text))
+          {
+            if (r.address.name != null) 'name': r.address.name,
+            'email': r.address.email,
+          },
+      ];
 
   String _addressListToText(List<imap.MailAddress>? addresses) {
     if (addresses == null || addresses.isEmpty) return '';

@@ -12,3 +12,16 @@ void configureSqliteForTests() {
 }
 
 AppDatabase openTestDatabase() => AppDatabase(NativeDatabase.memory());
+
+/// Inserts the `INBOX` mailbox (role `inbox`) for [accountId] into [db] —
+/// shared seed so suites don't each re-declare the same companion.
+Future<void> seedInboxMailbox(AppDatabase db, String accountId) =>
+    db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: '$accountId:INBOX',
+            accountId: accountId,
+            path: 'INBOX',
+            name: 'INBOX',
+            role: const Value('inbox'),
+          ),
+        );

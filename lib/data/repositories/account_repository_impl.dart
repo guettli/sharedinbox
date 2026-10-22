@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' show Value;
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -6,10 +10,15 @@ import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 class AccountRepositoryImpl implements AccountRepository {
-  AccountRepositoryImpl(this._db, this._storage);
+  AccountRepositoryImpl(
+    this._db,
+    this._storage, {
+    Future<Directory> Function() getCacheDir = getTemporaryDirectory,
+  }) : _getCacheDir = getCacheDir;
 
   final AppDatabase _db;
   final SecureStorage _storage;
+  final Future<Directory> Function() _getCacheDir;
 
   @override
   Stream<List<model.Account>> observeAccounts() {
@@ -90,8 +99,31 @@ class AccountRepositoryImpl implements AccountRepository {
 
   @override
   Future<void> removeAccount(String id) async {
-    await (_db.delete(_db.accounts)..where((t) => t.id.equals(id))).go();
+    final gone = await _db.transaction(() async {
+      await (_db.delete(_db.accounts)..where((t) => t.id.equals(id))).go();
+      return _db.deleteRowsOfMissingAccounts();
+    });
     await _storage.delete(key: _passwordKey(id));
+    await _deleteAttachmentFiles({...gone, id});
+  }
+
+  /// Deletes downloaded attachments of [accountIds]: they live in one
+  /// folder per email, named after its id (`<accountId>:…` with ':' as '_').
+  Future<void> _deleteAttachmentFiles(Set<String> accountIds) async {
+    try {
+      final root = Directory(
+        p.join((await _getCacheDir()).path, 'sharedinbox', 'attachments'),
+      );
+      if (!await root.exists()) return;
+      await for (final entry in root.list()) {
+        final name = p.basename(entry.path);
+        if (accountIds.any((id) => name.startsWith('${id}_'))) {
+          await entry.delete(recursive: true);
+        }
+      }
+    } on Object {
+      // Best effort: the OS clears the cache folder eventually.
+    }
   }
 
   @override

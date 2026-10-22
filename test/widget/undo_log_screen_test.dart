@@ -303,5 +303,38 @@ void main() {
         expect(find.textContaining('MOVE to b'), findsNothing);
       },
     );
+
+    testWidgets('an undone entry says so and offers "Undo again"', (
+      tester,
+    ) async {
+      final undone = UndoAction(
+        id: 'undo-6',
+        accountId: 'acc-1',
+        type: UndoType.delete,
+        emailIds: ['acc-1:42'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Trash',
+        originalEmails: [_emailWith()],
+        timestamp: DateTime(2024, 6, 1, 10),
+        undoneAt: DateTime(2024, 6, 1, 10, 5, 7),
+      );
+      final standing = UndoAction(
+        id: 'undo-7',
+        accountId: 'acc-1',
+        type: UndoType.delete,
+        emailIds: ['acc-1:43'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Trash',
+        originalEmails: [_emailWith(id: 'acc-1:43')],
+        timestamp: DateTime(2024, 6, 1, 11),
+      );
+
+      await tester.pumpWidget(_buildApp(history: [undone, standing]));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Undone • 10:05:07'), findsOneWidget);
+      expect(find.text('Undo again'), findsOneWidget);
+      expect(find.text('Undo'), findsOneWidget);
+    });
   });
 }

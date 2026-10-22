@@ -19,7 +19,11 @@ class ShareKeyMaterial {
     required this.keyId,
     required this.publicKeyBytes,
     required this.privateKeyBytes,
+    this.expiresAt,
   });
+
+  /// How long a stored key pair accepts encrypted codes.
+  static const lifetime = Duration(minutes: 20);
 
   /// Random 16-byte identifier (hex-encoded when stored / included in QR).
   final Uint8List keyId;
@@ -29,6 +33,9 @@ class ShareKeyMaterial {
 
   /// X25519 private key, 32 bytes.
   final Uint8List privateKeyBytes;
+
+  /// When the stored key pair expires (UTC); null for a key not stored yet.
+  final DateTime? expiresAt;
 }
 
 /// An account + password pair, used in the plaintext payload before encryption.

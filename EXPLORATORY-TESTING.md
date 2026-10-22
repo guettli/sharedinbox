@@ -106,9 +106,15 @@ How to read the output:
   toggling 'SSL/TLS' off", and clicking that fails with "not enabled".
 - Repeated labels, such as the two `Host` fields (IMAP and SMTP), are told
   apart with `index`, in tree order, which matches visual order.
-- A lookup waits up to 20 seconds for its node (`timeout=` changes that). The
-  server handles one request at a time, so while it waits every other call
-  blocks. When you only want to know whether something is there, read `texts`.
+- A lookup waits up to 20 seconds for its node (`timeout=` changes that). Only
+  one call at a time talks to the accessibility bus, so while it waits the
+  other GUI calls block. When you only want to know whether something is
+  there, read `texts`.
+- When the app is busy, each accessibility call waits for its D-Bus timeout.
+  A lookup still gives up at its `timeout`, and a GUI call that cannot get the
+  bus within 30 seconds is refused as "busy". `/health`, `/log` and `/shot`
+  always answer, so look at the screenshot and the log, and `c restart` if the
+  app stays stuck.
 - A failed lookup returns HTTP 409 with the message and the tree, truncated at
   400 nodes. Anything unexpected returns 500 with the traceback.
 - `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
@@ -150,6 +156,23 @@ c click name=SSL/TLS contains=1 role='toggle button' index=0
 c click name=SSL/TLS contains=1 role='toggle button' index=1
 c click name=Save
 ```
+
+**Add a JMAP account** to test the other sync path. Stalwart advertises its
+JMAP URLs as `http://localhost:8080/…` here, matching the forward the app uses:
+
+```bash
+c click name='Add account'
+c fill name='Email address' text=alice@example.com
+c click name=Continue                            # auto-detect fails, as expected
+c click name=JMAP role='push button'
+c fill name='Display name' text=Alice
+c fill name='JMAP API URL' text=http://localhost:8080/.well-known/jmap
+c fill name=Password text=secret role='password text'
+c focus name=Save role='push button'; c key key=Return   # Save is off-screen
+```
+
+A button below the visible part of a form "exposes no actions"; focusing it
+scrolls it into view, and Return activates it.
 
 **Seed mail** from the host through the SMTP forward, as Alice:
 

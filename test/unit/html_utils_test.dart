@@ -69,6 +69,59 @@ void main() {
       expect(htmlToPlain('&lt;tr&gt; &lt;td&gt;cell'), 'cell');
     });
 
+    test('keeps escaped text that is not a tag', () {
+      expect(htmlToPlain('Prices &lt;50%&gt; off'), 'Prices <50%> off');
+      expect(
+        htmlToPlain('From: John &lt;john@example.com&gt;<br>Sent: Monday'),
+        'From: John <john@example.com>\nSent: Monday',
+      );
+      expect(
+        htmlToPlain('if a &lt; b &amp;&amp; c &gt; d'),
+        'if a < b && c > d',
+      );
+    });
+
+    test('sets table cells and blocks apart', () {
+      expect(
+        htmlToPlain(
+          '<table><tr><td>Item</td><td>Price</td></tr>'
+          '<tr><td>Mug</td><td>5 &euro;</td></tr></table>',
+        ),
+        'Item Price\nMug 5 €',
+      );
+      expect(htmlToPlain('<div>one</div><div>two</div>'), 'one\ntwo');
+    });
+
+    test('drops comments, doctype and Word markup', () {
+      expect(
+        htmlToPlain('<!DOCTYPE html><!--[if mso]><table><![endif]-->Hi'),
+        'Hi',
+      );
+      expect(
+        htmlToPlain('<![if !supportLists]>1.<![endif]>Item'),
+        '1.Item',
+      );
+      expect(
+        htmlToPlain(
+          '<?xml:namespace prefix = o ns="urn:schemas-microsoft-com" />Hi',
+        ),
+        'Hi',
+      );
+      // Cut off by truncation before the comment ends.
+      expect(htmlToPlain('<p>a<!--[if mso]><table><tr><td>'), 'a');
+    });
+
+    test('treats <BR> like <br>', () {
+      expect(htmlToPlain('a<BR>b<Br/>c'), 'a\nb\nc');
+    });
+
+    test('stays fast on a body full of unclosed tags', () {
+      final watch = Stopwatch()..start();
+      htmlToPlain('<a ' * 40000);
+      htmlToPlain('<!--' * 40000);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
+    });
+
     test('decodes &quot;', () {
       expect(htmlToPlain('say &quot;hi&quot;'), 'say "hi"');
     });
@@ -100,8 +153,40 @@ void main() {
       expect(htmlToPlain('a &amp;lt; b'), 'a &lt; b');
     });
 
+    test('decodes Latin-1 and Windows-1252 named entities', () {
+      expect(
+        htmlToPlain('Gr&uuml;&szlig;e aus K&ouml;ln, caf&eacute; &Auml;rger'),
+        'Grüße aus Köln, café Ärger',
+      );
+      expect(
+        htmlToPlain('&bdquo;Hallo&ldquo; &ndash; 5&nbsp;&euro; &bull;'),
+        '„Hallo“ – 5 € •',
+      );
+    });
+
+    test('decodes names with digits and upper-case legacy names', () {
+      expect(htmlToPlain('&frac12; &sup2; &frac34;'), '½ ² ¾');
+      expect(htmlToPlain('&QUOT;x&QUOT; &COPY;'), '"x" ©');
+    });
+
+    test('reads numeric 128-159 as Windows-1252, like browsers', () {
+      expect(htmlToPlain('a &#150; b &#147;c&#148; &#128;'), 'a – b “c” €');
+    });
+
+    test('a decoded &amp; never starts another reference', () {
+      expect(htmlToPlain('&amp;#38;lt;b&amp;#38;gt;'), '&#38;lt;b&#38;gt;');
+    });
+
+    test('leaves an unknown named entity as written', () {
+      expect(htmlToPlain('a &bogus; b &AUML; c'), 'a &bogus; b &AUML; c');
+    });
+
+    test('decodes &amp; once, also before a named entity', () {
+      expect(htmlToPlain('&amp;auml; &amp;#228;'), '&auml; &#228;');
+    });
+
     test('leaves a malformed numeric entity as written (#682)', () {
-      expect(htmlToPlain('x&#;y'), 'x&#;y');
+      expect(htmlToPlain('x&#;y &#0; z'), 'x&#;y &#0; z');
     });
 
     test('trims surrounding whitespace', () {

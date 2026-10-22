@@ -88,6 +88,65 @@ void main() {
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     });
 
+    group('From account of a restored draft', () {
+      const second = Account(
+        id: 'acc-2',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+
+      Future<(FakeDraftRepository, int)> pumpDraftOf(
+        WidgetTester tester,
+        String accountId,
+      ) async {
+        final drafts = FakeDraftRepository();
+        final saved = await drafts.saveDraft(
+          accountId: accountId,
+          toText: 'carol@example.com',
+          ccText: '',
+          subjectText: 'Draft',
+          bodyText: 'Body',
+        );
+        await tester.pumpWidget(
+          _buildDirect(
+            screen: ComposeScreen(draftId: saved.id),
+            overrides: _composeOverrides(
+              accounts: const [kTestAccount, second],
+              drafts: drafts,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        return (drafts, saved.id);
+      }
+
+      testWidgets('a deleted account leaves From unselected', (tester) async {
+        // Before, the dropdown got a value missing from its items.
+        await pumpDraftOf(tester, 'deleted-account');
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Select an account'), findsOneWidget);
+      });
+
+      testWidgets('choosing another account saves the draft under it', (
+        tester,
+      ) async {
+        final (drafts, id) = await pumpDraftOf(tester, kTestAccount.id);
+
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(accountFromLabel(second)).last);
+        await tester.pumpAndSettle();
+        // Auto-save after 2 s, then the "saved" indicator's 2 s.
+        await tester.pump(const Duration(seconds: 3));
+        await tester.pump(const Duration(seconds: 3));
+
+        expect((await drafts.getDraft(id))?.accountId, 'acc-2');
+      });
+    });
+
     // Regression for the row-overflow class of #965, here via the dropdown.
     // DropdownButton sizes itself from the WIDEST ITEM, not the selected one,
     // so this overflowed by 426px on a real phone at font_scale 2.0 while the
@@ -175,6 +234,30 @@ void main() {
         await tester.pumpAndSettle();
       },
     );
+
+    testWidgets('refuses to send to something that is not an address', (
+      tester,
+    ) async {
+      final email = FakeEmailRepository();
+      await _pumpComposeAndSend(
+        tester,
+        email: email,
+        beforeSend: () => tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com, not-an-address',
+        ),
+      );
+
+      // Sending used to drop the bad entry and mail only Bob.
+      expect(find.text('Not an email address: not-an-address'), findsOneWidget);
+      expect(email.sentEmailAccountId, isNull);
+      expect(email.sendNowRowIds, isEmpty);
+      expect(find.byType(ComposeScreen), findsOneWidget);
+
+      // Let the SnackBar auto-dismiss so no timer leaks into teardown.
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
 
     testWidgets(
       'queues then sends the message immediately and shows the outcome (#755)',
@@ -511,6 +594,37 @@ void main() {
         findsOneWidget,
       );
       expect(_bodyText(tester), 'Draft body');
+    });
+
+    testWidgets('prefilled and restored bodies lose their carriage returns', (
+      tester,
+    ) async {
+      // A mailto body (%0D%0A) or a reply quote of a CRLF mail.
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: const ComposeScreen(prefillBody: 'one\r\ntwo\rthree'),
+          overrides: _composeOverrides(),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'one\ntwo\nthree');
+
+      // A draft pulled from the server.
+      final drafts = FakeDraftRepository();
+      final saved = await drafts.saveDraft(
+        toText: '',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: 'Hi\r\n\r\n> quoted\r\n',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: drafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_bodyText(tester), 'Hi\n\n> quoted\n');
     });
 
     testWidgets('typing before a slow restore is not overwritten (#1047)', (

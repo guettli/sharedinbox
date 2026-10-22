@@ -204,8 +204,9 @@ abstract class EmailRepository {
 
   /// Runs [scriptContent] against every INBOX message of [accountId] (regardless
   /// of LocalSieveApplied state) and enqueues the resulting moves/deletes/flag
-  /// changes. Each processed message is recorded in LocalSieveApplied. Returns
-  /// the number of matched messages.
+  /// changes. Each processed message that has a Message-ID is recorded in
+  /// LocalSieveApplied; mail without one is filtered but not recorded.
+  /// Returns the number of matched messages.
   ///
   /// Throws `SieveParseException` when [scriptContent] cannot be parsed.
   Future<int> applySieveScriptToInbox(String accountId, String scriptContent);

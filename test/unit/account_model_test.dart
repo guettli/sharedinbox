@@ -5,6 +5,15 @@ import 'package:test/test.dart';
 
 void main() {
   group('Account', () {
+    test('newId returns distinct, strictly increasing ids', () {
+      final ids = [for (var i = 0; i < 50; i++) Account.newId()];
+      expect(ids.toSet(), hasLength(50));
+      final values = ids.map(int.parse).toList();
+      for (var i = 1; i < values.length; i++) {
+        expect(values[i], greaterThan(values[i - 1]));
+      }
+    });
+
     const account = Account(
       id: 'a1',
       displayName: 'Work',

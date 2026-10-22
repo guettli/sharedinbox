@@ -1,4 +1,3 @@
-import 'package:drift/drift.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -11,18 +10,6 @@ FilterGroup _fromIs(String address) => FilterGroup.single(
       FilterComparison.is_,
       address,
     );
-
-Future<void> _seedInbox(AppDatabase db, String accountId) async {
-  await db.into(db.mailboxes).insert(
-        MailboxesCompanion.insert(
-          id: '$accountId:INBOX',
-          accountId: accountId,
-          path: 'INBOX',
-          name: 'INBOX',
-          role: const Value('inbox'),
-        ),
-      );
-}
 
 Future<void> _seedEmail(
   AppDatabase db,
@@ -87,7 +74,7 @@ void main() {
       final db = openTestDatabase();
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
-      await _seedInbox(db, 'acc');
+      await seedInboxMailbox(db, 'acc');
       // A non-inbox mailbox whose mail must never be a candidate.
       await db.into(db.mailboxes).insert(
             MailboxesCompanion.insert(
@@ -121,7 +108,7 @@ void main() {
       final db = openTestDatabase();
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
-      await _seedInbox(db, 'acc');
+      await seedInboxMailbox(db, 'acc');
 
       final t0 = DateTime.utc(2026, 1, 1, 9);
       await _seedEmail(db, 'acc', 'INBOX', 'acc:INBOX:1', t0);

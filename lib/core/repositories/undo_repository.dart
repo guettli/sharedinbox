@@ -3,6 +3,11 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 abstract class UndoRepository {
   Future<void> saveAction(UndoAction action);
   Future<void> deleteAction(String id);
+
+  /// Sets (or clears) [UndoAction.undoneAt] on the stored row [id], keeping
+  /// the rest of the row as it is now (a flush may have re-keyed its email
+  /// ids meanwhile). Does nothing when the row no longer exists.
+  Future<void> setUndoneAt(String id, DateTime? undoneAt);
   Future<List<UndoAction>> getHistory({int limit = 10});
   Future<void> clearHistory();
 

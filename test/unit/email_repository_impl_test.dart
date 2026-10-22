@@ -1793,6 +1793,70 @@ void main() {
       expect(words, hasLength(2));
     });
 
+    test('searchEmailsGlobal finds words with non-ASCII letters', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      final subjects = [
+        'Grüße von Jürgen Müller',
+        'Привет из Москвы',
+        'Write to info@bäcker.de',
+      ];
+      for (final (i, subject) in subjects.indexed) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:$i',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: i,
+                subject: Value(subject),
+                receivedAt: DateTime(2024),
+              ),
+            );
+      }
+
+      // An ASCII-only word split used to turn 'Müller' into the phrase
+      // "M ller" and 'Привет' into an empty query.
+      for (final (query, id) in [
+        ('Müller', 'acc-1:0'),
+        ('grüße', 'acc-1:0'),
+        ('Jürgen Mül', 'acc-1:0'),
+        ('Привет', 'acc-1:1'),
+        ('москв', 'acc-1:1'),
+        ('Mu\u0308ller', 'acc-1:0'), // decomposed ü, as some keyboards send
+        ('bäcker.de', 'acc-1:2'),
+      ]) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(results.map((e) => e.id), [id], reason: query);
+      }
+    });
+
+    test('searchEmailsGlobal treats AND, OR and NOT as words', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              subject: const Value('NOT urgent: lunch OR dinner'),
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Unquoted, FTS5 read these as operators and threw a syntax error.
+      for (final query in ['NOT urgent', 'lunch OR', 'AND']) {
+        final results = await r.emails.searchEmailsGlobal(null, query);
+        expect(
+          results.map((e) => e.id),
+          query == 'AND' ? isEmpty : ['acc-1:1'],
+          reason: query,
+        );
+      }
+    });
+
     test('searchEmailsGlobal matches a single word only in the body', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
@@ -8695,6 +8759,97 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('mail that arrives during a sync is fetched by the next one',
+        () async {
+      _PreviewTestMessage mail(int uid) => _PreviewTestMessage(
+            subject: 'Mail $uid',
+            from: 'alice@example.com',
+            text: 'Hi',
+            messageId: '<m$uid@example.com>',
+          );
+      final client = _LateArrivalImapClient(messages: {42: mail(42)});
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // 43 arrives after this sync's search for new mail, before its
+      // SEARCH ALL.
+      client
+        ..messages[43] = mail(43)
+        ..late = 43;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      client.late = null;
+      final next = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // The checkpoint used to jump to 43 from SEARCH ALL, so 43 was never
+      // fetched.
+      expect(next.fetched, 1);
+      final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id);
+      expect(ids, contains('acc-1:INBOX:43'));
+    });
+
+    test('a sync with nothing new fetches nothing', () async {
+      // Like a real server, the fake answers `UID 43:*` with the newest
+      // message (RFC 3501 reads n:* as *:n when n is past the last UID).
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Only mail',
+              from: 'alice@example.com',
+              text: 'Hi',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      final first = await r.emails.syncEmails('acc-1', 'INBOX');
+      final second = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(first.fetched, 1);
+      // Used to fetch message 42 again and report "1 new" on every sync.
+      expect(second.fetched, 0);
+    });
+
+    test('a mail read on another device is no longer bold in the list',
+        () async {
+      final client = _CondstoreImapClient(
+        messages: {
+          42: _PreviewTestMessage(
+            subject: 'Lunch tomorrow?',
+            from: 'alice@example.com',
+            text: 'Noon?',
+            messageId: '<m42@example.com>',
+          ),
+        },
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+      expect((await r.db.select(r.db.threads).getSingle()).hasUnread, isTrue);
+
+      // Another client sets \Seen and \Flagged; HIGHESTMODSEQ moves on.
+      client
+        ..flags[42] = [r'\Seen', r'\Flagged']
+        ..modSeq = 2;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final email = await r.db.select(r.db.emails).getSingle();
+      expect(email.isSeen, isTrue);
+      // The list reads the thread row, which used to keep the old state.
+      final thread = await r.db.select(r.db.threads).getSingle();
+      expect(thread.hasUnread, isFalse);
+      expect(thread.isFlagged, isTrue);
+    });
+
     test(
         'syncEmails dates mail by INTERNALDATE, not the fetch time, '
         'when it has no Date header', () async {
@@ -9805,6 +9960,73 @@ class _PreviewSyncImapClient extends FakeImapClient {
                 wantsInternalDate ? messages[uid]!.internalDate : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] whose `UID n:*` search answers like a real
+/// server (only UIDs ≥ n, or the newest one when there are none), and which
+/// can hide [late] from that search while `SEARCH ALL` already lists it: mail
+/// that arrives between the two searches of one sync.
+class _LateArrivalImapClient extends _PreviewSyncImapClient {
+  _LateArrivalImapClient({required super.messages});
+
+  int? late;
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'ALL',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    var uids = messages.keys.toList()..sort();
+    final range = RegExp(r'^UID (\d+):\*$').firstMatch(searchCriteria);
+    if (range != null) {
+      final from = int.parse(range.group(1)!);
+      final visible = uids.where((u) => u != late).toList();
+      final hits = visible.where((u) => u >= from).toList();
+      uids = hits.isNotEmpty ? hits : [if (visible.isNotEmpty) visible.last];
+    }
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
+  }
+}
+
+/// [_PreviewSyncImapClient] with CONDSTORE: SELECT reports [modSeq], and a
+/// `FLAGS` fetch with CHANGEDSINCE returns the [flags] of every message, the
+/// way a server answers once something changed.
+class _CondstoreImapClient extends _PreviewSyncImapClient {
+  _CondstoreImapClient({required super.messages});
+
+  int modSeq = 1;
+  final Map<int, List<String>> flags = {};
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      (await super.selectMailboxByPath(path))..highestModSequence = modSeq;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    if (changedSinceModSequence == null) {
+      return super.uidFetchMessages(sequence, fetchContentDefinition);
+    }
+    return imap.FetchImapResult(
+      [
+        for (final uid in messages.keys)
+          imap.MimeMessage()
+            ..uid = uid
+            ..flags = flags[uid] ?? [],
+      ],
+      null,
+    );
   }
 }
 
