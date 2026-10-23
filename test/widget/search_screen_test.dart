@@ -600,6 +600,36 @@ void main() {
       expect(find.text('Gamma from Work'), findsOneWidget);
       expect(find.text('Alpha from Alice'), findsOneWidget);
     });
+    testWidgets('each chip is an enabled button that toggles its account', (
+      tester,
+    ) async {
+      await pumpMultiAccountSearch(tester);
+
+      // The chip body itself must be actionable for screen-reader and
+      // keyboard users, not only its small X.
+      expect(
+        tester.getSemantics(accountChip('Work')),
+        isSemantics(
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+          isSelected: true,
+        ),
+      );
+
+      await tester.tap(accountChip('Work'));
+      await tester.pumpAndSettle();
+      expect(find.text('Gamma from Work'), findsNothing);
+      expect(
+        tester.getSemantics(accountChip('Work')),
+        isSemantics(isEnabled: true, hasTapAction: true, isSelected: false),
+      );
+
+      await tester.tap(accountChip('Work'));
+      await tester.pumpAndSettle();
+      expect(find.text('Gamma from Work'), findsOneWidget);
+    });
   });
 
   group('SearchScreen folder filter', () {
@@ -796,6 +826,22 @@ void main() {
 
       expect(find.byType(DropdownButton<String?>), findsOneWidget);
       expect(find.text('All accounts'), findsOneWidget);
+    });
+
+    testWidgets('picker announces itself as an enabled button', (
+      tester,
+    ) async {
+      await pumpGlobalSearch(tester);
+
+      expect(
+        tester.getSemantics(find.byType(DropdownButton<String?>)),
+        isSemantics(
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ),
+      );
     });
 
     testWidgets('picker is hidden when the user has a single account', (
