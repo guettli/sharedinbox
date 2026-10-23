@@ -541,6 +541,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       return;
     }
+    final to = recipientAddresses(_to.text);
+    if (to.isEmpty) {
+      context.showAppSnackBar(
+        'Add a recipient in To first',
+        duration: const Duration(seconds: 5),
+      );
+      return;
+    }
     setState(() => _sending = true);
     final messenger = context.appMessenger();
     // Set once the message is in the outbox: from then on a failure must not
@@ -554,7 +562,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         from: EmailAddress(name: account.displayName, email: account.email),
         // Parsed into name and address here: the JMAP send path uses the
         // address as given, so a raw "Bob <bob@x>" chunk was rejected there.
-        to: recipientAddresses(_to.text),
+        to: to,
         cc: recipientAddresses(_cc.text),
         bcc: recipientAddresses(_bcc.text),
         subject: _subject.text,
