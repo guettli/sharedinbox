@@ -357,6 +357,8 @@ final notificationDispatcherProvider = Provider<NotificationDispatcher>((ref) {
       body: body,
       id: emailId.hashCode & 0x7FFFFFFF,
       payload: '$accountId|$emailId',
+      accountId: accountId,
+      emailId: emailId,
     ),
   );
 });

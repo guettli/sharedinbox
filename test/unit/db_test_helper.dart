@@ -37,6 +37,19 @@ Future<void> seedAccountRow(
           mode: InsertMode.insertOrIgnore,
         );
 
+/// Inserts a bare `INBOX` email row [id] of [accountId] into [db], for tests
+/// that need a row other tables can reference. The account must exist.
+Future<void> seedEmailRow(AppDatabase db, String id, String accountId) =>
+    db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: id,
+            accountId: accountId,
+            mailboxPath: 'INBOX',
+            uid: 1,
+            receivedAt: DateTime(2026),
+          ),
+        );
+
 /// Runs [body] with foreign keys off, to seed rows that builds before
 /// schema v62 could leave behind (rows of a removed account, bodies of
 /// deleted emails).
