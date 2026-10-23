@@ -300,6 +300,17 @@ tasks:
       - mkdir -p build/app/outputs/bundle/release
       - HASH=$(git rev-parse --short HEAD) && timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. build-android-release --commit-hash "$HASH" -o build/app/outputs/bundle/release/app-release.aab
 
+  android-size-report:
+    desc: Build the AAB (cached) and print its delivered size breakdown. Set SIZE_APPEND=<tsv> to append a history row.
+    deps: [build-android-bundle]
+    cmds:
+      - |
+        HASH=$(git rev-parse --short HEAD)
+        VERSION_NAME=$(python3 -c "import re;m=re.search(r'^version:\s*([^+\s]+)',open('pubspec.yaml').read(),re.M);print(m.group(1) if m else 'unknown')")
+        FLUTTER=$(python3 -c "import json;print(json.load(open('.fvmrc')).get('flutter','unknown'))")
+        python3 scripts/android_size_report.py build/app/outputs/bundle/release/app-release.aab \
+          --git-hash "$HASH" --version-name "$VERSION_NAME" --version-code "${VERSION_CODE:-unknown}" --flutter "$FLUTTER" ${SIZE_APPEND:+--append "$SIZE_APPEND"}
+
   build-android-debug-apk:
     desc: Build a debug APK via Dagger for manual testing on a device (shows overflow banners; release builds hide them)
     cmds:
