@@ -75,4 +75,43 @@ void main() {
     expect(inbox.totalCount, greaterThan(0));
     expect(inbox.unreadCount, greaterThan(0));
   });
+
+  // Same input as the JMAP test in email_repository_jmap_test.dart: a "/" in
+  // the typed name is a hierarchy separator, so both protocols end up with
+  // Projects containing 2026.
+  test('createMailbox with "/" creates a nested IMAP folder', () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    Future<void> dropProjects() async {
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      final stale = all
+          .where(
+            (m) =>
+                m.displayPath == 'Projects' ||
+                m.displayPath.startsWith('Projects/'),
+          )
+          .toList()
+        ..sort((a, b) => b.displayPath.length.compareTo(a.displayPath.length));
+      for (final m in stale) {
+        await r.mailboxes.deleteMailbox('test', m.path);
+      }
+    }
+
+    await dropProjects();
+    try {
+      final leaf = await r.mailboxes.createMailbox('test', 'Projects/2026');
+      expect(leaf.name, '2026');
+      expect(leaf.displayPath, 'Projects/2026');
+
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      expect(all.where((m) => m.displayPath == 'Projects'), hasLength(1));
+      final child = all.singleWhere((m) => m.displayPath == 'Projects/2026');
+      expect(child.name, '2026');
+    } finally {
+      await dropProjects();
+    }
+  });
 }

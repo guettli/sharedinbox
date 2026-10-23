@@ -602,36 +602,26 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String name,
     String role, {
     String? parentDisplayPath,
-  }) async {
-    final account = (await _accounts.getAccount(accountId))!;
-    final password = await _accounts.getPassword(accountId);
-    final parent = await _findParent(accountId, parentDisplayPath);
-    switch (account.type) {
-      case account_model.AccountType.imap:
-        return _createMailboxWithRoleImap(
-          account,
-          password,
-          name,
-          role,
-          parent,
-        );
-      case account_model.AccountType.jmap:
-        return _createMailboxWithRoleJmap(
-          account,
-          password,
-          name,
-          role,
-          parent,
-        );
-    }
-  }
+  }) =>
+      _createMailbox(accountId, name, role, parentDisplayPath);
 
   @override
   Future<model.Mailbox> createMailbox(
     String accountId,
     String name, {
     String? parentDisplayPath,
-  }) async {
+  }) =>
+      _createMailbox(accountId, name, null, parentDisplayPath);
+
+  Future<model.Mailbox> _createMailbox(
+    String accountId,
+    String name,
+    String? role,
+    String? parentDisplayPath,
+  ) async {
+    // Validate before any lookup or network call so a bad name never
+    // reaches the server.
+    final segments = splitFolderName(name);
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final parent = await _findParent(accountId, parentDisplayPath);
@@ -640,19 +630,43 @@ class MailboxRepositoryImpl implements MailboxRepository {
         return _createMailboxWithRoleImap(
           account,
           password,
-          name,
-          null,
+          segments,
+          role,
           parent,
         );
       case account_model.AccountType.jmap:
         return _createMailboxWithRoleJmap(
           account,
           password,
-          name,
-          null,
+          segments,
+          role,
           parent,
         );
     }
+  }
+
+  /// Splits a user-typed folder [name] on `/` into its hierarchy segments, so
+  /// `Projects/2026` means "2026 inside Projects" on every protocol — IMAP
+  /// joins the segments with the server's hierarchy delimiter, JMAP creates
+  /// one mailbox per segment chained by `parentId`.
+  ///
+  /// Throws [ArgumentError] for an empty name or an empty segment
+  /// (`a//b`, a leading or trailing `/`).
+  static List<String> splitFolderName(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError.value(name, 'name', 'Folder name must not be empty');
+    }
+    final segments = trimmed.split('/').map((s) => s.trim()).toList();
+    if (segments.any((s) => s.isEmpty)) {
+      throw ArgumentError.value(
+        name,
+        'name',
+        'Folder name must not contain an empty part '
+            '(no leading, trailing or double "/")',
+      );
+    }
+    return segments;
   }
 
   /// Looks up the local mailbox row whose `displayPath` matches
@@ -683,7 +697,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<model.Mailbox> _createMailboxWithRoleImap(
     account_model.Account account,
     String password,
-    String name,
+    List<String> segments,
     String? role,
     MailboxRow? parent,
   ) async {
@@ -692,50 +706,64 @@ class MailboxRepositoryImpl implements MailboxRepository {
       _effectiveUsername(account),
       password,
     );
-    String serverPath;
+    // Server path of each hierarchy level, outermost first. IMAP CREATE of
+    // the leaf also creates missing ancestors (RFC 3501 §6.3.3).
+    final serverPaths = <String>[];
     try {
-      if (parent != null) {
+      if (parent != null || segments.length > 1) {
         // Discover the server's hierarchy separator so we can build a valid
         // subfolder path — LIST is cheap and every server responds with at
         // least INBOX, whose pathSeparator is the same for all mailboxes.
         final separator = await _imapPathSeparator(client, parent);
-        serverPath = '${parent.path}$separator$name';
+        var prefix = parent?.path;
+        for (final segment in segments) {
+          prefix = prefix == null ? segment : '$prefix$separator$segment';
+          serverPaths.add(prefix);
+        }
       } else {
-        serverPath = name;
+        serverPaths.add(segments.single);
       }
-      await client.createMailbox(serverPath);
+      await client.createMailbox(serverPaths.last);
     } finally {
       await client.logout();
     }
-    final displayPath = parent != null ? '${parent.displayPath}/$name' : name;
-    final id = '${account.id}:$serverPath';
-    await _db.into(_db.mailboxes).insertOnConflictUpdate(
-          MailboxesCompanion.insert(
-            id: id,
-            accountId: account.id,
-            path: serverPath,
-            name: name,
-            role: Value(role),
-            displayPath: Value(displayPath),
-          ),
-        );
+    var displayPath = parent?.displayPath;
+    String? id;
+    for (var i = 0; i < segments.length; i++) {
+      final isLeaf = i == segments.length - 1;
+      displayPath =
+          displayPath == null ? segments[i] : '$displayPath/${segments[i]}';
+      id = '${account.id}:${serverPaths[i]}';
+      final row = MailboxesCompanion.insert(
+        id: id,
+        accountId: account.id,
+        path: serverPaths[i],
+        name: segments[i],
+        role: Value(isLeaf ? role : null),
+        displayPath: Value(displayPath),
+      );
+      await _insertCreatedMailbox(row, isNew: isLeaf);
+    }
     final row = await (_db.select(
       _db.mailboxes,
-    )..where((t) => t.id.equals(id)))
+    )..where((t) => t.id.equals(id!)))
         .getSingle();
     return _toModel(row);
   }
 
   /// Returns the IMAP hierarchy separator to use when creating a subfolder
-  /// of [parent]. Derives it from the parent's own path when possible
-  /// (works for any hierarchical mailbox), otherwise asks the server via
-  /// LIST. Falls back to `/` if the server returns nothing usable.
+  /// of [parent] (or a nested path at top level when [parent] is null).
+  /// Derives it from the parent's own path when possible (works for any
+  /// hierarchical mailbox), otherwise asks the server via LIST. Falls back
+  /// to `/` if the server returns nothing usable.
   Future<String> _imapPathSeparator(
     imap.ImapClient client,
-    MailboxRow parent,
+    MailboxRow? parent,
   ) async {
-    if (parent.path.contains('/')) return '/';
-    if (parent.path.contains('.')) return '.';
+    if (parent != null) {
+      if (parent.path.contains('/')) return '/';
+      if (parent.path.contains('.')) return '.';
+    }
     final listed = await client.listMailboxes();
     if (listed.isNotEmpty && listed.first.pathSeparator.isNotEmpty) {
       return listed.first.pathSeparator;
@@ -746,7 +774,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   Future<model.Mailbox> _createMailboxWithRoleJmap(
     account_model.Account account,
     String password,
-    String name,
+    List<String> segments,
     String? role,
     MailboxRow? parent,
   ) async {
@@ -760,52 +788,134 @@ class MailboxRepositoryImpl implements MailboxRepository {
       username: _effectiveUsername(account),
       password: password,
     );
+
+    // JMAP has no path syntax: a nested name is a chain of mailboxes linked
+    // by parentId. Walk the server's current tree to reuse ancestors that
+    // already exist (creating "Projects/2027" next to "Projects/2026" must
+    // not make a second "Projects"); the local cache could be stale.
+    final existingIds = <String>[];
+    var parentId = parent?.path;
+    if (segments.length > 1) {
+      final children = await _jmapChildrenByParent(jmap);
+      for (final segment in segments.take(segments.length - 1)) {
+        final match = children[parentId]?[segment];
+        if (match == null) break;
+        existingIds.add(match);
+        parentId = match;
+      }
+    }
+
+    // Create the remaining levels in one Mailbox/set; each level points at
+    // the previous one through a creation-id back-reference (`#c0`, …).
+    final toCreate = segments.sublist(existingIds.length);
+    final create = <String, Map<String, dynamic>>{};
+    for (var i = 0; i < toCreate.length; i++) {
+      final isLeaf = i == toCreate.length - 1;
+      final ref = i == 0 ? parentId : '#c${i - 1}';
+      create['c$i'] = {
+        'name': toCreate[i],
+        if (isLeaf && role != null) 'role': role,
+        if (ref != null) 'parentId': ref,
+      };
+    }
     final responses = await jmap.call([
       [
         'Mailbox/set',
-        {
-          'accountId': jmap.accountId,
-          'create': {
-            'new-mailbox': {
-              'name': name,
-              if (role != null) 'role': role,
-              if (parent != null) 'parentId': parent.path,
-            },
-          },
-        },
+        {'accountId': jmap.accountId, 'create': create},
         '0',
       ],
     ]);
     final result = _responseArgs(responses, 0, 'Mailbox/set');
     final created = result['created'] as Map<String, dynamic>?;
-    final newId =
-        (created?['new-mailbox'] as Map<String, dynamic>?)?['id'] as String?;
-    if (newId == null) {
-      throw Exception(
-        'Failed to create mailbox "$name": server returned no ID',
-      );
-    }
-    final dbId = '${account.id}:$newId';
-    // Compute the new mailbox's displayPath by prefixing the parent's chain
-    // (matching the walk in [_upsertJmapMailboxes]). Without a parent, the
-    // display path is just the name — the next full sync will confirm.
-    final displayPath = parent != null ? '${parent.displayPath}/$name' : name;
-    await _db.into(_db.mailboxes).insertOnConflictUpdate(
-          MailboxesCompanion.insert(
-            id: dbId,
-            accountId: account.id,
-            path: newId,
-            name: name,
-            role: Value(role),
-            displayPath: Value(displayPath),
-            parentId: Value(parent?.path),
-          ),
+    final notCreated = result['notCreated'] as Map<String, dynamic>?;
+    final newIds = <String>[];
+    for (var i = 0; i < toCreate.length; i++) {
+      final newId =
+          (created?['c$i'] as Map<String, dynamic>?)?['id'] as String?;
+      if (newId == null) {
+        final err = notCreated?['c$i'] as Map<String, dynamic>?;
+        throw Exception(
+          'Failed to create mailbox "${segments.join('/')}": '
+          '${err?['type'] ?? 'server returned no ID'}'
+          '${err?['description'] != null ? ' (${err!['description']})' : ''}',
         );
+      }
+      newIds.add(newId);
+    }
+
+    // Store every level locally so the folder list and the Move dialog show
+    // the hierarchy right away; the next sync confirms. displayPath matches
+    // the parentId walk in [_upsertJmapMailboxes].
+    final serverIds = [...existingIds, ...newIds];
+    var displayPath = parent?.displayPath;
+    String? levelParent = parent?.path;
+    late String dbId;
+    for (var i = 0; i < segments.length; i++) {
+      final isLeaf = i == segments.length - 1;
+      final isNew = i >= existingIds.length;
+      displayPath =
+          displayPath == null ? segments[i] : '$displayPath/${segments[i]}';
+      dbId = '${account.id}:${serverIds[i]}';
+      await _insertCreatedMailbox(
+        MailboxesCompanion.insert(
+          id: dbId,
+          accountId: account.id,
+          path: serverIds[i],
+          name: segments[i],
+          role: Value(isLeaf ? role : null),
+          displayPath: Value(displayPath),
+          parentId: Value(levelParent),
+        ),
+        isNew: isNew,
+      );
+      levelParent = serverIds[i];
+    }
     final row = await (_db.select(
       _db.mailboxes,
     )..where((t) => t.id.equals(dbId)))
         .getSingle();
     return _toModel(row);
+  }
+
+  /// Stores a mailbox the create path just made ([isNew]) or walked through
+  /// as an existing ancestor. An existing ancestor may already be cached with
+  /// counts and a role, so it is only added when missing, never overwritten.
+  Future<void> _insertCreatedMailbox(
+    MailboxesCompanion row, {
+    required bool isNew,
+  }) async {
+    final into = _db.into(_db.mailboxes);
+    if (isNew) {
+      await into.insertOnConflictUpdate(row);
+    } else {
+      await into.insert(row, mode: InsertMode.insertOrIgnore);
+    }
+  }
+
+  /// Fetches the account's mailbox tree as `parentId → (name → id)`; the
+  /// top-level mailboxes sit under the `null` key.
+  Future<Map<String?, Map<String, String>>> _jmapChildrenByParent(
+    JmapClient jmap,
+  ) async {
+    final responses = await jmap.call([
+      [
+        'Mailbox/get',
+        {
+          'accountId': jmap.accountId,
+          'ids': null,
+          'properties': ['id', 'name', 'parentId'],
+        },
+        '0',
+      ],
+    ]);
+    final list = _responseArgs(responses, 0, 'Mailbox/get')['list'] as List;
+    final children = <String?, Map<String, String>>{};
+    for (final m in list.cast<Map<String, dynamic>>()) {
+      final name = m['name'] as String?;
+      if (name == null) continue;
+      (children[m['parentId'] as String?] ??= {})[name] = m['id'] as String;
+    }
+    return children;
   }
 
   // ── rename / delete / move ──────────────────────────────────────────────

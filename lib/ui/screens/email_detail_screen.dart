@@ -1790,8 +1790,24 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         textCapitalization: TextCapitalization.words,
       );
       if (name == null || !context.mounted) return;
-      final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
-      destination = mailbox.path;
+      // "Projects/2026" creates 2026 inside Projects on IMAP and JMAP alike;
+      // a malformed name ("a//b") or a server refusal lands here.
+      try {
+        final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
+        destination = mailbox.path;
+      } catch (e, stack) {
+        if (!context.mounted) return;
+        context.showAppSnackBar(
+          'Could not create folder: ${e is ArgumentError ? e.message : e}',
+          level: AppLogLevel.error,
+          event: 'email.move.create_folder_failed',
+          emailId: widget.emailId,
+          data: {'name': name},
+          error: e,
+          stack: stack,
+        );
+        return;
+      }
     }
 
     await _runDimmed(

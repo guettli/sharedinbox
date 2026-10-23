@@ -528,4 +528,64 @@ if header :contains "subject" "lunch" {
       await dropArchive(r.mailboxes, 'test-jmap');
     }
   });
+
+  // "Projects/2026" typed into Move → Create new folder must give the same
+  // tree as on IMAP: a top-level Projects with a child 2026 — not one
+  // top-level mailbox literally named "Projects/2026" — and a second nested
+  // create must reuse the existing Projects.
+  test('createMailbox with "/" creates a nested JMAP hierarchy', () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    Future<void> dropProjects() async {
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final all = await r.mailboxes.observeMailboxes('test-jmap').first;
+      final stale = all
+          .where(
+            (m) =>
+                m.displayPath == 'Projects' ||
+                m.displayPath.startsWith('Projects/'),
+          )
+          .toList()
+        // Children first: JMAP refuses to destroy a mailbox with children.
+        ..sort((a, b) => b.displayPath.length.compareTo(a.displayPath.length));
+      for (final m in stale) {
+        await r.mailboxes.deleteMailbox('test-jmap', m.path);
+      }
+    }
+
+    await dropProjects();
+    try {
+      final leaf =
+          await r.mailboxes.createMailbox('test-jmap', 'Projects/2026');
+      expect(leaf.name, '2026');
+      expect(leaf.displayPath, 'Projects/2026');
+
+      // Re-read the server's view, not just the optimistic local rows.
+      await r.mailboxes.syncMailboxes('test-jmap');
+      var all = await r.mailboxes.observeMailboxes('test-jmap').first;
+      final projects = all.where((m) => m.displayPath == 'Projects').toList();
+      expect(projects, hasLength(1));
+      expect(projects.single.name, 'Projects');
+      expect(projects.single.parentId, isNull);
+      final child = all.singleWhere((m) => m.path == leaf.path);
+      expect(child.name, '2026');
+      expect(child.parentId, projects.single.path);
+      expect(child.displayPath, 'Projects/2026');
+      expect(all.where((m) => m.name.contains('/')), isEmpty);
+
+      final second =
+          await r.mailboxes.createMailbox('test-jmap', 'Projects/2027');
+      expect(second.parentId, projects.single.path);
+      await r.mailboxes.syncMailboxes('test-jmap');
+      all = await r.mailboxes.observeMailboxes('test-jmap').first;
+      expect(all.where((m) => m.name == 'Projects'), hasLength(1));
+      expect(
+        all.singleWhere((m) => m.path == second.path).displayPath,
+        'Projects/2027',
+      );
+    } finally {
+      await dropProjects();
+    }
+  });
 }
