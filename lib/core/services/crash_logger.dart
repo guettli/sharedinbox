@@ -27,6 +27,8 @@ void logUncaught(
   StackTrace? stack, {
   AppLogLevel level = AppLogLevel.error,
   String? screen,
+  String? accountId,
+  String? emailId,
 }) {
   final logger = crashLogger;
   if (logger == null) return;
@@ -39,6 +41,8 @@ void logUncaught(
         error: error,
         stack: stack,
         screen: screen,
+        accountId: accountId,
+        emailId: emailId,
       ),
     );
   } catch (_) {
