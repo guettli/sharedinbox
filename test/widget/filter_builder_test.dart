@@ -132,4 +132,30 @@ void main() {
       expect((latest!.children.single as FilterLeaf).value, 'newsletter');
     });
   });
+
+  group('FilterBuilderWidget accessibility', () {
+    // DropdownButton has no enabled flag of its own; Flutter's Linux bridge
+    // announces such a node as "disabled" (#1180).
+    testWidgets('field and comparison pickers announce as enabled buttons', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_harness(_headerGroup(), (_) {}));
+      await tester.pumpAndSettle();
+
+      for (final picker in [
+        find.byType(DropdownButton<FilterField>),
+        find.byType(DropdownButton<FilterComparison>),
+      ]) {
+        expect(
+          tester.getSemantics(picker),
+          isSemantics(
+            isButton: true,
+            hasEnabledState: true,
+            isEnabled: true,
+            hasTapAction: true,
+          ),
+        );
+      }
+    });
+  });
 }

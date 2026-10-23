@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
@@ -653,32 +654,34 @@ class _ActionEditor extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
       child: Row(
         children: [
-          DropdownButton<_ActionType>(
-            value: type,
-            isDense: true,
-            underline: const SizedBox.shrink(),
-            onChanged: (t) {
-              if (t != null) _changeType(i, t);
-            },
-            items: const [
-              DropdownMenuItem(value: _ActionType.keep, child: Text('Keep')),
-              DropdownMenuItem(
-                value: _ActionType.discard,
-                child: Text('Discard'),
-              ),
-              DropdownMenuItem(
-                value: _ActionType.markAsRead,
-                child: Text('Mark as read'),
-              ),
-              DropdownMenuItem(
-                value: _ActionType.starMessage,
-                child: Text('Star message'),
-              ),
-              DropdownMenuItem(
-                value: _ActionType.fileInto,
-                child: Text('File into'),
-              ),
-            ],
+          AccessibleDropdown(
+            child: DropdownButton<_ActionType>(
+              value: type,
+              isDense: true,
+              underline: const SizedBox.shrink(),
+              onChanged: (t) {
+                if (t != null) _changeType(i, t);
+              },
+              items: const [
+                DropdownMenuItem(value: _ActionType.keep, child: Text('Keep')),
+                DropdownMenuItem(
+                  value: _ActionType.discard,
+                  child: Text('Discard'),
+                ),
+                DropdownMenuItem(
+                  value: _ActionType.markAsRead,
+                  child: Text('Mark as read'),
+                ),
+                DropdownMenuItem(
+                  value: _ActionType.starMessage,
+                  child: Text('Star message'),
+                ),
+                DropdownMenuItem(
+                  value: _ActionType.fileInto,
+                  child: Text('File into'),
+                ),
+              ],
+            ),
           ),
           if (type == _ActionType.fileInto) ...[
             const SizedBox(width: AppSpacing.sm),

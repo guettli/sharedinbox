@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/email_thread_list.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
@@ -438,30 +439,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           const Icon(Icons.filter_list, size: 20),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
-            // DropdownButton announces no enabled state of its own, which
-            // Flutter's Linux bridge reports as "disabled". Merge an explicit
-            // enabled flag into its button node. Hard-coding `true` is safe
-            // only because this picker is built with two or more accounts
-            // (see the early return above) and onChanged is always set; if
-            // it can ever be disabled, derive this flag from that instead.
-            child: MergeSemantics(
-              child: Semantics(
-                enabled: true,
-                child: DropdownButton<String?>(
-                  isExpanded: true,
-                  value: _selectedAccountId,
-                  items: [
-                    const DropdownMenuItem<String?>(
-                      child: Text('All accounts'),
+            // Reports its enabled state to screen readers (#1179).
+            child: AccessibleDropdown(
+              child: DropdownButton<String?>(
+                isExpanded: true,
+                value: _selectedAccountId,
+                items: [
+                  const DropdownMenuItem<String?>(
+                    child: Text('All accounts'),
+                  ),
+                  for (final a in accounts)
+                    DropdownMenuItem<String?>(
+                      value: a.id,
+                      child: Text(accountDisplayLabel(a, a.id)),
                     ),
-                    for (final a in accounts)
-                      DropdownMenuItem<String?>(
-                        value: a.id,
-                        child: Text(accountDisplayLabel(a, a.id)),
-                      ),
-                  ],
-                  onChanged: _onAccountScopeChanged,
-                ),
+                ],
+                onChanged: _onAccountScopeChanged,
               ),
             ),
           ),
