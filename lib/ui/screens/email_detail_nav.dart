@@ -10,7 +10,7 @@ import 'package:sharedinbox/core/models/email.dart';
 /// the neighbouring hit lives in a different folder or even a different
 /// account.
 class EmailDetailNav {
-  const EmailDetailNav(this.items);
+  const EmailDetailNav(this.items, {this.steppedTo = false});
 
   /// Flattens [threads] into one item per email so prev/next steps through
   /// individual messages, not threads.
@@ -39,6 +39,15 @@ class EmailDetailNav {
   }
 
   final List<EmailDetailNavItem> items;
+
+  /// Set when the message was reached by stepping (prev/next, or the next
+  /// message after an action) rather than opened by the user. Such a message
+  /// stays in the detail view even when it is a draft, instead of jumping
+  /// into compose mid-way through a list.
+  final bool steppedTo;
+
+  /// This list again, marked as reached by stepping.
+  EmailDetailNav stepped() => EmailDetailNav(items, steppedTo: true);
 
   int indexOf(String emailId) => items.indexWhere((e) => e.emailId == emailId);
 

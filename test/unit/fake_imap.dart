@@ -18,31 +18,63 @@ class FakeImapClient extends imap.ImapClient {
 }
 
 /// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
-/// mailbox of that name.
+/// mailbox of that name — or throws [selectError] when one is given.
 class SelectingFakeImapClient extends FakeImapClient {
+  SelectingFakeImapClient({this.selectError});
+
+  final Object? selectError;
+
   @override
   Future<imap.Mailbox> selectMailboxByPath(
     String path, {
     bool enableCondStore = false,
     imap.QResyncParameters? qresync,
+  }) async {
+    if (selectError case final error?) throw error;
+    return fakeMailbox(path);
+  }
+}
+
+/// An empty, flagless mailbox at [path].
+imap.Mailbox fakeMailbox(String path) => imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+    );
+
+/// Answers LIST with [listedMailboxes].
+mixin StubMailboxList on imap.ImapClient {
+  List<imap.Mailbox> get listedMailboxes;
+
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
   }) async =>
-      imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        pathSeparator: '/',
-        flags: [],
-      );
+      listedMailboxes;
 }
 
 /// Spy IMAP client that records snooze-related operations and succeeds silently.
-class SnoozeSpyImapClient extends FakeImapClient {
+class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
   SnoozeSpyImapClient({
     this.copyUidValidity,
     this.copyUidSourceToTarget = const {},
     this.searchResults = const {},
     this.searchResultsByMailbox,
     this.onUidMove,
+    this.messageFlags,
   });
+
+  /// When non-null, the flags a `UID FETCH … FLAGS` reports for the message.
+  final List<String>? messageFlags;
+
+  /// Every `UID STORE` and `UID MOVE`, in call order, as
+  /// `'store <add|remove|…> <uids> <flags>'` / `'move <mailbox>:<uids>-><target>'`.
+  final List<String> calls = [];
 
   String? selectedMailbox;
   String? createdMailbox;
@@ -76,13 +108,6 @@ class SnoozeSpyImapClient extends FakeImapClient {
   /// Every `uidMove` as `'<selected mailbox>:<uids>-><target>'`.
   final List<String> moves = [];
 
-  imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
-        encodedName: path,
-        encodedPath: path,
-        pathSeparator: '/',
-        flags: [],
-      );
-
   @override
   Future<imap.Mailbox> selectMailboxByPath(
     String path, {
@@ -90,21 +115,31 @@ class SnoozeSpyImapClient extends FakeImapClient {
     imap.QResyncParameters? qresync,
   }) async {
     selectedMailbox = path;
-    return _fakeMailbox(path);
+    return fakeMailbox(path);
   }
 
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
     createdMailbox = path;
-    return _fakeMailbox(path);
+    return fakeMailbox(path);
   }
 
   @override
   Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
     renamedFromEncodedPath = box.encodedPath;
     renamedToName = newName;
-    return _fakeMailbox(newName);
+    return fakeMailbox(newName);
   }
+
+  /// What `STATUS … (MESSAGES)` reports for any mailbox.
+  int statusMessages = 0;
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox box,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      box..messagesExists = statusMessages;
 
   @override
   Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
@@ -113,14 +148,7 @@ class SnoozeSpyImapClient extends FakeImapClient {
   }
 
   @override
-  Future<List<imap.Mailbox>> listMailboxes({
-    String path = '""',
-    bool recursive = false,
-    List<String>? mailboxPatterns,
-    List<String>? selectionOptions,
-    List<imap.ReturnOption>? returnOptions,
-  }) async =>
-      [_fakeMailbox('INBOX')];
+  List<imap.Mailbox> get listedMailboxes => [fakeMailbox('INBOX')];
 
   @override
   Future<imap.StoreImapResult> uidStore(
@@ -129,8 +157,12 @@ class SnoozeSpyImapClient extends FakeImapClient {
     imap.StoreAction? action,
     bool? silent,
     int? unchangedSinceModSequence,
-  }) async =>
-      imap.StoreImapResult();
+  }) async {
+    calls.add(
+      'store ${action?.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
+    );
+    return imap.StoreImapResult();
+  }
 
   @override
   Future<imap.GenericImapResult> uidMove(
@@ -143,6 +175,7 @@ class SnoozeSpyImapClient extends FakeImapClient {
     moves.add(
       '$selectedMailbox:${sequence.toList().join(',')}->$targetMailboxPath',
     );
+    calls.add('move ${moves.last}');
     final result = imap.GenericImapResult();
     if (copyUidValidity != null && copyUidSourceToTarget.isNotEmpty) {
       final sources = sequence.toList();
@@ -180,8 +213,11 @@ class SnoozeSpyImapClient extends FakeImapClient {
     String? fetchContentDefinition, {
     int? changedSinceModSequence,
     Duration? responseTimeout,
-  }) async =>
-      const imap.FetchImapResult([], null);
+  }) async {
+    final flags = messageFlags;
+    if (flags == null) return const imap.FetchImapResult([], null);
+    return imap.FetchImapResult([imap.MimeMessage()..flags = flags], null);
+  }
 }
 
 /// Minimal fake SMTP client; only `quit` is exercised by ConnectionTestService.
@@ -190,4 +226,27 @@ class FakeSmtpClient extends imap.SmtpClient {
 
   @override
   Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
+}
+
+/// Fake SMTP client whose `sendMessage` accepts the message (`250 OK`), or —
+/// with [rejectWith] — fails it the way enough_mail does for a 4xx/5xx reply,
+/// by throwing an [imap.SmtpException] carrying those response lines.
+class ScriptedSmtpClient extends FakeSmtpClient {
+  ScriptedSmtpClient({this.rejectWith});
+
+  final List<String>? rejectWith;
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async {
+    final reject = rejectWith;
+    if (reject != null) {
+      throw imap.SmtpException(this, imap.SmtpResponse(reject));
+    }
+    return imap.SmtpResponse(const ['250 OK']);
+  }
 }

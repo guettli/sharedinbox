@@ -35,11 +35,24 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
     POST /type            text — type into the focused widget
     POST /key             key — xdotool key name, e.g. Return, ctrl+a, Escape
     POST /tap             x, y — pixel click, last resort (prefer /click)
+    POST /press           x, y, [ms] — hold the button for ms (default 800,
+                          at most 10000): a long press, e.g. to select a mail
+    POST /drag            x, y, to_x, to_y, [ms], [hold=1] — press, move,
+                          release over ms (default 400): a swipe, e.g. a list
+                          row's actions. hold=1 keeps the button down (take a
+                          /shot); the next /drag goes on from where it is and
+                          ignores its x, y; /tap, /press and /scroll refuse
+                          meanwhile
+    POST /scroll          x, y, [clicks], [up=1] — turn the mouse wheel over
+                          x, y (default 5 clicks down, at most 200): Flutter
+                          desktop lists scroll by wheel, not by /drag
     POST /restart         [wipe=1] — restart the app; wipe=1 also removes its
                           data and the keyring, like a fresh install
 
-A lookup waits up to `timeout` seconds (default 20) for its node; the server
-handles one request at a time, so a long wait blocks every other call. Driver
+A lookup waits up to `timeout` seconds (default 20) for its node. Only one
+request at a time talks to the accessibility bus, so a long wait blocks the
+other GUI calls (refused as "busy" after 30 s); /health, /log and /shot always
+answer, and /restart does not wait for the bus. Driver
 errors come back as HTTP 409 with the message, which for "not found" includes
 the accessibility tree (truncated at 400 nodes); anything unexpected is a 500
 with the traceback.
@@ -51,8 +64,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -253,13 +268,100 @@ def key(params: dict) -> str:
     return "pressed\n"
 
 
+def _pixels(params: dict, *keys: str) -> list[str]:
+    # Whole non-negative pixels only: anything else is a caller mistake, and a
+    # value starting with "-" would be read by xdotool as an option.
+    values = [params[k] for k in keys]
+    if not all(v.isdigit() for v in values):
+        raise ValueError(f"{', '.join(keys)} must be non-negative integers, got {values!r}")
+    return values
+
+
+def _xdotool(*args: str) -> None:
+    subprocess.run(["xdotool", *args], check=True)
+
+
+def _ms(params: dict, default: int) -> float:
+    # Seconds to hold or move for. Capped well below GUI_LOCK_WAIT: the gesture
+    # holds the bus lock, and every other GUI call waits for it.
+    return min(max(0, _int(params, "ms", default)), 10_000) / 1000
+
+
+# Where a /drag with hold=1 left the button down, or None. The next /drag
+# goes on from there instead of pressing again; /tap, /press and /scroll refuse
+# until it is released, since their own click would let go of it unseen.
+_held_at: tuple[int, int] | None = None
+
+
+def _refuse_while_held() -> None:
+    if _held_at is not None:
+        raise g.GuiError(
+            "the button is held by a /drag with hold=1; finish it with a /drag "
+            "without hold (or /restart) first"
+        )
+
+
 def tap(params: dict) -> str:
-    subprocess.run(["xdotool", "mousemove", params["x"], params["y"], "click", "1"],
-                   check=True)
+    x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
+    _xdotool("mousemove", x, y, "click", "1")
     return "tapped\n"
 
 
+def press(params: dict) -> str:
+    x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
+    _xdotool("mousemove", x, y, "mousedown", "1")
+    try:
+        time.sleep(_ms(params, 800))
+    finally:
+        _xdotool("mouseup", "1")
+    return "long-pressed\n"
+
+
+def scroll(params: dict) -> str:
+    x, y = _pixels(params, "x", "y")
+    _refuse_while_held()
+    clicks = min(max(1, _int(params, "clicks", 5)), 200)
+    # X11 wheel: button 4 is up, 5 is down. --repeat sends them as separate
+    # clicks; the short delay lets Flutter handle each as its own event.
+    button = "4" if _flag(params, "up") else "5"
+    _xdotool("mousemove", x, y, "click", "--repeat", str(clicks),
+             "--delay", "30", button)
+    return f"scrolled {clicks} {'up' if button == '4' else 'down'}\n"
+
+
+def drag(params: dict) -> str:
+    global _held_at
+    to_x, to_y = (int(v) for v in _pixels(params, "to_x", "to_y"))
+    if _held_at is None:
+        x, y = (int(v) for v in _pixels(params, "x", "y"))
+        _xdotool("mousemove", str(x), str(y), "mousedown", "1")
+    else:
+        x, y = _held_at
+    _held_at = (x, y)
+    # Flutter only sees a drag when the pointer moves while down, so walk
+    # there in steps rather than jumping: one jump reads as a tap elsewhere.
+    steps = 10
+    pause = _ms(params, 400) / steps
+    try:
+        for i in range(1, steps + 1):
+            time.sleep(pause)
+            _held_at = (x + (to_x - x) * i // steps, y + (to_y - y) * i // steps)
+            _xdotool("mousemove", *map(str, _held_at))
+    finally:
+        if not _flag(params, "hold"):
+            _xdotool("mouseup", "1")
+            _held_at = None
+    return "dragged, button still down\n" if _held_at else "dragged\n"
+
+
 def restart(params: dict) -> str:
+    global _held_at
+    # Unconditionally: a /drag may be setting _held_at right now (restart
+    # does not take the bus lock), and a spare mouseup is harmless.
+    _xdotool("mouseup", "1")
+    _held_at = None
     stop_app()
     if _flag(params, "wipe"):
         failures = wipe_data()
@@ -270,10 +372,24 @@ def restart(params: dict) -> str:
     return "restarted\n" + health(params)
 
 
+# Requests are served on their own threads, but only one at a time may talk to
+# the accessibility bus. A slow lookup then blocks the other GUI routes, but not
+# the ones below: /health, /log and /shot show what the app is doing, and
+# /restart (which does not touch the bus) kills it, which also ends a stuck
+# walk. A lookup itself is bounded by its timeout, checked per node.
+_GUI_LOCK = threading.Lock()
+# Restarts must not overlap either: two would start two apps, one orphaned.
+_RESTART_LOCK = threading.Lock()
+LOCK_FREE = {"/health", "/log", "/shot"}
+# A GUI call that cannot get the bus within this long is refused rather than
+# queued: run later, it would act on whatever screen is up by then.
+GUI_LOCK_WAIT = 30.0
+
 ROUTES = {
     "/health": health, "/tree": tree, "/texts": texts, "/log": log,
     "/click": click, "/click-unnamed": click_unnamed, "/focus": focus,
     "/fill": fill, "/type": type_, "/key": key, "/tap": tap,
+    "/press": press, "/drag": drag, "/scroll": scroll,
     "/restart": restart,
 }
 
@@ -313,7 +429,22 @@ class Handler(BaseHTTPRequestHandler):
             if route is None:
                 self._send(404, (__doc__ or "").encode())
                 return
-            self._send(200, route(params).encode())
+            if path in LOCK_FREE:
+                body = route(params)
+            elif path == "/restart":
+                with _RESTART_LOCK:
+                    body = route(params)
+            else:
+                if not _GUI_LOCK.acquire(timeout=GUI_LOCK_WAIT):
+                    raise g.GuiError(
+                        f"busy: another call has held the accessibility bus for "
+                        f"over {GUI_LOCK_WAIT:.0f}s; check /shot and /log, or /restart"
+                    )
+                try:
+                    body = route(params)
+                finally:
+                    _GUI_LOCK.release()
+            self._send(200, body.encode())
         except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
         except Exception:  # noqa: BLE001 — e.g. GLib.GError when a node vanishes mid-walk
@@ -330,7 +461,7 @@ def main() -> None:
     start_keyring()
     start_app()
     print(f"explore server on :{PORT}, app {APP}", flush=True)
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":

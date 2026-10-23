@@ -280,9 +280,11 @@ String kindLabel(String kind) {
   return switch (kind) {
     'flag_seen' => 'Mark read/unread',
     'flag_flagged' => 'Toggle flag',
+    'add_keywords' => 'Add keywords',
     'move' => 'Move',
     'delete' => 'Delete',
     'append' => 'Append',
+    'clear_snooze' => 'Clear snooze',
     _ => kind,
   };
 }
@@ -302,6 +304,12 @@ String describeChange(PendingChange change) {
       final flagged = payload['flagged'];
       if (flagged is bool) return flagged ? 'Add flag' : 'Remove flag';
       return 'Toggle flag';
+    case 'add_keywords':
+      final keywords = payload['keywords'];
+      if (keywords is List && keywords.isNotEmpty) {
+        return 'Add keywords: ${keywords.join(', ')}';
+      }
+      return 'Add keywords';
     case 'move':
       final src = _string(payload['src']);
       final dest = _string(payload['dest']);

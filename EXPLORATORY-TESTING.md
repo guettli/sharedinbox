@@ -92,6 +92,10 @@ c click name=From contains=1 role='push button' force=1   # see [disabled] below
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …
+c press x=600 y=150                  # long press: selects a mail in the list
+c drag x=200 y=150 to_x=900 to_y=150 # swipe: opens a list row's action menu
+c drag x=200 y=150 to_x=500 to_y=150 hold=1   # keep it open, then /shot
+c scroll x=640 y=400 clicks=20       # mouse wheel; drag does not scroll lists
 c restart wipe=1                     # fresh install: no data, empty keyring
 ```
 
@@ -106,9 +110,15 @@ How to read the output:
   toggling 'SSL/TLS' off", and clicking that fails with "not enabled".
 - Repeated labels, such as the two `Host` fields (IMAP and SMTP), are told
   apart with `index`, in tree order, which matches visual order.
-- A lookup waits up to 20 seconds for its node (`timeout=` changes that). The
-  server handles one request at a time, so while it waits every other call
-  blocks. When you only want to know whether something is there, read `texts`.
+- A lookup waits up to 20 seconds for its node (`timeout=` changes that). Only
+  one call at a time talks to the accessibility bus, so while it waits the
+  other GUI calls block. When you only want to know whether something is
+  there, read `texts`.
+- When the app is busy, each accessibility call waits for its D-Bus timeout.
+  A lookup still gives up at its `timeout`, and a GUI call that cannot get the
+  bus within 30 seconds is refused as "busy". `/health`, `/log` and `/shot`
+  always answer, so look at the screenshot and the log, and `c restart` if the
+  app stays stuck.
 - A failed lookup returns HTTP 409 with the message and the tree, truncated at
   400 nodes. Anything unexpected returns 500 with the traceback.
 - `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
@@ -230,6 +240,12 @@ IMAP is available too, at `localhost:21430` (plaintext).
   accessibility bus (`texts` says `<app not on the accessibility bus>`) and
   `key Escape` does not reach the dialog. Recover with `c restart`; drafts are
   kept. Test attachments by seeding mail with them, or on Android.
+- **Gestures:** `press` and `drag` move the real pointer. With `hold=1` the
+  button stays down until a `drag` without it (or `restart`); the next
+  `drag` goes on from where the pointer is, and `tap`/`press` are refused
+  meanwhile. A `shot` right after a drag can
+  still show the frame before the last move, so nudge by a pixel first
+  (another `hold=1` drag) when you check what the pointer is over.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The

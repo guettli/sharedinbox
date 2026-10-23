@@ -66,6 +66,16 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   static const _pageSize = 50;
   int _limit = _pageSize;
 
+  // Search pagination: how many results the active search requests. Reset to
+  // one page per new query or scope; "Load more" grows it by a page and
+  // re-runs the query, so a common term no longer silently stops at 50.
+  int _searchLimit = searchPageSize;
+  bool _searchLoadingMore = false;
+  // Whether the last fetch filled its page (more matches may exist). Kept
+  // from the fetch result, not the live list length, so rows a batch action
+  // removes locally do not hide "Load more".
+  bool _searchLastPageFull = false;
+
   // Incremented on every search start; stale completions are ignored when the
   // generation has advanced (prevents out-of-order IMAP responses from
   // overwriting fresh results with results for an older query).
@@ -119,12 +129,17 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       return;
     }
     final generation = ++_searchGeneration;
-    setState(() => _searchLoading = true);
+    setState(() {
+      _searchLoading = true;
+      _searchLoadingMore = false;
+      _searchLimit = searchPageSize;
+    });
     try {
       final results = await _runScopedSearch(q);
       if (mounted && generation == _searchGeneration) {
         setState(() {
           _searchResults = results;
+          _searchLastPageFull = results.length >= _searchLimit;
           _lastSettledQuery = q;
         });
       }
@@ -136,14 +151,69 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
   }
 
   /// Runs the query honouring the current [_folderScoped] setting: the
-  /// folder-only IMAP search, or the shared account-wide global search reused
-  /// from the global search screen.
+  /// folder-only local search, or the shared account-wide global search reused
+  /// from the global search screen. Requests [_searchLimit] results.
   Future<List<Email>> _runScopedSearch(String query) {
     final repo = ref.read(emailRepositoryProvider);
     if (_folderScoped) {
-      return repo.searchEmails(widget.accountId, widget.mailboxPath, query);
+      return repo.searchEmails(
+        widget.accountId,
+        widget.mailboxPath,
+        query,
+        limit: _searchLimit,
+      );
     }
-    return searchEmailsGlobalMerged(repo, widget.accountId, query);
+    return searchEmailsGlobalMerged(
+      repo,
+      widget.accountId,
+      query,
+      limit: _searchLimit,
+    );
+  }
+
+  /// A full page means more matches may exist (same rule as the folder list).
+  bool get _searchHasMore => _searchLastPageFull && !_searchLoadingMore;
+
+  /// "Load more" on search results: grows [_searchLimit] by a page and re-runs
+  /// the active query. The current results stay on screen (no spinner) so the
+  /// list keeps its scroll position; a newer search supersedes this one.
+  Future<void> _loadMoreSearchResults() async {
+    final query = _searchController.text.trim();
+    if (query.isEmpty || _searchLoading || _searchLoadingMore) return;
+    final generation = ++_searchGeneration;
+    setState(() {
+      _searchLoadingMore = true;
+      _searchLimit += searchPageSize;
+    });
+    try {
+      final results = await _runScopedSearch(query);
+      if (mounted && generation == _searchGeneration) {
+        setState(() {
+          _searchResults = results;
+          _searchLastPageFull = results.length >= _searchLimit;
+        });
+      }
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Loading more search results failed',
+              screen: 'EmailListScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
+      // Keep the results already shown; the button comes back for a retry.
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchLimit -= searchPageSize);
+        context.showAppSnackBar('Could not load more results.');
+      }
+    } finally {
+      if (mounted && generation == _searchGeneration) {
+        setState(() => _searchLoadingMore = false);
+      }
+    }
   }
 
   void _onSearchChanged(String value) {
@@ -476,6 +546,8 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       controller: _selection,
       items: threads,
       enableSwipe: false,
+      hasMore: _searchHasMore,
+      onLoadMore: () => unawaited(_loadMoreSearchResults()),
       // When broadened beyond this folder, label each hit with its folder so
       // account-wide results stay identifiable.
       showLocationLabel: !_folderScoped,
@@ -579,7 +651,10 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
       _searchController.clear();
       return;
     }
-    setState(() => _searchResults = remaining);
+    setState(() {
+      _searchResults = remaining;
+      _searchLastPageFull = remaining.length >= _searchLimit;
+    });
   }
 
   void _onAfterBatchAction(List<String> actedThreadIds) {

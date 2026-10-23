@@ -247,14 +247,20 @@ class _SwipeActionMenuState extends State<SwipeActionMenu> {
     final top = _stack.last;
     return Positioned.fill(
       child: IgnorePointer(
-        child: Stack(
-          children: [
-            const ModalBarrier(color: Colors.black26),
-            if (top.isScrubber)
-              ..._scrubberWidgets(top)
-            else
-              ..._fanWidgets(top),
-          ],
+        // The overlay sits outside the page's Scaffold, so without a Material
+        // here the labels fall back to WidgetsApp's error style: monospace,
+        // heavy, with a yellow double underline — in release builds too.
+        child: Material(
+          type: MaterialType.transparency,
+          child: Stack(
+            children: [
+              const ModalBarrier(color: Colors.black26),
+              if (top.isScrubber)
+                ..._scrubberWidgets(top)
+              else
+                ..._fanWidgets(top),
+            ],
+          ),
         ),
       ),
     );

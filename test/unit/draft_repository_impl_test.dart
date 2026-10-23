@@ -1,11 +1,15 @@
 import 'package:drift/drift.dart' show Value;
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'fake_imap.dart';
+import 'helpers/jmap_test_server.dart';
 
 class _StubAccounts implements AccountRepository {
   @override
@@ -20,6 +24,120 @@ class _StubAccounts implements AccountRepository {
   Future<void> removeAccount(String id) async {}
   @override
   Future<String> getPassword(String accountId) async => '';
+}
+
+final _gmailDrafts = imap.Mailbox(
+  encodedName: 'Drafts',
+  encodedPath: '[Gmail]/Drafts',
+  pathSeparator: '/',
+  flags: [imap.MailboxFlag.drafts],
+);
+
+/// Accounts stub with one IMAP account.
+class _ImapAccounts extends _StubAccounts {
+  @override
+  Future<Account?> getAccount(String id) async => const Account(
+        id: 'acc-1',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      );
+}
+
+/// Records which folder draft sync creates, selects and appends to.
+class _DraftsSpyImapClient extends SelectingFakeImapClient
+    with StubMailboxList {
+  final created = <String>[];
+  final selected = <String>[];
+  final appendedTo = <String?>[];
+  final appendedMessages = <imap.MimeMessage>[];
+
+  /// UIDs reported back in `APPENDUID`, one per append; none when empty.
+  final appendUids = <int>[];
+
+  /// Runs while an append is in flight, e.g. to edit the draft meanwhile.
+  Future<void> Function()? onAppend;
+
+  /// What `UID SEARCH` finds in the drafts mailbox.
+  List<int> serverUids = [];
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    created.add(path);
+    return fakeMailbox(path);
+  }
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) {
+    selected.add(path);
+    return super.selectMailboxByPath(path);
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appendedTo.add(targetMailboxPath);
+    appendedMessages.add(message);
+    await onAppend?.call();
+    final result = imap.GenericImapResult();
+    if (appendUids.isNotEmpty) {
+      result.responseCode = 'APPENDUID 1 ${appendUids.removeAt(0)}';
+    }
+    return result;
+  }
+
+  final expunged = <imap.MessageSequence>[];
+  List<imap.Mailbox> listed = [];
+
+  @override
+  List<imap.Mailbox> get listedMailboxes => listed;
+
+  @override
+  Future<imap.StoreImapResult> uidMarkDeleted(
+    imap.MessageSequence sequence, {
+    bool? silent,
+    int? unchangedSinceModSequence,
+  }) async =>
+      imap.StoreImapResult();
+
+  @override
+  Future<imap.Mailbox> uidExpunge(imap.MessageSequence sequence) async {
+    expunged.add(sequence);
+    return fakeMailbox('x');
+  }
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async =>
+      imap.SearchImapResult()
+        ..matchingSequence = serverUids.isEmpty
+            ? null
+            : imap.MessageSequence.fromIds(serverUids, isUid: true);
+}
+
+/// Accounts stub with one JMAP account.
+class _JmapAccounts extends _StubAccounts {
+  @override
+  Future<Account?> getAccount(String id) async => const Account(
+        id: 'acc-1',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        type: AccountType.jmap,
+        jmapUrl: 'https://jmap.example.com/.well-known/jmap',
+      );
 }
 
 void main() {
@@ -185,23 +303,24 @@ void main() {
       expect(edited?.imapServerId, '42');
     });
 
-    test('deleteDraft writes a tombstone when the row had a server id',
-        () async {
-      final db = openTestDatabase();
-      await db.into(db.accounts).insert(
-            AccountsCompanion.insert(
-              id: 'acc-1',
-              displayName: 'A',
-              email: 'a@example.com',
-              imapHost: '',
-              imapPort: 993,
-              imapSsl: true,
-              smtpHost: '',
-              smtpPort: 465,
-              smtpSsl: true,
-            ),
-          );
-      final repo = DraftRepositoryImpl(db, _StubAccounts());
+    AccountsCompanion accountRow(String id) => AccountsCompanion.insert(
+          id: id,
+          displayName: id,
+          email: '$id@example.com',
+          imapHost: '',
+          imapPort: 993,
+          imapSsl: true,
+          smtpHost: '',
+          smtpPort: 465,
+          smtpSsl: true,
+        );
+
+    /// Saves a draft for acc-1 and marks it as pushed to the server
+    /// under IMAP UID 17, as a completed sync would.
+    Future<int> saveSyncedDraft(
+      AppDatabase db,
+      DraftRepositoryImpl repo,
+    ) async {
       final draft = await repo.saveDraft(
         accountId: 'acc-1',
         toText: 'a@example.com',
@@ -210,13 +329,193 @@ void main() {
         bodyText: '',
       );
       await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
-        const DraftsCompanion(
-          dirty: Value(false),
-          imapServerId: Value('17'),
+        const DraftsCompanion(dirty: Value(false), imapServerId: Value('17')),
+      );
+      return draft.id;
+    }
+
+    Email serverCopy({
+      String id = 'acc-1:Drafts:17',
+      String mailboxPath = 'Drafts',
+      int uid = 17,
+    }) =>
+        Email(
+          id: id,
+          accountId: 'acc-1',
+          mailboxPath: mailboxPath,
+          uid: uid,
+          receivedAt: DateTime(2026),
+          from: const [],
+          to: const [],
+          cc: const [],
+          isSeen: true,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+
+    test('findDraftForEmail resolves the IMAP server copy by UID', () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+
+      expect((await repo.findDraftForEmail(serverCopy()))?.id, draftId);
+      // The same UID in another folder is a different message.
+      expect(
+        await repo.findDraftForEmail(
+          serverCopy(id: 'acc-1:INBOX:17', mailboxPath: 'INBOX'),
         ),
+        isNull,
+      );
+      expect(
+        await repo
+            .findDraftForEmail(serverCopy(id: 'acc-1:Drafts:18', uid: 18)),
+        isNull,
+      );
+    });
+
+    test('findDraftForEmail uses the drafts mailbox draft sync uses', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+      await db.into(db.syncStates).insert(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:DraftsMailbox',
+              state: '[Gmail]/Drafts',
+              syncedAt: DateTime(2026),
+            ),
+          );
+
+      expect(await repo.findDraftForEmail(serverCopy()), isNull);
+      expect(
+        (await repo.findDraftForEmail(
+          serverCopy(
+            id: 'acc-1:[Gmail]/Drafts:17',
+            mailboxPath: '[Gmail]/Drafts',
+          ),
+        ))
+            ?.id,
+        draftId,
+      );
+    });
+
+    test('findDraftForEmail resolves the JMAP server copy by email id',
+        () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: '',
+        ccText: '',
+        subjectText: 'JMAP draft',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(jmapServerId: Value('Mabc')),
+      );
+
+      final email = serverCopy(id: 'acc-1:Mabc', mailboxPath: 'mb-d', uid: 0);
+      expect((await repo.findDraftForEmail(email))?.id, draft.id);
+      expect(
+        await repo.findDraftForEmail(
+          serverCopy(id: 'acc-1:Mother', mailboxPath: 'mb-d', uid: 0),
+        ),
+        isNull,
+      );
+    });
+
+    test(
+        'switching the account of a synced draft forgets its server id '
+        'and queues the old copy for removal', () async {
+      final db = openTestDatabase();
+      for (final id in ['acc-1', 'acc-2']) {
+        await db.into(db.accounts).insert(accountRow(id));
+      }
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+
+      await repo.saveDraft(
+        id: draftId,
+        accountId: 'acc-2',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'Synced',
+        bodyText: '',
+      );
+
+      final moved = await repo.getDraft(draftId);
+      expect(moved?.accountId, 'acc-2');
+      // UID 17 means nothing in acc-2's Drafts folder: pushing must append
+      // a fresh copy, not expunge acc-2's message 17.
+      expect(moved?.imapServerId, isNull);
+      expect(moved?.dirty, isTrue);
+      final tombstones = await db.select(db.draftTombstones).get();
+      expect(tombstones.single.accountId, 'acc-1');
+      expect(tombstones.single.serverId, '17');
+    });
+
+    test('a draft of a deleted account can move to another account', () async {
+      final db = openTestDatabase();
+      await db.into(db.accounts).insert(accountRow('acc-2'));
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      // acc-1 is gone; its draft stayed behind.
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(jmapServerId: Value('M42')),
+      );
+
+      await repo.saveDraft(
+        id: draft.id,
+        accountId: 'acc-2',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+
+      final moved = await repo.getDraft(draft.id);
+      expect(moved?.accountId, 'acc-2');
+      expect(moved?.jmapServerId, isNull);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test('deleteDraft of a deleted account works with foreign keys on',
+        () async {
+      // Foreign keys are on: a tombstone for a missing account would fail
+      // the insert.
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draft = await repo.saveDraft(
+        accountId: 'gone',
+        toText: '',
+        ccText: '',
+        subjectText: 'Orphan',
+        bodyText: '',
+      );
+      await (db.update(db.drafts)..where((t) => t.id.equals(draft.id))).write(
+        const DraftsCompanion(imapServerId: Value('9')),
       );
 
       await repo.deleteDraft(draft.id);
+
+      expect(await repo.getDraft(draft.id), isNull);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test('deleteDraft writes a tombstone when the row had a server id',
+        () async {
+      final db = openTestDatabase();
+      await db.into(db.accounts).insert(accountRow('acc-1'));
+      final repo = DraftRepositoryImpl(db, _StubAccounts());
+      final draftId = await saveSyncedDraft(db, repo);
+
+      await repo.deleteDraft(draftId);
 
       final tombstones = await db.select(db.draftTombstones).get();
       expect(tombstones, hasLength(1));
@@ -238,6 +537,446 @@ void main() {
 
       final tombstones = await db.select(db.draftTombstones).get();
       expect(tombstones, isEmpty);
+    });
+
+    /// A repo for the IMAP account whose connections all go to [client].
+    DraftRepositoryImpl imapRepo(
+      AppDatabase db,
+      _DraftsSpyImapClient client,
+    ) =>
+        DraftRepositoryImpl(
+          db,
+          _ImapAccounts(),
+          imapConnect: (_, __, ___) async => client,
+        );
+
+    /// Saves a not yet synced draft for acc-1.
+    Future<int> saveNewDraft(DraftRepositoryImpl repo) async {
+      final draft = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+      return draft.id;
+    }
+
+    /// Edits draft [id] of [accountId] as compose would.
+    Future<void> editDraft(
+      DraftRepositoryImpl repo,
+      int id, {
+      String accountId = 'acc-1',
+      String bodyText = 'Edited',
+    }) =>
+        repo.saveDraft(
+          id: id,
+          accountId: accountId,
+          toText: 'alice@example.com',
+          ccText: '',
+          subjectText: 'Hi',
+          bodyText: bodyText,
+        );
+
+    test('Bcc survives save, edit and the IMAP push (#1126)', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [42];
+      final repo = imapRepo(db, client);
+      final saved = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        bccText: 'Eve <eve@example.com>',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+      expect((await repo.getDraft(saved.id))?.bccText, 'Eve <eve@example.com>');
+
+      await repo.syncDrafts('acc-1');
+
+      // The server draft is the sender's own copy, so it keeps Bcc.
+      final pushed = client.appendedMessages.single;
+      expect(pushed.bcc?.map((a) => a.email), ['eve@example.com']);
+      expect((await repo.getDraft(saved.id))?.dirty, isFalse);
+
+      // Dropping only the Bcc (bccText defaults to empty) is an edit too.
+      await repo.saveDraft(
+        id: saved.id,
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+      final row = await repo.getDraft(saved.id);
+      expect(row?.bccText, isEmpty);
+      expect(row?.dirty, isTrue);
+    });
+
+    test('an edit during the IMAP append is pushed by the next sync', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..appendUids.addAll([42, 43]);
+      final repo = imapRepo(db, client);
+      final id = await saveNewDraft(repo);
+      client.onAppend = () async {
+        client.onAppend = null;
+        await editDraft(repo, id);
+      };
+
+      await repo.syncDrafts('acc-1');
+
+      // The edit is not lost: the row stays dirty, and remembers the copy
+      // just appended so the next push replaces it.
+      var row = await repo.getDraft(id);
+      expect(row?.bodyText, 'Edited');
+      expect(row?.imapServerId, '42');
+      expect(row?.dirty, isTrue);
+
+      client.serverUids = [43];
+      await repo.syncDrafts('acc-1');
+
+      row = await repo.getDraft(id);
+      expect(client.appendedTo, hasLength(2));
+      expect(client.expunged.single.toList(), [42]);
+      expect(row?.imapServerId, '43');
+      expect(row?.dirty, isFalse);
+    });
+
+    Future<AppDatabase> dbWithTwoAccounts() async {
+      final db = openTestDatabase();
+      for (final id in ['acc-1', 'acc-2']) {
+        await db.into(db.accounts).insert(accountRow(id));
+      }
+      return db;
+    }
+
+    /// Syncs acc-1 while [meanwhile] changes its new draft during the append
+    /// (which gets UID 42). Returns the draft as it is afterwards, once the
+    /// checks common to a move and a delete have passed: UID 42 is queued
+    /// for removal, is not imported back, and the next sync expunges it.
+    Future<Draft?> raceImapAppend(
+      Future<void> Function(DraftRepositoryImpl repo, int id) meanwhile,
+    ) async {
+      final db = await dbWithTwoAccounts();
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [42];
+      final repo = imapRepo(db, client);
+      final id = await saveNewDraft(repo);
+      client.onAppend = () => meanwhile(repo, id);
+
+      await repo.syncDrafts('acc-1');
+
+      final rows = await db.select(db.drafts).get();
+      expect(rows.where((r) => r.imapServerId == '42'), isEmpty);
+      expect(rows.length, lessThanOrEqualTo(1));
+      final tombstone = (await db.select(db.draftTombstones).get()).single;
+      expect(tombstone.accountId, 'acc-1');
+      expect(tombstone.serverId, '42');
+
+      client
+        ..onAppend = null
+        ..serverUids = [];
+      await repo.syncDrafts('acc-1');
+
+      expect(client.expunged.single.toList(), [42]);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+      return rows.isEmpty ? null : rows.single;
+    }
+
+    test(
+        'an account switch during the IMAP append removes the copy it made '
+        'on the old account', () async {
+      final row = await raceImapAppend(
+        (repo, id) => editDraft(repo, id, accountId: 'acc-2'),
+      );
+      expect(row?.accountId, 'acc-2');
+      expect(row?.dirty, isTrue);
+    });
+
+    test('a delete during the IMAP append removes the copy it made', () async {
+      final row = await raceImapAppend((repo, id) => repo.deleteDraft(id));
+      expect(row, isNull);
+    });
+
+    /// A repo for the JMAP account acc-1 whose fake server keeps the drafts
+    /// it is sent (as M1, M2, …) and records every `Email/set` in [sets].
+    /// [duringFirstSet] runs while the first one is in flight. The server
+    /// answers no `Email/get`, so a pull may only find drafts it knows.
+    Future<(DraftRepositoryImpl, int)> jmapRepo(
+      AppDatabase db,
+      List<Map<String, dynamic>> sets,
+      Future<void> Function(DraftRepositoryImpl repo, int id) duringFirstSet,
+    ) async {
+      late DraftRepositoryImpl repo;
+      late int id;
+      final onServer = <String>[];
+      final server = jmapFakeServer(
+        accountId: 'u1',
+        handle: (call) async {
+          switch (call.method) {
+            case 'Mailbox/get':
+              return [
+                'Mailbox/get',
+                {
+                  'list': [
+                    {'id': 'mb-drafts', 'name': 'Drafts', 'role': 'drafts'},
+                  ],
+                },
+                call.callId,
+              ];
+            case 'Email/set':
+              sets.add(call.args);
+              final destroy = (call.args['destroy'] as List?) ?? const [];
+              onServer.removeWhere(destroy.contains);
+              if (!call.args.containsKey('create')) {
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              }
+              if (sets.length == 1) await duringFirstSet(repo, id);
+              final newId = 'M${sets.length}';
+              onServer.add(newId);
+              return [
+                'Email/set',
+                {
+                  'created': {
+                    'draft': {'id': newId},
+                  },
+                },
+                call.callId,
+              ];
+            case 'Email/query':
+              return [
+                'Email/query',
+                {'ids': List.of(onServer)},
+                call.callId,
+              ];
+          }
+          return null;
+        },
+      );
+      repo = DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
+      id = await saveNewDraft(repo);
+      return (repo, id);
+    }
+
+    test('the JMAP draft push carries Bcc (#1126)', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(
+        db,
+        sets,
+        (repo, id) async {},
+      );
+      await repo.saveDraft(
+        id: id,
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        bccText: 'eve@example.com',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      final create = (sets.single['create'] as Map)['draft'] as Map;
+      expect(create['bcc'], [
+        {'email': 'eve@example.com'},
+      ]);
+    });
+
+    test('an edit during the JMAP push is pushed by the next sync', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(db, sets, editDraft);
+
+      await repo.syncDrafts('acc-1');
+
+      var row = await repo.getDraft(id);
+      expect(row?.jmapServerId, 'M1');
+      expect(row?.dirty, isTrue);
+
+      await repo.syncDrafts('acc-1');
+
+      // The second push replaces the copy the first one made.
+      row = await repo.getDraft(id);
+      expect(sets, hasLength(2));
+      expect(sets[1]['destroy'], ['M1']);
+      expect(row?.jmapServerId, 'M2');
+      expect(row?.dirty, isFalse);
+    });
+
+    test(
+        'an account switch during the JMAP push removes the copy it made '
+        'on the old account', () async {
+      final db = await dbWithTwoAccounts();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(
+        db,
+        sets,
+        (repo, id) => editDraft(repo, id, accountId: 'acc-2'),
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      // M1 is still on acc-1's server, but queued for removal: the pull
+      // must not import it back.
+      final row = await repo.getDraft(id);
+      expect(row?.accountId, 'acc-2');
+      expect(row?.jmapServerId, isNull);
+      expect(await db.select(db.drafts).get(), hasLength(1));
+      final tombstone = (await db.select(db.draftTombstones).get()).single;
+      expect(tombstone.accountId, 'acc-1');
+      expect(tombstone.serverId, 'M1');
+
+      await repo.syncDrafts('acc-1');
+
+      expect(sets.last['destroy'], ['M1']);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test('IMAP sync uses the server\'s drafts mailbox, not its own "Drafts"',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await repo.syncDrafts('acc-1');
+
+      expect(client.created, isEmpty);
+      expect(client.selected, ['[Gmail]/Drafts']);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
+    });
+
+    test(
+        'a switch of drafts mailbox re-uploads drafts instead of expunging '
+        'their old UIDs there', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      // Synced by an older build into its own "Drafts" folder as UID 7, and a
+      // deleted draft that was UID 9 there.
+      await db.into(db.drafts).insert(
+            DraftsCompanion.insert(
+              accountId: const Value('acc-1'),
+              toText: const Value('alice@example.com'),
+              subjectText: const Value('Old draft'),
+              updatedAt: DateTime(2026),
+              imapServerId: const Value('7'),
+              dirty: const Value(false),
+            ),
+          );
+      await db.into(db.draftTombstones).insert(
+            DraftTombstonesCompanion.insert(
+              accountId: 'acc-1',
+              serverId: '9',
+              createdAt: DateTime(2026),
+            ),
+          );
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
+      final repo = imapRepo(db, client);
+
+      await repo.syncDrafts('acc-1');
+
+      // UIDs 7 and 9 belong to the old folder: nothing is expunged in the
+      // new one, and the draft is uploaded there as a new message.
+      expect(client.expunged, isEmpty);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
+      expect(await db.select(db.draftTombstones).get(), isEmpty);
+    });
+
+    test('overlapping syncs of one account push a draft once', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.addAll([42, 43])
+        ..serverUids = [42];
+      // The append takes a while, as on a real server: long enough for the
+      // second sync (e.g. "Edit draft" during the background cycle) to start.
+      client.onAppend = () => Future<void>.delayed(
+            const Duration(milliseconds: 20),
+          );
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await Future.wait([repo.syncDrafts('acc-1'), repo.syncDrafts('acc-1')]);
+
+      expect(client.appendedTo, hasLength(1));
+      final rows = await db.select(db.drafts).get();
+      expect(rows.single.imapServerId, '42');
+      expect(rows.single.dirty, isFalse);
+    });
+
+    test('a failed sync does not block the next one', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..appendUids.add(42);
+      var fail = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async {
+          if (fail) throw Exception('offline');
+          return client;
+        },
+      );
+      await saveNewDraft(repo);
+
+      await expectLater(repo.syncDrafts('acc-1'), throwsException);
+      fail = false;
+      await repo.syncDrafts('acc-1');
+
+      expect(client.appendedTo, hasLength(1));
+    });
+
+    test('a second sync stays with the same mailbox', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()..listed = [_gmailDrafts];
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await repo.syncDrafts('acc-1');
+      await repo.syncDrafts('acc-1');
+
+      // The draft went up once, and the mailbox in use is remembered, so the
+      // next sync sees no switch to undo.
+      expect(client.created, isEmpty);
+      expect(client.appendedTo, ['[Gmail]/Drafts']);
+      final state = await (db.select(db.syncStates)
+            ..where((t) => t.resourceType.equals('IMAP:DraftsMailbox')))
+          .getSingle();
+      expect(state.state, '[Gmail]/Drafts');
+    });
+
+    test('a non-ASCII drafts mailbox is addressed in modified UTF-7', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..listed = [
+          // A user folder named "Drafts" is not the drafts mailbox: only the
+          // server's \Drafts flag counts.
+          imap.Mailbox(
+            encodedName: 'Drafts',
+            encodedPath: 'Projects/Drafts',
+            pathSeparator: '/',
+            flags: [],
+          ),
+          imap.Mailbox(
+            encodedName: 'Entw&APw-rfe',
+            encodedPath: 'Entw&APw-rfe',
+            pathSeparator: '/',
+            flags: [imap.MailboxFlag.drafts],
+          ),
+        ];
+      final repo = imapRepo(db, client);
+      await saveNewDraft(repo);
+
+      await repo.syncDrafts('acc-1');
+
+      expect(client.selected, ['Entw&APw-rfe']);
+      expect(client.appendedTo, ['Entw&APw-rfe']);
     });
   });
 }

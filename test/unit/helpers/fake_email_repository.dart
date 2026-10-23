@@ -41,11 +41,25 @@ class FakeEmailRepositoryBase implements EmailRepository {
   Future<SyncEmailsResult> syncEmails(String a, String m) async =>
       SyncEmailsResult.zero;
   @override
+  Future<ImapMailboxState?> lastImapMailboxState(String a, String m) async =>
+      null;
+  @override
   Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
   @override
   Future<void> markAllAsRead(String a, String m) async {}
   @override
   Future<void> moveEmail(String id, String dest) async {}
+
+  @override
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
+      false;
+
+  @override
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  }) async {}
   @override
   Future<String?> deleteEmail(String id) async => null;
 
@@ -65,14 +79,34 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<String> fetchRawRfc822(String id) async => '';
   @override
-  Future<List<Email>> searchEmails(String a, String m, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
-  @override
-  Future<List<Email>> searchEmailsStructured(String? a, FilterGroup f) async =>
+  Future<List<Email>> searchEmails(
+    String a,
+    String m,
+    String q, {
+    int limit = searchPageSize,
+  }) async =>
       [];
   @override
-  Future<List<Email>> getEmailsByAddress(String? a, String addr) async => [];
+  Future<List<Email>> searchEmailsGlobal(
+    String? a,
+    String q, {
+    int limit = searchPageSize,
+  }) async =>
+      [];
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? a,
+    FilterGroup f, {
+    int limit = searchPageSize,
+  }) async =>
+      [];
+  @override
+  Future<List<Email>> getEmailsByAddress(
+    String? a,
+    String addr, {
+    int? limit,
+  }) async =>
+      [];
   @override
   Future<List<EmailAddress>> searchAddresses(
     String? a,

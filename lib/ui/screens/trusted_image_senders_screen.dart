@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:sharedinbox/core/utils/sender_address.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -70,28 +71,40 @@ class TrustedImageSendersScreen extends ConsumerWidget {
 
   Future<void> _showAddDialog(BuildContext context, WidgetRef ref) async {
     final controller = TextEditingController();
+    // The error is shown only once the user tried to submit, not while typing.
+    var submitAttempted = false;
 
     await showDialog<void>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setState) {
+            final pattern = trustedImageSenderPattern(controller.text);
+            void add() {
+              _addSender(ref, pattern!);
+              Navigator.of(ctx).pop();
+            }
+
             return AlertDialog(
               title: const Text('Add allowed address'),
               content: TextField(
                 controller: controller,
                 autofocus: true,
                 keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Email address or pattern',
                   hintText: '*@example.com',
                   helperText: '* matches any characters, e.g. *@example.com',
+                  errorText: submitAttempted && pattern == null
+                      ? 'Not an email address or pattern like *@example.com'
+                      : null,
                 ),
-                onChanged: (_) => setState(() {}),
-                onSubmitted: (value) {
-                  if (value.trim().isNotEmpty) {
-                    _addSender(ref, value);
-                    Navigator.of(ctx).pop();
+                onChanged: (_) => setState(() => submitAttempted = false),
+                onSubmitted: (_) {
+                  if (pattern != null) {
+                    add();
+                  } else {
+                    setState(() => submitAttempted = true);
                   }
                 },
               ),
@@ -101,12 +114,7 @@ class TrustedImageSendersScreen extends ConsumerWidget {
                   child: const Text('Cancel'),
                 ),
                 TextButton(
-                  onPressed: controller.text.trim().isEmpty
-                      ? null
-                      : () {
-                          _addSender(ref, controller.text);
-                          Navigator.of(ctx).pop();
-                        },
+                  onPressed: pattern == null ? null : add,
                   child: const Text('Add'),
                 ),
               ],
@@ -117,11 +125,11 @@ class TrustedImageSendersScreen extends ConsumerWidget {
     );
   }
 
-  void _addSender(WidgetRef ref, String value) {
+  void _addSender(WidgetRef ref, String pattern) {
     unawaited(
       ref
           .read(userPreferencesRepositoryProvider)
-          .addTrustedImageSender(value.trim()),
+          .addTrustedImageSender(pattern),
     );
   }
 }

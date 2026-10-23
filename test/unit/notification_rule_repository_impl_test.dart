@@ -1,4 +1,3 @@
-import 'package:drift/drift.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -11,18 +10,6 @@ FilterGroup _fromIs(String address) => FilterGroup.single(
       FilterComparison.is_,
       address,
     );
-
-Future<void> _seedInbox(AppDatabase db, String accountId) async {
-  await db.into(db.mailboxes).insert(
-        MailboxesCompanion.insert(
-          id: '$accountId:INBOX',
-          accountId: accountId,
-          path: 'INBOX',
-          name: 'INBOX',
-          role: const Value('inbox'),
-        ),
-      );
-}
 
 Future<void> _seedEmail(
   AppDatabase db,
@@ -47,7 +34,8 @@ void main() {
 
   group('NotificationRuleRepositoryImpl', () {
     test('add / list / update / delete rules', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -71,7 +59,8 @@ void main() {
     });
 
     test('rules are scoped per account', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -84,10 +73,11 @@ void main() {
 
     test('unnotifiedInboxEmails excludes non-inbox and notified mail',
         () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
-      await _seedInbox(db, 'acc');
+      await seedInboxMailbox(db, 'acc');
       // A non-inbox mailbox whose mail must never be a candidate.
       await db.into(db.mailboxes).insert(
             MailboxesCompanion.insert(
@@ -118,10 +108,11 @@ void main() {
     });
 
     test('markBaseline silences the whole current inbox', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
-      await _seedInbox(db, 'acc');
+      await seedInboxMailbox(db, 'acc');
 
       final t0 = DateTime.utc(2026, 1, 1, 9);
       await _seedEmail(db, 'acc', 'INBOX', 'acc:INBOX:1', t0);
@@ -143,7 +134,8 @@ void main() {
     });
 
     test('watchRules emits on change', () async {
-      final db = openTestDatabase();
+      final db =
+          await openTestDatabaseWithAccounts(const ['acc', 'acc-1', 'acc-2']);
       addTearDown(db.close);
       final repo = NotificationRuleRepositoryImpl(db);
 
@@ -153,6 +145,16 @@ void main() {
       await repo.addRule('acc', _fromIs('a@x.com'));
       final next = await repo.watchRules('acc').first;
       expect(next, hasLength(1));
+    });
+
+    test('markNotified for an account removed meanwhile is dropped', () async {
+      final db = openTestDatabase();
+      addTearDown(db.close);
+      final repo = NotificationRuleRepositoryImpl(db);
+
+      await repo.markNotified('gone', ['gone:INBOX:1']);
+
+      expect(await db.select(db.notifiedEmails).get(), isEmpty);
     });
   });
 }

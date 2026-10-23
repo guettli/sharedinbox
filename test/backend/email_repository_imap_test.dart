@@ -111,6 +111,55 @@ void main() {
     expect((checkpoint['lastUid'] as int), greaterThan(0));
   });
 
+  // The IMAP IDLE wait compares its own SELECT of INBOX with what the last
+  // sync saw, to catch mail delivered while the cycle ran (which IDLE never
+  // reports). Both sides must read the same values from a real server.
+  test('lastImapMailboxState matches a later SELECT until new mail arrives',
+      () async {
+    await appendToInbox('state-1');
+    await appendToInbox('state-2');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    expect(await r.emails.lastImapMailboxState('test', 'INBOX'), isNull);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final synced = await r.emails.lastImapMailboxState('test', 'INBOX');
+    expect(synced, isNotNull);
+    expect(synced!.uidNext, isNotNull);
+    expect(synced.exists, 2);
+    expect((await _selectInbox(env, user)).differsFrom(synced), isFalse);
+
+    await appendToInbox('state-3');
+    expect((await _selectInbox(env, user)).differsFrom(synced), isTrue);
+  });
+
+  // The app's own flag change is flushed before the cycle selects INBOX, so
+  // the state that sync stores must already include it: otherwise every
+  // flag change would cost the IDLE wait a needless catch-up cycle (pins
+  // HIGHESTMODSEQ stability on Stalwart).
+  test('own flag change flushed before a sync leaves no INBOX state diff',
+      () async {
+    await appendToInbox('own-flag');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final emails = await r.emails.observeEmails('test', 'INBOX').first;
+    await r.emails.setFlag(emails.first.id, seen: true, flagged: true);
+    await r.emails.flushPendingChanges('test', user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final synced = await r.emails.lastImapMailboxState('test', 'INBOX');
+    final current = await _selectInbox(env, user);
+    expect(
+      current.differsFrom(synced!),
+      isFalse,
+      reason: '$synced vs $current',
+    );
+  });
+
   test(
     'syncEmails incremental sync fetches only messages newer than checkpoint',
     () async {
@@ -243,7 +292,7 @@ void main() {
     );
   });
 
-  // #565: a mail-to-self shows a local copy immediately; starring it must
+  // #565: a mail-to-self shows a local copy once sent; starring it must
   // survive the very sync that delivers the real message. The delivery
   // advances HIGHESTMODSEQ, so the incremental sync runs the CONDSTORE flag
   // refresh (_refreshFlagsImap) right after the dissolve carries the star
@@ -282,15 +331,16 @@ void main() {
     );
     expect(outboxId, isNonZero);
 
-    // The virtual copy appears in the inbox immediately; star it.
+    // Actually send it: once SMTP accepted it, the virtual copy appears in
+    // the inbox (not before, #545); star it.
+    await r.emails.flushOutbox('test', user.password);
     final local = (await r.emails.observeEmails('test', 'INBOX').first)
         .firstWhere((e) => e.subject == subject);
     expect(local.isLocal, isTrue, reason: 'mail-to-self shows a local copy');
     await r.emails.setFlag(local.id, flagged: true);
 
-    // Actually send it, then sync until the delivered message dissolves the
-    // virtual copy into the real one.
-    await r.emails.flushOutbox('test', user.password);
+    // Sync until the delivered message dissolves the virtual copy into the
+    // real one.
 
     var arrived = false;
     var stillStarred = false;
@@ -841,4 +891,62 @@ void main() {
       expect(downloaded, equals(attachmentBytes));
     },
   );
+
+  test('local Sieve star + keyword + fileinto reach the server', () async {
+    await appendToInbox('Lunch on Friday');
+    final client = await connectImap(env: env, user: user);
+    addTearDown(client.logout);
+    await _ensureMailbox(client, 'Trash');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.db.into(r.db.localSieveScripts).insert(
+          LocalSieveScriptsCompanion.insert(
+            accountId: 'test',
+            name: 'lunch',
+            content: const Value(r'''
+require ["fileinto", "imap4flags"];
+if header :contains "subject" "lunch" {
+  setflag "\\Flagged";
+  addflag "Work";
+  fileinto "Trash";
+}
+'''),
+            isActive: const Value(true),
+          ),
+        );
+    await r.emails.syncEmails('test', 'INBOX');
+    expect(await r.emails.applySieveRules('test'), 1);
+    await r.emails.flushPendingChanges('test', user.password);
+    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+    expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
+    await client.selectMailboxByPath('Trash');
+    final fetch =
+        await client.fetchMessages(MessageSequence.fromAll(), 'FLAGS');
+    final flags = fetch.messages.single.flags ?? [];
+    expect(flags, containsAll([r'\Flagged', 'Work']));
+    expect(flags, isNot(contains(r'\Seen')));
+  });
+}
+
+/// INBOX as a fresh SELECT reports it, like the IDLE connection sees it.
+Future<ImapMailboxState> _selectInbox(
+  StalwartEnv env,
+  StalwartTestUser user,
+) async {
+  final client = await connectImap(env: env, user: user);
+  try {
+    final mbox = await client.selectMailboxByPath(
+      'INBOX',
+      enableCondStore: client.serverInfo.supports('CONDSTORE'),
+    );
+    return ImapMailboxState(
+      uidNext: mbox.uidNext,
+      exists: mbox.messagesExists,
+      highestModSeq: mbox.highestModSequence,
+    );
+  } finally {
+    await client.logout();
+  }
 }

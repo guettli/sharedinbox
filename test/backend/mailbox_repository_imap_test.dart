@@ -75,4 +75,108 @@ void main() {
     expect(inbox.totalCount, greaterThan(0));
     expect(inbox.unreadCount, greaterThan(0));
   });
+
+  // Same input as the JMAP test in email_repository_jmap_test.dart: a "/" in
+  // the typed name is a hierarchy separator, so both protocols end up with
+  // Projects containing 2026.
+  test('createMailbox with "/" creates a nested IMAP folder', () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+
+    Future<void> dropProjects() async {
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      final stale = all
+          .where(
+            (m) =>
+                m.displayPath == 'Projects' ||
+                m.displayPath.startsWith('Projects/'),
+          )
+          .toList()
+        ..sort((a, b) => b.displayPath.length.compareTo(a.displayPath.length));
+      for (final m in stale) {
+        await r.mailboxes.deleteMailbox('test', m.path);
+      }
+    }
+
+    await dropProjects();
+    try {
+      final leaf = await r.mailboxes.createMailbox('test', 'Projects/2026');
+      expect(leaf.name, '2026');
+      expect(leaf.displayPath, 'Projects/2026');
+
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      expect(all.where((m) => m.displayPath == 'Projects'), hasLength(1));
+      final child = all.singleWhere((m) => m.displayPath == 'Projects/2026');
+      expect(child.name, '2026');
+    } finally {
+      await dropProjects();
+    }
+  });
+
+  test('deleteMailbox removes an IMAP folder that still contains mail',
+      () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    const folderName = 'DeleteWithMail';
+
+    Future<void> dropFolder() async {
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      for (final m in all.where((m) => m.displayPath == folderName)) {
+        await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
+      }
+    }
+
+    await dropFolder();
+    final folder = await r.mailboxes.createMailbox('test', folderName);
+    final client = await connectImap(env: env, user: user);
+    try {
+      await appendMessage(
+        client,
+        subject: 'doomed',
+        userEmail: user.email,
+        mailboxPath: folder.path,
+      );
+    } finally {
+      await client.logout();
+    }
+    await r.mailboxes.syncMailboxes('test');
+    await r.db.into(r.db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'test:${folder.path}:1',
+            accountId: 'test',
+            mailboxPath: folder.path,
+            uid: 1,
+            receivedAt: DateTime.now(),
+          ),
+        );
+
+    // Without removeEmails (the dialog said "empty") the mail is kept.
+    await expectLater(
+      r.mailboxes.deleteMailbox('test', folder.path),
+      throwsA(isA<Exception>()),
+    );
+    final kept = await r.mailboxes.observeMailboxes('test').first;
+    expect(kept.map((m) => m.path), contains(folder.path));
+
+    await r.mailboxes.deleteMailbox('test', folder.path, removeEmails: true);
+
+    final local = await (r.db.select(r.db.emails)
+          ..where((t) => t.mailboxPath.equals(folder.path)))
+        .get();
+    expect(local, isEmpty);
+    await r.mailboxes.syncMailboxes('test');
+    final all = await r.mailboxes.observeMailboxes('test').first;
+    expect(all.where((m) => m.displayPath == folderName), isEmpty);
+
+    final check = await connectImap(env: env, user: user);
+    try {
+      final boxes = await check.listMailboxes();
+      expect(boxes.where((b) => b.name == folderName), isEmpty);
+    } finally {
+      await check.logout();
+    }
+  });
 }

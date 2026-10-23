@@ -4,6 +4,7 @@
 // as the real app) inside a ProviderScope whose repository providers are
 // replaced with lightweight in-memory fakes.  No database or network is used.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -135,7 +136,7 @@ class FakeShareKeyRepository implements ShareKeyRepository {
   Future<ShareKeyMaterial?> findByKeyId(dynamic keyId) async => _material;
 }
 
-class FakeDraftRepository implements DraftRepository {
+class FakeDraftRepository extends DraftRepository {
   int _nextId = 1;
   final Map<int, SavedDraft> _drafts = {};
 
@@ -143,29 +144,22 @@ class FakeDraftRepository implements DraftRepository {
   final Set<int> savedIds = {};
 
   /// Awaited at the start of every [saveDraft]. Override it to hold a save
-  /// in flight (or fail it) without restating [saveDraft]'s signature.
+  /// in flight (or fail it) without restating [writeDraft].
   Future<void> beforeSave() async {}
 
   @override
-  Future<SavedDraft> saveDraft({
-    int? id,
-    String? accountId,
-    String? replyToEmailId,
-    required String toText,
-    required String ccText,
-    required String subjectText,
-    required String bodyText,
-  }) async {
+  Future<SavedDraft> writeDraft(DraftInput input) async {
     await beforeSave();
-    final draftId = id ?? _nextId++;
+    final draftId = input.id ?? _nextId++;
     final draft = SavedDraft(
       id: draftId,
-      accountId: accountId,
-      replyToEmailId: replyToEmailId,
-      toText: toText,
-      ccText: ccText,
-      subjectText: subjectText,
-      bodyText: bodyText,
+      accountId: input.accountId,
+      replyToEmailId: input.replyToEmailId,
+      toText: input.toText,
+      ccText: input.ccText,
+      bccText: input.bccText,
+      subjectText: input.subjectText,
+      bodyText: input.bodyText,
       updatedAt: DateTime.now(),
     );
     _drafts[draftId] = draft;
@@ -189,10 +183,26 @@ class FakeDraftRepository implements DraftRepository {
   Future<SavedDraft?> getDraft(int id) async => _drafts[id];
 
   @override
+  Future<SavedDraft?> findDraftForEmail(Email email) async =>
+      draftsByEmailId[email.id];
+
+  /// What [findDraftForEmail] resolves, keyed by message row id.
+  final Map<String, SavedDraft> draftsByEmailId = {};
+
+  /// Accounts [syncDrafts] ran for.
+  final List<String> syncedAccounts = [];
+
+  /// Runs inside [syncDrafts], e.g. to pull a draft or to fail.
+  Future<void> Function()? onSync;
+
+  @override
   Future<void> deleteDraft(int id) async => _drafts.remove(id);
 
   @override
-  Future<void> syncDrafts(String accountId) async {}
+  Future<void> syncDrafts(String accountId) async {
+    syncedAccounts.add(accountId);
+    await onSync?.call();
+  }
 }
 
 class FakeMailboxRepository implements MailboxRepository {
@@ -261,6 +271,12 @@ class FakeMailboxRepository implements MailboxRepository {
 
   final List<({String path, String newName})> renameCalls = [];
   final List<String> deleteCalls = [];
+
+  /// The `removeEmails` argument of each [deleteMailbox] call.
+  final List<bool> deleteRemoveEmails = [];
+
+  /// When set, [deleteMailbox] records the call and throws this instead.
+  Object? deleteError;
   final List<({String path, String? newParent})> moveCalls = [];
 
   @override
@@ -284,8 +300,15 @@ class FakeMailboxRepository implements MailboxRepository {
   }
 
   @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {
+  Future<void> deleteMailbox(
+    String accountId,
+    String mailboxPath, {
+    bool removeEmails = false,
+  }) async {
     deleteCalls.add(mailboxPath);
+    deleteRemoveEmails.add(removeEmails);
+    final error = deleteError;
+    if (error != null) throw error;
     _mailboxes.removeWhere(
       (m) => m.accountId == accountId && m.path == mailboxPath,
     );
@@ -490,6 +513,13 @@ class FakeEmailRepository implements EmailRepository {
   ) async =>
       SyncEmailsResult.zero;
 
+  @override
+  Future<ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  ) async =>
+      null;
+
   /// Records every [setFlag] call so tests can assert on batch behaviour.
   final List<({String emailId, bool? seen, bool? flagged})> setFlagCalls = [];
 
@@ -503,6 +533,17 @@ class FakeEmailRepository implements EmailRepository {
 
   @override
   Future<void> moveEmail(String emailId, String destMailboxPath) async {}
+
+  @override
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
+      false;
+
+  @override
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  }) async {}
 
   @override
   Future<bool> cancelPendingChange(String id, String type) async => false;
@@ -598,8 +639,9 @@ class FakeEmailRepository implements EmailRepository {
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) async {
     if (onSearch != null) return onSearch!(query);
     return _searchResults;
   }
@@ -611,8 +653,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) async {
     searchGlobalAccountIds.add(accountId);
     return _searchResults;
   }
@@ -624,8 +667,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async {
     structuredSearchCalls.add(filter);
     return List.of(_structuredSearchResults);
   }
@@ -633,8 +677,9 @@ class FakeEmailRepository implements EmailRepository {
   @override
   Future<List<Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async =>
+    String address, {
+    int? limit,
+  }) async =>
       List.of(_byAddressResults);
 
   @override
@@ -908,6 +953,7 @@ Widget buildApp({
             replyToEmailId: extra?['replyToEmailId'] as String?,
             prefillTo: extra?['prefillTo'] as String?,
             prefillCc: extra?['prefillCc'] as String?,
+            prefillBcc: extra?['prefillBcc'] as String?,
             prefillSubject: extra?['prefillSubject'] as String?,
             prefillBody: extra?['prefillBody'] as String?,
             draftId: extra?['draftId'] as int?,
@@ -943,6 +989,11 @@ Widget buildApp({
     overrides: [
       dbProvider.overrideWith((ref) {
         final db = AppDatabase(NativeDatabase.memory());
+        // The accounts and mail of a widget test live in the fake
+        // repositories, so this scratch database has no rows for the undo
+        // log, filters etc. to reference. Queued first, the pragma runs right
+        // after the open, before any statement of the screen under test.
+        unawaited(db.customStatement('PRAGMA foreign_keys = OFF'));
         ref.onDispose(db.close);
         return db;
       }),
@@ -1100,13 +1151,11 @@ Email testEmail({
 class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
     this.menuPosition = MenuPosition.bottom,
-    this.mailViewButtonPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
     List<String>? trustedImageSenders,
   }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
-  MenuPosition mailViewButtonPosition;
   AfterMailViewAction afterMailViewAction;
   final List<String> _trustedImageSenders;
 
@@ -1117,7 +1166,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   Stream<UserPreferences> observePreferences() => Stream.value(
         UserPreferences(
           menuPosition: menuPosition,
-          mailViewButtonPosition: mailViewButtonPosition,
           afterMailViewAction: afterMailViewAction,
         ),
       );
@@ -1125,11 +1173,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   @override
   Future<void> updateMenuPosition(MenuPosition position) async {
     menuPosition = position;
-  }
-
-  @override
-  Future<void> updateMailViewButtonPosition(MenuPosition position) async {
-    mailViewButtonPosition = position;
   }
 
   @override
@@ -1210,3 +1253,57 @@ List<GestureRecognizer> linkRecognizersFor(WidgetTester tester, String url) {
   }
   return recognizers;
 }
+
+/// Search fake that honours the `limit` paging parameter like the real
+/// repository: every search returns the first `limit` of [matches] (which the
+/// test supplies newest first) and records each requested limit in [limits].
+/// Address search returns nothing so merged searches see each match once.
+class PagedSearchRepository extends FakeEmailRepository {
+  PagedSearchRepository(this.matches);
+
+  final List<Email> matches;
+  final List<int> limits = [];
+
+  List<Email> _page(int limit) {
+    limits.add(limit);
+    return matches.take(limit).toList();
+  }
+
+  @override
+  Future<List<Email>> searchEmails(
+    String accountId,
+    String mailboxPath,
+    String query, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+
+  @override
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async =>
+      _page(limit);
+}
+
+/// [count] distinct search hits "Bulk 000", "Bulk 001", …, newest first
+/// (each one minute older than the previous, so merged searches that re-sort
+/// newest first keep this order).
+List<Email> bulkSearchHits(int count) => [
+      for (var i = 0; i < count; i++)
+        testEmail(
+          id: 'acc-1:bulk-$i',
+          subject: 'Bulk ${i.toString().padLeft(3, '0')}',
+        ).copyWith(
+          receivedAt: DateTime(2024, 6).subtract(Duration(minutes: i)),
+        ),
+    ];

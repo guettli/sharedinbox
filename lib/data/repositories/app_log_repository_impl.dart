@@ -36,8 +36,45 @@ class AppLogRepositoryImpl implements AppLogRepository {
               syncLogId: Value(syncLogId),
             ),
           );
-    } catch (_) {
+    } catch (e) {
       // Logging is best-effort — never bubble up.
+      if (!isForeignKeyViolation(e)) return null;
+    }
+    // The entry names a row that is gone already, e.g. a sync log of an
+    // account removed meanwhile. Keep the entry without the references the
+    // database no longer has.
+    try {
+      final kept = await _db.customSelect(
+        'SELECT (SELECT id FROM accounts WHERE id = ?1) AS a, '
+        '(SELECT id FROM emails WHERE id = ?2) AS e, '
+        '(SELECT id FROM sync_logs WHERE id = ?3) AS s',
+        variables: [
+          Variable(accountId),
+          Variable(emailId),
+          Variable(syncLogId),
+        ],
+      ).getSingle();
+      final keptAccountId = kept.readNullable<String>('a');
+      final keptEmailId = kept.readNullable<String>('e');
+      final keptSyncLogId = kept.readNullable<int>('s');
+      if (keptAccountId == accountId &&
+          keptEmailId == emailId &&
+          keptSyncLogId == syncLogId) {
+        return null; // Failed for another reason: give up.
+      }
+      return await insert(
+        level: level,
+        event: event,
+        message: message,
+        dataJson: dataJson,
+        screen: screen,
+        accountId: keptAccountId,
+        mailboxPath: mailboxPath,
+        emailId: keptEmailId,
+        syncLogId: keptSyncLogId,
+        createdAt: createdAt,
+      );
+    } catch (_) {
       return null;
     }
   }

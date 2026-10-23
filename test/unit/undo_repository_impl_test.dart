@@ -25,7 +25,7 @@ void main() {
 
   group('UndoRepositoryImpl', () {
     test('getHistory returns an empty list when no rows exist', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       expect(await repo.getHistory(), isEmpty);
@@ -34,7 +34,7 @@ void main() {
     });
 
     test('saveAction round-trips through getHistory', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       final action = _action('a', timestamp: DateTime.utc(2024));
@@ -50,7 +50,7 @@ void main() {
     });
 
     test('saveAction keeps undoneAt', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       final undoneAt = DateTime.utc(2024, 1, 1, 12, 30);
@@ -67,7 +67,7 @@ void main() {
     });
 
     test('setUndoneAt sets and clears the mark, keeping the row', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
       await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
 
@@ -86,7 +86,7 @@ void main() {
     });
 
     test('setUndoneAt on a missing row inserts nothing', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       await repo.setUndoneAt('gone', DateTime.utc(2024));
@@ -97,7 +97,7 @@ void main() {
 
     test('getHistory returns oldest-first within the requested window',
         () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       await repo.saveAction(_action('old', timestamp: DateTime.utc(2024)));
@@ -112,7 +112,7 @@ void main() {
     });
 
     test('saveAction with existing id replaces the row', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
@@ -128,7 +128,7 @@ void main() {
     });
 
     test('deleteAction removes only the matching row', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
@@ -143,7 +143,7 @@ void main() {
     });
 
     test('pushAndTrim drops rows beyond maxHistory (oldest first)', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       for (var i = 0; i < 5; i++) {
@@ -162,7 +162,7 @@ void main() {
 
     test('getHistory honours a larger limit and returns the newest window',
         () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       for (var i = 0; i < 30; i++) {
@@ -182,7 +182,7 @@ void main() {
     });
 
     test('clearHistory empties the table', () async {
-      final db = openTestDatabase();
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final repo = UndoRepositoryImpl(db);
 
       await repo.saveAction(_action('a', timestamp: DateTime.utc(2024)));
@@ -192,6 +192,17 @@ void main() {
 
       expect(await repo.getHistory(), isEmpty);
 
+      await db.close();
+    });
+
+    test('pushAndTrim drops an action of an account removed meanwhile',
+        () async {
+      final db = openTestDatabase();
+      final repo = UndoRepositoryImpl(db);
+
+      await repo.pushAndTrim(_action('a'), maxHistory: 10);
+
+      expect(await repo.getHistory(), isEmpty);
       await db.close();
     });
   });

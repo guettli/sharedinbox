@@ -38,11 +38,16 @@ import pyatspi
 # Flutter exposes plain text as `panel` nodes with the text as the accessible
 # name, so a text assertion has to consider every role rather than a label role.
 DEFAULT_TIMEOUT = 20.0
+TREE_DUMP_TIMEOUT = 5.0  # for the tree attached to a failure
 POLL_INTERVAL = 0.4
 
 
 class GuiError(AssertionError):
     """A driving or assertion failure, reported with the tree for context."""
+
+
+class _WalkTimeout(Exception):
+    """A tree walk ran past its deadline: the app answers too slowly."""
 
 
 def _app_root(app_name: str = "sharedinbox"):
@@ -53,7 +58,7 @@ def _app_root(app_name: str = "sharedinbox"):
     return None
 
 
-def _walk(node, depth: int = 0, max_depth: int = 40):
+def _walk(node, depth: int = 0, max_depth: int = 40, deadline: float | None = None):
     """Yield (node, depth) for the whole subtree.
 
     The depth limit is deliberately generous: Flutter's widgets sit roughly
@@ -63,29 +68,38 @@ def _walk(node, depth: int = 0, max_depth: int = 40):
     if depth > max_depth:
         return
     for child in node:
+        # A busy app answers each AT-SPI call only at its D-Bus timeout, and a
+        # walk makes hundreds of calls, so check the deadline per node.
+        if deadline is not None and time.monotonic() > deadline:
+            raise _WalkTimeout
         if child is None:
             continue
         yield child, depth
-        yield from _walk(child, depth + 1, max_depth)
+        yield from _walk(child, depth + 1, max_depth, deadline)
 
 
-def dump_tree(app_name: str = "sharedinbox", max_nodes: int = 400) -> str:
+def dump_tree(app_name: str = "sharedinbox", max_nodes: int = 400,
+              deadline: float | None = None) -> str:
     """Render the accessibility tree. Used for diagnosis and failure output."""
     app = _app_root(app_name)
     if app is None:
         return f"<no application named {app_name!r} on the accessibility bus>"
     lines = [f"APP: {app.name}"]
-    for i, (node, depth) in enumerate(_walk(app)):
-        if i >= max_nodes:
-            lines.append("  ... (truncated)")
-            break
-        name = (node.name or "").strip()
-        role = node.getRoleName()
-        lines.append("  " * depth + f"- {role}" + (f": {name!r}" if name else ""))
+    try:
+        for i, (node, depth) in enumerate(_walk(app, deadline=deadline)):
+            if i >= max_nodes:
+                lines.append("  ... (truncated)")
+                break
+            name = (node.name or "").strip()
+            role = node.getRoleName()
+            lines.append("  " * depth + f"- {role}" + (f": {name!r}" if name else ""))
+    except _WalkTimeout:
+        lines.append("  ... (walk timed out: the app is answering too slowly)")
     return "\n".join(lines)
 
 
-def find_all(name: str, role: str | None = None, app_name: str = "sharedinbox") -> list:
+def find_all(name: str, role: str | None = None, app_name: str = "sharedinbox",
+             deadline: float | None = None) -> list:
     """Every node whose accessible name matches exactly, in tree order.
 
     Forms repeat labels: the account form has two fields called 'Host' and two
@@ -96,19 +110,20 @@ def find_all(name: str, role: str | None = None, app_name: str = "sharedinbox") 
     if app is None:
         return []
     return [
-        node for node, _ in _walk(app)
+        node for node, _ in _walk(app, deadline=deadline)
         if (node.name or "").strip() == name and (role is None or node.getRoleName() == role)
     ]
 
 
-def find(name: str, role: str | None = None, app_name: str = "sharedinbox", index: int = 0):
+def find(name: str, role: str | None = None, app_name: str = "sharedinbox", index: int = 0,
+         deadline: float | None = None):
     """Return the index-th node whose accessible name matches exactly."""
-    matches = find_all(name, role, app_name)
+    matches = find_all(name, role, app_name, deadline)
     return matches[index] if len(matches) > index else None
 
 
 def find_containing(substring: str, role: str | None = None, app_name: str = "sharedinbox",
-                    index: int = 0):
+                    index: int = 0, deadline: float | None = None):
     """Return the index-th node whose accessible name contains `substring`.
 
     Needed for widgets whose name merges several texts, e.g. a SwitchListTile
@@ -118,7 +133,7 @@ def find_containing(substring: str, role: str | None = None, app_name: str = "sh
     if app is None:
         return None
     seen = 0
-    for node, _ in _walk(app):
+    for node, _ in _walk(app, deadline=deadline):
         if substring in (node.name or "") and (role is None or node.getRoleName() == role):
             if seen == index:
                 return node
@@ -131,8 +146,11 @@ def wait_for(name: str, role: str | None = None, timeout: float = DEFAULT_TIMEOU
     """Block until a matching node appears, or raise with the tree attached."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        node = (find_containing(name, role, index=index) if contains
-                else find(name, role, index=index))
+        try:
+            node = (find_containing(name, role, index=index, deadline=deadline)
+                    if contains else find(name, role, index=index, deadline=deadline))
+        except _WalkTimeout:
+            break
         if node is not None:
             return node
         time.sleep(POLL_INTERVAL)
@@ -140,7 +158,8 @@ def wait_for(name: str, role: str | None = None, timeout: float = DEFAULT_TIMEOU
     raise GuiError(
         f"timed out after {timeout:.0f}s waiting for a node {how} {name!r}"
         + (f" with role {role!r}" if role else "")
-        + "\n\nAccessibility tree was:\n" + dump_tree()
+        + "\n\nAccessibility tree was:\n"
+        + dump_tree(deadline=time.monotonic() + TREE_DUMP_TIMEOUT)
     )
 
 
@@ -223,7 +242,10 @@ def fill(name: str, text: str, role: str | None = "text", index: int = 0,
     """Focus a field and replace its contents."""
     focus(name, role, index=index, contains=contains, timeout=timeout)
     press("ctrl+a")
-    type_text(text)
+    if text:
+        type_text(text)
+    else:
+        press("BackSpace")  # typing nothing would leave the selection as is
 
 
 def type_text(text: str) -> None:
@@ -231,13 +253,15 @@ def type_text(text: str) -> None:
 
     Flutter's text fields do not implement the EditableText interface, so
     synthetic key events are the only route. xdotool talks to the same X server,
-    and the app receives them exactly as it would a real keyboard.
+    and the app receives them exactly as it would a real keyboard. The "--"
+    ends xdotool's options, so text that starts with "-" (a "-- " signature
+    delimiter, a negative number) is typed instead of rejected as an option.
     """
-    subprocess.run(["xdotool", "type", "--delay", "40", text], check=True)
+    subprocess.run(["xdotool", "type", "--delay", "40", "--", text], check=True)
 
 
 def press(key: str) -> None:
-    subprocess.run(["xdotool", "key", key], check=True)
+    subprocess.run(["xdotool", "key", "--", key], check=True)
 
 
 def screenshot(path: str) -> None:

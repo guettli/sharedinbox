@@ -220,12 +220,16 @@ Future<void> _notifyForNewMail(
   await client.selectMailboxByPath('INBOX');
   final search =
       await client.uidSearchMessages(searchCriteria: 'UID $fromUid:*');
-  final uids = search.matchingSequence?.toList() ?? [];
+  // RFC 3501 reads n:* as *:n when n is past the largest UID, which can match
+  // an older message when the new one was already expunged.
+  final uids = (search.matchingSequence?.toList() ?? [])
+      .where((uid) => uid >= fromUid)
+      .toList();
   if (uids.isEmpty) return;
 
   final fetch = await client.uidFetchMessages(
     imap.MessageSequence.fromIds(uids, isUid: true),
-    '(UID ENVELOPE)',
+    '(UID ENVELOPE RFC822.SIZE)',
   );
 
   final consideredIds = <String>[];
@@ -242,6 +246,8 @@ Future<void> _notifyForNewMail(
         body: _envelopeBody(msg),
         id: emailId.hashCode & 0x7FFFFFFF,
         payload: '${account.id}|$emailId',
+        accountId: account.id,
+        emailId: emailId,
       );
     }
   }
@@ -259,6 +265,7 @@ MatchableMessage _matchableFromEnvelope(imap.MimeMessage msg) {
     to: list(env?.to),
     cc: list(env?.cc),
     subject: env?.subject ?? '',
+    size: msg.size,
     folder: 'INBOX',
   );
 }

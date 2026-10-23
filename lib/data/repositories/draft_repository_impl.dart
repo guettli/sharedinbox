@@ -1,58 +1,81 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/draft.dart';
+import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _draftsFolder = 'Drafts';
 
-class DraftRepositoryImpl implements DraftRepository {
+class DraftRepositoryImpl extends DraftRepository {
   DraftRepositoryImpl(
     this._db,
     this._accounts, {
     ImapConnectFn? imapConnect,
     http.Client? httpClient,
+    AppLogger? appLogger,
   })  : _imapConnect = imapConnect,
-        _httpClient = httpClient;
+        _httpClient = httpClient,
+        _appLogger = appLogger;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final ImapConnectFn? _imapConnect;
   final http.Client? _httpClient;
+  final AppLogger? _appLogger;
 
   @override
-  Future<SavedDraft> saveDraft({
-    int? id,
-    String? accountId,
-    String? replyToEmailId,
-    required String toText,
-    required String ccText,
-    required String subjectText,
-    required String bodyText,
-  }) async {
+  Future<SavedDraft> writeDraft(DraftInput input) async {
+    final DraftInput(
+      :id,
+      :accountId,
+      :replyToEmailId,
+      :toText,
+      :ccText,
+      :bccText,
+      :subjectText,
+      :bodyText,
+    ) = input;
     final now = DateTime.now();
     if (id != null) {
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
-        DraftsCompanion(
-          accountId: Value(accountId),
-          replyToEmailId: Value(replyToEmailId),
-          toText: Value(toText),
-          ccText: Value(ccText),
-          subjectText: Value(subjectText),
-          bodyText: Value(bodyText),
-          updatedAt: Value(now),
-          dirty: const Value(true),
-        ),
-      );
+      await _db.transaction(() async {
+        final old = await (_db.select(_db.drafts)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        // The server ids belong to the old account's mailbox. Kept across a
+        // switch of the From account, the next push would expunge that UID
+        // from the new account's Drafts folder — someone else's draft.
+        final switched = old != null && old.accountId != accountId;
+        if (switched) await _tombstoneServerCopy(old);
+        await (_db.update(_db.drafts)..where((t) => t.id.equals(id))).write(
+          DraftsCompanion(
+            accountId: Value(accountId),
+            replyToEmailId: Value(replyToEmailId),
+            toText: Value(toText),
+            ccText: Value(ccText),
+            bccText: Value(bccText),
+            subjectText: Value(subjectText),
+            bodyText: Value(bodyText),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+            imapServerId: switched ? const Value(null) : const Value.absent(),
+            jmapServerId: switched ? const Value(null) : const Value.absent(),
+          ),
+        );
+      });
       final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
           .getSingleOrNull();
       if (row != null) return _toModel(row);
@@ -62,6 +85,7 @@ class DraftRepositoryImpl implements DraftRepository {
         replyToEmailId: replyToEmailId,
         toText: toText,
         ccText: ccText,
+        bccText: bccText,
         subjectText: subjectText,
         bodyText: bodyText,
         updatedAt: now,
@@ -74,6 +98,7 @@ class DraftRepositoryImpl implements DraftRepository {
             replyToEmailId: Value(replyToEmailId),
             toText: Value(toText),
             ccText: Value(ccText),
+            bccText: Value(bccText),
             subjectText: Value(subjectText),
             bodyText: Value(bodyText),
             updatedAt: now,
@@ -86,6 +111,7 @@ class DraftRepositoryImpl implements DraftRepository {
       replyToEmailId: replyToEmailId,
       toText: toText,
       ccText: ccText,
+      bccText: bccText,
       subjectText: subjectText,
       bodyText: bodyText,
       updatedAt: now,
@@ -117,26 +143,171 @@ class DraftRepositoryImpl implements DraftRepository {
   }
 
   @override
-  Future<void> deleteDraft(int id) async {
-    final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
-    if (row == null) return;
-    final accountId = row.accountId;
-    final serverId = row.imapServerId ?? row.jmapServerId;
-    if (accountId != null && serverId != null && serverId.isNotEmpty) {
-      await _db.into(_db.draftTombstones).insert(
-            DraftTombstonesCompanion.insert(
-              accountId: accountId,
-              serverId: serverId,
-              createdAt: DateTime.now(),
-            ),
-          );
+  Future<SavedDraft?> findDraftForEmail(model.Email email) async {
+    if (email.isLocal) return null;
+    final accountId = email.accountId;
+    // A JMAP message row is "<accountId>:<email id>". An IMAP row is
+    // "<accountId>:<mailbox>:<uid>", which never equals a JMAP email id.
+    final prefix = '$accountId:';
+    if (email.id.startsWith(prefix)) {
+      final jmapId = email.id.substring(prefix.length);
+      final row = await (_db.select(_db.drafts)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.jmapServerId.equals(jmapId),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (row != null) return _toModel(row);
     }
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    if (email.uid <= 0) return null;
+    // IMAP UIDs only mean something in the mailbox draft sync used for them.
+    final state = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_draftsPathState),
+          ))
+        .getSingleOrNull();
+    if (email.mailboxPath != (state?.state ?? _draftsFolder)) return null;
+    final row = await (_db.select(_db.drafts)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.imapServerId.equals(email.uid.toString()),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    return row == null ? null : _toModel(row);
   }
 
   @override
-  Future<void> syncDrafts(String accountId) async {
+  Future<void> deleteDraft(int id) {
+    // One transaction, so a push finishing in between cannot store a new
+    // server id that the tombstone then misses.
+    return _db.transaction(() async {
+      final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (row == null) return;
+      await _tombstoneServerCopy(row);
+      await (_db.delete(_db.drafts)..where((t) => t.id.equals(id))).go();
+    });
+  }
+
+  /// Queues removal of [row]'s copy on its account's server, if it has one.
+  Future<void> _tombstoneServerCopy(Draft row) =>
+      _tombstone(row.accountId, row.imapServerId ?? row.jmapServerId);
+
+  /// Queues removal of [serverId] from [accountId]'s server, if the account
+  /// still exists (a deleted account has no server to sync).
+  Future<void> _tombstone(String? accountId, String? serverId) async {
+    if (accountId == null || serverId == null || serverId.isEmpty) return;
+    final account = await (_db.select(_db.accounts)
+          ..where((t) => t.id.equals(accountId)))
+        .getSingleOrNull();
+    if (account == null) return;
+    await _db.into(_db.draftTombstones).insert(
+          DraftTombstonesCompanion.insert(
+            accountId: accountId,
+            serverId: serverId,
+            createdAt: DateTime.now(),
+          ),
+        );
+  }
+
+  /// Stores that [row] went up to [accountId]'s server as [newServerId].
+  ///
+  /// The push runs while compose may still be open, so the row can have
+  /// changed since it was read:
+  /// - edited: the new server id is kept but the row stays dirty, so the
+  ///   next push uploads the edit and replaces the copy just made;
+  /// - moved to another account or deleted: the copy just made belongs to
+  ///   nobody, so it is queued for removal from [accountId]'s server.
+  ///
+  /// Edits are detected by content rather than `updatedAt`, which is stored
+  /// with one-second precision.
+  Future<void> _recordPush(
+    Draft row,
+    String accountId,
+    String? newServerId, {
+    required bool jmap,
+  }) {
+    final serverId = jmap
+        ? DraftsCompanion(jmapServerId: Value(newServerId))
+        : DraftsCompanion(imapServerId: Value(newServerId));
+    return _db.transaction(() async {
+      final unchanged = await (_db.update(_db.drafts)
+            ..where(
+              (t) =>
+                  t.id.equals(row.id) &
+                  t.accountId.equals(accountId) &
+                  t.toText.equals(row.toText) &
+                  t.ccText.equals(row.ccText) &
+                  t.bccText.equals(row.bccText) &
+                  t.subjectText.equals(row.subjectText) &
+                  t.bodyText.equals(row.bodyText),
+            ))
+          .write(serverId.copyWith(dirty: const Value(false)));
+      if (unchanged > 0) return;
+      final edited = await (_db.update(_db.drafts)
+            ..where(
+              (t) => t.id.equals(row.id) & t.accountId.equals(accountId),
+            ))
+          .write(serverId);
+      if (edited > 0) return;
+      if (newServerId == null || newServerId.isEmpty) {
+        // No APPENDUID: the copy cannot be addressed, so it stays behind.
+        unawaited(
+          _appLogger?.warn(
+            'draft.push.orphaned',
+            'Draft moved or deleted during push; its new server copy has '
+                'no id and cannot be removed',
+            accountId: accountId,
+          ),
+        );
+        return;
+      }
+      await _tombstone(accountId, newServerId);
+    });
+  }
+
+  /// Server ids of [accountId]'s drafts queued for removal. A pull must not
+  /// import them again before the next sync removes them.
+  Future<Set<String>> _tombstonedServerIds(String accountId) async {
+    final rows = await (_db.select(_db.draftTombstones)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    return {for (final r in rows) r.serverId};
+  }
+
+  /// The last [syncDrafts] run per account; the next one waits for it.
+  final Map<String, Future<void>> _syncTails = {};
+
+  /// Runs one draft sync of [accountId] at a time. The background sync loop
+  /// and the "Edit draft" action can ask at once; two overlapping runs would
+  /// both push the same dirty draft (a second server copy) and both pull the
+  /// same new server draft (a second local row). A call made during a run
+  /// waits for it and then runs itself, so it still sees edits made meanwhile.
+  @override
+  Future<void> syncDrafts(String accountId) {
+    final previous = _syncTails[accountId];
+    final run = previous == null
+        ? _syncDraftsNow(accountId)
+        : previous.then((_) => _syncDraftsNow(accountId));
+    // The tail never fails, so a failed run does not fail the next one.
+    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    _syncTails[accountId] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        if (identical(_syncTails[accountId], tail)) {
+          unawaited(_syncTails.remove(accountId));
+        }
+      }),
+    );
+    return run;
+  }
+
+  Future<void> _syncDraftsNow(String accountId) async {
     final account = await _accounts.getAccount(accountId);
     if (account == null) return;
 
@@ -167,15 +338,29 @@ class DraftRepositoryImpl implements DraftRepository {
       password,
     );
     try {
-      try {
-        await client.createMailbox(_draftsFolder);
-      } catch (_) {
-        // Already exists.
+      // The mailbox the server flags as SPECIAL-USE \Drafts: "[Gmail]/Drafts",
+      // "INBOX.Drafts", "Entwürfe". Only the server's flag counts, not a
+      // folder that merely has "Drafts" in its name ("Projects/Drafts"). A
+      // server that flags none keeps the "Drafts" folder used so far.
+      final rolePath = await _serverDraftsMailboxPath(client);
+      final draftsPath = rolePath ?? _draftsFolder;
+      if (rolePath == null) {
+        try {
+          await client.createMailbox(_draftsFolder);
+        } catch (_) {
+          // Already exists.
+        }
       }
-      await client.selectMailboxByPath(_draftsFolder);
+      // Stored paths are decoded Unicode; the wire wants modified UTF-7.
+      final encodedPath = encodeImapMailboxPath(
+        draftsPath,
+        client.serverInfo.pathSeparator ?? '/',
+      );
+      await client.selectMailboxByPath(encodedPath);
+      await _forgetUidsFromOtherMailbox(account.id, draftsPath);
 
       await _pushTombstonesImap(client, account.id);
-      await _pushDirtyImap(client, account);
+      await _pushDirtyImap(client, account, encodedPath);
       await _pullDraftsImap(client, account.id);
     } finally {
       await client.logout();
@@ -207,9 +392,71 @@ class DraftRepositoryImpl implements DraftRepository {
     }
   }
 
+  static const _draftsPathState = 'IMAP:DraftsMailbox';
+
+  /// Draft rows and tombstones carry IMAP UIDs, which only mean something in
+  /// the mailbox they came from. When the drafts mailbox in use changes (an
+  /// account synced before the server's own drafts mailbox was used always
+  /// had "Drafts"), expunging those UIDs in the new mailbox could delete
+  /// unrelated messages there. Instead the local drafts are pushed again as
+  /// new messages and the tombstones are dropped; the old copies stay in the
+  /// old folder.
+  Future<void> _forgetUidsFromOtherMailbox(
+    String accountId,
+    String draftsPath,
+  ) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_draftsPathState),
+          ))
+        .getSingleOrNull();
+    final previousPath = row?.state ?? _draftsFolder;
+    if (previousPath != draftsPath) {
+      await _db.transaction(() async {
+        await (_db.update(_db.drafts)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
+              ))
+            .write(
+          const DraftsCompanion(imapServerId: Value(null), dirty: Value(true)),
+        );
+        await (_db.delete(_db.draftTombstones)
+              ..where((t) => t.accountId.equals(accountId)))
+            .go();
+      });
+    }
+    if (row?.state != draftsPath) {
+      await _db.into(_db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: accountId,
+              resourceType: _draftsPathState,
+              state: draftsPath,
+              syncedAt: DateTime.now(),
+            ),
+          );
+    }
+  }
+
+  /// The mailbox the server lists with the SPECIAL-USE `\Drafts` flag, if any.
+  Future<String?> _serverDraftsMailboxPath(imap.ImapClient client) async {
+    try {
+      final boxes = await client.listMailboxes(recursive: true);
+      for (final box in boxes) {
+        if (box.isDrafts) return box.path;
+      }
+    } catch (_) {
+      // LIST failed; fall back to "Drafts".
+    }
+    return null;
+  }
+
   Future<void> _pushDirtyImap(
     imap.ImapClient client,
     account_model.Account account,
+    String draftsPath,
   ) async {
     final dirty = await (_db.select(_db.drafts)
           ..where((t) => t.accountId.equals(account.id) & t.dirty.equals(true)))
@@ -220,6 +467,9 @@ class DraftRepositoryImpl implements DraftRepository {
         ..from = [HeaderMailAddress(account.displayName, account.email)]
         ..to = _parseAddresses(row.toText)
         ..cc = _parseAddresses(row.ccText)
+        // The server copy is the sender's own, so it keeps Bcc like any
+        // other client's draft does (#1126).
+        ..bcc = _parseAddresses(row.bccText)
         ..subject = encodeUnstructuredHeader(row.subjectText)
         ..subjectEncoding = imap.HeaderEncoding.none
         ..text = row.bodyText;
@@ -227,7 +477,7 @@ class DraftRepositoryImpl implements DraftRepository {
 
       final appendResult = await client.appendMessage(
         mime,
-        targetMailboxPath: _draftsFolder,
+        targetMailboxPath: draftsPath,
         flags: [r'\Draft'],
       );
       final uidList =
@@ -252,12 +502,7 @@ class DraftRepositoryImpl implements DraftRepository {
         }
       }
 
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(row.id))).write(
-        DraftsCompanion(
-          imapServerId: Value(newUid),
-          dirty: const Value(false),
-        ),
-      );
+      await _recordPush(row, account.id, newUid, jmap: false);
     }
   }
 
@@ -277,7 +522,7 @@ class DraftRepositoryImpl implements DraftRepository {
             (t) => t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
           ))
         .get();
-    final knownUids = <String>{};
+    final knownUids = await _tombstonedServerIds(accountId);
     for (final row in localRows) {
       final uid = row.imapServerId;
       if (uid != null) knownUids.add(uid);
@@ -311,6 +556,7 @@ class DraftRepositoryImpl implements DraftRepository {
               accountId: Value(accountId),
               toText: Value(_addressListToText(env?.to)),
               ccText: Value(_addressListToText(env?.cc)),
+              bccText: Value(_addressListToText(env?.bcc)),
               subjectText: Value(env?.subject ?? ''),
               bodyText: Value(msg.decodeTextPlainPart() ?? ''),
               updatedAt: env?.date ?? DateTime.now(),
@@ -387,6 +633,8 @@ class DraftRepositoryImpl implements DraftRepository {
         ],
         'to': _parseAddressesJmap(row.toText),
         if (row.ccText.trim().isNotEmpty) 'cc': _parseAddressesJmap(row.ccText),
+        if (row.bccText.trim().isNotEmpty)
+          'bcc': _parseAddressesJmap(row.bccText),
         'subject': row.subjectText,
         'bodyValues': {
           bodyPartId: {
@@ -418,12 +666,7 @@ class DraftRepositoryImpl implements DraftRepository {
       final newEmail = created?['draft'] as Map<String, dynamic>?;
       final newId = newEmail?['id'] as String?;
 
-      await (_db.update(_db.drafts)..where((t) => t.id.equals(row.id))).write(
-        DraftsCompanion(
-          jmapServerId: Value(newId),
-          dirty: const Value(false),
-        ),
-      );
+      await _recordPush(row, account.id, newId, jmap: true);
     }
   }
 
@@ -464,7 +707,7 @@ class DraftRepositoryImpl implements DraftRepository {
       }
     }
 
-    final knownIds = <String>{};
+    final knownIds = await _tombstonedServerIds(accountId);
     for (final row in localRows) {
       final id = row.jmapServerId;
       if (id != null) knownIds.add(id);
@@ -484,6 +727,7 @@ class DraftRepositoryImpl implements DraftRepository {
             'subject',
             'to',
             'cc',
+            'bcc',
             'textBody',
             'bodyValues',
           ],
@@ -521,6 +765,7 @@ class DraftRepositoryImpl implements DraftRepository {
               accountId: Value(accountId),
               toText: Value(_addressJsonToText(m['to'])),
               ccText: Value(_addressJsonToText(m['cc'])),
+              bccText: Value(_addressJsonToText(m['bcc'])),
               subjectText: Value((m['subject'] as String?) ?? ''),
               bodyText: Value(bodyText),
               updatedAt: receivedAt,
@@ -621,6 +866,7 @@ class DraftRepositoryImpl implements DraftRepository {
         replyToEmailId: row.replyToEmailId,
         toText: row.toText,
         ccText: row.ccText,
+        bccText: row.bccText,
         subjectText: row.subjectText,
         bodyText: row.bodyText,
         updatedAt: row.updatedAt,

@@ -14,7 +14,10 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
+import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 
 import 'helpers.dart';
 
@@ -57,6 +60,7 @@ List<Override> _overrides({
   Email? email,
   List<Account> accounts = const [kTestAccount],
   FakeMailboxRepository? mailboxes,
+  FakeEmailRepository? emails,
 }) =>
     [
       accountRepositoryProvider.overrideWithValue(
@@ -66,7 +70,11 @@ List<Override> _overrides({
         mailboxes ?? FakeMailboxRepository(),
       ),
       emailRepositoryProvider.overrideWithValue(
-        FakeEmailRepository(emailDetail: email ?? testEmail(), emailBody: body),
+        emails ??
+            FakeEmailRepository(
+              emailDetail: email ?? testEmail(),
+              emailBody: body,
+            ),
       ),
     ];
 
@@ -159,12 +167,15 @@ void main() {
       expect(find.textContaining('bob@example.com'), findsOneWidget);
     });
 
-    testWidgets('shows the Cc recipients in the header', (tester) async {
+    testWidgets('shows the Cc and then the Bcc recipients in the header', (
+      tester,
+    ) async {
       final email = testEmail().copyWith(
         cc: const [
           EmailAddress(name: 'Carol', email: 'carol@example.com'),
           EmailAddress(email: 'dave@example.com'),
         ],
+        bcc: const [EmailAddress(name: 'Boss', email: 'boss@example.com')],
       );
       await tester.pumpWidget(
         buildApp(
@@ -181,13 +192,35 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('Cc: Carol <carol@example.com>, dave@example.com'),
-        findsOneWidget,
-      );
+      final cc = find.text('Cc: Carol <carol@example.com>, dave@example.com');
+      final bcc = find.text('Bcc: Boss <boss@example.com>');
+      expect(cc, findsOneWidget);
+      expect(bcc, findsOneWidget);
+      expect(tester.getTopLeft(bcc).dy, greaterThan(tester.getTopLeft(cc).dy));
     });
 
-    testWidgets('shows no Cc line when there is no Cc', (tester) async {
+    testWidgets('shows a Bcc the body load backfilled on this open', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(
+            body: const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'Hi',
+              attachments: [],
+            ),
+            emails: _BackfillingEmailRepository(testEmail()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bcc: boss@example.com'), findsOneWidget);
+    });
+
+    testWidgets('shows no Cc or Bcc line when there is none', (tester) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -203,6 +236,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Cc:'), findsNothing);
+      expect(find.textContaining('Bcc:'), findsNothing);
     });
 
     testWidgets('shows attachment section when email has attachments', (
@@ -1179,6 +1213,169 @@ void main() {
         );
       },
     );
+
+    group('a message in the Drafts folder', () {
+      final draftMail = Email(
+        id: 'acc-1:Drafts:5',
+        accountId: 'acc-1',
+        mailboxPath: 'Drafts',
+        uid: 5,
+        subject: 'Unfinished',
+        receivedAt: DateTime(2024, 6),
+        sentAt: DateTime(2024, 6),
+        from: const [EmailAddress(email: 'alice@example.com')],
+        to: const [EmailAddress(email: 'carol@example.com')],
+        cc: const [],
+        isSeen: false,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+      const draftsMailbox = Mailbox(
+        id: 'acc-1:Drafts',
+        accountId: 'acc-1',
+        path: 'Drafts',
+        name: 'Drafts',
+        role: 'drafts',
+        unreadCount: 0,
+        totalCount: 1,
+      );
+
+      const draftBody = EmailBody(
+        emailId: 'acc-1:Drafts:5',
+        textBody: 'Read-only body',
+        attachments: [],
+      );
+
+      Future<FakeEmailRepository> pumpDraftMail(
+        WidgetTester tester,
+        FakeDraftRepository drafts, {
+        Object? initialExtra,
+      }) async {
+        final emails = FakeEmailRepository(
+          emailDetail: draftMail,
+          emailBody: draftBody,
+          emails: [draftMail],
+        );
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/Drafts/emails/acc-1%3ADrafts%3A5',
+            initialExtra: initialExtra,
+            overrides: [
+              ..._overrides(
+                body: draftBody,
+                mailboxes: FakeMailboxRepository(const [draftsMailbox]),
+                emails: emails,
+              ),
+              draftRepositoryProvider.overrideWithValue(drafts),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        return emails;
+      }
+
+      /// Adds a local draft whose server copy is [draftMail].
+      Future<void> addLocalDraft(FakeDraftRepository drafts) async {
+        final saved = await drafts.saveDraft(
+          accountId: 'acc-1',
+          toText: 'carol@example.com',
+          ccText: '',
+          subjectText: 'Unfinished',
+          bodyText: 'Half a thought',
+        );
+        drafts.draftsByEmailId[draftMail.id] = saved;
+      }
+
+      testWidgets('opens in compose; back returns to the folder', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        final emails = await pumpDraftMail(tester, drafts);
+
+        expect(find.byType(EmailDetailScreen), findsNothing);
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('Half a thought'), findsOneWidget);
+        expect(_editableWithText('Unfinished'), findsOneWidget);
+        // Opening a draft does not mark it read.
+        expect(emails.setFlagCalls, isEmpty);
+
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsNothing);
+        expect(find.byType(EmailListScreen), findsOneWidget);
+      });
+
+      testWidgets('reached by prev/next it stays in the detail view', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await addLocalDraft(drafts);
+
+        await pumpDraftMail(
+          tester,
+          drafts,
+          initialExtra: EmailDetailNav.fromEmails([draftMail]).stepped(),
+        );
+
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        expect(find.byTooltip('Reply'), findsNothing);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(drafts.syncedAccounts, isEmpty);
+      });
+
+      testWidgets('without a local draft "Edit draft" syncs, then opens it', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () => addLocalDraft(drafts);
+        await pumpDraftMail(tester, drafts);
+
+        expect(find.byType(EmailDetailScreen), findsOneWidget);
+        expect(find.byTooltip('Reply'), findsNothing);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(drafts.syncedAccounts, ['acc-1']);
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('Half a thought'), findsOneWidget);
+      });
+
+      testWidgets('"Edit draft" says so when the draft is still not there', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('not among the drafts'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsNothing);
+      });
+
+      testWidgets('"Edit draft" shows why a draft sync failed', (tester) async {
+        final drafts = FakeDraftRepository();
+        drafts.onSync = () async => throw Exception('server unreachable');
+        await pumpDraftMail(tester, drafts);
+
+        await tester.tap(find.byTooltip('Edit draft'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('server unreachable'), findsOneWidget);
+        expect(find.byType(ComposeScreen), findsNothing);
+      });
+    });
 
     testWidgets('Archive button is present in app bar', (tester) async {
       await tester.pumpWidget(
@@ -2595,5 +2792,36 @@ class _GatedDeleteEmailRepository extends FakeEmailRepository {
   Future<String?> deleteEmail(String emailId) async {
     await gate.future;
     return null;
+  }
+}
+
+/// Like a real repository whose getEmailBody backfills Bcc from the body's
+/// headers: the row only has it once the body load has run.
+class _BackfillingEmailRepository extends FakeEmailRepository {
+  _BackfillingEmailRepository(this._current)
+      : super(
+          emailDetail: _current,
+          emailBody: const EmailBody(
+            emailId: 'acc-1:42',
+            textBody: 'Hi',
+            attachments: [],
+          ),
+        );
+
+  Email _current;
+
+  @override
+  Future<Email?> getEmail(String emailId) async => _current;
+
+  @override
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async {
+    await Future<void>.delayed(Duration.zero);
+    _current = _current.copyWith(
+      bcc: const [EmailAddress(email: 'boss@example.com')],
+    );
+    return super.getEmailBody(emailId, forceRefresh: forceRefresh);
   }
 }

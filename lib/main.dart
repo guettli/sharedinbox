@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
+import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -28,6 +29,8 @@ void main({List<Override> overrides = const []}) {
     runZonedGuarded(
       () async {
         WidgetsFlutterBinding.ensureInitialized();
+        // Captured here, in the zone the binding was initialized in.
+        final crashScreen = CrashScreenInstaller(Zone.current);
 
         // Dart's async machinery propagates stack traces in chain format
         // (with '===== asynchronous gap =====' separators). Flutter's
@@ -74,10 +77,12 @@ void main({List<Override> overrides = const []}) {
           );
           if (_isWidgetTreeError(details)) return;
           if (transient) return;
-          runApp(
-            CrashScreen(
-              exception: details.exception,
-              stackTrace: details.stack,
+          crashScreen.install(
+            () => runApp(
+              CrashScreen(
+                exception: details.exception,
+                stackTrace: details.stack,
+              ),
             ),
           );
         };
@@ -236,8 +241,8 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Give the global, out-of-widget error handlers a logger too so uncaught
     // crashes land in the App Log for bug reports (#534).
     crashLogger = ref.read(appLoggerProvider);
-    // Trim retained log rows once per launch.
-    unawaited(ref.read(appLogRepositoryProvider).trim());
+    // Trim retained app/sync log rows now and periodically while running.
+    ref.read(logRetentionSchedulerProvider).start();
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
     ref.read(reliabilityRunnerProvider).start();
@@ -249,6 +254,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // (#353). Reading `reconnectFlushProvider` installs the subscription.
     unawaited(ref.read(connectivityServiceProvider).initialize());
     ref.read(reconnectFlushProvider);
+    // WorkManager (which prefetches bodies on Android) does not exist on
+    // desktop; prefetch in-process while the app runs instead.
+    if (needsInProcessBodyPrefetch) {
+      ref.read(desktopPrefetchSchedulerProvider).start();
+    }
     // Handle "compose email" intents (mailto: links, Share → Email) by
     // pushing /compose onto the running router. No-op on non-Android.
     _mailIntentHandler = MailIntentHandler(

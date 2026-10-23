@@ -4,20 +4,19 @@ import 'dart:io';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/note.dart';
-import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
-import 'package:sharedinbox/core/repositories/email_repository.dart';
-import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
-import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
+
+import '../unit/helpers/fake_email_repository.dart';
+import '../unit/helpers/fake_mailbox_repository.dart';
+import '../unit/helpers/fake_sync_log_repository.dart';
 
 Future<imap.ImapClient> _fakeImapConnect(
   Account account,
@@ -493,7 +492,7 @@ class _FakeAccounts implements AccountRepository {
   void push(List<Account> accounts) => _ctrl.add(accounts);
 }
 
-class _FakeMailboxes implements MailboxRepository {
+class _FakeMailboxes extends FakeMailboxRepositoryBase {
   @override
   Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
         Mailbox(
@@ -506,83 +505,9 @@ class _FakeMailboxes implements MailboxRepository {
           role: 'inbox',
         ),
       ]);
-
-  @override
-  Future<int> syncMailboxes(String accountId) async => 0;
-
-  @override
-  Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
-      null;
-
-  @override
-  Future<void> clearForResync(String accountId) async {}
-
-  @override
-  Future<Mailbox> createMailboxWithRole(
-    String accountId,
-    String name,
-    String role, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-  @override
-  Future<Mailbox> createMailbox(
-    String accountId,
-    String name, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<Mailbox> renameMailbox(
-    String accountId,
-    String mailboxPath,
-    String newName,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: newName,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<Mailbox> moveMailbox(
-    String accountId,
-    String mailboxPath, {
-    required String? newParentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: mailboxPath,
-        unreadCount: 0,
-        totalCount: 0,
-      );
 }
 
-class _FakeEmails implements EmailRepository {
+class _FakeEmails extends FakeEmailRepositoryBase {
   final syncCounts = <String, int>{};
 
   /// Per-account JMAP push stream factory. Tests can install their own
@@ -591,200 +516,16 @@ class _FakeEmails implements EmailRepository {
   final Map<String, Stream<void> Function()> pushStreams = {};
 
   @override
-  Stream<List<Email>> observeEmails(String a, String m, {int limit = 50}) =>
-      Stream.value([]);
-
-  @override
-  Stream<List<EmailThread>> observeThreads(
-    String a,
-    String m, {
-    int limit = 50,
-  }) =>
-      Stream.value([]);
-
-  @override
-  Stream<List<EmailThread>> observeAllInboxThreads({int limit = 50}) =>
-      Stream.value([]);
-
-  @override
-  Stream<List<Email>> observeEmailsInThread(String a, String m, String t) =>
-      Stream.value([]);
-
-  @override
-  Stream<List<Email>> observeThreadAcrossFolders(String a, String t) =>
-      Stream.value([]);
-
-  @override
-  Future<Email?> getEmail(String id) async => null;
-
-  @override
-  Future<EmailBody> getEmailBody(
-    String id, {
-    bool forceRefresh = false,
-  }) async =>
-      const EmailBody(emailId: '', attachments: []);
-
-  @override
   Future<SyncEmailsResult> syncEmails(String a, String m) async {
     syncCounts[a] = (syncCounts[a] ?? 0) + 1;
     return SyncEmailsResult.zero;
   }
 
   @override
-  Future<void> setFlag(String id, {bool? seen, bool? flagged}) async {}
-
-  @override
-  Future<void> markAllAsRead(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<void> moveEmail(String id, String dest) async {}
-
-  @override
-  Future<bool> cancelPendingChange(String id, String type) async => false;
-
-  @override
-  Future<void> snoozeEmail(String emailId, DateTime until) async {}
-
-  @override
-  Future<int> wakeUpEmails(String accountId) async => 0;
-
-  @override
-  Future<void> restoreEmails(List<Email> emails) async {}
-
-  @override
-  Future<Email?> findEmailByMessageId(
-    String accountId,
-    String messageId, {
-    String? preferMailboxPath,
-  }) async =>
-      null;
-
-  @override
-  Future<String?> deleteEmail(String id) async => null;
-
-  @override
-  Future<String?> deleteEmails(List<String> ids) async => null;
-
-  @override
-  Stream<String> get onChangesQueued => const Stream.empty();
-
-  @override
-  Future<int> flushPendingChanges(String accountId, String password) async => 0;
-
-  @override
-  Future<void> sendEmail(String a, EmailDraft d) async {}
-
-  @override
-  Future<int> enqueueSend(String accountId, EmailDraft draft) async => 0;
-
-  @override
-  Future<int> flushOutbox(String accountId, String password) async => 0;
-
-  @override
-  Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async =>
-      const SendNowResult(SendNowOutcome.sent);
-
-  @override
-  Future<String> downloadAttachment(
-    String emailId,
-    EmailAttachment attachment,
-  ) async =>
-      '/tmp/${attachment.filename}';
-
-  @override
-  Future<String> fetchRawRfc822(String emailId) async => '';
-
-  @override
-  Future<List<Email>> searchEmails(String a, String m, String q) async => [];
-
-  @override
-  Future<List<Email>> searchEmailsGlobal(String? a, String q) async => [];
-
-  @override
-  Future<List<Email>> searchEmailsStructured(
-    String? a,
-    FilterGroup f,
-  ) async =>
-      [];
-
-  @override
-  Future<List<Email>> getEmailsByAddress(String? a, String address) async => [];
-
-  @override
-  Future<List<EmailAddress>> searchAddresses(
-    String? a,
-    String q, {
-    int limit = 10,
-  }) async =>
-      [];
-
-  // Ordering below intentionally mixes the sync-related overrides in a
-  // different sequence to the equivalent fake in `test/widget/helpers.dart`
-  // — jscpd flags shared method tails when the token order lines up, and
-  // this reordering breaks the match without changing any behaviour.
-
-  @override
-  Future<int> applySieveScriptToInbox(
-    String accountId,
-    String scriptContent,
-  ) async =>
-      0;
-
-  @override
-  Future<int> previewSieveRuleMatches(
-    String accountId,
-    String scriptContent,
-  ) async =>
-      0;
-
-  @override
-  Future<int> applySieveRules(String accountId) async => 0;
-
-  @override
   Stream<void> watchJmapPush(String accountId, String password) {
     final factory = pushStreams[accountId];
     return factory != null ? factory() : const Stream.empty();
   }
-
-  @override
-  Future<MailboxDiagnostics> diagnoseMailbox(String a, String m) async =>
-      MailboxDiagnostics.empty(accountId: a, mailboxPath: m);
-
-  @override
-  Future<int> sweepOrphanThreads(String a, String m) async => 0;
-
-  @override
-  Future<ReliabilityResult> verifySyncReliability(
-    String accountId,
-    String mailboxPath,
-  ) async =>
-      ReliabilityResult.healthy;
-
-  @override
-  Stream<List<PendingChange>> observeAllPendingChanges() => Stream.value([]);
-
-  @override
-  Stream<List<PendingChange>> observePendingChanges(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<List<FailedMutation>> observeFailedMutations(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Future<void> clearForResync(String accountId) async {}
-
-  @override
-  Future<void> clearMailboxForResync(
-    String accountId,
-    String mailboxPath,
-  ) async {}
-
-  @override
-  Future<void> retryMutation(int id) async {}
-
-  @override
-  Future<void> discardMutation(int id) async {}
 }
 
 /// A single recorded call to [AppLogRepository.insert]. Only the fields the
@@ -821,44 +562,7 @@ class _RecordingAppLogRepo extends NoOpAppLogRepository {
   }
 }
 
-class _FakeLogs implements SyncLogRepository {
-  final records = <_FakeLogRecord>[];
-
-  @override
-  Future<int> log({
-    required String accountId,
-    required bool success,
-    String? errorMessage,
-    String? stackTrace,
-    bool isPermanent = false,
-    required String protocol,
-    required int emailsFetched,
-    required int emailsSkipped,
-    required int mailboxesSynced,
-    required int pendingFlushed,
-    required int bytesTransferred,
-    required DateTime startedAt,
-    required DateTime finishedAt,
-    List<MailboxSyncStats> mailboxStats = const [],
-    String? protocolLog,
-  }) async {
-    records.add(_FakeLogRecord(accountId: accountId, success: success));
-    return 0;
-  }
-
-  @override
-  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<String?> observeLastError(String accountId) => Stream.value(null);
-}
-
-class _FakeLogRecord {
-  _FakeLogRecord({required this.accountId, required this.success});
-  final String accountId;
-  final bool success;
-}
+class _FakeLogs extends FakeSyncLogRepository {}
 
 class _FakeNotes implements NoteRepository {
   final syncAllCounts = <String, int>{};

@@ -39,6 +39,8 @@ LocalMessageSnapshot _local({
   int uid = 42,
   List<EmailAddress> from = const [EmailAddress(email: 'a@example.com')],
   List<EmailAddress> to = const [EmailAddress(email: 'b@example.com')],
+  List<EmailAddress> replyTo = const [],
+  List<EmailAddress> bcc = const [],
   String? references,
   List<EmailAttachment> attachments = const [],
 }) =>
@@ -55,6 +57,8 @@ LocalMessageSnapshot _local({
       from: from,
       to: to,
       cc: const [],
+      replyTo: replyTo,
+      bcc: bcc,
       inReplyTo: null,
       references: references,
       listUnsubscribeHeader: null,
@@ -70,6 +74,8 @@ RemoteMessageSnapshot _remote({
   int? uid = 42,
   List<EmailAddress> from = const [EmailAddress(email: 'a@example.com')],
   List<EmailAddress> to = const [EmailAddress(email: 'b@example.com')],
+  List<EmailAddress> replyTo = const [],
+  List<EmailAddress> bcc = const [],
   String? references,
   List<EmailAttachment> attachments = const [],
 }) =>
@@ -85,6 +91,8 @@ RemoteMessageSnapshot _remote({
       uid: uid,
       from: from,
       to: to,
+      replyTo: replyTo,
+      bcc: bcc,
       references: references,
       attachments: attachments,
     );
@@ -150,6 +158,17 @@ void main() {
         isTrue,
         reason: 'address list order and case should not matter',
       );
+    });
+
+    test('flags Reply-To and Bcc mismatches', () {
+      const boss = [EmailAddress(email: 'boss@example.com')];
+      final same = compareMessage(_local(bcc: boss), _remote(bcc: boss));
+      expect(same.isMatch, isTrue);
+      final result = compareMessage(
+        _local(),
+        _remote(replyTo: boss, bcc: boss),
+      );
+      expect(result.diffs.map((d) => d.field), ['replyTo', 'bcc']);
     });
 
     test('compares uid only when remote provides one', () {

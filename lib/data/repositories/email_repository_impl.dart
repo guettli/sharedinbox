@@ -20,6 +20,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/core/sieve/sieve_flags.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
@@ -87,6 +88,13 @@ class _LiveMailboxCounts {
 }
 
 class EmailRepositoryImpl implements EmailRepository {
+  /// SQL `ORDER BY` of the mail search results (table alias `e`): starred
+  /// first, then [model.compareNewestFirst]. Searches span folders and
+  /// accounts, whose UIDs are not comparable; there the UID tiebreak only
+  /// makes the order deterministic.
+  static const _emailListOrderSql =
+      'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
+
   EmailRepositoryImpl(
     AppDatabase db,
     this._accounts, {
@@ -154,7 +162,14 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          // Mail from the same second: highest UID (newest arrival) first.
+          // `id` makes rows with equal UIDs (JMAP, local) deterministic.
+          // Matches the `emails_list_order` index.
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(limit))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -172,9 +187,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.mailboxPath.equals(mailboxPath),
           )
+          // Matches the `threads_list_order` index; see [observeEmails] for
+          // the tiebreakers.
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.latestDate),
+            (t) => OrderingTerm.desc(t.latestUid),
+            (t) => OrderingTerm.desc(t.id),
           ])
           ..limit(limit))
         .watch()
@@ -203,6 +222,10 @@ class EmailRepositoryImpl implements EmailRepository {
       ..orderBy([
         OrderingTerm.desc(_db.threads.isFlagged),
         OrderingTerm.desc(_db.threads.latestDate),
+        // UIDs of different accounts are not comparable: across inboxes
+        // this tiebreak only makes the order deterministic.
+        OrderingTerm.desc(_db.threads.latestUid),
+        OrderingTerm.desc(_db.threads.id),
       ])
       ..limit(limit);
     return query.watch().asyncMap((rows) async {
@@ -231,7 +254,7 @@ class EmailRepositoryImpl implements EmailRepository {
   ///
   /// The kept copy is deterministic (IMAP preferred, then lowest account id)
   /// and keeps its original list position, preserving the query's
-  /// `isFlagged`/`latestDate` ordering.
+  /// `isFlagged`/`latestDate`/`latestUid`/`id` ordering.
   List<model.EmailThread> _dedupeCounterpartThreads(
     List<(model.EmailThread, String?)> rows,
     List<account_model.Account> accounts,
@@ -334,9 +357,12 @@ class EmailRepositoryImpl implements EmailRepository {
           )
           // Same key as `latestDate` below, so an undated message sorts by
           // its arrival time rather than first (SQLite orders NULL lowest).
+          // Same-second mail by UID, so `latest` is the newest arrival.
           ..orderBy([
             (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .get();
 
@@ -382,6 +408,7 @@ class EmailRepositoryImpl implements EmailRepository {
             participantsJson: Value(jsonEncode(participants)),
             preview: Value(latest.preview),
             latestEmailId: latest.id,
+            latestUid: Value(latest.uid),
             emailIdsJson: Value(
               jsonEncode(threadEmails.map((e) => e.id).toList()),
             ),
@@ -518,7 +545,9 @@ class EmailRepositoryImpl implements EmailRepository {
           prefetch: prefetch,
           cacheAgeSeconds: age.inSeconds,
         );
-        return _bodyRowToModel(cached);
+        final body = _bodyRowToModel(cached);
+        await _backfillAddressHeaders(emailId, body.headers);
+        return body;
       }
     }
 
@@ -684,18 +713,14 @@ class EmailRepositoryImpl implements EmailRepository {
           );
         }
 
-        await _db.into(_db.emailBodies).insertOnConflictUpdate(
-              EmailBodiesCompanion.insert(
-                emailId: emailId,
-                textBody: Value(textBody),
-                htmlBody: Value(htmlBody),
-                attachmentsJson: Value(attachmentsJson),
-                headersJson: Value(headersJson),
-                mimeTreeJson: Value(mimeTreeJson),
-                cachedAt: Value(DateTime.now()),
-                bodySize: Value(_bodySize(textBody, htmlBody)),
-              ),
-            );
+        await _cacheFetchedBody(
+          emailId: emailId,
+          textBody: textBody,
+          htmlBody: htmlBody,
+          attachmentsJson: attachmentsJson,
+          headersJson: headersJson,
+          mimeTreeJson: mimeTreeJson,
+        );
 
         // Opportunistic backfill for rows synced before we started writing
         // previews on the IMAP sync path. Costs no extra IMAP round trip.
@@ -728,17 +753,12 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
-        // Same opportunistic backfill for Reply-To (#919), so mail cached
-        // before we stored it replies to the right address once opened.
-        if (emailRow.replyToJson == '[]' || emailRow.replyToJson.isEmpty) {
-          final replyTo = msg.decodeHeaderMailAddressValue('Reply-To');
-          if (replyTo != null && replyTo.isNotEmpty) {
-            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-                .write(
-              EmailsCompanion(replyToJson: Value(_encodeAddresses(replyTo))),
-            );
-          }
-        }
+        // Same opportunistic backfill for Reply-To and Bcc.
+        await _backfillAddressHeaders(
+          emailId,
+          _parseHeaders(headersJson),
+          row: emailRow,
+        );
 
         _logBodyLoaded(
           emailId: emailId,
@@ -934,6 +954,35 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// Caches a body just fetched from the server. The fetch can outlast the
+  /// email row (a sync pruned it, the user deleted it); its body is then
+  /// still shown once, but there is nothing left to cache it for.
+  Future<void> _cacheFetchedBody({
+    required String emailId,
+    required String? textBody,
+    required String? htmlBody,
+    required String attachmentsJson,
+    required String? headersJson,
+    required String? mimeTreeJson,
+  }) async {
+    try {
+      await _db.into(_db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: Value(textBody),
+              htmlBody: Value(htmlBody),
+              attachmentsJson: Value(attachmentsJson),
+              headersJson: Value(headersJson),
+              mimeTreeJson: Value(mimeTreeJson),
+              cachedAt: Value(DateTime.now()),
+              bodySize: Value(_bodySize(textBody, htmlBody)),
+            ),
+          );
+    } catch (e) {
+      if (!isForeignKeyViolation(e)) rethrow;
+    }
+  }
+
   /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all
   /// references that embed the old id — the cached body, pending changes,
   /// per-message logs, thread aggregates and undo history — in one transaction.
@@ -952,6 +1001,12 @@ class EmailRepositoryImpl implements EmailRepository {
         'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
         [newId, oldId],
       );
+      // The downloaded files live in a folder named after the old id, so
+      // their rows cannot follow; keeping them would break the foreign key
+      // at COMMIT. The attachment is downloaded again when opened.
+      await (_db.delete(_db.attachmentFiles)
+            ..where((t) => t.emailId.equals(oldId)))
+          .go();
 
       await (_db.update(_db.emails)..where((t) => t.id.equals(oldId))).write(
         EmailsCompanion(
@@ -980,11 +1035,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
       // threads.latest_email_id is a plain equality match; threads.email_ids_json
       // is a JSON array of email IDs — both are safe to update via REPLACE()
-      // because email IDs are unique opaque strings.
+      // because email IDs are unique opaque strings. latest_uid follows the
+      // latest email's UID, the thread list's same-second tiebreaker.
       await _db.customStatement(
-        'UPDATE threads SET latest_email_id = ?1 '
+        'UPDATE threads SET latest_email_id = ?1, latest_uid = ?3 '
         'WHERE latest_email_id = ?2',
-        [newId, oldId],
+        [newId, oldId, newUid],
       );
       await _db.customStatement(
         'UPDATE threads SET email_ids_json = '
@@ -1147,18 +1203,16 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
 
-    await _db.into(_db.emailBodies).insertOnConflictUpdate(
-          EmailBodiesCompanion.insert(
-            emailId: emailId,
-            textBody: Value(textBody),
-            htmlBody: Value(htmlBody),
-            attachmentsJson: Value(attachmentsJson),
-            headersJson: Value(headersJson),
-            mimeTreeJson: Value(mimeTreeJson),
-            cachedAt: Value(DateTime.now()),
-            bodySize: Value(_bodySize(textBody, htmlBody)),
-          ),
-        );
+    await _cacheFetchedBody(
+      emailId: emailId,
+      textBody: textBody,
+      htmlBody: htmlBody,
+      attachmentsJson: attachmentsJson,
+      headersJson: headersJson,
+      mimeTreeJson: mimeTreeJson,
+    );
+
+    await _backfillAddressHeaders(emailId, _parseHeaders(headersJson));
 
     _logBodyLoaded(
       emailId: emailId,
@@ -1198,6 +1252,21 @@ class EmailRepositoryImpl implements EmailRepository {
       case account_model.AccountType.jmap:
         return _syncEmailsJmap(account, password, mailboxPath);
     }
+  }
+
+  @override
+  Future<model.ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  ) async {
+    final checkpoint =
+        await _loadImapCheckpoint(accountId, 'IMAP:$mailboxPath');
+    if (checkpoint == null) return null;
+    return model.ImapMailboxState(
+      uidNext: checkpoint['uidNext'] as int?,
+      exists: checkpoint['exists'] as int?,
+      highestModSeq: checkpoint['highestModSeq'] as int?,
+    );
   }
 
   Future<model.SyncEmailsResult> _syncEmailsImap(
@@ -1280,6 +1349,8 @@ class EmailRepositoryImpl implements EmailRepository {
           uidValidity,
           maxUid,
           highestModSeq: serverModSeq,
+          uidNext: selectedMailbox.uidNext,
+          exists: selectedMailbox.messagesExists,
         );
         // Record that we've just fetched every flag so the periodic reconcile
         // in _maybeReconcileImapFlagsMailbox doesn't repeat it immediately.
@@ -1304,12 +1375,18 @@ class EmailRepositoryImpl implements EmailRepository {
         // (including Stalwart 0.14.x) do not increment HIGHESTMODSEQ when new
         // mail is delivered via SMTP, causing newly arrived messages to be
         // silently missed when modseq values appear equal.
-        final newUids = (await client.uidSearchMessages(
-              searchCriteria: 'UID ${lastUid + 1}:*',
-            ))
-                .matchingSequence
-                ?.toList() ??
-            [];
+        // RFC 3501 §6.4.4 reads `n:*` as `*:n` when n is past the largest
+        // UID, so with nothing new this still matches the newest message.
+        // Without the filter every sync fetched that message again and
+        // reported it as "1 new".
+        final newUids = ((await client.uidSearchMessages(
+                  searchCriteria: 'UID ${lastUid + 1}:*',
+                ))
+                    .matchingSequence
+                    ?.toList() ??
+                [])
+            .where((uid) => uid > lastUid)
+            .toList();
         var bytes = 0;
         if (newUids.isNotEmpty) {
           bytes = await _fetchAndUpsertImap(
@@ -1348,14 +1425,21 @@ class EmailRepositoryImpl implements EmailRepository {
           serverUids,
           serverMessageCount: selectedMailbox.messagesExists,
         );
-        final maxUid =
-            serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+        // Advance only past what was searched for and fetched above. Mail
+        // that arrived after that search already shows up in [serverUids];
+        // taking their maximum skipped it for good, since the next search
+        // starts after the checkpoint. This relies on every UID in [newUids]
+        // having been fetched above; if that fetch is ever capped or
+        // chunked, advance only to the highest UID actually fetched.
+        final maxUid = newUids.fold(lastUid, math.max);
         await _saveImapCheckpoint(
           account.id,
           resourceType,
           uidValidity,
           maxUid,
           highestModSeq: serverModSeq,
+          uidNext: selectedMailbox.uidNext,
+          exists: selectedMailbox.messagesExists,
         );
         await _sweepOrphanThreads(account.id, mailboxPath);
         return model.SyncEmailsResult(
@@ -1386,6 +1470,7 @@ class EmailRepositoryImpl implements EmailRepository {
                     'move',
                     'snooze',
                     'unsnooze',
+                    'clear_snooze',
                     'delete',
                   ],
                 ),
@@ -1517,6 +1602,17 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxPath, tid);
     }
+    await _backfillImapSizes(
+      client,
+      [
+        for (final row in localRows)
+          if (row.sizeBytes == null &&
+              !row.isLocal &&
+              row.uid > 0 &&
+              byUid.containsKey(row.uid))
+            row,
+      ],
+    );
 
     if (corrected > 0) {
       log(
@@ -1525,6 +1621,48 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+  }
+
+  static const _imapSizeBackfillBatch = 500;
+
+  /// Fetches RFC822.SIZE for [rows] (cached before schema v64, still on the
+  /// server) in batches and stores it. Only these rows are asked for, so once
+  /// a mailbox is backfilled the reconcile costs nothing extra.
+  Future<void> _backfillImapSizes(
+    imap.ImapClient client,
+    List<Email> rows,
+  ) async {
+    final idByUid = {for (final r in rows) r.uid: r.id};
+    final uids = idByUid.keys.toList();
+    for (var i = 0; i < uids.length; i += _imapSizeBackfillBatch) {
+      final batch =
+          uids.sublist(i, math.min(i + _imapSizeBackfillBatch, uids.length));
+      final fetch = await client.uidFetchMessages(
+        imap.MessageSequence.fromIds(batch, isUid: true),
+        'RFC822.SIZE',
+      );
+      await _backfillSizes({
+        for (final msg in fetch.messages)
+          if (idByUid[msg.uid] != null && msg.size != null)
+            idByUid[msg.uid]!: msg.size!,
+      });
+    }
+  }
+
+  /// Stores the message sizes in [sizeById] (email row id → bytes) in one
+  /// batch: rows cached before schema v64 have none, and the first
+  /// reconcile after the upgrade can fill in a whole mailbox at once.
+  Future<void> _backfillSizes(Map<String, int> sizeById) async {
+    if (sizeById.isEmpty) return;
+    await _db.batch((b) {
+      for (final MapEntry(key: id, value: size) in sizeById.entries) {
+        b.update(
+          _db.emails,
+          EmailsCompanion(sizeBytes: Value(size)),
+          where: (t) => t.id.equals(id),
+        );
+      }
+    });
   }
 
   // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
@@ -1657,6 +1795,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 toAddresses: Value(_encodeAddresses(envelope.to)),
                 ccJson: Value(_encodeAddresses(envelope.cc)),
                 replyToJson: Value(_encodeAddresses(envelope.replyTo)),
+                bccJson: Value(_encodeAddresses(envelope.bcc)),
+                sizeBytes:
+                    msg.size == null ? const Value.absent() : Value(msg.size),
                 preview: Value(
                   previewFromSnippet(msg, previewSnippetByUid[uid]),
                 ),
@@ -1804,12 +1945,18 @@ class EmailRepositoryImpl implements EmailRepository {
     int uidValidity,
     int lastUid, {
     int? highestModSeq,
+    int? uidNext,
+    int? exists,
   }) async {
     final data = <String, dynamic>{
       'uidValidity': uidValidity,
       'lastUid': lastUid,
     };
     if (highestModSeq != null) data['highestModSeq'] = highestModSeq;
+    // What SELECT reported, for the IDLE wait's catch-up check
+    // ([lastImapMailboxState]).
+    if (uidNext != null) data['uidNext'] = uidNext;
+    if (exists != null) data['exists'] = exists;
     await _saveSyncState(accountId, resourceType, jsonEncode(data));
   }
 
@@ -1960,6 +2107,12 @@ class EmailRepositoryImpl implements EmailRepository {
         'UPDATE undo_actions SET data_json = REPLACE(data_json, ?1, ?2) '
         'WHERE data_json LIKE ?3',
         ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+      // Like [_rekeyEmailRow]: the per-message logs follow the message;
+      // dropping the source row would set their email_id to null.
+      await _db.customStatement(
+        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
       );
     });
   }
@@ -2506,6 +2659,8 @@ class EmailRepositoryImpl implements EmailRepository {
     'to',
     'cc',
     'replyTo',
+    'bcc',
+    'size',
     'keywords',
     'hasAttachment',
     'preview',
@@ -3458,6 +3613,7 @@ class EmailRepositoryImpl implements EmailRepository {
     if (toCheck.isEmpty) return;
 
     final affectedThreads = <String>{};
+    final sizeById = <String, int>{};
     var corrected = 0;
     for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
       final batch = toCheck.sublist(
@@ -3470,7 +3626,8 @@ class EmailRepositoryImpl implements EmailRepository {
           {
             'accountId': jmap.accountId,
             'ids': batch,
-            'properties': ['id', 'keywords'],
+            // `size` backfills rows cached before schema v64.
+            'properties': ['id', 'keywords', 'size'],
           },
           '0',
         ],
@@ -3482,6 +3639,8 @@ class EmailRepositoryImpl implements EmailRepository {
         final jmapId = m['id'] as String;
         final row = localByJmapId[jmapId];
         if (row == null) continue;
+        final size = m['size'];
+        if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
         final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
         final serverSeen = keywords.containsKey(r'$seen');
         final serverFlagged = keywords.containsKey(r'$flagged');
@@ -3502,6 +3661,7 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final tid in affectedThreads) {
       await _updateThread(accountId, mailboxJmapId, tid);
     }
+    await _backfillSizes(sizeById);
     if (corrected > 0) {
       log(
         'JMAP-sync: flag-reconcile mailbox=$mailboxJmapId corrected=$corrected '
@@ -3608,6 +3768,7 @@ class EmailRepositoryImpl implements EmailRepository {
       final to = _encodeJmapAddresses(m['to'] as List<dynamic>?);
       final cc = _encodeJmapAddresses(m['cc'] as List<dynamic>?);
       final replyTo = _encodeJmapAddresses(m['replyTo'] as List<dynamic>?);
+      final bcc = _encodeJmapAddresses(m['bcc'] as List<dynamic>?);
       final sentAt = _parseDate(m['sentAt'] as String?);
       final receivedAt =
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
@@ -3650,6 +3811,10 @@ class EmailRepositoryImpl implements EmailRepository {
               toAddresses: Value(to),
               ccJson: Value(cc),
               replyToJson: Value(replyTo),
+              bccJson: Value(bcc),
+              sizeBytes: m['size'] is int
+                  ? Value(m['size'] as int)
+                  : const Value.absent(),
               preview: Value(m['preview'] as String?),
               isSeen: Value(keywords.containsKey(r'$seen')),
               isFlagged: Value(keywords.containsKey(r'$flagged')),
@@ -3850,10 +4015,14 @@ class EmailRepositoryImpl implements EmailRepository {
         return 'read/unread change';
       case 'flag_flagged':
         return 'flag change';
+      case 'add_keywords':
+        return 'keyword change';
       case 'snooze':
         return 'snooze';
       case 'unsnooze':
         return 'unsnooze';
+      case 'clear_snooze':
+        return 'snooze cleanup';
       default:
         return '"${row.changeType}" change';
     }
@@ -4202,7 +4371,17 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   @override
-  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) =>
+      _setFlag(emailId, seen: seen, flagged: flagged);
+
+  /// [setFlag] with an optional [source] recorded in the `email.flag` log
+  /// entry (e.g. `sieve` when a local filter set the flag).
+  Future<void> _setFlag(
+    String emailId, {
+    bool? seen,
+    bool? flagged,
+    String? source,
+  }) async {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
@@ -4249,7 +4428,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.mailboxPath,
         row.threadId ?? emailId,
       );
-      _logFlag(row, account, seen: seen, flagged: flagged);
+      _logFlag(row, account, seen: seen, flagged: flagged, source: source);
       return;
     }
 
@@ -4288,7 +4467,7 @@ class EmailRepositoryImpl implements EmailRepository {
       row.mailboxPath,
       row.threadId ?? emailId,
     );
-    _logFlag(row, account, seen: seen, flagged: flagged);
+    _logFlag(row, account, seen: seen, flagged: flagged, source: source);
   }
 
   /// Writes a per-message `email.flag` log row so the read/unread/star change
@@ -4299,6 +4478,7 @@ class EmailRepositoryImpl implements EmailRepository {
     account_model.Account account, {
     bool? seen,
     bool? flagged,
+    String? source,
   }) {
     if (seen == null && flagged == null) return;
     final parts = <String>[
@@ -4316,6 +4496,7 @@ class EmailRepositoryImpl implements EmailRepository {
           if (seen != null) 'seen': seen,
           if (flagged != null) 'flagged': flagged,
           'protocol': account.type.name,
+          if (source != null) 'source': source,
         },
       ),
     );
@@ -4426,18 +4607,31 @@ class EmailRepositoryImpl implements EmailRepository {
     final emailId = row.id;
     final srcMailboxPath = row.mailboxPath;
     final account = (await _bulkAccount(row.accountId))!;
+    // Filing a snoozed mail by hand ends the snooze: otherwise the wake-up
+    // later pulls it back to the Inbox from wherever the user put it. The
+    // flush also strips the server-side `snz:` keyword, which sync would
+    // otherwise read back into `snoozedUntil`.
+    final clearSnooze = row.snoozedUntil != null;
 
     if (account.type == account_model.AccountType.jmap) {
       await _enqueueChange(
         account.id,
         emailId,
         'move',
-        jsonEncode({'src': srcMailboxPath, 'dest': destMailboxPath}),
+        jsonEncode({
+          'src': srcMailboxPath,
+          'dest': destMailboxPath,
+          if (clearSnooze) 'clearSnooze': true,
+        }),
       );
       // Optimistic: move the cached row so it disappears from the current
       // mailbox immediately and is visible in the destination mailbox.
       await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(mailboxPath: Value(destMailboxPath)),
+        EmailsCompanion(
+          mailboxPath: Value(destMailboxPath),
+          snoozedUntil: const Value(null),
+          snoozedFromMailboxPath: const Value(null),
+        ),
       );
       await _reconcileSourceThreads(
         row.accountId,
@@ -4462,6 +4656,7 @@ class EmailRepositoryImpl implements EmailRepository {
           // Lets the flush re-resolve a stale UID (see
           // [_retryImapMoveByMessageId]) instead of silently no-op'ing (#1048).
           if (row.messageId != null) 'messageId': row.messageId,
+          if (clearSnooze) 'clearSnooze': true,
         }),
       );
       // Optimistic: move the cached row locally instead of hard-deleting.
@@ -4652,6 +4847,9 @@ class EmailRepositoryImpl implements EmailRepository {
         mailboxPath: row.mailboxPath,
         data: {
           'permanent': true,
+          // The row's delete sets this entry's email_id to null (foreign
+          // key), so keep which mail it was in the data.
+          'emailId': emailId,
           'mailboxPath': row.mailboxPath,
           'protocol': account.type.name,
           if (row.messageId != null) 'messageId': row.messageId,
@@ -4705,10 +4903,15 @@ class EmailRepositoryImpl implements EmailRepository {
     if (await _isLocalEmail(resourceId)) return;
 
     // Collapse redundant flag changes: if an un-attempted `flag_seen` /
-    // `flag_flagged` for this message with the same payload is already queued,
-    // don't append a duplicate. Only flag changes are de-duped — move / delete /
-    // snooze carry ordering semantics and must not be collapsed here (#644).
-    if (changeType == 'flag_seen' || changeType == 'flag_flagged') {
+    // `flag_flagged` / `clear_snooze` for this message with the same payload is
+    // already queued, don't append a duplicate (the wake-up re-queues a
+    // `clear_snooze` each time sync reads a stale snooze back). Only these are
+    // de-duped — move / delete / snooze carry ordering semantics and must not
+    // be collapsed here (#644).
+    if (changeType == 'flag_seen' ||
+        changeType == 'flag_flagged' ||
+        changeType == 'add_keywords' ||
+        changeType == 'clear_snooze') {
       final existing = await (_db.select(_db.pendingChanges)
             ..where(
               (t) =>
@@ -4830,24 +5033,17 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
   Future<void> _snoozeRow(Email row, DateTime until) async {
     final accountId = row.accountId;
+    final destPath = await _snoozedMailboxPath(accountId);
 
-    // Find or create Snoozed mailbox.
-    var snoozedMailbox = await (_db.select(_db.mailboxes)
+    // A queued keyword cleanup from an earlier stale snooze would strip the
+    // keyword this snooze is about to add.
+    await (_db.delete(_db.pendingChanges)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-
-    snoozedMailbox ??= await (_db.select(_db.mailboxes)
-          ..where(
-            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-
-    // Default path if not found; flush logic will attempt to create it.
-    final destPath = snoozedMailbox?.path ?? 'Snoozed';
+            (t) =>
+                t.resourceId.equals(row.id) &
+                t.changeType.equals('clear_snooze'),
+          ))
+        .go();
 
     // Optimistic local update.
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
@@ -4867,6 +5063,9 @@ class EmailRepositoryImpl implements EmailRepository {
         'src': row.mailboxPath,
         'dest': destPath,
         'until': until.toIso8601String(),
+        // Lets the IMAP flush re-find a stale UID by Message-ID, as a move
+        // does (#1048).
+        if (row.messageId != null) 'messageId': row.messageId,
       }),
     );
 
@@ -4891,6 +5090,42 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
+  /// The path of [accountId]'s Snoozed mailbox (by role, then by name), or
+  /// the literal `Snoozed` when it is not known locally yet — the snooze flush
+  /// creates it on the server.
+  Future<String> _snoozedMailboxPath(String accountId) async {
+    var snoozedMailbox = await (_db.select(_db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    snoozedMailbox ??= await (_db.select(_db.mailboxes)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.name.equals(_snoozedPlaceholder),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+
+    return snoozedMailbox?.path ?? _snoozedPlaceholder;
+  }
+
+  /// The Snoozed mailbox's name, and the stand-in path a snooze uses while
+  /// the folder is not known locally yet (the flush resolves or creates it).
+  static const _snoozedPlaceholder = 'Snoozed';
+
+  @override
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
+      _isSnoozedPath(mailboxPath, await _snoozedMailboxPath(accountId));
+
+  /// Whether [mailboxPath] is the Snoozed folder at [snoozedPath], or the
+  /// literal `Snoozed` a snooze queued before that folder was known uses.
+  static bool _isSnoozedPath(String mailboxPath, String snoozedPath) =>
+      mailboxPath == snoozedPath || mailboxPath == _snoozedPlaceholder;
+
   @override
   Future<int> wakeUpEmails(String accountId) async {
     final now = DateTime.now();
@@ -4904,15 +5139,51 @@ class EmailRepositoryImpl implements EmailRepository {
 
     if (expired.isEmpty) return 0;
 
+    final snoozedPath = await _snoozedMailboxPath(accountId);
+    var woken = 0;
     for (final row in expired) {
+      // Only a mail still waiting in the Snoozed folder goes back to the
+      // Inbox. One the user (or another client) filed elsewhere since keeps
+      // its place; its stale snooze is dropped, and so is the server-side
+      // `snz:` keyword sync would otherwise keep reading back.
+      if (!_isSnoozedPath(row.mailboxPath, snoozedPath)) {
+        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+          const EmailsCompanion(
+            snoozedUntil: Value(null),
+            snoozedFromMailboxPath: Value(null),
+          ),
+        );
+        await _enqueueChange(
+          accountId,
+          row.id,
+          'clear_snooze',
+          jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
+        );
+        continue;
+      }
       await _unsnoozeRow(row);
       await _mirrorSnoozeToCounterparts(
         row.accountId,
         row.messageId,
         until: null,
       );
+      woken++;
     }
-    return expired.length;
+    return woken;
+  }
+
+  @override
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  }) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        snoozedUntil: Value(until),
+        snoozedFromMailboxPath: Value(fromMailboxPath),
+      ),
+    );
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that
@@ -5316,6 +5587,8 @@ class EmailRepositoryImpl implements EmailRepository {
               toAddresses: Value(jsonEncode(e.to)),
               ccJson: Value(jsonEncode(e.cc)),
               replyToJson: Value(jsonEncode(e.replyTo)),
+              bccJson: Value(jsonEncode(e.bcc)),
+              sizeBytes: Value(e.size),
               preview: Value(e.preview),
               isSeen: Value(e.isSeen),
               isFlagged: Value(e.isFlagged),
@@ -5424,12 +5697,19 @@ class EmailRepositoryImpl implements EmailRepository {
       appliedIds = const {};
     }
 
+    // LocalSieveApplied is keyed on the Message-ID, which survives moves, so
+    // the automatic run can only remember mail that has one and skips the
+    // rest. The preview and the explicit "apply now" remember nothing, so
+    // they take every inbox mail, with or without a Message-ID.
     final inboxEmails = await (_db.select(_db.emails)
           ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.mailboxPath.equals(inboxPath) &
-                t.messageId.isNotNull(),
+            (t) {
+              final inInbox = t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(inboxPath);
+              return skipAlreadyApplied
+                  ? inInbox & t.messageId.isNotNull()
+                  : inInbox;
+            },
           ))
         .get();
 
@@ -5438,7 +5718,7 @@ class EmailRepositoryImpl implements EmailRepository {
     var matched = 0;
 
     for (final row in inboxEmails) {
-      final msgId = row.messageId!;
+      final msgId = row.messageId;
       if (skipAlreadyApplied && appliedIds.contains(msgId)) continue;
 
       final emailCtx = _buildSieveContext(row);
@@ -5447,8 +5727,10 @@ class EmailRepositoryImpl implements EmailRepository {
       try {
         result = interpreter.execute(rules, emailCtx);
       } catch (e) {
-        log('Sieve interpreter error for message $msgId: $e');
-        if (enqueueActions) await _markSieveApplied(accountId, msgId);
+        log('Sieve interpreter error for message ${msgId ?? row.id}: $e');
+        if (enqueueActions && msgId != null) {
+          await _markSieveApplied(accountId, msgId);
+        }
         continue;
       }
 
@@ -5463,15 +5745,32 @@ class EmailRepositoryImpl implements EmailRepository {
 
       if (!enqueueActions) continue;
 
-      await _markSieveApplied(accountId, msgId);
+      if (msgId != null) await _markSieveApplied(accountId, msgId);
 
       if (result.isCancelled) {
         await _enqueueSieveDelete(account, row);
-      } else if (result.targetFolders.isNotEmpty) {
-        final dest = result.targetFolders.first;
-        await _enqueueSieveMove(account, row, dest);
-      } else if (result.flagsToAdd.isNotEmpty) {
-        await _enqueueSieveFlagSeen(account, row);
+        continue;
+      }
+      // Flags first: an IMAP move re-keys the row (new UID in the
+      // destination), so a flag change queued after it would address the
+      // vanished source UID. Queued before, it is flushed first and the
+      // MOVE carries the flags along (RFC 6851 keeps them; JMAP ids are
+      // stable anyway). This also matches RFC 5232, where `fileinto`
+      // files the message with the flags set so far.
+      if (result.flagsToAdd.isNotEmpty) {
+        await _enqueueSieveFlags(account, row, result.flagsToAdd);
+      }
+      if (result.targetFolders.isNotEmpty) {
+        // The local model holds a message in exactly one folder, so a
+        // script with several `fileinto` targets (copies, in Sieve) is
+        // applied as a move to the first one.
+        if (result.targetFolders.length > 1) {
+          log(
+            'Sieve: message ${row.id} has ${result.targetFolders.length} '
+            'fileinto targets; moving to the first only',
+          );
+        }
+        await _enqueueSieveMove(account, row, result.targetFolders.first);
       }
     }
     return matched;
@@ -5501,6 +5800,7 @@ class EmailRepositoryImpl implements EmailRepository {
         'cc': [formatAddrs(row.ccJson)],
         if (row.messageId != null) 'message-id': [row.messageId!],
       },
+      sizeBytes: row.sizeBytes,
     );
   }
 
@@ -5583,33 +5883,71 @@ class EmailRepositoryImpl implements EmailRepository {
     await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
   }
 
-  Future<void> _enqueueSieveFlagSeen(
+  /// Applies the Sieve `setflag` / `addflag` / mark / star actions in
+  /// [flags] to [row]. `\Seen` and `\Flagged` go through [setFlag], the same
+  /// path as the read/star buttons, so the local row, thread and push stay
+  /// consistent. Any other flag or keyword is queued as an `add_keywords`
+  /// change; the app has no local column for those, so it is server-only.
+  /// Strings that are not valid IMAP flags are dropped (see
+  /// [normalizeSieveFlags]) and logged.
+  Future<void> _enqueueSieveFlags(
     account_model.Account account,
     Email row,
+    Set<String> flags,
   ) async {
-    if (account.type == account_model.AccountType.jmap) {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'flag_seen',
-        jsonEncode({'seen': true}),
+    final normalized = normalizeSieveFlags(flags);
+    if (normalized.dropped.isNotEmpty) {
+      log(
+        'Sieve: ignoring invalid flags ${normalized.dropped} for message '
+        '${row.id}',
       );
-    } else {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'flag_seen',
-        jsonEncode({
-          'uid': row.uid,
-          'mailboxPath': row.mailboxPath,
-          'seen': true,
-        }),
+      unawaited(
+        _appLogger?.warn(
+          'sieve.flag_ignored',
+          'Local filter flag(s) ignored: ${normalized.dropped.join(', ')}',
+          accountId: account.id,
+          emailId: row.id,
+          mailboxPath: row.mailboxPath,
+        ),
       );
     }
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      const EmailsCompanion(isSeen: Value(true)),
+    final seen = normalized.flags.contains(r'\Seen');
+    final flagged = normalized.flags.contains(r'\Flagged');
+    if (seen || flagged) {
+      await _setFlag(
+        row.id,
+        seen: seen ? true : null,
+        flagged: flagged ? true : null,
+        source: 'sieve',
+      );
+    }
+    final keywords = normalized.flags
+        .where((f) => f != r'\Seen' && f != r'\Flagged')
+        .toList()
+      ..sort();
+    if (keywords.isEmpty) return;
+    await _enqueueChange(
+      account.id,
+      row.id,
+      'add_keywords',
+      jsonEncode(
+        account.type == account_model.AccountType.jmap
+            ? {'keywords': keywords}
+            : {
+                'uid': row.uid,
+                'mailboxPath': row.mailboxPath,
+                'keywords': keywords,
+              },
+      ),
     );
-    await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
+  }
+
+  /// Maps an IMAP flag or keyword from [normalizeSieveFlags] to its JMAP
+  /// keyword (RFC 8621 §4.1.1): system flags become their `$` form, keywords
+  /// are case-insensitive and lower-cased.
+  static String _imapFlagToJmapKeyword(String flag) {
+    final lower = flag.toLowerCase();
+    return lower.startsWith(r'\') ? '\$${lower.substring(1)}' : lower;
   }
 
   /// Drains pending changes for [accountId] via the appropriate protocol.
@@ -5618,7 +5956,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<int> flushPendingChanges(String accountId, String password) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          // Flush in enqueue order. The autoincrement id gives that exactly;
+          // `createdAt` can tie for changes queued together (a Sieve flag +
+          // move) and would follow the wall clock if it steps back.
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
         .get();
     if (rows.isEmpty) return 0;
 
@@ -5773,8 +6114,14 @@ class EmailRepositoryImpl implements EmailRepository {
         flagged
             ? await client.uidMarkFlagged(seq)
             : await client.uidMarkUnflagged(seq);
+      case 'add_keywords':
+        final keywords = (payload['keywords'] as List<dynamic>).cast<String>();
+        await client.uidStore(seq, keywords, action: imap.StoreAction.add);
       case 'move':
         final dest = payload['dest'] as String;
+        if (payload['clearSnooze'] == true) {
+          await _removeImapSnoozeFlags(client, seq);
+        }
         final result = await client.uidMove(seq, targetMailboxPath: dest);
         final located = await _remapEmailAfterImapMove(
           client,
@@ -5791,6 +6138,9 @@ class EmailRepositoryImpl implements EmailRepository {
           mailboxPath: mailboxPath,
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
+          beforeMove: payload['clearSnooze'] == true
+              ? (s) => _removeImapSnoozeFlags(client, s)
+              : null,
         );
       case 'delete':
         await client.uidMarkDeleted(seq);
@@ -5805,33 +6155,37 @@ class EmailRepositoryImpl implements EmailRepository {
         try {
           await client.createMailbox(dest);
         } catch (_) {}
-        await client.uidStore(seq, [keyword], action: imap.StoreAction.add);
+        Future<void> tag(imap.MessageSequence s) async {
+          await client.uidStore(s, [keyword], action: imap.StoreAction.add);
+        }
+
+        await tag(seq);
         final snoozeResult = await client.uidMove(seq, targetMailboxPath: dest);
-        await _remapEmailAfterImapMove(
+        final located = await _remapEmailAfterImapMove(
           client,
           oldId: row.resourceId,
           sourceUid: uid,
           destMailboxPath: dest,
           moveResult: snoozeResult,
         );
+        if (located) return;
+        // A stale UID (e.g. Undo re-snoozing a row rebuilt from its snapshot)
+        // makes STORE + MOVE silent no-ops: re-find the message like a move.
+        await _retryImapMoveByMessageId(
+          client,
+          row: row,
+          staleUid: uid,
+          mailboxPath: mailboxPath,
+          destMailboxPath: dest,
+          messageId: payload['messageId'] as String?,
+          beforeMove: tag,
+        );
       case 'unsnooze':
         final dest = payload['dest'] as String;
         try {
           await client.createMailbox(dest);
         } catch (_) {}
-        // Remove any existing snooze flags.
-        final fetch = await client.uidFetchMessages(seq, 'FLAGS');
-        if (fetch.messages.isNotEmpty) {
-          final flags = fetch.messages.first.flags ?? [];
-          final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
-          if (snzFlags.isNotEmpty) {
-            await client.uidStore(
-              seq,
-              snzFlags,
-              action: imap.StoreAction.remove,
-            );
-          }
-        }
+        await _removeImapSnoozeFlags(client, seq);
         final unsnoozeResult =
             await client.uidMove(seq, targetMailboxPath: dest);
         await _remapEmailAfterImapMove(
@@ -5841,7 +6195,71 @@ class EmailRepositoryImpl implements EmailRepository {
           destMailboxPath: dest,
           moveResult: unsnoozeResult,
         );
+      case 'clear_snooze':
+        await _clearImapSnoozeFlags(
+          client,
+          row: row,
+          uid: uid,
+          mailboxPath: mailboxPath,
+        );
     }
+  }
+
+  /// Removes every `snz:` snooze keyword from the message at [seq] in the
+  /// selected mailbox, so a later sync does not read the snooze back.
+  /// Returns false when no message exists at [seq] (a stale UID).
+  Future<bool> _removeImapSnoozeFlags(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+  ) async {
+    final fetch = await client.uidFetchMessages(seq, 'FLAGS');
+    if (fetch.messages.isEmpty) return false;
+    final flags = fetch.messages.first.flags ?? [];
+    final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
+    if (snzFlags.isEmpty) return true;
+    await client.uidStore(seq, snzFlags, action: imap.StoreAction.remove);
+    return true;
+  }
+
+  /// IMAP `clear_snooze`: strips the `snz:` flags at the queued UID or, when
+  /// that UID went stale, at the message re-found by Message-ID. Logs a
+  /// warning when it cannot be found at all; the change is not retried since
+  /// a missing message has no keyword to keep reading back.
+  Future<void> _clearImapSnoozeFlags(
+    imap.ImapClient client, {
+    required PendingChangeRow row,
+    required int uid,
+    required String mailboxPath,
+  }) async {
+    if (await _removeImapSnoozeFlags(
+      client,
+      imap.MessageSequence.fromId(uid, isUid: true),
+    )) {
+      return;
+    }
+    final local = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    final found =
+        await _searchUidByMessageId(client, mailboxPath, local?.messageId);
+    if (found != null &&
+        found != uid &&
+        await _removeImapSnoozeFlags(
+          client,
+          imap.MessageSequence.fromId(found, isUid: true),
+        )) {
+      return;
+    }
+    unawaited(
+      _appLogger?.warn(
+        'email.snooze_cleanup_missed',
+        'Could not clear the snooze keyword: UID $uid is gone from '
+            '$mailboxPath and the message was not found by Message-ID',
+        accountId: row.accountId,
+        emailId: row.resourceId,
+        mailboxPath: mailboxPath,
+      ),
+    );
   }
 
   /// Handles a `UID MOVE` that reported OK but whose message could not be
@@ -5850,7 +6268,9 @@ class EmailRepositoryImpl implements EmailRepository {
   /// queued before the original move re-keyed the row) would otherwise be
   /// dropped as "applied" while the message stays put (#1048).
   ///
-  /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one.
+  /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one,
+  /// running [beforeMove] on it first (snooze flag edits ride along).
+  /// Shared by `move` and `snooze`.
   /// Throws [StateError] when the message cannot be found, so the change is
   /// retried and the failure lands in the App Log instead of vanishing.
   /// Without any Message-ID to verify against, keeps the old behaviour and
@@ -5862,6 +6282,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String mailboxPath,
     required String destMailboxPath,
     required String? messageId,
+    Future<void> Function(imap.MessageSequence seq)? beforeMove,
   }) async {
     final local = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(row.resourceId)))
@@ -5879,8 +6300,10 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await client.selectUnicodeMailboxByPath(mailboxPath);
+    final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
+    await beforeMove?.call(resolvedSeq);
     final result = await client.uidMove(
-      imap.MessageSequence.fromId(resolvedUid, isUid: true),
+      resolvedSeq,
       targetMailboxPath: destMailboxPath,
     );
     final located = await _remapEmailAfterImapMove(
@@ -5999,6 +6422,176 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// The JMAP id of [accountId]'s Snoozed mailbox, or null when neither the
+  /// local cache nor the server has one and [create] is false. With [create]
+  /// a missing mailbox is made on the server — the case on every fresh JMAP
+  /// account. A snooze queued while the folder was unknown targets
+  /// [_snoozedPlaceholder]; resolving it here, at flush time, keeps snoozing
+  /// usable offline. Whenever an id is found, every row still parked under
+  /// the placeholder is moved onto it, so the list, [isSnoozedMailbox] and the
+  /// wake-up all see one Snoozed folder.
+  ///
+  /// The `snoozed` role is not in the IANA registry and servers such as
+  /// Stalwart reject it (`invalidProperties`), so creation retries without a
+  /// role; the folder is then found by name, as [_snoozedMailboxPath] does.
+  ///
+  /// Throws when creation fails, so the change stays queued and is retried
+  /// (up to [_maxChangeAttempts]) rather than dropped as a per-email reject.
+  Future<String?> _resolveJmapSnoozedMailbox(
+    JmapClient jmap,
+    String accountId, {
+    required bool create,
+  }) async {
+    final known = await _snoozedMailboxPath(accountId);
+    if (known != _snoozedPlaceholder) {
+      await _repointSnoozedPlaceholder(accountId, known);
+      return known;
+    }
+
+    final getResponses = await jmap.call([
+      [
+        'Mailbox/get',
+        {
+          'accountId': jmap.accountId,
+          'properties': ['name', 'role', 'parentId'],
+        },
+        '0',
+      ],
+    ]);
+    final list =
+        (_responseArgs(getResponses, 0, 'Mailbox/get')['list'] as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+    final existing = list.where((m) => m['role'] == 'snoozed').firstOrNull ??
+        list
+            .where(
+              (m) => m['name'] == _snoozedPlaceholder && m['parentId'] == null,
+            )
+            .firstOrNull;
+    var id = existing?['id'] as String?;
+    var role = existing?['role'] as String?;
+
+    if (id == null) {
+      if (!create) return null;
+      for (final withRole in const [true, false]) {
+        final setResponses = await jmap.call([
+          [
+            'Mailbox/set',
+            {
+              'accountId': jmap.accountId,
+              'create': {
+                'snoozed': {
+                  'name': _snoozedPlaceholder,
+                  if (withRole) 'role': 'snoozed',
+                },
+              },
+            },
+            '0',
+          ],
+        ]);
+        final result = _responseArgs(setResponses, 0, 'Mailbox/set');
+        final created = (result['created'] as Map<String, dynamic>?)?['snoozed']
+            as Map<String, dynamic>?;
+        id = created?['id'] as String?;
+        if (id != null) {
+          role = withRole ? 'snoozed' : null;
+          break;
+        }
+      }
+    }
+    if (id == null) {
+      // Not a per-email rejection: keep the snooze queued and retry later.
+      throw StateError('Could not create the Snoozed mailbox on the server');
+    }
+
+    await _repointSnoozedPlaceholder(
+      accountId,
+      id,
+      mailbox: MailboxesCompanion.insert(
+        id: '$accountId:$id',
+        accountId: accountId,
+        path: id,
+        name: _snoozedPlaceholder,
+        role: Value(role),
+        displayPath: const Value(_snoozedPlaceholder),
+      ),
+    );
+    return id;
+  }
+
+  /// Records [mailbox] (when given) and moves every email and thread row of
+  /// [accountId] still under [_snoozedPlaceholder] onto [snoozedId], in one
+  /// transaction. Threads are rebuilt rather than renamed: the same thread
+  /// can already have a row under [snoozedId], and the key would collide.
+  Future<void> _repointSnoozedPlaceholder(
+    String accountId,
+    String snoozedId, {
+    MailboxesCompanion? mailbox,
+  }) =>
+      _db.transaction(() async {
+        if (mailbox != null) {
+          await _db.into(_db.mailboxes).insertOnConflictUpdate(mailbox);
+        }
+        await (_db.update(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.mailboxPath.equals(_snoozedPlaceholder),
+              ))
+            .write(EmailsCompanion(mailboxPath: Value(snoozedId)));
+        await (_db.update(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.snoozedFromMailboxPath.equals(_snoozedPlaceholder),
+              ))
+            .write(EmailsCompanion(snoozedFromMailboxPath: Value(snoozedId)));
+        final placeholderThreads = _db.select(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(_snoozedPlaceholder),
+          );
+        final threadIds =
+            (await placeholderThreads.get()).map((t) => t.id).toSet();
+        if (threadIds.isEmpty) return;
+        await (_db.delete(_db.threads)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.mailboxPath.equals(_snoozedPlaceholder),
+              ))
+            .go();
+        for (final threadId in threadIds) {
+          await _updateThread(accountId, snoozedId, threadId);
+        }
+      });
+
+  /// `Email/set` patch entries (`keywords/snz:…: null`) that remove every
+  /// snooze keyword [jmapEmailId] currently carries on the server.
+  Future<Map<String, dynamic>> _jmapSnoozeKeywordRemovals(
+    JmapClient jmap,
+    String jmapEmailId,
+  ) async {
+    final getResponses = await jmap.call([
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          'ids': [jmapEmailId],
+          'properties': ['keywords'],
+        },
+        '0',
+      ],
+    ]);
+    final getResult = _responseArgs(getResponses, 0, 'Email/get');
+    final email = (getResult['list'] as List).firstOrNull as Map?;
+    final keywords = (email?['keywords'] as Map?) ?? {};
+    return {
+      for (final k in keywords.keys)
+        if (k.toString().startsWith('snz:')) 'keywords/$k': null,
+    };
+  }
+
   /// Applies a single pending change to the JMAP server.
   ///
   /// The `Email/set` calls intentionally omit `ifInState`: each is a targeted
@@ -6055,8 +6648,29 @@ class EmailRepositoryImpl implements EmailRepository {
           ],
         ]);
 
+      case 'add_keywords':
+        final update = <String, dynamic>{
+          for (final k in (payload['keywords'] as List<dynamic>).cast<String>())
+            'keywords/${_imapFlagToJmapKeyword(k)}': true,
+        };
+        if (update.isEmpty) return;
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {jmapEmailId: update},
+            }),
+            '0',
+          ],
+        ]);
+
       case 'move':
         final destMailboxId = payload['dest'] as String;
+        final moveUpdate = <String, dynamic>{
+          'mailboxIds': {destMailboxId: true},
+          if (payload['clearSnooze'] == true)
+            ...await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId),
+        };
         // Set `mailboxIds` outright rather than patching `dest: true` plus
         // `src: null`. `src` is the folder the row sat in when the move was
         // queued; by flush time the server can hold the message elsewhere
@@ -6071,11 +6685,7 @@ class EmailRepositoryImpl implements EmailRepository {
           [
             'Email/set',
             setArgs({
-              'update': {
-                jmapEmailId: {
-                  'mailboxIds': {destMailboxId: true},
-                },
-              },
+              'update': {jmapEmailId: moveUpdate},
             }),
             '0',
           ],
@@ -6097,27 +6707,23 @@ class EmailRepositoryImpl implements EmailRepository {
         final timestamp = until.replaceAll(':', '').replaceAll('-', '');
         final keyword = 'snz:$timestamp';
         var destMailboxId = payload['dest'] as String;
-        final srcMailboxId = payload['src'] as String;
+        var srcMailboxId = payload['src'] as String;
         // When the Snoozed folder didn't exist at enqueue time, 'dest' holds
-        // the literal name 'Snoozed' rather than a JMAP mailbox ID.  Create it.
-        if (destMailboxId == 'Snoozed') {
-          final createResps = await jmap.call([
-            [
-              'Mailbox/set',
-              {
-                'accountId': jmap.accountId,
-                'create': {
-                  'new-snoozed': {'name': 'Snoozed', 'role': 'snoozed'},
-                },
-              },
-              '0',
-            ],
-          ]);
-          final createResult = _responseArgs(createResps, 0, 'Mailbox/set');
-          final created = createResult['created'] as Map<String, dynamic>?;
-          final newId = (created?['new-snoozed']
-              as Map<String, dynamic>?)?['id'] as String?;
-          if (newId != null) destMailboxId = newId;
+        // the literal name 'Snoozed' rather than a JMAP mailbox ID — and so
+        // does 'src' for a re-snooze of a mail parked under that placeholder.
+        if (destMailboxId == _snoozedPlaceholder) {
+          destMailboxId = (await _resolveJmapSnoozedMailbox(
+            jmap,
+            row.accountId,
+            create: true,
+          ))!;
+        }
+        if (srcMailboxId == _snoozedPlaceholder) {
+          srcMailboxId = (await _resolveJmapSnoozedMailbox(
+            jmap,
+            row.accountId,
+            create: true,
+          ))!;
         }
         responses = await jmap.call([
           [
@@ -6126,8 +6732,12 @@ class EmailRepositoryImpl implements EmailRepository {
               'update': {
                 jmapEmailId: {
                   'keywords/$keyword': true,
-                  'mailboxIds/$destMailboxId': true,
-                  'mailboxIds/$srcMailboxId': null,
+                  // A re-snooze from the Snoozed folder only re-tags: patching
+                  // the same id to true and null is a conflicting update.
+                  if (srcMailboxId != destMailboxId) ...{
+                    'mailboxIds/$destMailboxId': true,
+                    'mailboxIds/$srcMailboxId': null,
+                  },
                 },
               },
             }),
@@ -6137,39 +6747,42 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'unsnooze':
         final destMailboxId = payload['dest'] as String;
-        final srcMailboxId = payload['src'] as String;
-        // Fetch current keywords to identify which snz: keywords to remove.
-        final getResponses = await jmap.call([
-          [
-            'Email/get',
-            {
-              'accountId': jmap.accountId,
-              'ids': [jmapEmailId],
-              'properties': ['keywords'],
-            },
-            '0',
-          ],
-        ]);
-        final getResult = _responseArgs(getResponses, 0, 'Email/get');
-        final email = (getResult['list'] as List).firstOrNull as Map?;
-        final keywords = (email?['keywords'] as Map?) ?? {};
-        final toRemove = keywords.keys.where(
-          (k) => k.toString().startsWith('snz:'),
-        );
-
-        final update = {
-          'mailboxIds/$destMailboxId': true,
-          'mailboxIds/$srcMailboxId': null,
-        };
-        for (final k in toRemove) {
-          update['keywords/$k'] = null;
+        String? srcMailboxId = payload['src'] as String;
+        // An unsnooze queued before its snooze reached the server still names
+        // the placeholder. Look the folder up, but never create one just to
+        // leave it: with no Snoozed mailbox the mail cannot be in it.
+        if (srcMailboxId == _snoozedPlaceholder) {
+          srcMailboxId = await _resolveJmapSnoozedMailbox(
+            jmap,
+            row.accountId,
+            create: false,
+          );
         }
+        final update = <String, dynamic>{
+          'mailboxIds/$destMailboxId': true,
+          if (srcMailboxId != null && srcMailboxId != destMailboxId)
+            'mailboxIds/$srcMailboxId': null,
+          ...await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId),
+        };
 
         responses = await jmap.call([
           [
             'Email/set',
             setArgs({
               'update': {jmapEmailId: update},
+            }),
+            '0',
+          ],
+        ]);
+
+      case 'clear_snooze':
+        final removals = await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId);
+        if (removals.isEmpty) return;
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {jmapEmailId: removals},
             }),
             '0',
           ],
@@ -6221,18 +6834,21 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<int> enqueueSend(String accountId, model.EmailDraft draft) async {
-    // Stamp a deterministic Message-ID so a self-send's immediately-created
-    // local message and the real message that arrives later share the same id
-    // (#545). enough_mail would otherwise generate a random one at send time.
+    // Stamp a deterministic Message-ID so a self-send's local inbox note and
+    // the real message that arrives later share the same id (#545). enough_mail
+    // would otherwise generate a random one at send time.
     final host = draft.from.email.contains('@')
         ? draft.from.email.split('@').last
         : 'localhost';
     final stampedDraft = draft.messageId != null
         ? draft
         : draft.copyWith(messageId: imap.MessageBuilder.createMessageId(host));
-    final rowId = await _outbox.enqueue(accountId, stampedDraft);
-    await _createLocalSelfMessages(accountId, stampedDraft);
-    return rowId;
+    // The self-send inbox note (#545) is NOT created here: until SMTP accepts
+    // the message it may still be rejected (unknown recipient, 5xx) or be
+    // discarded from the Sent Queue, and a note in the inbox would then look
+    // like mail that arrived although nothing was delivered. It is created by
+    // the outbox sender once the send has succeeded (see [_flushOutbox]).
+    return _outbox.enqueue(accountId, stampedDraft);
   }
 
   /// Marker inserted into a local (virtual) email row's `id` so it never
@@ -6299,6 +6915,7 @@ class EmailRepositoryImpl implements EmailRepository {
             fromJson: Value(_encodeModelAddresses([draft.from])),
             toAddresses: Value(_encodeModelAddresses(draft.to)),
             ccJson: Value(_encodeModelAddresses(draft.cc)),
+            bccJson: Value(_encodeModelAddresses(draft.bcc)),
             preview: Value(preview),
             // You wrote it — mirrors the \Seen flag the APPEND sets, and never
             // nags with an unread badge on your own mail.
@@ -6323,17 +6940,19 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// For every configured account whose address is among [draft]'s recipients,
   /// insert a local "virtual" copy of the message into that account's inbox so
-  /// it shows up immediately for note-taking (#545). Dissolved into the real
+  /// it shows up right after sending for note-taking (#545), instead of only
+  /// once the next sync of the inbox fetches it. Dissolved into the real
   /// message by [_maybeDissolveLocalMessage] once it arrives via sync.
-  Future<void> _createLocalSelfMessages(
-    String accountId,
-    model.EmailDraft draft,
-  ) async {
+  ///
+  /// Only call this after the server accepted the message: a note for a mail
+  /// that was rejected or discarded would be a phantom inbox message.
+  Future<void> _createLocalSelfMessages(model.EmailDraft draft) async {
     final mid = normaliseMessageId(draft.messageId);
     if (mid == null) return;
     final recipients = <String>{
       for (final a in draft.to) a.email.toLowerCase().trim(),
       for (final a in draft.cc) a.email.toLowerCase().trim(),
+      for (final a in draft.bcc) a.email.toLowerCase().trim(),
     };
     if (recipients.isEmpty) return;
 
@@ -6359,38 +6978,87 @@ class EmailRepositoryImpl implements EmailRepository {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: emailId,
-              accountId: account.id,
-              mailboxPath: inbox.path,
-              uid: 0,
-              subject: Value(draft.subject),
-              sentAt: Value(now),
-              receivedAt: now,
-              fromJson: Value(_encodeModelAddresses([draft.from])),
-              toAddresses: Value(_encodeModelAddresses(draft.to)),
-              ccJson: Value(_encodeModelAddresses(draft.cc)),
-              preview: Value(preview),
-              // Self-sent: you wrote it, so don't nag with an unread badge.
-              isSeen: const Value(true),
-              isFlagged: const Value(false),
-              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-              threadId: Value(threadId),
-              messageId: Value(mid),
-              isLocal: const Value(true),
-            ),
-          );
-      await _db.into(_db.emailBodies).insertOnConflictUpdate(
-            EmailBodiesCompanion.insert(
-              emailId: emailId,
-              textBody: Value(body),
-              cachedAt: Value(now),
-              bodySize: Value(_bodySize(body, null)),
-            ),
-          );
-      await _updateThread(account.id, inbox.path, threadId);
+      // One transaction: the arrival check and the insert must not interleave
+      // with a sync storing the real message, and a note must never be left
+      // half-written (row without body or thread aggregate).
+      await _db.transaction(() async {
+        // A fast server can deliver the real message, and a sync can store
+        // it, before we get here. Its arrival found no note to dissolve, so a
+        // note inserted now would stay behind as a permanent duplicate.
+        if (await _hasArrivedOutsideSent(account.id, mid)) return;
+
+        // insertOrIgnore: a second successful send of the same draft (or a
+        // replay) must not reset the star / read state / folder the user has
+        // already set on the note.
+        await _db.into(_db.emails).insert(
+              EmailsCompanion.insert(
+                id: emailId,
+                accountId: account.id,
+                mailboxPath: inbox.path,
+                uid: 0,
+                subject: Value(draft.subject),
+                sentAt: Value(now),
+                receivedAt: now,
+                fromJson: Value(_encodeModelAddresses([draft.from])),
+                toAddresses: Value(_encodeModelAddresses(draft.to)),
+                ccJson: Value(_encodeModelAddresses(draft.cc)),
+                preview: Value(preview),
+                // Self-sent: you wrote it, so don't nag with an unread badge.
+                isSeen: const Value(true),
+                isFlagged: const Value(false),
+                hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+                threadId: Value(threadId),
+                messageId: Value(mid),
+                isLocal: const Value(true),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _db.into(_db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: emailId,
+                textBody: Value(body),
+                cachedAt: Value(now),
+                bodySize: Value(_bodySize(body, null)),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        await _updateThread(account.id, inbox.path, threadId);
+      });
     }
+  }
+
+  /// Whether the real (synced, non-local) message with Message-ID [mid] is
+  /// already stored on [accountId] in any folder but Sent. Mirrors which
+  /// arrivals [_maybeDissolveLocalMessage] dissolves an inbox note against: a
+  /// Sent-folder row is the copy of what we sent, not the delivered message,
+  /// and a server rule may have filed the delivery somewhere other than INBOX.
+  ///
+  /// Only folders the mailbox list knows count: a sync only ever stores
+  /// messages of such a folder, whereas the Sent copy we just appended may sit
+  /// in a folder not synced yet (e.g. a freshly created "Sent"), whose missing
+  /// role must not pass it off as the delivered message.
+  Future<bool> _hasArrivedOutsideSent(String accountId, String mid) async {
+    final rows = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.mailboxPath])
+          ..where(
+            _db.emails.accountId.equals(accountId) &
+                _db.emails.isLocal.equals(false) &
+                (_db.emails.messageId.equals(mid) |
+                    _db.emails.messageId.equals('<$mid>')),
+          ))
+        .get();
+    for (final row in rows) {
+      final mailbox = await (_db.select(_db.mailboxes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.path.equals(row.read(_db.emails.mailboxPath)!),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      if (mailbox != null && mailbox.role != 'sent') return true;
+    }
+    return false;
   }
 
   String _encodeModelAddresses(List<model.EmailAddress> addresses) =>
@@ -6440,6 +7108,22 @@ class EmailRepositoryImpl implements EmailRepository {
               await _sendEmailImap(account, password, job.draft, timing);
             case account_model.AccountType.jmap:
               await _sendEmailJmap(account, password, job.draft);
+          }
+          // Accepted by the server: only now may a mail to one of our own
+          // accounts show up in that inbox (#545). Best-effort, like the Sent
+          // copy — rethrowing would re-send an already-sent message.
+          try {
+            await _createLocalSelfMessages(job.draft);
+          } catch (e, stack) {
+            unawaited(
+              _appLogger?.warn(
+                'outbox.send.self_note_failed',
+                'Message sent, but adding the local inbox copy failed: $e',
+                accountId: accountId,
+                error: e,
+                stack: stack,
+              ),
+            );
           }
         } on imap.SmtpException catch (e) {
           // Permanent SMTP rejections come back as 5xx response codes — those
@@ -6584,7 +7268,7 @@ class EmailRepositoryImpl implements EmailRepository {
           : (job.draft.subject.length > 60
               ? '${job.draft.subject.substring(0, 60)}…'
               : job.draft.subject);
-      final recipients = job.draft.to.length + job.draft.cc.length;
+      final recipients = job.draft.allRecipients.length;
       return '"$subject" ($recipients recipient${recipients == 1 ? '' : 's'})';
     }
 
@@ -6706,7 +7390,14 @@ class EmailRepositoryImpl implements EmailRepository {
       final mediaType = imap.MediaType.guessFromFileName(filePath);
       await builder.addFile(file, mediaType);
     }
+    // Built without Bcc, so the transmitted message cannot carry it: Bcc
+    // recipients only go into the SMTP envelope (RCPT TO) below (#1126).
+    // enough_mail would strip a Bcc header itself, but only its first line,
+    // so a long, folded one would leak its continuation lines.
     final mimeMessage = builder.buildMimeMessage();
+    final envelopeRecipients = [
+      for (final a in draft.allRecipients) HeaderMailAddress(a.name, a.email),
+    ];
     final smtpEndpoint = '${account.smtpHost}:${account.smtpPort}';
     final imapEndpoint = '${account.imapHost}:${account.imapPort}';
     final smtpClient = await _withPhase(
@@ -6723,8 +7414,9 @@ class EmailRepositoryImpl implements EmailRepository {
       await _withPhase(
         'SMTP send message',
         smtpEndpoint,
-        () =>
-            smtpClient.sendMessage(mimeMessage).timeout(_sendOperationTimeout),
+        () => smtpClient
+            .sendMessage(mimeMessage, recipients: envelopeRecipients)
+            .timeout(_sendOperationTimeout),
         timing: timing,
       );
     } finally {
@@ -6744,6 +7436,18 @@ class EmailRepositoryImpl implements EmailRepository {
     // delivering the message twice and leaving the row lingering in the Sent
     // Queue until a later attempt finally completed the append.
     try {
+      // The Sent copy is the sender's own record, so it keeps Bcc, as other
+      // clients' copies do.
+      if (draft.bcc.isNotEmpty) {
+        mimeMessage.setHeader(
+          'Bcc',
+          draft.bcc
+              .map((a) => HeaderMailAddress(a.name, a.email).encode())
+              .join(
+                ', ',
+              ),
+        );
+      }
       final appended = await _appendSentCopy(
         account,
         password,
@@ -6760,7 +7464,8 @@ class EmailRepositoryImpl implements EmailRepository {
       final appendUid =
           (uidList != null && uidList.isNotEmpty) ? uidList.first : null;
       // The draft's own id first: it is what `enqueueSend` stamped and what the
-      // self-send inbox note (#545) was keyed on, so both rows agree. The
+      // self-send inbox note (#545), created once this send returns, is keyed
+      // on, so both rows agree. The
       // header is only a fallback for a direct send that never went through the
       // outbox, and MessageBuilder can hand it back double-bracketed (#859),
       // which `normaliseMessageId` only half-strips.
@@ -6980,6 +7685,13 @@ class EmailRepositoryImpl implements EmailRepository {
       'to': draft.to.map((a) => {'name': a.name, 'email': a.email}).toList(),
       if (draft.cc.isNotEmpty)
         'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
+      // This Email is also the Sent copy, so it keeps Bcc. RFC 8621 §7.5:
+      // "The server MUST remove any Bcc header field present on the message
+      // during delivery." The Bcc recipients get the message through the
+      // envelope's rcptTo below (#1126).
+      if (draft.bcc.isNotEmpty)
+        'bcc':
+            draft.bcc.map((a) => {'name': a.name, 'email': a.email}).toList(),
       'subject': draft.subject,
       // JMAP messageId is an array of bracket-less ids (RFC 8621 §4.1.2.3).
       if (draft.messageId != null)
@@ -7007,8 +7719,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // Build the recipient envelope for EmailSubmission.
     final allRecipients = [
-      ...draft.to.map((a) => {'email': a.email}),
-      ...draft.cc.map((a) => {'email': a.email}),
+      for (final a in draft.allRecipients) {'email': a.email},
     ];
 
     // Fail fast if the server can't submit mail at all, rather than issuing an
@@ -7284,14 +7995,19 @@ class EmailRepositoryImpl implements EmailRepository {
     File file,
   ) async {
     final size = await file.length();
-    await _db.into(_db.attachmentFiles).insertOnConflictUpdate(
-          AttachmentFilesCompanion.insert(
-            emailId: emailId,
-            filename: filename,
-            size: size,
-            downloadedAt: DateTime.now(),
-          ),
-        );
+    try {
+      await _db.into(_db.attachmentFiles).insertOnConflictUpdate(
+            AttachmentFilesCompanion.insert(
+              emailId: emailId,
+              filename: filename,
+              size: size,
+              downloadedAt: DateTime.now(),
+            ),
+          );
+    } catch (e) {
+      // The email was deleted while the download ran.
+      if (!isForeignKeyViolation(e)) rethrow;
+    }
   }
 
   @override
@@ -7369,41 +8085,56 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsGlobal(
     String? accountId,
-    String query,
-  ) async {
+    String query, {
+    int limit = searchPageSize,
+  }) =>
+      _searchEmailsLocal(
+        accountId: accountId,
+        mailboxPath: null,
+        query: query,
+        limit: limit,
+      );
+
+  /// Shared body of [searchEmails] and [searchEmailsGlobal]: the subject/
+  /// preview/From FTS hits merged with the note and body hits, deduplicated,
+  /// flagged then newest first, capped at [limit].
+  ///
+  /// Each source returns its own first [limit] rows in that same order, so
+  /// the first [limit] of the merge are exactly the first [limit] of the full
+  /// union — growing [limit] (the UI's "Load more") extends the list without
+  /// reordering what is already shown.
+  Future<List<model.Email>> _searchEmailsLocal({
+    required String? accountId,
+    required String? mailboxPath,
+    required String query,
+    required int limit,
+  }) async {
     final ftsQuery = _toFtsQuery(query);
-    if (ftsQuery.isEmpty) return [];
+    if (ftsQuery.isEmpty || limit <= 0) return [];
 
-    final sql = accountId != null
-        ? 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ? AND e.account_id = ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50'
-        : 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-            ' WHERE email_fts MATCH ?'
-            ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
-    final variables = accountId != null
-        ? [Variable<String>(ftsQuery), Variable<String>(accountId)]
-        : [Variable<String>(ftsQuery)];
-
-    final queryRows = await _db
-        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
-    final emailRows = await Future.wait(
-      queryRows.map((r) => _db.emails.mapFromRow(r)),
+    final subjectRows = await _searchEmailsByFts(
+      fromJoin: 'FROM email_fts f JOIN emails e ON e.rowid = f.rowid',
+      ftsTable: 'email_fts',
+      readsFrom: {_db.emails},
+      accountId: accountId,
+      mailboxPath: mailboxPath,
+      query: query,
+      limit: limit,
+      // email_fts maps 1:1 onto emails by rowid: no duplicates to collapse.
+      distinct: false,
     );
-
-    final noteRows = await _searchEmailsByNotes(accountId, null, query);
-    final bodyRows = await _searchEmailsByBody(accountId, null, query);
+    final noteRows =
+        await _searchEmailsByNotes(accountId, mailboxPath, query, limit);
+    final bodyRows =
+        await _searchEmailsByBody(accountId, mailboxPath, query, limit);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
+    for (final e in [...subjectRows, ...noteRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
-    merged.sort((a, b) {
-      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
-    });
-    return merged;
+    merged.sort(model.compareFlaggedThenNewest);
+    return merged.length > limit ? merged.sublist(0, limit) : merged;
   }
 
   /// Returns emails whose plaintext body matches [query] via the
@@ -7413,6 +8144,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
+    int limit,
   ) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_body_fts f'
@@ -7423,6 +8155,7 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        limit: limit,
       );
 
   /// Returns emails whose associated notes match [query] via the
@@ -7432,6 +8165,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String? accountId,
     String? mailboxPath,
     String query,
+    int limit,
   ) =>
       _searchEmailsByFts(
         fromJoin: 'FROM email_notes_fts f'
@@ -7443,14 +8177,15 @@ class EmailRepositoryImpl implements EmailRepository {
         accountId: accountId,
         mailboxPath: mailboxPath,
         query: query,
+        limit: limit,
       );
 
   /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
   /// `e`) and returns them as models, flagged and newest first. [fromJoin] is
   /// the `FROM …` clause joining the [ftsTable] shadow index to `emails`;
   /// [ftsTable] is the virtual-table name used in the `MATCH` predicate.
-  /// Optionally filtered by [accountId] and [mailboxPath]. Shared by the
-  /// body and note search paths.
+  /// Optionally filtered by [accountId] and [mailboxPath]; at most [limit]
+  /// rows. Shared by the subject, body and note search paths.
   Future<List<model.Email>> _searchEmailsByFts({
     required String fromJoin,
     required String ftsTable,
@@ -7458,6 +8193,8 @@ class EmailRepositoryImpl implements EmailRepository {
     required String? accountId,
     required String? mailboxPath,
     required String query,
+    required int limit,
+    bool distinct = true,
   }) async {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
@@ -7473,14 +8210,18 @@ class EmailRepositoryImpl implements EmailRepository {
       extraVars.add(Variable<String>(mailboxPath));
     }
 
-    final sql = 'SELECT DISTINCT e.* $fromJoin'
+    final sql = 'SELECT${distinct ? ' DISTINCT' : ''} e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
+        ' ORDER BY $_emailListOrderSql LIMIT ?';
 
     final rows = await _db
         .customSelect(
           sql,
-          variables: [Variable<String>(ftsQuery), ...extraVars],
+          variables: [
+            Variable<String>(ftsQuery),
+            ...extraVars,
+            Variable<int>(limit),
+          ],
           readsFrom: readsFrom,
         )
         .get();
@@ -7492,8 +8233,9 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  ) async {
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async {
     final rows = await (_db.select(_db.emails)
           ..where((t) {
             final fe = _filterGroup(filter, t);
@@ -7503,8 +8245,10 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.desc(t.isFlagged),
             (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
           ])
-          ..limit(100))
+          ..limit(limit))
         .get();
     return rows.map(_toModel).toList();
   }
@@ -7531,10 +8275,23 @@ class EmailRepositoryImpl implements EmailRepository {
       FilterField.to => _jsonLike(t.toAddresses, leaf.comparison, val),
       FilterField.cc => _jsonLike(t.ccJson, leaf.comparison, val),
       FilterField.subject => _textLike(t.subject, leaf.comparison, val),
-      // Size is not stored in the local cache; skip silently.
-      FilterField.size => const Constant(true),
+      FilterField.size => _sizeCompare(t.sizeBytes, leaf),
       FilterField.header => _headerLike(leaf, t),
       FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
+    };
+  }
+
+  /// Compares the stored message size. An unparseable value matches
+  /// nothing (the editors refuse it), and so does a row whose size is unknown
+  /// (NULL: cached before schema v64 and not yet backfilled by a reconcile):
+  /// SQL `NULL > n` is not true.
+  Expression<bool> _sizeCompare(GeneratedColumn<int> col, FilterLeaf leaf) {
+    final bytes = parseFilterSize(leaf.value);
+    if (bytes == null) return const Constant(false);
+    return switch (leaf.comparison) {
+      FilterComparison.over => col.isBiggerThanValue(bytes),
+      FilterComparison.under => col.isSmallerThanValue(bytes),
+      _ => const Constant(false),
     };
   }
 
@@ -7547,7 +8304,9 @@ class EmailRepositoryImpl implements EmailRepository {
         FilterComparison.contains => col.like('%$val%'),
         FilterComparison.is_ => col.like('%"email":"$val"%'),
         FilterComparison.matches => col.like(_globToLike(val)),
-        _ => const Constant(true),
+        // over/under on a text field: the editors never offer it, but a
+        // hand-made or imported filter must not match every mail.
+        _ => const Constant(false),
       };
 
   Expression<bool> _textLike(
@@ -7559,7 +8318,9 @@ class EmailRepositoryImpl implements EmailRepository {
         FilterComparison.contains => col.like('%$val%'),
         FilterComparison.is_ => col.like(val),
         FilterComparison.matches => col.like(_globToLike(val)),
-        _ => const Constant(true),
+        // over/under on a text field: the editors never offer it, but a
+        // hand-made or imported filter must not match every mail.
+        _ => const Constant(false),
       };
 
   /// Header filters are matched against the JSON-encoded header list cached
@@ -7584,7 +8345,7 @@ class EmailRepositoryImpl implements EmailRepository {
         '%"name":"$literalNameLike","value":"${_globToLikeBang(storedValue)}"%',
       _ => null,
     };
-    if (pattern == null) return const Constant(true);
+    if (pattern == null) return const Constant(false);
     final sub = _db.selectOnly(_db.emailBodies)
       ..addColumns([_db.emailBodies.emailId])
       ..where(
@@ -7679,26 +8440,30 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<List<model.Email>> getEmailsByAddress(
     String? accountId,
-    String address,
-  ) async {
+    String address, {
+    int? limit,
+  }) async {
     final pattern = '%${address.toLowerCase()}%';
-    final rows = await (_db.select(_db.emails)
-          ..where((t) {
-            Expression<bool> condition = const Constant(true);
-            if (accountId != null) {
-              condition = t.accountId.equals(accountId);
-            }
-            condition = condition &
-                (t.fromJson.like(pattern) |
-                    t.toAddresses.like(pattern) |
-                    t.ccJson.like(pattern));
-            return condition;
-          })
-          ..orderBy([
-            (t) => OrderingTerm.desc(t.isFlagged),
-            (t) => OrderingTerm.desc(t.receivedAt),
-          ]))
-        .get();
+    final select = _db.select(_db.emails)
+      ..where((t) {
+        Expression<bool> condition = const Constant(true);
+        if (accountId != null) {
+          condition = t.accountId.equals(accountId);
+        }
+        condition = condition &
+            (t.fromJson.like(pattern) |
+                t.toAddresses.like(pattern) |
+                t.ccJson.like(pattern));
+        return condition;
+      })
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.isFlagged),
+        (t) => OrderingTerm.desc(t.receivedAt),
+        (t) => OrderingTerm.desc(t.uid),
+        (t) => OrderingTerm.desc(t.id),
+      ]);
+    if (limit != null) select.limit(limit);
+    final rows = await select.get();
     return rows.map(_toModel).toList();
   }
 
@@ -7734,7 +8499,11 @@ class EmailRepositoryImpl implements EmailRepository {
                     t.ccJson.like(pattern));
             return cond;
           })
-          ..orderBy([(t) => OrderingTerm.desc(t.receivedAt)])
+          ..orderBy([
+            (t) => OrderingTerm.desc(t.receivedAt),
+            (t) => OrderingTerm.desc(t.uid),
+            (t) => OrderingTerm.desc(t.id),
+          ])
           ..limit(100))
         .get();
 
@@ -7779,40 +8548,15 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<List<model.Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  ) async {
-    final ftsQuery = _toFtsQuery(query);
-    if (ftsQuery.isEmpty) return [];
-
-    const sql = 'SELECT e.* FROM email_fts f JOIN emails e ON e.rowid = f.rowid'
-        ' WHERE email_fts MATCH ? AND e.account_id = ? AND e.mailbox_path = ?'
-        ' ORDER BY e.is_flagged DESC, e.received_at DESC LIMIT 50';
-    final variables = [
-      Variable<String>(ftsQuery),
-      Variable<String>(accountId),
-      Variable<String>(mailboxPath),
-    ];
-
-    final queryRows = await _db
-        .customSelect(sql, variables: variables, readsFrom: {_db.emails}).get();
-    final emailRows = await Future.wait(
-      queryRows.map((r) => _db.emails.mapFromRow(r)),
-    );
-
-    final noteRows = await _searchEmailsByNotes(accountId, mailboxPath, query);
-    final bodyRows = await _searchEmailsByBody(accountId, mailboxPath, query);
-
-    final seen = <String>{};
-    final merged = <model.Email>[];
-    for (final e in [...emailRows.map(_toModel), ...noteRows, ...bodyRows]) {
-      if (seen.add(e.id)) merged.add(e);
-    }
-    merged.sort((a, b) {
-      if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
-      return b.receivedAt.compareTo(a.receivedAt);
-    });
-    return merged;
-  }
+    String query, {
+    int limit = searchPageSize,
+  }) =>
+      _searchEmailsLocal(
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        query: query,
+        limit: limit,
+      );
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -7903,6 +8647,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -7915,7 +8661,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) {
     // Same as observeEmailsInThread but without the mailboxPath filter, so a
     // conversation's Inbox, Sent and Archive copies are gathered together
-    // (#754).
+    // (#754). The UID tiebreak compares UIDs of different folders, so for
+    // same-second copies it only makes the order deterministic.
     return (_db.select(_db.emails)
           ..where(
             (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),
@@ -7923,6 +8670,8 @@ class EmailRepositoryImpl implements EmailRepository {
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
             (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
         .map((rows) => rows.map(_toModel).toList());
@@ -7953,6 +8702,7 @@ class EmailRepositoryImpl implements EmailRepository {
       to: parseAddresses(row.toAddresses),
       cc: parseAddresses(row.ccJson),
       replyTo: parseAddresses(row.replyToJson),
+      bcc: parseAddresses(row.bccJson),
       preview: row.preview,
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,
@@ -7965,6 +8715,7 @@ class EmailRepositoryImpl implements EmailRepository {
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
       listUnsubscribeHeader: row.listUnsubscribeHeader,
       isLocal: row.isLocal,
+      size: row.sizeBytes,
     );
   }
 
@@ -7996,6 +8747,51 @@ class EmailRepositoryImpl implements EmailRepository {
             .map(_mimePartFromJson)
             .toList(),
       );
+
+  /// Opportunistic backfill for address headers stored only since a later
+  /// schema: Reply-To (#919), so mail cached before replies to the right
+  /// address, and Bcc (#1097). Fills only empty columns, from the body's
+  /// [headers] already at hand (fresh fetch or cache), so it costs no network
+  /// round trip. [row] saves the lookup when the caller has it.
+  Future<void> _backfillAddressHeaders(
+    String emailId,
+    List<model.EmailHeader> headers, {
+    Email? row,
+  }) async {
+    const names = {'reply-to', 'bcc'};
+    final relevant = [
+      for (final h in headers)
+        if (names.contains(h.name.toLowerCase())) h,
+    ];
+    if (relevant.isEmpty) return;
+    final emailRow = row ??
+        await (_db.select(_db.emails)..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+    if (emailRow == null) return;
+    bool isEmpty(String stored) => stored.isEmpty || stored == '[]';
+    if (!isEmpty(emailRow.replyToJson) && !isEmpty(emailRow.bccJson)) return;
+
+    // Let enough_mail parse and RFC 2047-decode the raw header values.
+    final msg = imap.MimeMessage.parseFromText(
+      '${relevant.map((h) => '${h.name}: ${h.value}').join('\r\n')}\r\n\r\n',
+    );
+    String? decode(String stored, String header) {
+      if (!isEmpty(stored)) return null;
+      final addresses = msg.decodeHeaderMailAddressValue(header);
+      if (addresses == null || addresses.isEmpty) return null;
+      return _encodeAddresses(addresses);
+    }
+
+    final replyTo = decode(emailRow.replyToJson, 'Reply-To');
+    final bcc = decode(emailRow.bccJson, 'Bcc');
+    if (replyTo == null && bcc == null) return;
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+      EmailsCompanion(
+        replyToJson: replyTo == null ? const Value.absent() : Value(replyTo),
+        bccJson: bcc == null ? const Value.absent() : Value(bcc),
+      ),
+    );
+  }
 
   List<model.EmailHeader> _parseHeaders(String? jsonStr) {
     if (jsonStr == null || jsonStr.isEmpty) return [];
@@ -8104,7 +8900,10 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) => t.accountId.equals(accountId) & t.lastError.isNotNull(),
           )
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map(
           (rows) => rows
@@ -8139,7 +8938,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Stream<List<model.PendingChange>> observePendingChanges(String accountId) {
     return (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map((rows) => rows.map(_toPendingChange).toList());
   }
@@ -8147,7 +8949,10 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Stream<List<model.PendingChange>> observeAllPendingChanges() {
     return (_db.select(_db.pendingChanges)
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map((rows) => rows.map(_toPendingChange).toList());
   }
@@ -8170,6 +8975,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // Disable FK constraints so EmailBodies rows survive the emails deletion.
     // When emails are re-inserted after the next sync with the same IDs, the
     // cached body content will be reused without a network round-trip.
+    // The pragma is per connection: other statements that run until the
+    // finally block are unchecked too.
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
@@ -8202,7 +9009,8 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     // Disable FK constraints so EmailBodies rows survive the emails deletion —
     // re-inserting emails with the same IDs after the next sync reuses the
-    // cached body without a network round-trip.
+    // cached body without a network round-trip. The pragma is per connection:
+    // other statements that run until the finally block are unchecked too.
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {

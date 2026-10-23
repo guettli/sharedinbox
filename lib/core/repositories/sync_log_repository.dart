@@ -91,6 +91,20 @@ abstract class SyncLogRepository {
   /// Emits the error message of the most recent sync attempt for [accountId],
   /// or null when the last sync succeeded (or no syncs have run yet).
   Stream<String?> observeLastError(String accountId);
+
+  /// Removes sync logs (and their per-mailbox rows) older than [maxAge] or
+  /// beyond the newest [maxPerAccount] of their account. The newest log of
+  /// each account is always kept. Idempotent — safe to call any time; errors
+  /// (e.g. a closed database) are thrown to the caller.
+  ///
+  /// An account polling every 30 s (the JMAP no-push fallback) logs ~2900
+  /// cycles a day, so for busy accounts [maxPerAccount] (about 8 h of
+  /// history at that rate) is the binding limit; [maxAge] matters for
+  /// accounts that sync rarely (IMAP IDLE, JMAP push) or not at all.
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  });
 }
 
 class NoOpSyncLogRepository implements SyncLogRepository {
@@ -122,4 +136,10 @@ class NoOpSyncLogRepository implements SyncLogRepository {
 
   @override
   Stream<String?> observeLastError(String accountId) => Stream.value(null);
+
+  @override
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
 }

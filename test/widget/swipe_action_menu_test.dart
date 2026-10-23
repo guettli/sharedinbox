@@ -85,6 +85,18 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('labels get the app text style, not the underlined fallback',
+      (tester) async {
+    await tester.pumpWidget(harness());
+    final g = await openMenu(tester);
+    final style =
+        DefaultTextStyle.of(tester.element(find.text('Archive'))).style;
+    expect(style.decoration, isNot(TextDecoration.underline));
+    expect(style.fontFamily, isNot('monospace'));
+    await g.up();
+    await tester.pump();
+  });
+
   testWidgets('release over an action node invokes it', (tester) async {
     await tester.pumpWidget(harness());
     final g = await openMenu(tester);

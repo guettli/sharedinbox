@@ -5,7 +5,8 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
+import 'package:sharedinbox/core/models/email.dart'
+    show ImapMailboxState, SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart'
     show Mailbox, isDuplicateOfOtherFolders;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -763,6 +764,13 @@ class _AccountSync with _KickableWait {
 
   imap.ImapClient? _idleClient;
   bool _running = false;
+
+  /// Consecutive cycles started because the IDLE SELECT found INBOX changed
+  /// since the last sync (see [_inboxChangedSinceSync]). Bounded by
+  /// [_maxCatchUpCycles] so a server whose SELECT values never settle cannot
+  /// keep the loop from idling; reset whenever IDLE is entered.
+  int _catchUpCycles = 0;
+  static const _maxCatchUpCycles = 3;
   int _backoffSeconds = 5;
   Timer? _waitTimer;
 
@@ -1054,31 +1062,60 @@ class _AccountSync with _KickableWait {
     final client = await _imapConnect(account, username, password);
     _idleClient = client;
     try {
-      await client.selectMailboxByPath('INBOX');
+      final supportsCondStore = client.serverInfo.supports('CONDSTORE') ||
+          client.serverInfo.supports('QRESYNC');
+      final inbox = await client.selectMailboxByPath(
+        'INBOX',
+        enableCondStore: supportsCondStore,
+      );
+      // IDLE only reports changes made after this SELECT. Mail delivered (or
+      // flags changed) while the last cycle ran, after it had synced INBOX,
+      // is already in this SELECT's counts and would never be announced:
+      // it stayed invisible until the 25-minute cap below ended IDLE. Sync
+      // again right away instead.
+      if (await _inboxChangedSinceSync(inbox)) return;
+      _catchUpCycles = 0;
 
-      final newMessageCompleter = Completer<void>();
+      final changeCompleter = Completer<void>();
 
+      // Any change the server reports for INBOX wakes the loop: new mail
+      // (EXISTS), a removed message (EXPUNGE) and a flag change made on
+      // another device (an untagged FETCH, e.g. a mail read or starred
+      // elsewhere). Flag changes used to be ignored, so they only arrived
+      // with the next full sync, up to 25 minutes later. VANISHED is handled
+      // defensively only: servers send it instead of EXPUNGE after ENABLE
+      // QRESYNC, which this connection does not send today.
+      //
+      // The app's own flag pushes cannot echo into an endless sync loop: they
+      // are only sent by flushPendingChanges() inside a sync cycle, and this
+      // IDLE connection is opened after that cycle and logged out before the
+      // next one. A server only reports changes made after SELECT, so the
+      // app's STOREs never reach it; at worst a late notification costs one
+      // extra cycle, which itself has nothing to flush.
       final sub = client.eventBus
           .on<imap.ImapEvent>()
           .where(
             (e) =>
-                e is imap.ImapMessagesExistEvent || e is imap.ImapExpungeEvent,
+                e is imap.ImapMessagesExistEvent ||
+                e is imap.ImapExpungeEvent ||
+                e is imap.ImapVanishedEvent ||
+                e is imap.ImapFetchEvent,
           )
           .listen((e) {
-        if (!newMessageCompleter.isCompleted) newMessageCompleter.complete();
+        if (!changeCompleter.isCompleted) changeCompleter.complete();
       });
 
       await client.idleStart();
 
       // Cap IDLE at 25 minutes (RFC 2177). Also wakes up when stop() is
-      // called or a new message / expunge event arrives.
+      // called or the server reports a change (see above).
       final idleTimer = Timer(const Duration(minutes: 25), () {
         if (_stopSignal != null && !_stopSignal!.isCompleted) {
           _stopSignal!.complete();
         }
       });
       try {
-        await Future.any([newMessageCompleter.future, _stopSignal!.future]);
+        await Future.any([changeCompleter.future, _stopSignal!.future]);
       } finally {
         idleTimer.cancel();
       }
@@ -1086,14 +1123,56 @@ class _AccountSync with _KickableWait {
       await client.idleDone();
       await sub.cancel();
 
-      // New mail detected during IDLE wakes the loop, which runs a full sync
-      // (storing the messages) and then fires notifications from _sync(). We do
-      // not notify here because the envelopes are not fetched yet.
+      // A change detected during IDLE wakes the loop, which runs a full sync
+      // (storing new messages and flags) and then fires notifications from
+      // _sync(). We do not notify here because the envelopes are not fetched
+      // yet.
     } finally {
       await client.logout();
       _idleClient = null;
       _stopSignal = null;
     }
+  }
+
+  /// Whether the INBOX state the IDLE connection's SELECT reported
+  /// ([selected]) differs from what the last sync cycle saw when it selected
+  /// INBOX — i.e. something changed in between that IDLE will not report.
+  ///
+  /// Cannot spin: each catch-up cycle stores the values its own SELECT saw,
+  /// so the next comparison only differs if the mailbox changed again; and at
+  /// most [_maxCatchUpCycles] catch-up cycles run in a row before the loop
+  /// idles regardless (e.g. a server reporting UIDNEXT inconsistently).
+  Future<bool> _inboxChangedSinceSync(imap.Mailbox selected) async {
+    final synced = await _emails.lastImapMailboxState(account.id, 'INBOX');
+    if (synced == null) return false;
+    final current = ImapMailboxState(
+      uidNext: selected.uidNext,
+      exists: selected.messagesExists,
+      highestModSeq: selected.highestModSequence,
+    );
+    if (!current.differsFrom(synced)) return false;
+    if (_catchUpCycles >= _maxCatchUpCycles) {
+      unawaited(
+        _appLogger.warn(
+          'sync.idle.catchup_limit',
+          'INBOX still differs from the last sync after $_catchUpCycles '
+              'catch-up cycles; idling anyway',
+          accountId: account.id,
+          data: {'synced': '$synced', 'current': '$current'},
+        ),
+      );
+      return false;
+    }
+    _catchUpCycles++;
+    unawaited(
+      _appLogger.info(
+        'sync.idle.catchup',
+        'INBOX changed while syncing; syncing again before IDLE',
+        accountId: account.id,
+        data: {'synced': '$synced', 'current': '$current'},
+      ),
+    );
+    return true;
   }
 }
 

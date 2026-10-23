@@ -4,7 +4,8 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart' show MissingPluginException;
 import 'package:mockito/annotations.dart';
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/models/email.dart' show SyncEmailsResult;
+import 'package:sharedinbox/core/models/email.dart'
+    show ImapMailboxState, SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
@@ -15,7 +16,10 @@ import 'package:test/test.dart';
 
 @GenerateMocks([AccountRepository, MailboxRepository, EmailRepository])
 import 'account_sync_manager_test.mocks.dart';
+import 'fake_imap.dart';
 import 'helpers/fake_email_repository.dart';
+import 'helpers/fake_mailbox_repository.dart';
+import 'helpers/fake_sync_log_repository.dart';
 
 void main() {
   late MockAccountRepository accounts;
@@ -56,7 +60,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
       expect(syncLog.logs, hasLength(1));
-      expect(syncLog.logs.first.success, isFalse);
+      expect(syncLog.logs.first, isFalse);
 
       // Kicking the loop should have no effect once it has stopped permanently.
       m.syncNow('1');
@@ -125,6 +129,76 @@ void main() {
 
     expect(mailboxes.calls, 2);
     expect(connectsBeforeSecondCycle, 0, reason: 'IDLE was not entered');
+  });
+
+  // A flag changed on another device (`UID STORE 2 +FLAGS (\\Seen)`) is
+  // reported during IDLE as an untagged FETCH. The IDLE wait used to react
+  // only to EXISTS and EXPUNGE, so such changes reached the app only with the
+  // next full sync, up to 25 minutes later. It must now wake the loop for one
+  // sync cycle, after which it goes back to IDLE (no echo loop). VANISHED is
+  // only sent after ENABLE QRESYNC, which the IDLE connection does not send
+  // today; the loop listens for it defensively, covered here too. EXISTS is
+  // the control case that already worked.
+  final idleEvents = <String, imap.ImapEvent Function(imap.ImapClient)>{
+    'FETCH (flag change)': (c) => imap.ImapFetchEvent(imap.MimeMessage(), c),
+    'VANISHED (defensive, QRESYNC only)': (c) => imap.ImapVanishedEvent(
+          imap.MessageSequence.fromId(2, isUid: true),
+          c,
+          isEarlier: false,
+        ),
+    'EXISTS': (c) => imap.ImapMessagesExistEvent(3, 2, c),
+  };
+  for (final MapEntry(key: name, value: makeEvent) in idleEvents.entries) {
+    test('an IMAP IDLE $name event wakes the loop for one sync cycle',
+        () async {
+      // Only the first IDLE session sees a change from another device; the
+      // loop syncs, then idles again in a second session.
+      final (:mailboxes, :clients) = await _runImapLoopUntilIdling(
+        FakeEmailRepository(),
+        (n) => _FakeIdleClient(fireOnIdle: n == 0 ? makeEvent : null),
+        sessions: 2,
+      );
+
+      expect(mailboxes.calls, 2, reason: 'the $name event triggered a sync');
+      expect(clients, hasLength(2), reason: 'the loop went back to IDLE');
+      expect(clients.first.idleDoneCalled, isTrue);
+      expect(clients.last.idleDoneCalled, isFalse, reason: 'still idling');
+    });
+  }
+
+  // Mail delivered while a cycle runs, after it fetched INBOX, is already in
+  // the mailbox when the IDLE connection selects INBOX, so IDLE never reports
+  // it. Seen with 300 APPENDs: the app stopped at 296 of 331 until a manual
+  // sync. The IDLE SELECT now shows a higher UIDNEXT than the last sync saw,
+  // and the loop must sync again instead of idling — then idle once settled.
+  test('IMAP mail delivered during a cycle is synced before IDLE', () async {
+    final emails = _UidNextEmailRepository(serverUidNext: 297);
+    // A delivery right after the first cycle synced INBOX.
+    emails.afterSync = () => emails.serverUidNext = 332;
+    final (:mailboxes, :clients) = await _runImapLoopUntilIdling(
+      emails,
+      (_) => _FakeIdleClient(inboxUidNext: emails.serverUidNext),
+    );
+
+    expect(mailboxes.calls, 2, reason: 'the late delivery was synced');
+    expect(clients, hasLength(2));
+    expect(clients.first.idleStarted, isFalse, reason: 'IDLE was skipped');
+    expect(clients.last.idleStarted, isTrue, reason: 'idles once caught up');
+    expect(emails.syncedUidNext, 332);
+  });
+
+  // A sync state that never matches the IDLE SELECT (stale state, or a server
+  // reporting UIDNEXT inconsistently) must not make the loop spin: after a
+  // bounded number of catch-up cycles it idles anyway.
+  test('IMAP IDLE catch-up cycles are bounded', () async {
+    final (:mailboxes, :clients) = await _runImapLoopUntilIdling(
+      _UidNextEmailRepository(serverUidNext: 5, frozen: true),
+      (_) => _FakeIdleClient(inboxUidNext: 9),
+    );
+
+    expect(mailboxes.calls, 4, reason: 'first cycle + 3 catch-up cycles');
+    expect(clients, hasLength(4));
+    expect(clients.last.idleStarted, isTrue);
   });
 
   // The JMAP loop waits on push (EventSource) instead of IDLE; a mid-cycle
@@ -368,126 +442,22 @@ void main() {
 /// method needs bespoke behaviour here.
 class FakeEmailRepository extends FakeEmailRepositoryBase {}
 
-class _Log {
-  _Log({required this.success});
-  final bool success;
-}
+class FakeMailboxRepositoryWithInbox extends FakeMailboxRepositoryBase {
+  FakeMailboxRepositoryWithInbox()
+      : super(const [
+          Mailbox(
+            id: '1:INBOX',
+            accountId: '1',
+            path: 'INBOX',
+            name: 'INBOX',
+            unreadCount: 0,
+            totalCount: 0,
+            role: 'inbox',
+          ),
+        ]);
 
-class FakeSyncLogRepository implements SyncLogRepository {
-  final logs = <_Log>[];
-  int _nextId = 1;
-  @override
-  Future<int> log({
-    required String accountId,
-    required bool success,
-    String? errorMessage,
-    String? stackTrace,
-    bool isPermanent = false,
-    required String protocol,
-    required int emailsFetched,
-    required int emailsSkipped,
-    required int mailboxesSynced,
-    required int pendingFlushed,
-    required int bytesTransferred,
-    required DateTime startedAt,
-    required DateTime finishedAt,
-    List<MailboxSyncStats> mailboxStats = const [],
-    String? protocolLog,
-  }) async {
-    logs.add(_Log(success: success));
-    return _nextId++;
-  }
-
-  @override
-  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<String?> observeLastError(String accountId) => Stream.value(null);
-}
-
-class FakeMailboxRepositoryWithInbox implements MailboxRepository {
-  @override
-  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
-        const Mailbox(
-          id: '1:INBOX',
-          accountId: '1',
-          path: 'INBOX',
-          name: 'INBOX',
-          unreadCount: 0,
-          totalCount: 0,
-          role: 'inbox',
-        ),
-      ]);
   @override
   Future<int> syncMailboxes(String id) async => 1;
-  @override
-  Future<Mailbox?> findMailboxByRole(String id, String role) async => null;
-  @override
-  Future<void> clearForResync(String accountId) async {}
-  @override
-  Future<Mailbox> createMailboxWithRole(
-    String accountId,
-    String name,
-    String role, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        role: role,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-  @override
-  Future<Mailbox> createMailbox(
-    String accountId,
-    String name, {
-    String? parentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$name',
-        accountId: accountId,
-        path: name,
-        name: name,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<Mailbox> renameMailbox(
-    String accountId,
-    String mailboxPath,
-    String newName,
-  ) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: newName,
-        unreadCount: 0,
-        totalCount: 0,
-      );
-
-  @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
-
-  @override
-  Future<Mailbox> moveMailbox(
-    String accountId,
-    String mailboxPath, {
-    required String? newParentDisplayPath,
-  }) async =>
-      Mailbox(
-        id: '$accountId:$mailboxPath',
-        accountId: accountId,
-        path: mailboxPath,
-        name: mailboxPath,
-        unreadCount: 0,
-        totalCount: 0,
-      );
 }
 
 class _AccountRepositoryWithMissingPlugin implements AccountRepository {
@@ -617,6 +587,55 @@ Future<void> _kickMidFirstCycle(
   await Future<void>.delayed(const Duration(milliseconds: 200));
 }
 
+/// Starts an IMAP sync loop over [emails] whose n-th IDLE connection (from
+/// 0) is [newClient]`(n)`, and returns once it rests in IDLE (see
+/// [_untilIdling]) with the mailbox-sync counter and every IDLE client.
+Future<
+    ({
+      _CountingMailboxRepository mailboxes,
+      List<_FakeIdleClient> clients,
+    })> _runImapLoopUntilIdling(
+  EmailRepository emails,
+  _FakeIdleClient Function(int n) newClient, {
+  int sessions = 1,
+}) async {
+  final mailboxes = _CountingMailboxRepository();
+  final clients = <_FakeIdleClient>[];
+  final m = AccountSyncManager(
+    _OkAccountRepository(),
+    mailboxes,
+    emails,
+    syncLog: FakeSyncLogRepository(),
+    imapConnect: (_, __, ___) async {
+      final client = newClient(clients.length);
+      clients.add(client);
+      return client;
+    },
+  );
+  addTearDown(m.dispose);
+  m.start();
+  await _untilIdling(clients, sessions: sessions);
+  return (mailboxes: mailboxes, clients: clients);
+}
+
+/// Waits until at least [sessions] IDLE connections were opened and the
+/// latest one has started IDLE — the loop's resting state — instead of a
+/// fixed sleep that flakes on a loaded machine. Fails after [timeout].
+Future<void> _untilIdling(
+  List<_FakeIdleClient> clients, {
+  int sessions = 1,
+  Duration timeout = const Duration(seconds: 20),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!(clients.length >= sessions && clients.last.idleStarted)) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('IDLE not reached: ${clients.length} session(s), last idling: '
+          '${clients.isNotEmpty && clients.last.idleStarted}');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
+
 /// Counts JMAP push waits; the push stream never fires nor closes, like a
 /// connected but silent EventSource.
 class _PushCountingEmailRepository extends FakeEmailRepositoryBase {
@@ -717,4 +736,74 @@ class _OneFolderFailsEmailRepository extends FakeEmailRepositoryBase {
       bytesTransferred: 0,
     );
   }
+}
+
+/// Counts sync cycles (one [syncMailboxes] call each).
+/// Reports, for INBOX, the UIDNEXT the last sync saw. Each sync records the
+/// server's current [serverUidNext] unless [frozen] (a sync state that is
+/// never updated), then runs [afterSync] — e.g. a delivery that lands after
+/// the sync fetched INBOX.
+class _UidNextEmailRepository extends FakeEmailRepositoryBase {
+  _UidNextEmailRepository({required this.serverUidNext, this.frozen = false});
+
+  int serverUidNext;
+  final bool frozen;
+  int? syncedUidNext;
+  void Function()? afterSync;
+
+  @override
+  Future<SyncEmailsResult> syncEmails(String a, String m) async {
+    if (!frozen || syncedUidNext == null) syncedUidNext = serverUidNext;
+    afterSync?.call();
+    afterSync = null;
+    return SyncEmailsResult.zero;
+  }
+
+  @override
+  Future<ImapMailboxState?> lastImapMailboxState(String a, String m) async =>
+      ImapMailboxState(uidNext: syncedUidNext);
+}
+
+class _CountingMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  int calls = 0;
+
+  @override
+  Future<int> syncMailboxes(String id) async {
+    calls++;
+    return 1;
+  }
+}
+
+/// An IMAP client that never touches the network. When [fireOnIdle] is set,
+/// it reports that event on its event bus once IDLE has started, like a server
+/// pushing an untagged response.
+class _FakeIdleClient extends SelectingFakeImapClient {
+  _FakeIdleClient({this.fireOnIdle, this.inboxUidNext});
+
+  final imap.ImapEvent Function(imap.ImapClient)? fireOnIdle;
+
+  /// UIDNEXT the SELECT of INBOX reports; null leaves it unreported.
+  final int? inboxUidNext;
+  bool idleStarted = false;
+  bool idleDoneCalled = false;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      fakeMailbox(path)..uidNext = inboxUidNext;
+
+  @override
+  Future<void> idleStart() async {
+    idleStarted = true;
+    final make = fireOnIdle;
+    if (make != null) {
+      Timer(const Duration(milliseconds: 10), () => eventBus.fire(make(this)));
+    }
+  }
+
+  @override
+  Future<dynamic> idleDone() async => idleDoneCalled = true;
 }

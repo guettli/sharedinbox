@@ -26,11 +26,12 @@ import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/ui/utils/global_email_search.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'fake_imap.dart'
-    show FakeImapClient, FakeSmtpClient, SnoozeSpyImapClient;
+    show FakeImapClient, ScriptedSmtpClient, SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -69,6 +70,7 @@ const _jmapPair = Account(
 
 http.Client _mockJmapEmails({
   required List<Map<String, dynamic>> apiResponses,
+  List<Map<String, dynamic>>? requests,
 }) {
   var callIndex = 0;
   return MockClient((req) async {
@@ -90,10 +92,53 @@ http.Client _mockJmapEmails({
         200,
       );
     }
+    requests?.add(jsonDecode(req.body) as Map<String, dynamic>);
     final resp = apiResponses[callIndex % apiResponses.length];
     callIndex++;
     return http.Response(jsonEncode(resp), 200);
   });
+}
+
+/// An `Email/get` response reporting that `e1` carries a `snz:` keyword.
+Map<String, dynamic> _snzKeywordsGet() => {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'Email/get',
+          {
+            'accountId': 'acct1',
+            'list': [
+              {
+                'id': 'e1',
+                'keywords': {
+                  r'$seen': true,
+                  'snz:20260510T150000.000': true,
+                },
+              },
+            ],
+          },
+          '0',
+        ],
+      ],
+    };
+
+/// A successful `Email/set` response.
+Map<String, dynamic> _emailSetOk() => {
+      'sessionState': 'sess1',
+      'methodResponses': [
+        [
+          'Email/set',
+          {'accountId': 'acct1', 'updated': {}},
+          '0',
+        ],
+      ],
+    };
+
+/// The patch a captured `Email/set` [request] sends for [jmapId].
+Object? _emailSetUpdate(Map<String, dynamic> request, String jmapId) {
+  final call = (request['methodCalls'] as List).first as List;
+  final update = (call[1] as Map)['update'] as Map;
+  return update[jmapId];
 }
 
 /// The request sequence a full sync makes, as separate API calls.
@@ -224,9 +269,12 @@ Map<String, dynamic> _jmapEmail({
   bool seen = false,
   String? threadId,
   List<Map<String, dynamic>>? replyTo,
+  List<Map<String, dynamic>>? bcc,
+  int? size,
 }) =>
     {
       'id': id,
+      if (size != null) 'size': size,
       'mailboxIds': {mailboxId: true},
       'subject': subject,
       'sentAt': '2024-01-01T10:00:00Z',
@@ -239,6 +287,7 @@ Map<String, dynamic> _jmapEmail({
       ],
       'cc': [],
       'replyTo': replyTo,
+      'bcc': bcc,
       'keywords': seen ? {r'$seen': true} : <String, dynamic>{},
       'hasAttachment': false,
       'preview': 'Hello world',
@@ -463,19 +512,6 @@ class _SentCaptureImapClient extends FakeImapClient {
   }
 }
 
-/// Fake SMTP client whose `sendMessage` always succeeds, so the send path
-/// proceeds to the Sent-copy APPEND. `quit` is inherited from [FakeSmtpClient].
-class _OkSmtpClient extends FakeSmtpClient {
-  @override
-  Future<imap.SmtpResponse> sendMessage(
-    imap.MimeMessage message, {
-    bool use8BitEncoding = false,
-    imap.MailAddress? from,
-    List<imap.MailAddress>? recipients,
-  }) async =>
-      imap.SmtpResponse(const ['250 OK']);
-}
-
 /// Fake IMAP client that returns a *different* message than the row expects for
 /// a given UID — the shape produced by an optimistic snooze/unsnooze/move whose
 /// destination UID happens to collide with an unrelated message (#616). The
@@ -572,7 +608,7 @@ void main() {
         final sentImap = _SentCaptureImapClient();
         final r = _makeRepos(
           imapConnect: (a, u, p) async => sentImap,
-          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+          smtpConnect: (a, u, p) async => ScriptedSmtpClient(),
         );
         await r.accounts.addAccount(_account, 'pw');
         // This account's real Sent folder is "Sent Items" (role sent), as on
@@ -620,7 +656,7 @@ void main() {
         final sentImap = _SentCaptureImapClient();
         final r = _makeRepos(
           imapConnect: (a, u, p) async => sentImap,
-          smtpConnect: (a, u, p) async => _OkSmtpClient(),
+          smtpConnect: (a, u, p) async => ScriptedSmtpClient(),
         );
         await r.accounts.addAccount(_account, 'pw');
         // No mailboxes synced → no role=sent folder is known.
@@ -2322,6 +2358,58 @@ void main() {
     );
 
     test(
+      'searchEmailsStructured compares the stored size; unknown never matches',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        // small, big, and a row cached before sizes were stored (NULL).
+        for (final (uid, size) in [(1, 500), (2, 2000000), (3, null)]) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'acc-1:$uid',
+                  accountId: 'acc-1',
+                  mailboxPath: 'INBOX',
+                  uid: uid,
+                  receivedAt: DateTime(2024, 1, uid),
+                  sizeBytes: Value(size),
+                ),
+              );
+        }
+        Future<List<String>> ids(
+          FilterComparison comparison,
+          String value, {
+          FilterField field = FilterField.size,
+        }) async =>
+            (await r.emails.searchEmailsStructured(
+              'acc-1',
+              FilterGroup.single(field, comparison, value),
+            ))
+                .map((e) => e.id)
+                .toList();
+
+        expect(await ids(FilterComparison.over, '1000000'), ['acc-1:2']);
+        expect(await ids(FilterComparison.over, '1MB'), ['acc-1:2']);
+        expect(await ids(FilterComparison.under, '1 K'), ['acc-1:1']);
+        // Garbage used to match every mail.
+        expect(await ids(FilterComparison.over, 'Alice'), isEmpty);
+        expect(await ids(FilterComparison.under, ''), isEmpty);
+        // over/under on a text field (no editor offers it) matches nothing.
+        expect(
+          await ids(
+            FilterComparison.over,
+            'x',
+            field: FilterField.subject,
+          ),
+          isEmpty,
+        );
+        expect(
+          await ids(FilterComparison.under, 'x', field: FilterField.from_),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
       'searchEmailsStructured returns starred results before unstarred',
       () async {
         final r = _makeRepos();
@@ -3150,10 +3238,12 @@ void main() {
       final all = await r.db.select(r.db.appLogs).get();
       final deleteRows = all.where((e) => e.event == 'email.delete').toList();
       expect(deleteRows, hasLength(1));
-      expect(deleteRows.single.emailId, 'acc-1:5');
+      // The row is gone, so only the data still names it.
+      expect(deleteRows.single.emailId, isNull);
       final data =
           jsonDecode(deleteRows.single.dataJson!) as Map<String, dynamic>;
       expect(data['permanent'], true);
+      expect(data['emailId'], 'acc-1:5');
     });
 
     // A bulk delete runs in one transaction and kicks the sync loop once,
@@ -3838,6 +3928,15 @@ void main() {
                 textBody: const Value('cached body'),
               ),
             );
+        // A downloaded attachment: its folder is named after the old id.
+        await r.db.into(r.db.attachmentFiles).insert(
+              AttachmentFilesCompanion.insert(
+                emailId: oldId,
+                filename: 'a.pdf',
+                size: 1,
+                downloadedAt: DateTime(2024),
+              ),
+            );
         await r.db.into(r.db.pendingChanges).insert(
               PendingChangesCompanion.insert(
                 accountId: 'acc-1',
@@ -3871,6 +3970,9 @@ void main() {
         expect(bodies, hasLength(1));
         expect(bodies.first.emailId, newId);
         expect(bodies.first.textBody, 'cached body');
+        // With foreign keys on, the attachment row of the old id would fail
+        // the re-key at COMMIT; it is dropped instead.
+        expect(await r.db.select(r.db.attachmentFiles).get(), isEmpty);
       },
     );
 
@@ -4360,6 +4462,468 @@ void main() {
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes, hasLength(1));
       expect(changes.first.changeType, 'unsnooze');
+    });
+
+    // A JMAP move used to rewrite only `mailboxPath`, so a snoozed mail the
+    // user filed by hand kept `snoozedUntil` and the wake-up pulled it back to
+    // the Inbox from wherever it now lived — even out of Trash.
+    test('moving a snoozed JMAP mail ends the snooze; wake-up leaves it put',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-inbox',
+              accountId: 'jmap-1',
+              path: 'mbx-inbox',
+              name: 'Inbox',
+              role: const Value('inbox'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // Snoozed until a moment that has passed by the time wake-up runs.
+      await r.emails.snoozeEmail(
+        'jmap-1:e1',
+        DateTime.now().subtract(const Duration(minutes: 1)),
+      );
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+      final moved = await r.emails.getEmail('jmap-1:e1');
+      expect(moved!.mailboxPath, 'mbx-archive');
+      expect(moved.snoozedUntil, isNull);
+      expect(moved.snoozedFromMailboxPath, isNull);
+      // The flush must also drop the server-side `snz:` keyword, or the next
+      // sync reads the snooze back.
+      final move = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.changeType.equals('move')))
+          .getSingle();
+      expect(
+        (jsonDecode(move.payload) as Map<String, dynamic>)['clearSnooze'],
+        isTrue,
+      );
+
+      expect(await r.emails.wakeUpEmails('jmap-1'), 0);
+
+      final after = await r.emails.getEmail('jmap-1:e1');
+      expect(after!.mailboxPath, 'mbx-archive');
+      expect(await _changeTypes(r.db), isNot(contains('unsnooze')));
+    });
+
+    test('moving a mail that is not snoozed does not ask to clear a snooze',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+      final move = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(jsonDecode(move.payload), isNot(contains('clearSnooze')));
+    });
+
+    // Defensive: a row whose expired snooze survived outside the Snoozed
+    // folder (another client filed it, sync read a stale `snz:` keyword back)
+    // must not be yanked to the Inbox.
+    test('wakeUpEmails leaves an expired snooze outside Snoozed in place',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-snoozed',
+              accountId: 'jmap-1',
+              path: 'mbx-snoozed',
+              name: 'Snoozed',
+              role: const Value('snoozed'),
+            ),
+          );
+      final past = DateTime.now().subtract(const Duration(hours: 1));
+      for (final (id, path) in const [
+        ('jmap-1:filed', 'mbx-trash'),
+        ('jmap-1:waiting', 'mbx-snoozed'),
+      ]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'jmap-1',
+                mailboxPath: path,
+                uid: 0,
+                receivedAt: DateTime(2024),
+                snoozedUntil: Value(past),
+              ),
+            );
+      }
+
+      expect(await r.emails.wakeUpEmails('jmap-1'), 1);
+
+      final filed = await r.emails.getEmail('jmap-1:filed');
+      expect(filed!.mailboxPath, 'mbx-trash');
+      expect(filed.snoozedUntil, isNull);
+      final waiting = await r.emails.getEmail('jmap-1:waiting');
+      expect(waiting!.mailboxPath, 'INBOX');
+      // The stale `snz:` keyword is stripped on the server too, so sync
+      // stops reading the snooze back.
+      Future<List<(String, String)>> changes() async =>
+          (await r.db.select(r.db.pendingChanges).get())
+              .map((c) => (c.resourceId, c.changeType))
+              .toList();
+      expect(
+        await changes(),
+        unorderedEquals([
+          ('jmap-1:filed', 'clear_snooze'),
+          ('jmap-1:waiting', 'unsnooze'),
+        ]),
+      );
+
+      // Sync reads the keyword back before the cleanup flushed: waking again
+      // must not queue a second cleanup.
+      await (r.db.update(r.db.emails)
+            ..where((t) => t.id.equals('jmap-1:filed')))
+          .write(EmailsCompanion(snoozedUntil: Value(past)));
+      expect(await r.emails.wakeUpEmails('jmap-1'), 0);
+      expect(await changes(), hasLength(2));
+    });
+
+    // Both a move out of Snoozed and the wake-up's keyword-only cleanup must
+    // drop the server-side `snz:` keyword in the same Email/set.
+    for (final (changeType, payload, expected) in [
+      (
+        'move',
+        {'src': 'mbx-snoozed', 'dest': 'mbx-archive', 'clearSnooze': true},
+        {
+          'mailboxIds': {'mbx-archive': true},
+          'keywords/snz:20260510T150000.000': null,
+        },
+      ),
+      (
+        'clear_snooze',
+        {'uid': 0, 'mailboxPath': 'mbx-archive'},
+        {'keywords/snz:20260510T150000.000': null},
+      ),
+    ]) {
+      test('JMAP $changeType flush removes the snz: keywords', () async {
+        final requests = <Map<String, dynamic>>[];
+        final r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            requests: requests,
+            apiResponses: [
+              _snzKeywordsGet(),
+              _emailSetOk(),
+            ],
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'jmap-1',
+                resourceType: 'Email',
+                resourceId: 'jmap-1:e1',
+                changeType: changeType,
+                payload: jsonEncode(payload),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(_emailSetUpdate(requests.last, 'e1'), expected);
+      });
+    }
+
+    for (final (changeType, payload, expected) in [
+      (
+        'move',
+        {
+          'uid': 5,
+          'mailboxPath': 'Snoozed',
+          'dest': 'Archive',
+          'clearSnooze': true,
+        },
+        [
+          'store remove 5 snz:20260510T150000.000',
+          'move Snoozed:5->Archive',
+        ],
+      ),
+      (
+        'clear_snooze',
+        {'uid': 5, 'mailboxPath': 'Snoozed'},
+        ['store remove 5 snz:20260510T150000.000'],
+      ),
+    ]) {
+      test('IMAP $changeType flush removes the snz: flags (before any MOVE)',
+          () async {
+        final spy = SnoozeSpyImapClient(
+          messageFlags: const [r'\Seen', 'snz:20260510T150000.000'],
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: 'acc-1:Snoozed:5',
+                changeType: changeType,
+                payload: jsonEncode(payload),
+                createdAt: DateTime.now(),
+              ),
+            );
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.calls, expected);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      });
+    }
+
+    test('IMAP move retried by Message-ID strips the flags on the found UID',
+        () async {
+      // The first MOVE is an OK no-op on a stale UID (#1048); the retry must
+      // strip the snooze from the message it actually moves.
+      final spy = SnoozeSpyImapClient(
+        copyUidValidity: 1,
+        copyUidSourceToTarget: const {205: 7},
+        searchResultsByMailbox: const {
+          'Snoozed': [205],
+        },
+        messageFlags: const ['snz:20260510T150000.000'],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Snoozed:5',
+              accountId: 'acc-1',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<m1@example.com>'),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Snoozed:5',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 5,
+                'mailboxPath': 'Snoozed',
+                'dest': 'Archive',
+                'messageId': '<m1@example.com>',
+                'clearSnooze': true,
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.calls, [
+        'store remove 5 snz:20260510T150000.000',
+        'move Snoozed:5->Archive',
+        'store remove 205 snz:20260510T150000.000',
+        'move Snoozed:205->Archive',
+      ]);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    // Undo re-snoozing a row rebuilt from its snapshot queues the snooze with
+    // a UID that no longer exists: STORE + MOVE are OK no-ops, so the flush
+    // must re-find the message by Message-ID instead of dropping the change.
+    test('IMAP snooze with a stale UID re-finds the message by Message-ID',
+        () async {
+      final spy = SnoozeSpyImapClient(
+        copyUidValidity: 1,
+        copyUidSourceToTarget: const {300: 9},
+        searchResultsByMailbox: const {
+          'Archive': [300],
+        },
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Archive:5',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<m1@example.com>'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('acc-1:Archive:5', DateTime(2030));
+      final snooze = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(
+        (jsonDecode(snooze.payload) as Map<String, dynamic>)['messageId'],
+        '<m1@example.com>',
+      );
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.calls, [
+        'store add 5 snz:20300101T000000.000',
+        'move Archive:5->Snoozed',
+        'store add 300 snz:20300101T000000.000',
+        'move Archive:300->Snoozed',
+      ]);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final snoozed = await r.emails.getEmail('acc-1:Snoozed:9');
+      expect(snoozed!.snoozedUntil, DateTime(2030));
+    });
+
+    test('snoozing again drops a queued snz: keyword cleanup', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-archive',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              snoozedUntil: Value(
+                DateTime.now().subtract(const Duration(hours: 1)),
+              ),
+            ),
+          );
+      await r.emails.wakeUpEmails('jmap-1');
+      expect(await _changeTypes(r.db), ['clear_snooze']);
+
+      await r.emails.snoozeEmail('jmap-1:e1', DateTime(2030));
+
+      // The cleanup would otherwise strip the keyword this snooze adds.
+      expect(await _changeTypes(r.db), ['snooze']);
+    });
+
+    test('IMAP clear_snooze on a vanished message logs a warning', () async {
+      final recorder = _PushStatusRecorder();
+      final spy = SnoozeSpyImapClient();
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async => spy,
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Archive:5',
+              changeType: 'clear_snooze',
+              payload: jsonEncode({'uid': 5, 'mailboxPath': 'Archive'}),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.calls, isEmpty);
+      final warning = recorder.entries
+          .singleWhere((e) => e.event == 'email.snooze_cleanup_missed');
+      expect(warning.level, AppLogLevel.warn);
+      expect(warning.emailId, 'acc-1:Archive:5');
+    });
+
+    test('JMAP: snooze still queued, then move — one flush ends unsnoozed',
+        () async {
+      final requests = <Map<String, dynamic>>[];
+      final r = _makeRepos(
+        httpClient: _mockJmapEmails(
+          requests: requests,
+          apiResponses: [
+            _emailSetOk(),
+            _snzKeywordsGet(),
+            _emailSetOk(),
+          ],
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'jmap-1:mbx-snoozed',
+              accountId: 'jmap-1',
+              path: 'mbx-snoozed',
+              name: 'Snoozed',
+              role: const Value('snoozed'),
+            ),
+          );
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.snoozeEmail('jmap-1:e1', DateTime(2030));
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(requests, hasLength(3));
+      expect(_emailSetUpdate(requests.first, 'e1'), {
+        'keywords/snz:20300101T000000.000': true,
+        'mailboxIds/mbx-snoozed': true,
+        'mailboxIds/mbx-inbox': null,
+      });
+      expect(_emailSetUpdate(requests.last, 'e1'), {
+        'mailboxIds': {'mbx-archive': true},
+        'keywords/snz:20260510T150000.000': null,
+      });
+    });
+
+    test('IMAP: snooze still queued, then move — one flush ends unsnoozed',
+        () async {
+      final spy = SnoozeSpyImapClient(
+        copyUidValidity: 1,
+        copyUidSourceToTarget: const {5: 42, 42: 7},
+        messageFlags: const ['snz:20300101T000000.000'],
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<m1@example.com>'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('acc-1:INBOX:5', DateTime(2030));
+      await r.emails.moveEmail('acc-1:INBOX:5', 'Archive');
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.calls, [
+        'store add 5 snz:20300101T000000.000',
+        'move INBOX:5->Snoozed',
+        'store remove 42 snz:20300101T000000.000',
+        'move Snoozed:42->Archive',
+      ]);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final archived = await r.emails.getEmail('acc-1:Archive:7');
+      expect(archived!.snoozedUntil, isNull);
     });
 
     test('snoozeEmail mirrors the snooze onto the counterpart account',
@@ -5285,7 +5849,7 @@ void main() {
       expect(emailState.state, 'est1');
     });
 
-    test('full sync stores replyTo addresses (#919)', () async {
+    test('full sync stores replyTo, bcc and size', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
           apiResponses: _fullSyncResponses(
@@ -5299,6 +5863,10 @@ void main() {
                   replyTo: [
                     {'name': 'Support', 'email': 'support@example.com'},
                   ],
+                  bcc: [
+                    {'name': 'Boss', 'email': 'boss@example.com'},
+                  ],
+                  size: 2048,
                 ),
                 _jmapEmail(id: 'e2', mailboxId: 'mbx1', subject: 'Without'),
               ],
@@ -5314,7 +5882,13 @@ void main() {
           emails.firstWhere((e) => e.subject == 'With Reply-To');
       expect(withReplyTo.replyTo.single.email, 'support@example.com');
       expect(withReplyTo.replyTo.single.name, 'Support');
-      expect(emails.firstWhere((e) => e.subject == 'Without').replyTo, isEmpty);
+      expect(withReplyTo.bcc.single.email, 'boss@example.com');
+      expect(withReplyTo.bcc.single.name, 'Boss');
+      expect(withReplyTo.size, 2048);
+      final without = emails.firstWhere((e) => e.subject == 'Without');
+      expect(without.replyTo, isEmpty);
+      expect(without.bcc, isEmpty);
+      expect(without.size, isNull);
     });
 
     test('incremental sync applies created, updated, destroyed', () async {
@@ -5848,7 +6422,8 @@ void main() {
     );
 
     test(
-      'periodic reconcile prunes rows missing from Email/query',
+      'periodic reconcile prunes rows missing from Email/query and '
+      'backfills unknown sizes',
       () async {
         final r = _makeRepos(
           httpClient: _mockJmapEmails(
@@ -5882,7 +6457,11 @@ void main() {
                       'accountId': 'acct1',
                       'state': 'est1',
                       'list': [
-                        {'id': 'e-live', 'keywords': <String, dynamic>{}},
+                        {
+                          'id': 'e-live',
+                          'keywords': <String, dynamic>{},
+                          'size': 4321,
+                        },
                       ],
                     },
                     '0',
@@ -5937,6 +6516,9 @@ void main() {
               .getSingleOrNull(),
           isNotNull,
         );
+        // The row cached without a size (before schema v64) gets one.
+        final live = await r.emails.getEmail('jmap-1:e-live');
+        expect(live!.size, 4321);
         final recon = await (r.db.select(r.db.syncStates)
               ..where((t) => t.resourceType.equals('JMAP:Reconcile:mbx1')))
             .getSingle();
@@ -6622,7 +7204,25 @@ void main() {
           capturedBodies.add(body);
           final calls = body['methodCalls'] as List;
           final methodName = (calls.first as List)[0] as String;
+          if (methodName == 'Mailbox/get') {
+            // The server has no Snoozed mailbox yet.
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Mailbox/get',
+                    {'accountId': 'acct1', 'list': <dynamic>[]},
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
           if (methodName == 'Mailbox/set') {
+            final args = (calls.first as List)[1] as Map<String, dynamic>;
+            final key = (args['create'] as Map<String, dynamic>).keys.single;
             return http.Response(
               jsonEncode({
                 'sessionState': 's1',
@@ -6632,7 +7232,7 @@ void main() {
                     {
                       'accountId': 'acct1',
                       'created': {
-                        'new-snoozed': {'id': 'mbx-snoozed'},
+                        key: {'id': 'mbx-snoozed'},
                       },
                     },
                     '0',
@@ -6675,14 +7275,17 @@ void main() {
         // Change successfully applied — removed from queue.
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
-        // First API call should be Mailbox/set to create the Snoozed folder.
-        expect(capturedBodies, hasLength(2));
-        final firstCall =
-            ((capturedBodies.first['methodCalls'] as List).first as List)[0];
-        expect(firstCall, 'Mailbox/set');
+        // Look the folder up, create it (Mailbox/set), then Email/set into it.
+        String method(int i) =>
+            ((capturedBodies[i]['methodCalls'] as List).first as List)[0]
+                as String;
+        expect(capturedBodies, hasLength(3));
+        expect(method(0), 'Mailbox/get');
+        expect(method(1), 'Mailbox/set');
+        expect(method(2), 'Email/set');
 
-        // Second call should be Email/set using the newly created mailbox ID.
-        final secondCallArgs = ((capturedBodies[1]['methodCalls'] as List).first
+        // The Email/set uses the newly created mailbox ID.
+        final secondCallArgs = ((capturedBodies[2]['methodCalls'] as List).first
             as List)[1] as Map<String, dynamic>;
         final update = (secondCallArgs['update'] as Map<String, dynamic>)['e1']
             as Map<String, dynamic>;
@@ -8090,6 +8693,85 @@ void main() {
       expect(body.textBody, 'Body');
     });
 
+    test('Bcc goes into RCPT TO only; the Sent copy keeps the header (#1126)',
+        () async {
+      final smtp = _CapturingSmtpClient();
+      final spy = _AppendCapturingImapClient(appendUid: 12);
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async => smtp,
+        imapConnect: (Account _, String __, String ___) async => spy,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+      // Enough Bcc recipients for the header to be folded over several
+      // lines, which enough_mail's own Bcc stripping only half removes.
+      final bcc = [
+        for (var i = 0; i < 8; i++)
+          EmailAddress(name: 'Hidden $i', email: 'hidden$i@example.com'),
+      ];
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: draft.from,
+          to: draft.to,
+          cc: const [],
+          bcc: bcc,
+          subject: 'Test',
+          body: 'Body',
+        ),
+      );
+
+      expect(smtp.recipients, [
+        'bob@example.com',
+        for (final a in bcc) a.email,
+      ]);
+      expect(smtp.sentMime, isNot(contains(RegExp('^Bcc:', multiLine: true))));
+      expect(smtp.sentMime, isNot(contains('hidden')));
+      expect(spy.appendedMime, contains(RegExp('^Bcc:', multiLine: true)));
+      for (final a in bcc) {
+        expect(spy.appendedMime, contains(a.email));
+      }
+
+      final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      expect(
+        sent.single.bcc.map((a) => a.email),
+        [for (final a in bcc) a.email],
+      );
+    });
+
+    test('an address in both To and Bcc gets one RCPT TO (#1126)', () async {
+      final smtp = _CapturingSmtpClient();
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async => smtp,
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(appendUid: 13),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: draft.from,
+          to: draft.to,
+          cc: const [EmailAddress(email: 'carol@example.com')],
+          bcc: const [
+            EmailAddress(email: 'BOB@Example.com'),
+            EmailAddress(email: 'Carol@example.com'),
+            EmailAddress(email: 'dave@example.com'),
+          ],
+          subject: 'Test',
+          body: 'Body',
+        ),
+      );
+
+      expect(smtp.recipients, [
+        'bob@example.com',
+        'carol@example.com',
+        'dave@example.com',
+      ]);
+    });
+
     test('without UIDPLUS it still shows up, as a virtual row', () async {
       final r = _makeRepos(
         smtpConnect: (Account _, String __, String ___) async =>
@@ -8489,6 +9171,15 @@ void main() {
               }),
             ),
           );
+      await r.db.into(r.db.appLogs).insert(
+            AppLogsCompanion.insert(
+              createdAt: DateTime(2024),
+              level: 'info',
+              event: 'email.open',
+              message: 'opened',
+              emailId: const Value('acc-1:INBOX:1'),
+            ),
+          );
 
       // Checkpoint so the sync goes incremental and reconciliation runs.
       await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -8521,6 +9212,12 @@ void main() {
           .getSingle();
       expect(undo.dataJson, contains('acc-1:Archive:100'));
       expect(undo.dataJson, isNot(contains('acc-1:INBOX:1')));
+      // The per-message log follows too, instead of losing its email.
+      final logs = await r.db.select(r.db.appLogs).get();
+      expect(
+        logs.where((l) => l.event == 'email.open').map((l) => l.emailId),
+        ['acc-1:Archive:100'],
+      );
     });
 
     test('a genuine deletion (no matching server id elsewhere) is removed',
@@ -8759,6 +9456,64 @@ void main() {
       expect(threadRow.preview, emailRow.preview);
     });
 
+    test('mail that arrives during a sync is fetched by the next one',
+        () async {
+      _PreviewTestMessage mail(int uid) => _PreviewTestMessage(
+            subject: 'Mail $uid',
+            from: 'alice@example.com',
+            text: 'Hi',
+            messageId: '<m$uid@example.com>',
+          );
+      final client = _LateArrivalImapClient(messages: {42: mail(42)});
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // 43 arrives after this sync's search for new mail, before its
+      // SEARCH ALL.
+      client
+        ..messages[43] = mail(43)
+        ..late = 43;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      client.late = null;
+      final next = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // The checkpoint used to jump to 43 from SEARCH ALL, so 43 was never
+      // fetched.
+      expect(next.fetched, 1);
+      final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id);
+      expect(ids, contains('acc-1:INBOX:43'));
+    });
+
+    test('a sync with nothing new fetches nothing', () async {
+      // Like a real server, the fake answers `UID 43:*` with the newest
+      // message (RFC 3501 reads n:* as *:n when n is past the last UID).
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Only mail',
+              from: 'alice@example.com',
+              text: 'Hi',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        ),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      final first = await r.emails.syncEmails('acc-1', 'INBOX');
+      final second = await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(first.fetched, 1);
+      // Used to fetch message 42 again and report "1 new" on every sync.
+      expect(second.fetched, 0);
+    });
+
     test('a mail read on another device is no longer bold in the list',
         () async {
       final client = _CondstoreImapClient(
@@ -8873,7 +9628,7 @@ void main() {
       expect(thread.latestDate.toUtc(), DateTime.utc(2024, 6, 17, 9));
     });
 
-    test('syncEmails stores the Reply-To envelope addresses (#919)', () async {
+    test('syncEmails stores the Reply-To and Bcc envelope addresses', () async {
       final messages = {
         42: _PreviewTestMessage(
           subject: 'With Reply-To',
@@ -8881,6 +9636,7 @@ void main() {
           text: 'Hi',
           messageId: '<m42@example.com>',
           replyTo: 'support@example.com',
+          bcc: 'boss@example.com',
         ),
         43: _PreviewTestMessage(
           subject: 'Without Reply-To',
@@ -8903,8 +9659,49 @@ void main() {
         withReplyTo!.replyTo.map((a) => a.email),
         ['support@example.com'],
       );
+      expect(withReplyTo.bcc.map((a) => a.email), ['boss@example.com']);
+      // RFC822.SIZE (the fake answers the raw message length).
+      expect(withReplyTo.size, messages[42]!._rawMime().length);
       final withoutReplyTo = await r.emails.getEmail('acc-1:INBOX:43');
       expect(withoutReplyTo!.replyTo, isEmpty);
+      expect(withoutReplyTo.bcc, isEmpty);
+    });
+
+    test('flag reconcile backfills the size of rows cached without one',
+        () async {
+      final messages = {
+        42: _PreviewTestMessage(
+          subject: 'Old mail',
+          from: 'sender@example.com',
+          text: 'Hi',
+          messageId: '<m42@example.com>',
+        ),
+      };
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _PreviewSyncImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      // As cached before schema v64, with the reconcile due again.
+      await r.db.update(r.db.emails).write(
+            const EmailsCompanion(sizeBytes: Value(null)),
+          );
+      await (r.db.delete(r.db.syncStates)
+            ..where(
+              (t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX'),
+            ))
+          .go();
+      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.size, isNull);
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect(
+        (await r.emails.getEmail('acc-1:INBOX:42'))!.size,
+        messages[42]!._rawMime().length,
+      );
     });
 
     test('syncEmails derives preview from HTML when there is no text part',
@@ -9061,7 +9858,7 @@ void main() {
       expect(emailRow.listUnsubscribeHeader, '<mailto:existing@example.com>');
     });
 
-    test('getEmailBody backfills an empty Reply-To (#919)', () async {
+    test('getEmailBody backfills an empty Reply-To and Bcc', () async {
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
             _ReplyToBodyImapClient(),
@@ -9083,9 +9880,12 @@ void main() {
       final email = await r.emails.getEmail('acc-1:INBOX:1');
       expect(email!.replyTo.map((a) => a.email), ['support@example.com']);
       expect(email.replyTo.single.name, 'Support');
+      expect(email.bcc.map((a) => a.email), ['boss@example.com']);
+      expect(email.bcc.single.name, 'Boss');
     });
 
-    test('getEmailBody leaves an existing Reply-To untouched', () async {
+    test('getEmailBody leaves an existing Reply-To and Bcc untouched',
+        () async {
       final r = _makeRepos(
         imapConnect: (Account _, String __, String ___) async =>
             _ReplyToBodyImapClient(),
@@ -9102,6 +9902,9 @@ void main() {
               replyToJson: const Value(
                 '[{"name":null,"email":"existing@example.com"}]',
               ),
+              bccJson: const Value(
+                '[{"name":null,"email":"kept@example.com"}]',
+              ),
             ),
           );
 
@@ -9109,6 +9912,72 @@ void main() {
 
       final email = await r.emails.getEmail('acc-1:INBOX:1');
       expect(email!.replyTo.map((a) => a.email), ['existing@example.com']);
+      expect(email.bcc.map((a) => a.email), ['kept@example.com']);
+    });
+
+    test('a cached body backfills an empty Bcc from its headers', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            throw StateError('a cache hit must not connect'),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Sent:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Sent',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: 'acc-1:Sent:1',
+              textBody: const Value('Hi'),
+              headersJson: Value(
+                jsonEncode([
+                  {'name': 'From', 'value': 'me@example.com'},
+                  {'name': 'Bcc', 'value': '=?UTF-8?Q?B=C3=B6ss?= <b@x.com>'},
+                ]),
+              ),
+              mimeTreeJson: const Value('{}'),
+              cachedAt: Value(DateTime.now()),
+            ),
+          );
+
+      await r.emails.getEmailBody('acc-1:Sent:1');
+
+      final email = await r.emails.getEmail('acc-1:Sent:1');
+      expect(email!.bcc.single.email, 'b@x.com');
+      expect(email.bcc.single.name, 'Böss');
+      expect(email.replyTo, isEmpty);
+    });
+
+    test('restoreEmails keeps Bcc and Reply-To', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final email = Email(
+        id: 'acc-1:Sent:1',
+        accountId: 'acc-1',
+        mailboxPath: 'Sent',
+        uid: 1,
+        receivedAt: DateTime(2024),
+        from: const [EmailAddress(email: 'me@example.com')],
+        to: const [],
+        cc: const [],
+        replyTo: const [EmailAddress(email: 'help@example.com')],
+        bcc: const [EmailAddress(name: 'Boss', email: 'boss@example.com')],
+        isSeen: true,
+        isFlagged: false,
+        hasAttachment: false,
+      );
+
+      await r.emails.restoreEmails([email]);
+
+      final restored = await r.emails.getEmail('acc-1:Sent:1');
+      expect(restored!.bcc.single.email, 'boss@example.com');
+      expect(restored.bcc.single.name, 'Boss');
+      expect(restored.replyTo.single.email, 'help@example.com');
     });
   });
 
@@ -9227,8 +10096,24 @@ void main() {
               preview: const Value('Automatic reply preview'),
             ),
           );
+      await r.db.into(r.db.threads).insert(
+            ThreadsCompanion.insert(
+              id: 'tid-616',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              latestDate: DateTime(2024),
+              latestEmailId: 'acc-1:Snoozed:6',
+              latestUid: const Value(6),
+              emailIdsJson: const Value('["acc-1:Snoozed:6"]'),
+            ),
+          );
 
       final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
+
+      // The thread row follows the re-key, its same-second tiebreaker too.
+      final thread = await r.db.select(r.db.threads).getSingle();
+      expect(thread.latestEmailId, 'acc-1:INBOX:42');
+      expect(thread.latestUid, 42);
 
       // The correct body is returned and cached under the re-keyed id — a
       // healed mismatch is not a load failure, so no loadError is set (#837).
@@ -9410,6 +10295,255 @@ void main() {
       expect(d.conclusions.first, contains('Could not reach the server'));
     });
   });
+
+  // Bulk mail, mailing lists and scripted mail often arrive within one
+  // second, so their INTERNALDATE (and often their Date header) are equal.
+  // Lists must then still be newest arrival first, not in whatever order
+  // SQLite returns rows with equal sort keys.
+  group('same-second mail ordering', () {
+    const sameSecond = '15-Oct-2026 12:22:10 +0000';
+
+    Map<int, _PreviewTestMessage> bulk(int count, {bool oneThread = false}) => {
+          for (var uid = 1; uid <= count; uid++)
+            uid: _PreviewTestMessage(
+              subject: oneThread ? 'Re: Bulk' : 'Bulk $uid',
+              from: 'list@example.com',
+              messageId: '<bulk-$uid@example.com>',
+              inReplyTo: oneThread && uid > 1 ? '<bulk-1@example.com>' : null,
+              text: 'Body $uid',
+              internalDate: sameSecond,
+            ),
+        };
+
+    test('mail and thread lists show the newest arrival first', () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            _PreviewSyncImapClient(messages: bulk(5)),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedInboxMailbox(r.db, 'acc-1');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      const newestFirst = [
+        'acc-1:INBOX:5',
+        'acc-1:INBOX:4',
+        'acc-1:INBOX:3',
+        'acc-1:INBOX:2',
+        'acc-1:INBOX:1',
+      ];
+      final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
+      expect(emails.map((e) => e.id), newestFirst);
+      final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
+      expect(threads.map((t) => t.latestEmailId), newestFirst);
+      final inbox = await r.emails.observeAllInboxThreads().first;
+      expect(inbox.map((t) => t.latestEmailId), newestFirst);
+    });
+
+    test(
+        'a conversation is oldest arrival first and its row shows the newest '
+        'message', () async {
+      // The fetch answers newest first, so the rows are stored in reverse
+      // arrival order: the order must not depend on that.
+      final messages = bulk(3, oneThread: true);
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            _ReversedFetchImapClient(messages: messages),
+        fetchPreviewSnippets: _snippetsFor(messages),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      final thread =
+          (await r.emails.observeThreads('acc-1', 'INBOX').first).single;
+      expect(thread.messageCount, 3);
+      expect(thread.latestEmailId, 'acc-1:INBOX:3');
+      expect(thread.preview, contains('Body 3'));
+      const oldestFirst = ['acc-1:INBOX:1', 'acc-1:INBOX:2', 'acc-1:INBOX:3'];
+      final inThread = await r.emails
+          .observeEmailsInThread('acc-1', 'INBOX', thread.threadId)
+          .first;
+      expect(inThread.map((e) => e.id), oldestFirst);
+      final across = await r.emails
+          .observeThreadAcrossFolders('acc-1', thread.threadId)
+          .first;
+      expect(across.map((e) => e.id), oldestFirst);
+    });
+
+    test('search results show the newest arrival first', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final at = DateTime.utc(2026, 10, 15, 12, 22, 10);
+      for (var uid = 1; uid <= 4; uid++) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                subject: Value('Bulk $uid'),
+                receivedAt: at,
+                fromJson: const Value(
+                  '[{"name":null,"email":"list@example.com"}]',
+                ),
+              ),
+            );
+      }
+      const newestFirst = [
+        'acc-1:INBOX:4',
+        'acc-1:INBOX:3',
+        'acc-1:INBOX:2',
+        'acc-1:INBOX:1',
+      ];
+
+      List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
+      for (final results in [
+        await r.emails.searchEmails('acc-1', 'INBOX', 'Bulk'),
+        await r.emails.searchEmailsGlobal('acc-1', 'Bulk'),
+        await r.emails.searchEmailsGlobal(null, 'Bulk'),
+      ]) {
+        expect(ids(results), newestFirst);
+      }
+      expect(
+        ids(await r.emails.getEmailsByAddress('acc-1', 'list@example.com')),
+        newestFirst,
+      );
+    });
+
+    test('search is paged by limit instead of stopping at 50 matches',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      final base = DateTime.utc(2026, 10);
+      // 120 matches: even uids hit via the subject, odd uids only via the
+      // cached body, so a page mixes both FTS sources. Uids divisible by 4
+      // hit via both (deduplicated before the page is cut), and a few old
+      // flagged mails from either source must lead every page.
+      const flagged = {3, 10, 57};
+      for (var uid = 0; uid < 120; uid++) {
+        final id = 'acc-1:INBOX:$uid';
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                subject: Value(uid.isEven ? 'Bulk $uid' : 'Mail $uid'),
+                receivedAt: base.add(Duration(minutes: uid)),
+                isFlagged: Value(flagged.contains(uid)),
+                fromJson: const Value(
+                  '[{"name":null,"email":"list@example.com"}]',
+                ),
+              ),
+            );
+        if (uid.isOdd || uid % 4 == 0) {
+          await r.db.into(r.db.emailBodies).insert(
+                EmailBodiesCompanion.insert(
+                  emailId: id,
+                  textBody: const Value('bulk body'),
+                ),
+              );
+        }
+      }
+      // Flagged first (newest first among them), then the rest newest first.
+      final listOrder = [
+        for (final uid in [57, 10, 3]) 'acc-1:INBOX:$uid',
+        for (var uid = 119; uid >= 0; uid--)
+          if (!flagged.contains(uid)) 'acc-1:INBOX:$uid',
+      ];
+      List<String> newest(int n) => listOrder.take(n).toList();
+      List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
+
+      final folderPage = await r.emails.searchEmails('acc-1', 'INBOX', 'bulk');
+      expect(ids(folderPage), newest(50));
+      final folderTwoPages =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 100);
+      expect(ids(folderTwoPages), newest(100));
+      final folderAll =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 150);
+      expect(ids(folderAll), newest(120));
+
+      expect(
+        ids(await r.emails.searchEmailsGlobal('acc-1', 'bulk', limit: 100)),
+        newest(100),
+      );
+      expect(
+        ids(await r.emails.searchEmailsGlobal(null, 'bulk', limit: 150)),
+        newest(120),
+      );
+
+      final filter = FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          FilterLeaf(
+            field: FilterField.from_,
+            comparison: FilterComparison.contains,
+            value: 'list@',
+          ),
+        ],
+      );
+      expect(
+        ids(await r.emails.searchEmailsStructured(null, filter, limit: 110)),
+        newest(110),
+      );
+
+      expect(
+        ids(
+          await r.emails
+              .getEmailsByAddress('acc-1', 'list@example.com', limit: 70),
+        ),
+        newest(70),
+      );
+      expect(
+        await r.emails.getEmailsByAddress('acc-1', 'list@example.com'),
+        hasLength(120),
+      );
+
+      // The merged all-folders search (FTS + address hits, the same mails
+      // twice over) pages with the same stable prefix.
+      for (final limit in [50, 100, 150]) {
+        expect(
+          ids(
+            await searchEmailsGlobalMerged(
+              r.emails,
+              'acc-1',
+              'list@example.com',
+              limit: limit,
+            ),
+          ),
+          newest(limit),
+        );
+      }
+    });
+
+    test('mail and thread lists are sorted by an index, not a temp sort',
+        () async {
+      final r = _makeRepos();
+      const scope = [Variable<String>('acc-1'), Variable<String>('INBOX')];
+      Future<String> plan(String sql) async {
+        final rows = await r.db
+            .customSelect('EXPLAIN QUERY PLAN $sql', variables: scope)
+            .get();
+        return [for (final row in rows) row.read<String>('detail')].join('\n');
+      }
+
+      final emailsPlan = await plan(
+        'SELECT * FROM emails WHERE account_id = ? AND mailbox_path = ? '
+        'ORDER BY received_at DESC, uid DESC, id DESC LIMIT 50',
+      );
+      expect(emailsPlan, contains('emails_list_order'));
+      expect(emailsPlan, isNot(contains('TEMP B-TREE')));
+
+      final threadsPlan = await plan(
+        'SELECT * FROM threads WHERE account_id = ? AND mailbox_path = ? '
+        'ORDER BY is_flagged DESC, latest_date DESC, latest_uid DESC, '
+        'id DESC LIMIT 50',
+      );
+      expect(threadsPlan, contains('threads_list_order'));
+      expect(threadsPlan, isNot(contains('TEMP B-TREE')));
+    });
+  });
 }
 
 // ── Fakes for folder diagnostics tests (#511) ────────────────────────────────
@@ -9556,6 +10690,29 @@ class _NoOpSmtpClient extends imap.SmtpClient {
   Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
 }
 
+/// Records what an SMTP send transmits: the envelope recipients and the
+/// message text as enough_mail would put it on the wire.
+class _CapturingSmtpClient extends _NoOpSmtpClient {
+  List<String>? recipients;
+  String? sentMime;
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async {
+    this.recipients =
+        (recipients ?? message.recipients).map((a) => a.email).toList();
+    // Same stripping as enough_mail's SmtpSendMailCommand.
+    sentMime = message
+        .renderMessage()
+        .replaceAll(RegExp('^Bcc:.*\r\n', multiLine: true), '');
+    return imap.SmtpResponse(const ['250 OK']);
+  }
+}
+
 class _AppendCapturingImapClient extends FakeImapClient {
   _AppendCapturingImapClient({this.appendUid});
 
@@ -9566,6 +10723,7 @@ class _AppendCapturingImapClient extends FakeImapClient {
 
   Duration? lastAppendTimeout;
   String? appendedToPath;
+  String? appendedMime;
   final List<String> createdMailboxes = [];
 
   @override
@@ -9584,6 +10742,7 @@ class _AppendCapturingImapClient extends FakeImapClient {
   }) async {
     lastAppendTimeout = responseTimeout;
     appendedToPath = targetMailboxPath;
+    appendedMime = message.renderMessage();
     final result = imap.GenericImapResult();
     if (appendUid != null) result.responseCode = 'APPENDUID 1 $appendUid';
     return result;
@@ -9751,6 +10910,7 @@ class _PreviewTestMessage {
     this.text,
     this.html,
     this.replyTo,
+    this.bcc,
     this.hasDateHeader = true,
     this.internalDate,
     this.inReplyTo,
@@ -9769,6 +10929,7 @@ class _PreviewTestMessage {
   final String from;
   final String messageId;
   final String? replyTo;
+  final String? bcc;
   final String? text;
   final String? html;
 
@@ -9809,6 +10970,7 @@ class _PreviewTestMessage {
         from: [imap.MailAddress(null, from)],
         to: const [imap.MailAddress(null, 'alice@example.com')],
         replyTo: replyTo == null ? null : [imap.MailAddress(null, replyTo!)],
+        bcc: bcc == null ? null : [imap.MailAddress(null, bcc!)],
         messageId: messageId,
         inReplyTo: inReplyTo,
       );
@@ -9894,14 +11056,70 @@ class _PreviewSyncImapClient extends FakeImapClient {
     // Like a real server, only answer INTERNALDATE when it was asked for.
     final wantsInternalDate =
         fetchContentDefinition?.contains('INTERNALDATE') ?? false;
+    final wantsSize = fetchContentDefinition?.contains('RFC822.SIZE') ?? false;
+    // The periodic flag reconcile fetches `1:*`, which toList() cannot spell.
+    final uids =
+        sequence.containsLast() ? messages.keys.toList() : sequence.toList();
     final built = <imap.MimeMessage>[
-      for (final uid in sequence.toList())
+      for (final uid in uids)
         if (messages[uid] != null)
           messages[uid]!.build(uid)
             ..internalDate =
-                wantsInternalDate ? messages[uid]!.internalDate : null,
+                wantsInternalDate ? messages[uid]!.internalDate : null
+            // Nor RFC822.SIZE, so a size backfill must really ask for it.
+            ..size = wantsSize ? messages[uid]!._rawMime().length : null,
     ];
     return imap.FetchImapResult(built, null);
+  }
+}
+
+/// [_PreviewSyncImapClient] whose fetch answers newest first, so sync stores
+/// the rows in reverse arrival order.
+class _ReversedFetchImapClient extends _PreviewSyncImapClient {
+  _ReversedFetchImapClient({required super.messages});
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final result = await super.uidFetchMessages(
+      sequence,
+      fetchContentDefinition,
+      changedSinceModSequence: changedSinceModSequence,
+      responseTimeout: responseTimeout,
+    );
+    return imap.FetchImapResult(result.messages.reversed.toList(), null);
+  }
+}
+
+/// [_PreviewSyncImapClient] whose `UID n:*` search answers like a real
+/// server (only UIDs ≥ n, or the newest one when there are none), and which
+/// can hide [late] from that search while `SEARCH ALL` already lists it: mail
+/// that arrives between the two searches of one sync.
+class _LateArrivalImapClient extends _PreviewSyncImapClient {
+  _LateArrivalImapClient({required super.messages});
+
+  int? late;
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'ALL',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    var uids = messages.keys.toList()..sort();
+    final range = RegExp(r'^UID (\d+):\*$').firstMatch(searchCriteria);
+    if (range != null) {
+      final from = int.parse(range.group(1)!);
+      final visible = uids.where((u) => u != late).toList();
+      final hits = visible.where((u) => u >= from).toList();
+      uids = hits.isNotEmpty ? hits : [if (visible.isNotEmpty) visible.last];
+    }
+    return imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(uids, isUid: true);
   }
 }
 
@@ -9976,13 +11194,14 @@ class _PreviewBodyImapClient extends FakeImapClient {
   }
 }
 
-/// Serves a body carrying a Reply-To header so we can exercise the
-/// opportunistic Reply-To backfill on body fetch (#919).
+/// Serves a body carrying Reply-To and Bcc headers so we can exercise the
+/// opportunistic address backfill on body fetch (#919, #1097).
 class _ReplyToBodyImapClient extends _UnsubscribeBodyImapClient {
   static const String _kRawMime = 'MIME-Version: 1.0\r\n'
       'Content-Type: text/plain; charset=UTF-8\r\n'
       'From: Bob <bob@example.com>\r\n'
       'Reply-To: Support <support@example.com>\r\n'
+      'Bcc: Boss <boss@example.com>\r\n'
       '\r\n'
       'Body with a Reply-To header.\r\n';
 

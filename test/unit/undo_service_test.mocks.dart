@@ -234,6 +234,22 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<_i2.SyncEmailsResult>);
 
   @override
+  _i4.Future<_i2.ImapMailboxState?> lastImapMailboxState(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #lastImapMailboxState,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i4.Future<_i2.ImapMailboxState?>.value(),
+      ) as _i4.Future<_i2.ImapMailboxState?>);
+
+  @override
   _i4.Future<void> setFlag(
     String? emailId, {
     bool? seen,
@@ -419,8 +435,9 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
   _i4.Future<List<_i2.Email>> searchEmails(
     String? accountId,
     String? mailboxPath,
-    String? query,
-  ) =>
+    String? query, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmails,
@@ -429,6 +446,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             mailboxPath,
             query,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Future<List<_i2.Email>>.value(<_i2.Email>[]),
       ) as _i4.Future<List<_i2.Email>>);
@@ -436,8 +454,9 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
   @override
   _i4.Future<List<_i2.Email>> searchEmailsGlobal(
     String? accountId,
-    String? query,
-  ) =>
+    String? query, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsGlobal,
@@ -445,6 +464,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             query,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Future<List<_i2.Email>>.value(<_i2.Email>[]),
       ) as _i4.Future<List<_i2.Email>>);
@@ -452,8 +472,9 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
   @override
   _i4.Future<List<_i2.Email>> searchEmailsStructured(
     String? accountId,
-    _i6.FilterGroup? filter,
-  ) =>
+    _i6.FilterGroup? filter, {
+    int? limit = 50,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #searchEmailsStructured,
@@ -461,6 +482,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             filter,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Future<List<_i2.Email>>.value(<_i2.Email>[]),
       ) as _i4.Future<List<_i2.Email>>);
@@ -468,8 +490,9 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
   @override
   _i4.Future<List<_i2.Email>> getEmailsByAddress(
     String? accountId,
-    String? address,
-  ) =>
+    String? address, {
+    int? limit,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #getEmailsByAddress,
@@ -477,6 +500,7 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
             accountId,
             address,
           ],
+          {#limit: limit},
         ),
         returnValue: _i4.Future<List<_i2.Email>>.value(<_i2.Email>[]),
       ) as _i4.Future<List<_i2.Email>>);
@@ -609,6 +633,41 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
         ),
         returnValue: _i4.Future<int>.value(0),
       ) as _i4.Future<int>);
+
+  @override
+  _i4.Future<bool> isSnoozedMailbox(
+    String? accountId,
+    String? mailboxPath,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #isSnoozedMailbox,
+          [
+            accountId,
+            mailboxPath,
+          ],
+        ),
+        returnValue: _i4.Future<bool>.value(false),
+      ) as _i4.Future<bool>);
+
+  @override
+  _i4.Future<void> restoreLocalSnooze(
+    String? emailId, {
+    required DateTime? until,
+    String? fromMailboxPath,
+  }) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #restoreLocalSnooze,
+          [emailId],
+          {
+            #until: until,
+            #fromMailboxPath: fromMailboxPath,
+          },
+        ),
+        returnValue: _i4.Future<void>.value(),
+        returnValueForMissingStub: _i4.Future<void>.value(),
+      ) as _i4.Future<void>);
 
   @override
   _i4.Future<void> restoreEmails(List<_i2.Email>? emails) =>

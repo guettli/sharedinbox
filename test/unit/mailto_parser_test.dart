@@ -102,12 +102,14 @@ void main() {
       const intent = MailIntent(
         to: 'a@b',
         cc: 'c@d',
+        bcc: 'e@f',
         subject: 'S',
         body: 'B',
       );
       expect(intent.toComposeExtra(), {
         'prefillTo': 'a@b',
         'prefillCc': 'c@d',
+        'prefillBcc': 'e@f',
         'prefillSubject': 'S',
         'prefillBody': 'B',
       });

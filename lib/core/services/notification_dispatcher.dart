@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sharedinbox/core/filter/filter_matcher.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
@@ -5,6 +7,11 @@ import 'package:sharedinbox/core/repositories/notification_rule_repository.dart'
 
 /// Callback that actually surfaces one OS notification. Injected so the
 /// dispatcher can be unit-tested without the platform plugin.
+///
+/// Must neither throw nor hang: the production callback,
+/// `showNewMailNotification`, guarantees that via `guardNotificationShow`
+/// (#1107). The dispatcher marks mail as notified *before* showing, so even a
+/// callback that breaks this contract cannot make the same mail alert again.
 typedef ShowNotification = Future<void> Function({
   required String accountId,
   required String emailId,
@@ -28,11 +35,32 @@ class NotificationDispatcher {
   final AccountRepository _accounts;
   final ShowNotification _show;
 
+  /// The latest queued dispatch per account. Dispatches for one account run
+  /// one after another, so two overlapping sync cycles cannot both read the
+  /// same not-yet-notified mail and alert twice.
+  final _queue = <String, Future<void>>{};
+
   /// Evaluates the account's rules against every inbox message not yet
   /// considered, firing a notification for each match. Safe (and cheap) to
   /// call after every sync cycle — it short-circuits when notifications are
   /// off or no rules exist.
-  Future<void> dispatchForAccount(String accountId) async {
+  Future<void> dispatchForAccount(String accountId) {
+    final previous = _queue[accountId] ?? Future<void>.value();
+    final run = previous.then((_) => _dispatch(accountId));
+    // The queue entry must not carry this run's error into the next one.
+    final entry = run.then<void>((_) {}, onError: (Object _) {});
+    _queue[accountId] = entry;
+    unawaited(
+      entry.whenComplete(() {
+        if (identical(_queue[accountId], entry)) {
+          unawaited(_queue.remove(accountId));
+        }
+      }),
+    );
+    return run;
+  }
+
+  Future<void> _dispatch(String accountId) async {
     final account = await _accounts.getAccount(accountId);
     if (account == null || !account.notificationsEnabled) return;
 
@@ -42,20 +70,21 @@ class NotificationDispatcher {
     final candidates = await _rules.unnotifiedInboxEmails(accountId);
     if (candidates.isEmpty) return;
 
-    final consideredIds = <String>[];
-    for (final email in candidates) {
-      consideredIds.add(email.id);
+    final matches = candidates.where((email) {
       final message = matchableFromEmail(email);
-      if (rules.any((r) => matchesFilter(r.filter, message))) {
-        await _show(
-          accountId: accountId,
-          emailId: email.id,
-          title: notificationTitle(email),
-          body: notificationBody(email),
-        );
-      }
+      return rules.any((r) => matchesFilter(r.filter, message));
+    }).toList();
+    // Marked before showing: a failing or hanging notification backend must
+    // not leave the mail unmarked, or it alerts again on every sync (#1107).
+    await _rules.markNotified(accountId, [for (final e in candidates) e.id]);
+    for (final email in matches) {
+      await _show(
+        accountId: accountId,
+        emailId: email.id,
+        title: notificationTitle(email),
+        body: notificationBody(email),
+      );
     }
-    await _rules.markNotified(accountId, consideredIds);
   }
 }
 
@@ -74,6 +103,7 @@ MatchableMessage matchableFromEmail(Email email) {
     to: email.to.map(toMatch).toList(),
     cc: email.cc.map(toMatch).toList(),
     subject: email.subject ?? '',
+    size: email.size,
     folder: email.mailboxPath,
     headers: headers,
   );

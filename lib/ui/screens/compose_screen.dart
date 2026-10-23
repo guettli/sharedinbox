@@ -32,6 +32,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.replyToEmailId,
     this.prefillTo,
     this.prefillCc,
+    this.prefillBcc,
     this.prefillSubject,
     this.prefillBody,
     this.draftId,
@@ -41,6 +42,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? replyToEmailId;
   final String? prefillTo;
   final String? prefillCc;
+  final String? prefillBcc;
   final String? prefillSubject;
   final String? prefillBody;
 
@@ -55,8 +57,15 @@ class ComposeScreen extends ConsumerStatefulWidget {
 class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _to = TextEditingController();
   final _cc = TextEditingController();
+  final _bcc = TextEditingController();
   final _toFocus = FocusNode();
   final _ccFocus = FocusNode();
+  final _bccFocus = FocusNode();
+
+  /// Whether the Bcc field is shown. Collapsed by default behind a "Bcc"
+  /// button on the Cc field; opened by that button, or by a prefill or
+  /// restored draft that has Bcc recipients (#1126).
+  bool _showBcc = false;
   final _subject = TextEditingController();
   final _body = TextEditingController();
   String? _accountId;
@@ -88,6 +97,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String _sigBlock = '';
   String? _sigAccountId;
   bool _draftRestored = false;
+
+  // The body text as last set programmatically (prefill / signature). While
+  // the body still equals it the user has not written anything yet, so the
+  // cursor is parked at [_parkOffset], where the message belongs, instead of
+  // after the signature or below the quote.
+  String _programmaticBody = '';
+  int _parkOffset = 0;
   bool _suppressAutoSave = false;
   // Captured in initState so it remains accessible in dispose() after ref is gone.
   late final DraftRepository _draftRepo;
@@ -98,18 +114,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   void initState() {
     super.initState();
     _draftRepo = ref.read(draftRepositoryProvider);
+    // Before the body prefill: a reply parks the cursor at the top.
+    _replyToEmailId = widget.replyToEmailId;
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
+    if (widget.prefillBcc != null) _bcc.text = widget.prefillBcc!;
+    _showBcc = _bcc.text.trim().isNotEmpty;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) {
-      _body.text = normalizeNewlines(widget.prefillBody!);
+      _setPristineBody(normalizeNewlines(widget.prefillBody!));
     }
     _accountId = widget.accountId;
-    _replyToEmailId = widget.replyToEmailId;
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
-    for (final c in [_to, _cc, _subject, _body]) {
+    for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.addListener(_onTextChanged);
     }
   }
@@ -131,8 +150,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   /// Inserts the selected account's signature into the body, swapping out any
-  /// previously inserted one. For a reply the signature sits above the quoted
-  /// text so the user writes between it and the quote; otherwise it is appended.
+  /// previously inserted one. A new message gets it appended
+  /// (`<text>\n\n<signature>`). A reply gets it above the quoted text, after
+  /// an empty first line the user types into (`\n\n<signature>\n\n<quote>`;
+  /// the quote's own leading blank lines provide the separator when present).
+  /// While the user has not touched the body the cursor stays parked where the
+  /// message belongs ([_parkOffset]); otherwise their cursor is shifted along.
   Future<void> _applySignatureForAccount(String? accountId) async {
     // A restored draft already carries its body verbatim — never rewrite it.
     if (_draftRestored) return;
@@ -145,28 +168,81 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!mounted) return;
     _sigAccountId = accountId;
     final isReply = _replyToEmailId != null;
-    final newBlock = signature.isEmpty
-        ? ''
-        : (isReply ? '$signature\n\n' : '\n\n$signature');
     final text = _body.text;
     final oldIndex = _sigBlock.isEmpty ? -1 : text.indexOf(_sigBlock);
-    String updated;
+    // The range of [text] the new block replaces: the old block, or an empty
+    // range at the start (reply) / end (new message).
+    final int from;
+    final int to;
     if (oldIndex >= 0) {
-      updated =
-          text.replaceRange(oldIndex, oldIndex + _sigBlock.length, newBlock);
-    } else if (newBlock.isEmpty) {
-      updated = text;
-    } else if (isReply) {
-      updated = '$newBlock$text';
+      from = oldIndex;
+      to = oldIndex + _sigBlock.length;
     } else {
-      updated = '$text$newBlock';
+      from = isReply ? 0 : text.length;
+      to = from;
     }
+    final after = text.substring(to);
+    final String newBlock;
+    if (signature.isEmpty) {
+      newBlock = '';
+    } else if (isReply) {
+      newBlock = after.startsWith('\n') || after.isEmpty
+          ? '\n\n$signature'
+          : '\n\n$signature\n\n';
+    } else {
+      newBlock = '\n\n$signature';
+    }
+    final updated = text.replaceRange(from, to, newBlock);
+    final pristine = _bodyIsPristine;
+    final sel = _body.selection;
     _sigBlock = newBlock;
     if (updated == text) return;
     // Programmatic edit — don't count it as the user dirtying a draft.
     _suppressAutoSave = true;
-    _body.text = updated;
+    if (pristine) {
+      _setPristineBody(updated, base: text.replaceRange(from, to, ''));
+    } else if (sel.isValid) {
+      int shift(int o) =>
+          o <= from ? o : (o >= to ? o + newBlock.length - (to - from) : from);
+      _body.value = TextEditingValue(
+        text: updated,
+        selection: TextSelection(
+          baseOffset: shift(sel.baseOffset),
+          extentOffset: shift(sel.extentOffset),
+        ),
+      );
+    } else {
+      _body.text = updated;
+    }
     _suppressAutoSave = false;
+  }
+
+  /// True while the body holds only programmatically inserted text and the
+  /// cursor has not been placed anywhere but where we parked it.
+  bool get _bodyIsPristine {
+    final sel = _body.selection;
+    return _body.text == _programmaticBody &&
+        (!sel.isValid || sel == TextSelection.collapsed(offset: _parkOffset));
+  }
+
+  /// Sets a body the user has not touched yet, with the cursor parked where
+  /// the message belongs. [base] is the body without the signature block.
+  /// Focusing the body without a tap (Tab, IME "next", a screen reader) keeps
+  /// a valid selection, so typing lands above the signature / quote instead
+  /// of being glued to its end. A tap still places the cursor where tapped.
+  void _setPristineBody(String text, {String? base}) {
+    final b = base ?? text;
+    // A reply, a forward ("\n\n— On … wrote:") or an empty body is written
+    // at the top. A prefilled message text (mailto body) is continued, so the
+    // cursor goes after it — before an appended signature.
+    _parkOffset = _replyToEmailId != null || b.isEmpty || b.startsWith('\n')
+        ? 0
+        : b.length;
+    _programmaticBody = text;
+    _body.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: _parkOffset),
+    );
   }
 
   Future<void> _restoreDraft(int id) async {
@@ -182,6 +258,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _replyToEmailId = draft.replyToEmailId ?? _replyToEmailId;
       _to.text = draft.toText;
       _cc.text = draft.ccText;
+      _bcc.text = draft.bccText;
+      if (draft.bccText.trim().isNotEmpty) _showBcc = true;
       _subject.text = draft.subjectText;
       // Drafts pulled from the server come back with CRLF.
       _body.text = normalizeNewlines(draft.bodyText);
@@ -221,6 +299,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       replyToEmailId: _replyToEmailId,
       toText: _to.text,
       ccText: _cc.text,
+      bccText: _bcc.text,
       subjectText: _subject.text,
       bodyText: _body.text,
     );
@@ -238,12 +317,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   @override
   void dispose() {
     _saveTimer?.cancel();
-    for (final c in [_to, _cc, _subject, _body]) {
+    for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.removeListener(_onTextChanged);
       c.dispose();
     }
     _toFocus.dispose();
     _ccFocus.dispose();
+    _bccFocus.dispose();
     // Drop any temp files created for shrunk attachments.
     for (final a in _attachments) {
       if (a.isTemp) unawaited(_deleteTempFile(a.path));
@@ -258,6 +338,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           replyToEmailId: _replyToEmailId,
           toText: _to.text,
           ccText: _cc.text,
+          bccText: _bcc.text,
           subjectText: _subject.text,
           bodyText: _body.text,
         ),
@@ -429,7 +510,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
+  /// [_accountId], unless it names an account that no longer exists (a draft
+  /// left behind by a deleted account): then the only account, or none.
+  String? get _fromAccountId {
+    final id = _accountId;
+    if (id != null && _accounts.any((a) => a.id == id)) return id;
+    return _accounts.length == 1 ? _accounts.first.id : null;
+  }
+
   Future<void> _send() async {
+    _accountId = _fromAccountId;
     if (_accountId == null) {
       context.showAppSnackBar(
         'Select an account first',
@@ -440,6 +530,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final invalid = [
       ...invalidRecipients(_to.text),
       ...invalidRecipients(_cc.text),
+      ...invalidRecipients(_bcc.text),
     ];
     if (invalid.isNotEmpty) {
       context.showAppSnackBar(
@@ -473,6 +564,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         // address as given, so a raw "Bob <bob@x>" chunk was rejected there.
         to: to,
         cc: recipientAddresses(_cc.text),
+        bcc: recipientAddresses(_bcc.text),
         subject: _subject.text,
         body: _body.text,
         attachmentFilePaths: List.unmodifiable(
@@ -658,7 +750,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               child: DropdownButtonFormField<String>(
-                initialValue: _accountId,
+                initialValue: _fromAccountId,
                 decoration: const InputDecoration(
                   labelText: 'From',
                   border: OutlineInputBorder(),
@@ -700,6 +792,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 onChanged: (v) {
                   setState(() => _accountId = v);
                   unawaited(_applySignatureForAccount(v));
+                  // Save the new account like an edit, so a saved draft
+                  // moves even when nothing is typed afterwards.
+                  if (_draftId != null) _onTextChanged();
                 },
               ),
             )
@@ -719,7 +814,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               ),
             ),
           _addressField(_to, _toFocus, 'To'),
-          _addressField(_cc, _ccFocus, 'Cc'),
+          _addressField(
+            _cc,
+            _ccFocus,
+            'Cc',
+            suffix: _showBcc
+                ? null
+                : TextButton(
+                    key: const Key('compose-show-bcc'),
+                    onPressed: () {
+                      setState(() => _showBcc = true);
+                      _bccFocus.requestFocus();
+                    },
+                    child: const Text('Bcc'),
+                  ),
+          ),
+          if (_showBcc) _addressField(_bcc, _bccFocus, 'Bcc'),
           _field(_subject, 'Subject'),
           const SizedBox(height: AppSpacing.sm),
           TextFormField(
@@ -783,8 +893,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   Widget _addressField(
     TextEditingController ctrl,
     FocusNode focusNode,
-    String label,
-  ) {
+    String label, {
+    Widget? suffix,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: RawAutocomplete<EmailAddress>(
@@ -821,6 +932,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             decoration: InputDecoration(
               labelText: label,
               border: const OutlineInputBorder(),
+              suffixIcon: suffix,
             ),
             onFieldSubmitted: (_) => onFieldSubmitted(),
           );

@@ -28,6 +28,7 @@ Email _row({
       toAddresses: '[]',
       ccJson: '[]',
       replyToJson: '[]',
+      bccJson: '[]',
       isSeen: isSeen,
       isFlagged: false,
       hasAttachment: false,

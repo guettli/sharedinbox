@@ -15,6 +15,11 @@ export 'package:sharedinbox/core/sieve/sieve_parser.dart'
 /// its generated mocks — stay unchanged; absent/unset means no check.
 final deleteExpectedMailboxZoneKey = Object();
 
+/// Page size of every local search (simple, folder, advanced). A search
+/// returns at most `limit` results; the UI starts at one page and grows the
+/// limit by one page per "Load more".
+const searchPageSize = 50;
+
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
     String accountId,
@@ -57,6 +62,14 @@ abstract class EmailRepository {
   /// is performed. The result is then written back to the cache.
   Future<EmailBody> getEmailBody(String emailId, {bool forceRefresh = false});
   Future<SyncEmailsResult> syncEmails(String accountId, String mailboxPath);
+
+  /// What the last successful IMAP sync of [mailboxPath] saw when it selected
+  /// the mailbox, or null when it has not been synced over IMAP yet (or the
+  /// account is JMAP).
+  Future<ImapMailboxState?> lastImapMailboxState(
+    String accountId,
+    String mailboxPath,
+  );
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged});
   Future<void> markAllAsRead(String accountId, String mailboxPath);
   Future<void> moveEmail(String emailId, String destMailboxPath);
@@ -109,26 +122,46 @@ abstract class EmailRepository {
   Future<String> fetchRawRfc822(String emailId);
 
   /// Returns emails in [mailboxPath] whose subject or body contain [query].
-  /// Results come from the server (IMAP SEARCH) and are not cached.
+  ///
+  /// At most [limit] results, flagged first then newest first. A result list
+  /// of exactly [limit] entries means more matches may exist: the UI grows
+  /// [limit] by [searchPageSize] for "Load more", like the folder list.
   Future<List<Email>> searchEmails(
     String accountId,
     String mailboxPath,
-    String query,
-  );
+    String query, {
+    int limit = searchPageSize,
+  });
 
   /// Searches the local DB across all mailboxes of [accountId] (or all accounts
   /// if null) by subject, preview, body, and notes. Fast, works offline.
-  Future<List<Email>> searchEmailsGlobal(String? accountId, String query);
+  ///
+  /// Paged by [limit] like [searchEmails].
+  Future<List<Email>> searchEmailsGlobal(
+    String? accountId,
+    String query, {
+    int limit = searchPageSize,
+  });
 
   /// Searches the local DB using a structured [FilterGroup]. Fast, works offline.
+  ///
+  /// Paged by [limit] like [searchEmails].
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
-    FilterGroup filter,
-  );
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  });
 
   /// Returns all locally cached emails in any mailbox of [accountId] (or all
   /// accounts if null) whose from, to, or cc fields contain [address].
-  Future<List<Email>> getEmailsByAddress(String? accountId, String address);
+  ///
+  /// When [limit] is non-null, returns at most that many (flagged first, then
+  /// newest first); null returns every match.
+  Future<List<Email>> getEmailsByAddress(
+    String? accountId,
+    String address, {
+    int? limit,
+  });
 
   /// Returns unique email addresses from the local cache whose email or display
   /// name contains [query]. Results are deduplicated and capped at [limit].
@@ -172,6 +205,19 @@ abstract class EmailRepository {
   /// Returns the number of emails woken up.
   Future<int> wakeUpEmails(String accountId);
 
+  /// Whether [mailboxPath] is [accountId]'s Snoozed folder.
+  Future<bool> isSnoozedMailbox(String accountId, String mailboxPath);
+
+  /// Puts a snooze back on [emailId] locally only, without queuing anything.
+  /// For an Undo whose move out of the Snoozed folder was cancelled before it
+  /// reached the server: the server never lost the snooze, but the optimistic
+  /// move cleared it from the local row.
+  Future<void> restoreLocalSnooze(
+    String emailId, {
+    required DateTime until,
+    String? fromMailboxPath,
+  });
+
   /// Restores previously deleted/moved emails to the local database.
   /// Used for the "Undo" feature when the original rows were hard-deleted (IMAP).
   Future<void> restoreEmails(List<Email> emails);
@@ -204,8 +250,9 @@ abstract class EmailRepository {
 
   /// Runs [scriptContent] against every INBOX message of [accountId] (regardless
   /// of LocalSieveApplied state) and enqueues the resulting moves/deletes/flag
-  /// changes. Each processed message is recorded in LocalSieveApplied. Returns
-  /// the number of matched messages.
+  /// changes. Each processed message that has a Message-ID is recorded in
+  /// LocalSieveApplied; mail without one is filtered but not recorded.
+  /// Returns the number of matched messages.
   ///
   /// Throws `SieveParseException` when [scriptContent] cannot be parsed.
   Future<int> applySieveScriptToInbox(String accountId, String scriptContent);

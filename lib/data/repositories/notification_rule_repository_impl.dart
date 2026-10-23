@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' show log;
 
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
@@ -88,7 +89,12 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
           ..where(
             (t) => t.accountId.equals(accountId) & t.mailboxPath.isIn(paths),
           )
-          ..orderBy([(t) => OrderingTerm.asc(t.receivedAt)]))
+          // Same-second mail in arrival (UID) order.
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.receivedAt),
+            (t) => OrderingTerm.asc(t.uid),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .get();
     final notified = await (_db.select(_db.notifiedEmails)
           ..where((t) => t.accountId.equals(accountId)))
@@ -104,20 +110,26 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
   Future<void> markNotified(String accountId, List<String> emailIds) async {
     if (emailIds.isEmpty) return;
     final now = DateTime.now();
-    await _db.batch((b) {
-      b.insertAll(
-        _db.notifiedEmails,
-        [
-          for (final id in emailIds)
-            NotifiedEmailsCompanion.insert(
-              accountId: accountId,
-              emailId: id,
-              notifiedAt: now,
-            ),
-        ],
-        mode: InsertMode.insertOrIgnore,
-      );
-    });
+    try {
+      await _db.batch((b) {
+        b.insertAll(
+          _db.notifiedEmails,
+          [
+            for (final id in emailIds)
+              NotifiedEmailsCompanion.insert(
+                accountId: accountId,
+                emailId: id,
+                notifiedAt: now,
+              ),
+          ],
+          mode: InsertMode.insertOrIgnore,
+        );
+      });
+    } catch (e) {
+      // The account was removed meanwhile; its mail needs no marks.
+      if (!isForeignKeyViolation(e)) rethrow;
+      log('notifications: account $accountId removed, marks dropped');
+    }
   }
 
   @override
@@ -156,6 +168,7 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
       to: parse(row.toAddresses),
       cc: parse(row.ccJson),
       replyTo: parse(row.replyToJson),
+      bcc: parse(row.bccJson),
       preview: row.preview,
       isSeen: row.isSeen,
       isFlagged: row.isFlagged,
@@ -168,6 +181,7 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
       snoozedFromMailboxPath: row.snoozedFromMailboxPath,
       listUnsubscribeHeader: row.listUnsubscribeHeader,
       isLocal: row.isLocal,
+      size: row.sizeBytes,
     );
   }
 }

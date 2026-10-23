@@ -49,7 +49,17 @@ abstract class MailboxRepository {
 
   /// Deletes the mailbox with [mailboxPath] under [accountId] on the server
   /// and removes its local cache (emails, threads, sync state).
-  Future<void> deleteMailbox(String accountId, String mailboxPath);
+  ///
+  /// With [removeEmails] the mail it contains is deleted too (mail that is
+  /// also in another JMAP mailbox stays there) — pass it only when the user
+  /// confirmed deleting mail. Without it a folder that is not empty on the
+  /// server is refused, so mail that arrived after a stale "empty" count
+  /// is never deleted silently.
+  Future<void> deleteMailbox(
+    String accountId,
+    String mailboxPath, {
+    bool removeEmails = false,
+  });
 
   /// Moves the mailbox with [mailboxPath] under [accountId] to live under
   /// [newParentDisplayPath] (null for top level). The leaf name is preserved.

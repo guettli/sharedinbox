@@ -34,6 +34,11 @@ class FilterSieveConverter {
         s.skip();
       }
       s.expectChar('}');
+      // The visual editor holds exactly one rule. Anything after it (a second
+      // rule, an `else`) would be lost when the editor re-serialises, so such
+      // a script stays on the Script tab.
+      s.skip();
+      if (!s.isAtEnd) return null;
       final group = switch (node) {
         final FilterGroup g => g,
         final FilterLeaf l =>
@@ -131,7 +136,14 @@ class FilterSieveConverter {
       s.skip();
       final compTag = s.readTaggedArg();
       s.skip();
-      final numStr = s.readDigits();
+      // RFC 5228 §2.4.2.4: a number may carry a K, M or G multiplier.
+      // Keep it in the value ("1M"); [parseFilterSize] reads it the same way.
+      var numStr = s.readDigits();
+      final unit = s.peek()?.toUpperCase();
+      if (unit == 'K' || unit == 'M' || unit == 'G') {
+        s.advance();
+        numStr += unit!;
+      }
       final comp = switch (compTag.toLowerCase()) {
         ':over' => FilterComparison.over,
         ':under' => FilterComparison.under,
@@ -185,18 +197,11 @@ class FilterSieveConverter {
       final flags = _parseStringOrList(s);
       s.skip();
       s.expectChar(';');
-      if (flags.any(
-        (f) => f.toLowerCase() == r'\seen' || f.toLowerCase() == r'\\seen',
-      )) {
-        return MarkAsSeenAction();
-      }
-      if (flags.any(
-        (f) =>
-            f.toLowerCase() == r'\flagged' || f.toLowerCase() == r'\\flagged',
-      )) {
-        return StarMessageAction();
-      }
-      return FlagAction(flags);
+      final action = sieveFlagAction(flags);
+      // The visual editor only offers "Mark as read" and "Star message". Any
+      // other flag list would show as "Keep" and be rewritten on save, so the
+      // script stays on the Script tab.
+      return action is FlagAction ? null : action;
     }
     return null;
   }

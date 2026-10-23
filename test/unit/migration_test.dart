@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
+import 'db_test_helper.dart';
+
 /// Reads all column names for [tableName] from [db].
 Future<List<String>> _tableColumns(AppDatabase db, String tableName) async {
   final rows = await db.customSelect('PRAGMA table_info($tableName)').get();
@@ -14,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 60);
+      expect(db.schemaVersion, 65);
       await db.close();
     });
 
@@ -131,6 +133,12 @@ void main() {
       // v59: Reply-To addresses (#919).
       expect(emailColumns, contains('reply_to_json'));
 
+      // v61: Bcc addresses (#1097).
+      expect(emailColumns, contains('bcc_json'));
+
+      // v64: message size for the Advanced Search size condition.
+      expect(emailColumns, contains('size_bytes'));
+
       // v55: previews poisoned by the mis-parsed partial body fetch (#680) are
       // cleared so getEmailBody's backfill can replace them; real previews are
       // left alone.
@@ -168,6 +176,7 @@ void main() {
       expect(draftColumns, contains('imap_server_id'));
       expect(draftColumns, contains('jmap_server_id')); // v43
       expect(draftColumns, contains('dirty')); // v43
+      expect(draftColumns, contains('bcc_text')); // v65
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
       final allTables = await db
@@ -202,12 +211,12 @@ void main() {
       expect(
         indexNames,
         containsAll([
-          'emails_received_at', // v18
+          'emails_list_order', // v63, replaces v18's emails_received_at
           'emails_thread_id', // v18
           'pending_changes_account_id', // v18
           'emails_snoozed_until', // v22
           'mailboxes_account_id', // v25
-          'threads_latest_date', // v25
+          'threads_list_order', // v63, replaces v25's threads_latest_date
           'emails_server_email_id', // v53
           'emails_account_thread', // v57
         ]),
@@ -283,7 +292,8 @@ void main() {
       });
 
       final fresh = AppDatabase(NativeDatabase(dbFile));
-      await fresh.select(fresh.accounts).get();
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
       await fresh.close();
 
       final rawDb = sqlite.sqlite3.open(dbFile.path);
@@ -321,7 +331,8 @@ void main() {
       });
 
       final fresh = AppDatabase(NativeDatabase(dbFile));
-      await fresh.select(fresh.accounts).get();
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
       await fresh.close();
 
       // A v58 database (no reply_to_json) whose v60 backfill fails after the
@@ -364,8 +375,213 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 60);
+      expect(version.read<int>('user_version'), 65);
       await db.close();
+    });
+
+    test('v60→v61 adds emails.bcc_json, tolerating it already present',
+        () async {
+      final dbFile = File('test_migration_v60_bcc.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      // Owner of the rows below: the v62 step drops rows without one.
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      // A v60 database: no bcc_json yet, one cached mail.
+      var rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('ALTER TABLE emails DROP COLUMN bcc_json;');
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('e1', 'acc-x', 'Sent', 1, 0);
+      ''');
+      rawDb.execute('PRAGMA user_version = 60;');
+      rawDb.close();
+
+      var db = AppDatabase(NativeDatabase(dbFile));
+      final row = await db
+          .customSelect("SELECT bcc_json FROM emails WHERE id = 'e1'")
+          .getSingle();
+      expect(row.read<String>('bcc_json'), '[]');
+      await db.close();
+
+      // An interrupted earlier upgrade can leave the column at v60 already.
+      rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('PRAGMA user_version = 60;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 65);
+      await db.close();
+    });
+
+    test('v63→v64 adds a NULL emails.size_bytes to cached mail', () async {
+      final dbFile = File('test_migration_v63_size.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE emails DROP COLUMN size_bytes;')
+        ..execute(
+          'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)'
+          " VALUES ('e1', 'acc-x', 'INBOX', 1, 0);",
+        )
+        ..execute('PRAGMA user_version = 63;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      // Unknown until a sync or reconcile fills it in.
+      final row = await db
+          .customSelect("SELECT size_bytes FROM emails WHERE id = 'e1'")
+          .getSingle();
+      expect(row.read<int?>('size_bytes'), isNull);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 65);
+      await db.close();
+    });
+
+    test('v64→v65 adds an empty drafts.bcc_text to saved drafts', () async {
+      final dbFile = File('test_migration_v64_bcc_text.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x'); // creates the schema
+      await fresh.close();
+
+      var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE drafts DROP COLUMN bcc_text;')
+        ..execute(
+          "INSERT INTO drafts (id, to_text, updated_at) VALUES (1, 'a@b', 0);",
+        )
+        ..execute('PRAGMA user_version = 64;');
+      rawDb.close();
+
+      var db = AppDatabase(NativeDatabase(dbFile));
+      final row = await db
+          .customSelect('SELECT to_text, bcc_text FROM drafts WHERE id = 1')
+          .getSingle();
+      expect(row.read<String>('to_text'), 'a@b');
+      expect(row.read<String>('bcc_text'), '');
+      await db.close();
+
+      // An interrupted earlier upgrade can leave the column at v64 already.
+      rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('PRAGMA user_version = 64;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 65);
+      await db.close();
+    });
+
+    test(
+        'v62→v63 adds threads.latest_uid from the latest email and the list '
+        'order indexes', () async {
+      final dbFile = File('test_migration_v62_list_order.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      // A v62 database: threads without latest_uid, the old list indexes.
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('DROP INDEX emails_list_order;');
+      rawDb.execute('DROP INDEX threads_list_order;');
+      rawDb.execute('ALTER TABLE threads DROP COLUMN latest_uid;');
+      rawDb.execute(
+        'CREATE INDEX emails_received_at ON emails '
+        '(account_id, mailbox_path, received_at DESC);',
+      );
+      rawDb.execute(
+        'CREATE INDEX threads_latest_date ON threads '
+        '(account_id, mailbox_path, latest_date DESC);',
+      );
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('acc-x:INBOX:7', 'acc-x', 'INBOX', 7, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (id, account_id, mailbox_path, latest_date,
+                             latest_email_id)
+        VALUES ('t1', 'acc-x', 'INBOX', 0, 'acc-x:INBOX:7'),
+               ('t2', 'acc-x', 'INBOX', 0, 'gone');
+      ''');
+      rawDb.execute('PRAGMA user_version = 62;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final rows = await db
+          .customSelect('SELECT id, latest_uid FROM threads ORDER BY id')
+          .get();
+      expect(
+        {for (final r in rows) r.read<String>('id'): r.read<int>('latest_uid')},
+        {'t1': 7, 't2': 0},
+      );
+      final indexes = {
+        for (final r in await db
+            .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .get())
+          r.read<String>('name'),
+      };
+      expect(indexes, containsAll(['emails_list_order', 'threads_list_order']));
+      expect(indexes, isNot(contains('emails_received_at')));
+      expect(indexes, isNot(contains('threads_latest_date')));
+    });
+
+    test('v62→v63 tolerates latest_uid and the list indexes already present',
+        () async {
+      // An interrupted earlier upgrade can leave the v63 schema at v62.
+      final dbFile = File('test_migration_v62_list_order_rerun.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb.execute('''
+        INSERT INTO emails (id, account_id, mailbox_path, uid, received_at)
+        VALUES ('acc-x:INBOX:9', 'acc-x', 'INBOX', 9, 0);
+      ''');
+      rawDb.execute('''
+        INSERT INTO threads (id, account_id, mailbox_path, latest_date,
+                             latest_email_id, latest_uid)
+        VALUES ('t1', 'acc-x', 'INBOX', 0, 'acc-x:INBOX:9', 0);
+      ''');
+      rawDb.execute('PRAGMA user_version = 62;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      final row = await db
+          .customSelect("SELECT latest_uid FROM threads WHERE id = 't1'")
+          .getSingle();
+      expect(row.read<int>('latest_uid'), 9);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 65);
     });
 
     test(
@@ -535,14 +751,15 @@ void main() {
         final draftColumns = await _tableColumns(db, 'drafts');
         expect(draftColumns, contains('imap_server_id'));
 
-        // v25: new indexes on mailboxes and threads.
+        // v25: new indexes on mailboxes and threads (v63 replaces the
+        // threads one with threads_list_order).
         final allIndexes = await db
             .customSelect("SELECT name FROM sqlite_master WHERE type='index'")
             .get();
         final indexNames =
             allIndexes.map((r) => r.read<String>('name')).toSet();
         expect(indexNames, contains('mailboxes_account_id'));
-        expect(indexNames, contains('threads_latest_date'));
+        expect(indexNames, contains('threads_list_order'));
 
         // v26: FTS5 virtual table and triggers.
         final allTriggers = await db
@@ -614,6 +831,9 @@ void main() {
         expect(indexNames, contains('app_logs_account_created_at'));
         expect(indexNames, contains('app_logs_level'));
         expect(indexNames, contains('app_logs_sync_log_id'));
+        expect(indexNames, contains('app_logs_email_id'));
+        // v62: foreign-key child index for bulk sync-log deletes.
+        expect(indexNames, contains('sync_log_mailboxes_sync_log_id'));
 
         await db.close();
         if (dbFile.existsSync()) dbFile.deleteSync();
@@ -877,11 +1097,24 @@ void main() {
 
       final emailColumns = await _tableColumns(db, 'emails');
       expect(emailColumns, contains('list_unsubscribe_header'));
+      expect(emailColumns, contains('size_bytes')); // v64
+      expect(await _tableColumns(db, 'threads'), contains('latest_uid'));
+      final indexes = (await db
+              .customSelect(
+                "SELECT name FROM sqlite_master WHERE type = 'index'",
+              )
+              .get())
+          .map((r) => r.read<String>('name'));
+      expect(
+        indexes,
+        containsAll(['emails_list_order', 'threads_list_order']), // v63
+      );
 
       final draftColumns = await _tableColumns(db, 'drafts');
       expect(draftColumns, contains('imap_server_id'));
       expect(draftColumns, contains('jmap_server_id')); // v43
       expect(draftColumns, contains('dirty')); // v43
+      expect(draftColumns, contains('bcc_text')); // v65
 
       // v30: duration_ms column on sync_log_mailboxes.
       final syncLogMailboxColumns = await _tableColumns(

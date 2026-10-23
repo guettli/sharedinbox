@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/notification_rule.dart';
+import 'package:sharedinbox/core/utils/sender_address.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/filter_builder.dart';
@@ -299,7 +300,7 @@ class _RuleEditorPageState extends State<_RuleEditorPage> {
         title: const Text('Notification rule'),
         actions: [
           TextButton(
-            onPressed: _group.isEmpty
+            onPressed: _group.isEmpty || _group.hasInvalidCondition
                 ? null
                 : () {
                     final name = _nameController.text.trim();
@@ -334,17 +335,4 @@ class _RuleEditorPageState extends State<_RuleEditorPage> {
       ),
     );
   }
-}
-
-/// The bare address in what was typed into "Add sender": `alice@example.com`,
-/// a pasted `Alice <alice@example.com>` or `mailto:alice@example.com`. Null
-/// when it is not an address. The rule compares it with the sender's bare
-/// address (`From is …`), so anything else could never match.
-@visibleForTesting
-String? senderAddress(String input) {
-  final bracketed = RegExp(r'<([^<>]*)>\s*$').firstMatch(input.trim());
-  final address = (bracketed?.group(1) ?? input)
-      .trim()
-      .replaceFirst(RegExp('^mailto:', caseSensitive: false), '');
-  return RegExp(r'^[^\s@<>]+@[^\s@<>]+$').hasMatch(address) ? address : null;
 }

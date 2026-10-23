@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
+import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -69,43 +70,6 @@ class UserPreferencesScreen extends ConsumerWidget {
             const Divider(),
             ListTile(
               title: Text(
-                'Single mail view button position',
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              subtitle: const Text(
-                'Where the back button is shown in the single mail view.',
-              ),
-            ),
-            RadioGroup<MenuPosition>(
-              groupValue: prefs.mailViewButtonPosition,
-              onChanged: (value) {
-                if (value == null) return;
-                unawaited(
-                  ref
-                      .read(userPreferencesRepositoryProvider)
-                      .updateMailViewButtonPosition(value),
-                );
-              },
-              child: const Column(
-                children: [
-                  RadioListTile<MenuPosition>(
-                    title: Text('Bottom (default)'),
-                    subtitle: Text(
-                      'Show the back button at the bottom of the screen.',
-                    ),
-                    value: MenuPosition.bottom,
-                  ),
-                  RadioListTile<MenuPosition>(
-                    title: Text('Top'),
-                    subtitle: Text('Show the back button in the top bar.'),
-                    value: MenuPosition.top,
-                  ),
-                ],
-              ),
-            ),
-            const Divider(),
-            ListTile(
-              title: Text(
                 'After mail action',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
@@ -144,8 +108,12 @@ class UserPreferencesScreen extends ConsumerWidget {
                 'Offline email cache',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
-              subtitle: const Text(
-                'Pre-fetch email bodies in the background so they are available offline.',
+              subtitle: Text(
+                needsInProcessBodyPrefetch
+                    ? 'Pre-fetch email bodies while the app is running so they '
+                        'are available offline. On desktop every network '
+                        'connection counts as Wi-Fi (unmetered).'
+                    : 'Pre-fetch email bodies in the background so they are available offline.',
               ),
             ),
             RadioGroup<PrefetchMode>(

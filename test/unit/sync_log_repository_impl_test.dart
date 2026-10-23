@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
-import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 
 import 'db_test_helper.dart';
@@ -11,19 +10,7 @@ void main() {
   late final db = openTestDatabase();
 
   setUpAll(() async {
-    await db.into(db.accounts).insert(
-          AccountsCompanion.insert(
-            id: 'acc1',
-            displayName: 'Test',
-            email: 'test@example.com',
-            imapHost: 'imap.example.com',
-            imapPort: 993,
-            imapSsl: true,
-            smtpHost: 'smtp.example.com',
-            smtpPort: 587,
-            smtpSsl: true,
-          ),
-        );
+    await seedAccountRow(db, 'acc1');
   });
 
   tearDownAll(() => db.close());
@@ -229,4 +216,23 @@ void main() {
       expect(entry.errorMessage, 'MissingPluginException');
     },
   );
+
+  test('a log for an account removed meanwhile is dropped', () async {
+    final repo = SyncLogRepositoryImpl(db);
+    final id = await repo.log(
+      accountId: 'removed',
+      success: true,
+      protocol: 'imap',
+      emailsFetched: 0,
+      emailsSkipped: 0,
+      mailboxesSynced: 0,
+      pendingFlushed: 0,
+      bytesTransferred: 0,
+      startedAt: DateTime(2024),
+      finishedAt: DateTime(2024),
+    );
+
+    expect(id, 0);
+    expect(await repo.observeSyncLogs('removed').first, isEmpty);
+  });
 }

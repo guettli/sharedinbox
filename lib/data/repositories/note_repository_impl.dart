@@ -112,21 +112,7 @@ class NoteRepositoryImpl implements NoteRepository {
         selected = await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
         if (isImapMailboxNotFound(e)) {
-          // Notes folder doesn't exist yet — clear any stale checkpoint and
-          // drop orphaned local notes so the local cache mirrors reality.
-          final wiped = await _clearNotesForAccount(
-            account.id,
-            'note.sync.folder_missing_wipe',
-          );
-          await _clearNotesCheckpoint(account.id);
-          unawaited(
-            _appLogger?.info(
-              'note.sync.completed',
-              'Note sync: Notes folder not found, cleared local cache',
-              accountId: account.id,
-              data: {'transport': 'imap', 'wiped': wiped},
-            ),
-          );
+          await _handleNotesFolderMissing(account.id, 'imap');
           return;
         }
         rethrow;
@@ -213,11 +199,15 @@ class NoteRepositoryImpl implements NoteRepository {
       final pruned =
           await _pruneNotesForAccountByServerId(account.id, serverUidStrings);
 
-      final maxUid = serverUids.isEmpty ? lastUid : serverUids.reduce(math.max);
+      // Only past what was fetched: a note appended after the search above is
+      // already in [serverUids] and would otherwise never be fetched.
+      final maxUid = trulyNew.fold(lastUid, math.max);
       await _saveNotesCheckpoint(account.id, {
         'uidValidity': uidValidity,
         'lastUid': maxUid,
       });
+      // Runs every sync cycle — only log when something changed.
+      if (fetched == 0 && pruned == 0) return;
       unawaited(
         _appLogger?.info(
           'note.sync.completed',
@@ -233,6 +223,34 @@ class NoteRepositoryImpl implements NoteRepository {
     } finally {
       await client.logout();
     }
+  }
+
+  /// The Notes folder doesn't exist (yet) — the default on most servers.
+  /// Clears any stale checkpoint and drops orphaned local notes so the local
+  /// cache mirrors reality. This runs on every sync cycle, and every App Log
+  /// row is persisted, so it logs only when something was actually cleared.
+  Future<void> _handleNotesFolderMissing(
+    String accountId,
+    String transport,
+  ) async {
+    final wiped = await _clearNotesForAccount(
+      accountId,
+      'note.sync.folder_missing_wipe',
+    );
+    final checkpointCleared = await _clearNotesCheckpoint(accountId) > 0;
+    if (wiped == 0 && !checkpointCleared) return;
+    unawaited(
+      _appLogger?.info(
+        'note.sync.completed',
+        'Note sync: Notes folder not found, cleared local cache',
+        accountId: accountId,
+        data: {
+          'transport': transport,
+          'wiped': wiped,
+          'checkpointCleared': checkpointCleared,
+        },
+      ),
+    );
   }
 
   Future<void> _syncAllNotesJmap(
@@ -251,19 +269,7 @@ class NoteRepositoryImpl implements NoteRepository {
 
     final mailboxId = await _findNotesMailboxJmap(jmap);
     if (mailboxId == null) {
-      final wiped = await _clearNotesForAccount(
-        account.id,
-        'note.sync.folder_missing_wipe',
-      );
-      await _clearNotesCheckpoint(account.id);
-      unawaited(
-        _appLogger?.info(
-          'note.sync.completed',
-          'Note sync: Notes mailbox not found, cleared local cache',
-          accountId: account.id,
-          data: {'transport': 'jmap', 'wiped': wiped},
-        ),
-      );
+      await _handleNotesFolderMissing(account.id, 'jmap');
       return;
     }
 
@@ -484,6 +490,8 @@ class NoteRepositoryImpl implements NoteRepository {
       'queryState': newQueryState,
       'emailState': newEmailState,
     });
+    // Runs every sync cycle — only log when something changed.
+    if (toFetch.isEmpty && toRemove.isEmpty) return;
     unawaited(
       _appLogger?.info(
         'note.sync.completed',
@@ -1036,8 +1044,9 @@ class NoteRepositoryImpl implements NoteRepository {
         );
   }
 
-  Future<void> _clearNotesCheckpoint(String accountId) async {
-    await (_db.delete(_db.syncStates)
+  /// Deletes the notes checkpoint; returns the number of rows removed.
+  Future<int> _clearNotesCheckpoint(String accountId) async {
+    return (_db.delete(_db.syncStates)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &

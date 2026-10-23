@@ -22,6 +22,9 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/jmap/jmap_client.dart';
+
+import 'localhost_mapping_client.dart';
 
 /// Default size of the user pool defined in stalwart-dev/config.toml.
 /// Keep in sync with the number of aliceN/bobN principals seeded there.
@@ -151,6 +154,19 @@ Future<ImapClient> connectImap({
   await client.login(user.email, user.password);
   return client;
 }
+
+/// JMAP client for [user] against the local dev Stalwart, for tests that
+/// need to arrange or inspect server state the repositories don't expose.
+Future<JmapClient> connectJmap({
+  required StalwartEnv env,
+  required StalwartTestUser user,
+}) =>
+    JmapClient.connect(
+      httpClient: LocalhostMappingClient(),
+      jmapUrl: Uri.parse('${env.stalwartUrl}/.well-known/jmap'),
+      username: user.email,
+      password: user.password,
+    );
 
 /// Deletes every message in [mailboxPath], swallowing the error if the
 /// folder doesn't exist yet (e.g. Trash created lazily on first move).

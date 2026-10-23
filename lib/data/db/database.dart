@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:developer' show log;
 import 'dart:io';
+import 'dart:math' show min;
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -106,6 +108,12 @@ class Emails extends Table {
   TextColumn get ccJson => text().withDefault(const Constant('[]'))();
   // Added in schema v59: RFC 5322 Reply-To addresses (#919).
   TextColumn get replyToJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v61: Bcc addresses, known for mail you sent (#1097).
+  TextColumn get bccJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v64: the message size in bytes (IMAP RFC822.SIZE, JMAP
+  // Email `size`), for the Advanced Search size condition. Null for rows
+  // cached before v64 until a sync or reconcile pass fills it in.
+  IntColumn get sizeBytes => integer().nullable()();
   TextColumn get preview => text().nullable()();
   BoolColumn get isSeen => boolean().withDefault(const Constant(false))();
   BoolColumn get isFlagged => boolean().withDefault(const Constant(false))();
@@ -201,6 +209,10 @@ class Threads extends Table {
   TextColumn get preview => text().nullable()();
   TextColumn get latestEmailId => text()();
   TextColumn get emailIdsJson => text().withDefault(const Constant('[]'))();
+  // Added in schema v63: IMAP UID of [latestEmailId], the tiebreaker for
+  // threads whose latest message is from the same second (0 for JMAP and
+  // local rows).
+  IntColumn get latestUid => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {accountId, mailboxPath, id};
@@ -216,8 +228,8 @@ class PendingChanges extends Table {
       text().references(Accounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get resourceType => text()();
   TextColumn get resourceId => text()();
-  // "flag_seen" | "flag_flagged" | "move" | "delete" | "snooze"
-  //   | "unsnooze"
+  // "flag_seen" | "flag_flagged" | "add_keywords" | "move" | "delete"
+  //   | "snooze" | "unsnooze" | "clear_snooze" (strip `snz:` keywords only)
   TextColumn get changeType => text()();
   // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
   TextColumn get payload => text()();
@@ -314,6 +326,8 @@ class Drafts extends Table {
   TextColumn get replyToEmailId => text().nullable()();
   TextColumn get toText => text().withDefault(const Constant(''))();
   TextColumn get ccText => text().withDefault(const Constant(''))();
+  // Added in schema v65: Bcc recipients typed in compose (#1126).
+  TextColumn get bccText => text().withDefault(const Constant(''))();
   TextColumn get subjectText => text().withDefault(const Constant(''))();
   TextColumn get bodyText => text().withDefault(const Constant(''))();
   DateTimeColumn get updatedAt => dateTime()();
@@ -562,7 +576,10 @@ class UserPreferences extends Table {
   IntColumn get id => integer()();
   // 'bottom' (default) | 'top'
   TextColumn get menuPosition => text().withDefault(const Constant('bottom'))();
-  // Added in schema v35: 'bottom' (default) | 'top'
+  // Added in schema v35: 'bottom' (default) | 'top'.
+  // Unused since #1093 (the preference was removed); the column is kept to
+  // avoid a migration. Nothing in the app reads or writes it (only the v35
+  // migration still adds it).
   TextColumn get mailViewButtonPosition =>
       text().withDefault(const Constant('bottom'))();
   // Added in schema v36: 'nextMessage' (default) | 'showMailbox'
@@ -742,6 +759,45 @@ class AppDatabase extends _$AppDatabase {
       'CREATE INDEX IF NOT EXISTS app_logs_sync_log_id '
       'ON app_logs (sync_log_id);',
     );
+    // With foreign keys on, deleting an email sets app_logs.email_id to
+    // null, which without this index scans the whole log for every email.
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS app_logs_email_id '
+      'ON app_logs (email_id);',
+    );
+  }
+
+  /// Indexes for foreign keys whose parent rows are deleted in bulk. With
+  /// foreign keys on, each deleted parent looks up its children; without
+  /// an index that is a full scan per parent (removing an account deletes
+  /// all its sync logs). Other bulk-deleted parents are covered by primary
+  /// keys (email_bodies, attachment_files) and the app_logs indexes.
+  Future<void> _createForeignKeyIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS sync_log_mailboxes_sync_log_id '
+      'ON sync_log_mailboxes (sync_log_id);',
+    );
+  }
+
+  /// Indexes that hand the mail list and the thread list their rows already
+  /// in display order, so a `LIMIT 50` page reads 50 index entries instead
+  /// of sorting the whole folder. They cover the full `ORDER BY`, tiebreakers
+  /// included: mail from the same second sorts by UID, newest arrival first
+  /// (see `EmailRepositoryImpl.observeEmails` / `observeThreads`). They
+  /// replace `emails_received_at` and `threads_latest_date`, which only the
+  /// v18/v25 upgrades created — fresh installs had no list index at all.
+  Future<void> _createListOrderIndexes() async {
+    await customStatement('DROP INDEX IF EXISTS emails_received_at;');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS emails_list_order ON emails '
+      '(account_id, mailbox_path, received_at DESC, uid DESC, id DESC);',
+    );
+    await customStatement('DROP INDEX IF EXISTS threads_latest_date;');
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS threads_list_order ON threads '
+      '(account_id, mailbox_path, is_flagged DESC, latest_date DESC, '
+      'latest_uid DESC, id DESC);',
+    );
   }
 
   @override
@@ -752,9 +808,166 @@ class AppDatabase extends _$AppDatabase {
           await _createEmailNotesFts();
           await _createEmailBodyFts();
           await _createAppLogsIndexes();
+          await _createForeignKeyIndexes();
+          await _createListOrderIndexes();
         },
         onUpgrade: _upgradeAtomically,
+        // Drift runs this after onCreate/onUpgrade, so the upgrade steps
+        // (some rebuild or re-key tables) run with SQLite's default of
+        // foreign keys off and cannot cascade. The pragma is a no-op inside
+        // a transaction, so it must run here, outside one, on every open:
+        // it is per connection, and the WorkManager isolate opens its own.
+        beforeOpen: (_) => customStatement('PRAGMA foreign_keys = ON'),
       );
+
+  static const _missingAccount = 'account_id NOT IN (SELECT id FROM accounts)';
+
+  // Email ids start with "<accountId>:" (account ids never contain ':').
+  // Matching by prefix also catches bodies a resync left without their
+  // email row.
+  static const _emailOfMissingAccount =
+      "substr(email_id, 1, instr(email_id, ':') - 1) "
+      'NOT IN (SELECT id FROM accounts)';
+
+  /// Deletes the rows that the `onDelete: cascade` (and `setNull`)
+  /// references of the schema would remove for accounts that no longer
+  /// exist, and returns the ids of those accounts. Builds before schema v62
+  /// switched foreign keys on only after a resync, so deleting an account
+  /// usually left all its mail, mailboxes and threads behind; with foreign
+  /// keys on, the cascades already did most of this. Drafts are kept for
+  /// their text but detached: their server ids belong to the gone account's
+  /// server.
+  /// Run it inside a transaction.
+  Future<Set<String>> deleteRowsOfMissingAccounts() async {
+    final gone = <String>{
+      for (final row in await customSelect(
+        'SELECT DISTINCT account_id FROM mailboxes WHERE $_missingAccount '
+        'UNION SELECT DISTINCT account_id FROM emails WHERE $_missingAccount',
+      ).get())
+        row.read<String>('account_id'),
+    };
+    Future<void> run(
+      String sql,
+      Set<TableInfo> tables, {
+      UpdateKind kind = UpdateKind.delete,
+    }) =>
+        customUpdate(sql, updates: tables, updateKind: kind);
+
+    await run(
+      'DELETE FROM email_bodies WHERE $_emailOfMissingAccount',
+      {emailBodies},
+    );
+    await run(
+      'DELETE FROM attachment_files WHERE $_emailOfMissingAccount',
+      {attachmentFiles},
+    );
+    await run(
+      'DELETE FROM sync_log_mailboxes WHERE sync_log_id IN '
+      '(SELECT id FROM sync_logs WHERE $_missingAccount)',
+      {syncLogMailboxes},
+    );
+    await run(
+      'UPDATE app_logs SET email_id = NULL '
+      'WHERE email_id IS NOT NULL AND $_emailOfMissingAccount',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE app_logs SET sync_log_id = NULL WHERE sync_log_id IN '
+      '(SELECT id FROM sync_logs WHERE $_missingAccount)',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE app_logs SET account_id = NULL '
+      'WHERE account_id IS NOT NULL AND $_missingAccount',
+      {appLogs},
+      kind: UpdateKind.update,
+    );
+    await run(
+      'UPDATE drafts SET account_id = NULL, imap_server_id = NULL, '
+      'jmap_server_id = NULL, dirty = 1 '
+      'WHERE account_id IS NOT NULL AND $_missingAccount',
+      {drafts},
+      kind: UpdateKind.update,
+    );
+    for (final table in <TableInfo>[
+      emails,
+      threads,
+      mailboxes,
+      pendingChanges,
+      syncStates,
+      syncLogs,
+      syncHealth,
+      draftTombstones,
+      localSieveScripts,
+      localSieveApplied,
+      undoActions,
+      notificationRules,
+      notifiedEmails,
+      emailNotes,
+      outbox,
+    ]) {
+      await run(
+        'DELETE FROM ${table.actualTableName} WHERE $_missingAccount',
+        {table},
+      );
+    }
+    return gone;
+  }
+
+  /// Removes every row that breaks a declared foreign key, as reported by
+  /// `PRAGMA foreign_key_check`: a reference with `onDelete: setNull` is set
+  /// to null, any other row is deleted. Repeats until the check is clean,
+  /// because a deleted row (an email of a gone account) can leave rows that
+  /// pointed at it (its body) behind. Returns the number of rows changed.
+  ///
+  /// Builds before schema v62 never switched foreign keys on outside a
+  /// resync, so their databases can hold such rows; with foreign keys on,
+  /// rewriting one of them would fail. Only looks at tables that exist, so
+  /// it is safe on any schema. Run it with foreign keys off (the upgrade
+  /// transaction): otherwise deleting a row would cascade.
+  Future<int> deleteForeignKeyOrphans() async {
+    var changed = 0;
+    while (true) {
+      final violations = await customSelect('PRAGMA foreign_key_check').get();
+      final rowIds = <(String, int), List<int>>{};
+      for (final v in violations) {
+        final rowId = v.data['rowid'];
+        if (rowId is! int) continue; // WITHOUT ROWID tables: none here.
+        final key = (v.read<String>('table'), v.read<int>('fkid'));
+        (rowIds[key] ??= []).add(rowId);
+      }
+      if (rowIds.isEmpty) return changed;
+      var changedThisRound = 0;
+      for (final MapEntry(key: (table, fkId), value: ids) in rowIds.entries) {
+        final fk = await customSelect(
+          'SELECT "from", on_delete FROM pragma_foreign_key_list(?) '
+          'WHERE id = ?',
+          variables: [Variable.withString(table), Variable.withInt(fkId)],
+        ).getSingle();
+        final column = fk.read<String>('from');
+        final setNull = fk.read<String>('on_delete') == 'SET NULL';
+        for (var i = 0; i < ids.length; i += 500) {
+          final chunk = ids.sublist(i, min(i + 500, ids.length)).join(',');
+          final where = 'WHERE rowid IN ($chunk)';
+          changedThisRound += await customUpdate(
+            setNull
+                ? 'UPDATE "$table" SET "$column" = NULL $where'
+                : 'DELETE FROM "$table" $where',
+            updateKind: setNull ? UpdateKind.update : UpdateKind.delete,
+          );
+        }
+      }
+      changed += changedThisRound;
+      if (changedThisRound == 0) {
+        // Cannot happen with this schema; never spin. Writes touching the
+        // rows left would still fail, but the app opens.
+        log('foreign keys: ${violations.length} violations left unresolved');
+        return changed;
+      }
+    }
+  }
 
   /// Runs every upgrade step and the user_version bump as one write
   /// transaction. Drift runs migrations without one, so an upgrade that was
@@ -1366,6 +1579,41 @@ class AppDatabase extends _$AppDatabase {
           )
       ''');
     }
+    if (from < 61 && await _tableExists(this, 'emails')) {
+      // Bcc addresses of sent mail, shown in the detail header (#1097).
+      await _addColumnIfMissing(m, emails, emails.bccJson);
+    }
+    if (from < 62) {
+      // Foreign keys are on from v62 (#1119). Clear the rows that older
+      // builds left breaking them first, with foreign keys still off.
+      if (await _tableExists(this, 'app_logs')) await _createAppLogsIndexes();
+      if (await _tableExists(this, 'sync_log_mailboxes')) {
+        await _createForeignKeyIndexes();
+      }
+      await deleteForeignKeyOrphans();
+    }
+    if (from < 63 &&
+        await _tableExists(this, 'threads') &&
+        await _tableExists(this, 'emails')) {
+      // Same-second mail sorts newest arrival first (by UID).
+      await _addColumnIfMissing(m, threads, threads.latestUid);
+      await customStatement('''
+        UPDATE threads SET latest_uid = COALESCE(
+          (SELECT e.uid FROM emails e WHERE e.id = threads.latest_email_id),
+          0)
+      ''');
+      await _createListOrderIndexes();
+    }
+    if (from < 64 && await _tableExists(this, 'emails')) {
+      // Message size for the Advanced Search size condition. Existing rows
+      // stay NULL (unknown, never matches a size condition) until the
+      // periodic IMAP/JMAP reconcile backfills them.
+      await _addColumnIfMissing(m, emails, emails.sizeBytes);
+    }
+    if (from < 65 && await _tableExists(this, 'drafts')) {
+      // Bcc recipients of a saved draft (#1126).
+      await _addColumnIfMissing(m, drafts, drafts.bccText);
+    }
   }
 
   /// Inserts a row for [gitHash] the first time that version is seen.
@@ -1666,6 +1914,13 @@ Future<String> resolveDatabasePathForTesting() => _resolveDatabasePath();
 void resetDatabasePathForTesting() => _dbPath = null;
 void setDatabasePathForTesting(String path) => _dbPath = path;
 Future<String?> androidFallbackPathForTesting() => _androidFallbackPath();
+
+/// True when [error] is SQLite refusing a write that would break a foreign
+/// key (`SQLITE_CONSTRAINT_FOREIGNKEY`), e.g. a row for an email or account
+/// that was deleted meanwhile. Matches on the message, so it also holds for
+/// the copy a background-isolate connection rethrows.
+bool isForeignKeyViolation(Object error) =>
+    error.toString().contains('FOREIGN KEY constraint failed');
 
 /// Configures PRAGMAs on a newly opened SQLite connection.
 ///

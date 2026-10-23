@@ -13,6 +13,9 @@ class Email {
   // RFC 5322 Reply-To addresses; empty when the header is absent. Replies go
   // here instead of [from] when set (#919).
   final List<EmailAddress> replyTo;
+  // Bcc addresses; empty when the message carries none, which is usual for
+  // received mail. Typically set on copies of mail you sent (#1097).
+  final List<EmailAddress> bcc;
   final String? preview;
   final bool isSeen;
   final bool isFlagged;
@@ -30,6 +33,10 @@ class Email {
   // own accounts. It appears in the inbox immediately for note-taking and is
   // dissolved into the real message once it arrives via sync (see #545).
   final bool isLocal;
+  // The message size in bytes as the server reports it (IMAP RFC822.SIZE,
+  // JMAP `size`); null when not known yet, e.g. mail cached before it was
+  // stored or a local virtual copy.
+  final int? size;
 
   /// When the mail was written (its Date header), or when it arrived if it
   /// has no Date header, so a date can always be shown.
@@ -47,6 +54,7 @@ class Email {
     required this.to,
     required this.cc,
     this.replyTo = const [],
+    this.bcc = const [],
     this.preview,
     required this.isSeen,
     required this.isFlagged,
@@ -59,6 +67,7 @@ class Email {
     this.snoozedFromMailboxPath,
     this.listUnsubscribeHeader,
     this.isLocal = false,
+    this.size,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -84,6 +93,9 @@ class Email {
       replyTo: (json['replyTo'] as List<dynamic>? ?? const [])
           .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
           .toList(),
+      bcc: (json['bcc'] as List<dynamic>? ?? const [])
+          .map((e) => EmailAddress.fromJson(e as Map<String, dynamic>))
+          .toList(),
       preview: json['preview'] as String?,
       isSeen: json['isSeen'] as bool,
       isFlagged: json['isFlagged'] as bool,
@@ -98,6 +110,7 @@ class Email {
       snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
       listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
       isLocal: (json['isLocal'] as bool?) ?? false,
+      size: json['size'] as int?,
     );
   }
 
@@ -114,6 +127,7 @@ class Email {
       'to': to.map((e) => e.toJson()).toList(),
       'cc': cc.map((e) => e.toJson()).toList(),
       'replyTo': replyTo.map((e) => e.toJson()).toList(),
+      'bcc': bcc.map((e) => e.toJson()).toList(),
       'preview': preview,
       'isSeen': isSeen,
       'isFlagged': isFlagged,
@@ -126,6 +140,7 @@ class Email {
       'snoozedFromMailboxPath': snoozedFromMailboxPath,
       'listUnsubscribeHeader': listUnsubscribeHeader,
       'isLocal': isLocal,
+      'size': size,
     };
   }
 
@@ -141,6 +156,7 @@ class Email {
     List<EmailAddress>? to,
     List<EmailAddress>? cc,
     List<EmailAddress>? replyTo,
+    List<EmailAddress>? bcc,
     String? preview,
     bool? isSeen,
     bool? isFlagged,
@@ -153,6 +169,7 @@ class Email {
     String? snoozedFromMailboxPath,
     String? listUnsubscribeHeader,
     bool? isLocal,
+    int? size,
   }) {
     return Email(
       id: id ?? this.id,
@@ -166,6 +183,7 @@ class Email {
       to: to ?? this.to,
       cc: cc ?? this.cc,
       replyTo: replyTo ?? this.replyTo,
+      bcc: bcc ?? this.bcc,
       preview: preview ?? this.preview,
       isSeen: isSeen ?? this.isSeen,
       isFlagged: isFlagged ?? this.isFlagged,
@@ -180,6 +198,7 @@ class Email {
       listUnsubscribeHeader:
           listUnsubscribeHeader ?? this.listUnsubscribeHeader,
       isLocal: isLocal ?? this.isLocal,
+      size: size ?? this.size,
     );
   }
 }
@@ -380,6 +399,12 @@ class EmailDraft {
   final EmailAddress from;
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
+
+  /// Blind-copy recipients: they get the message (SMTP `RCPT TO`, JMAP
+  /// `EmailSubmission` envelope) but the transmitted message carries no
+  /// `Bcc:` header, so nobody sees them. Only the sender's own copies (Sent,
+  /// the server draft) keep the header (#1126).
+  final List<EmailAddress> bcc;
   final String subject;
   final String body;
 
@@ -388,8 +413,9 @@ class EmailDraft {
 
   /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
   /// message. When null, the mail library generates one at send time. Set
-  /// explicitly for self-sends so the immediately-created local message and
-  /// the real message that arrives later share the same id (see #545).
+  /// explicitly for queued sends so a self-send's local inbox note (created
+  /// once the server accepted the message) and the real message that arrives
+  /// later share the same id (see #545).
   final String? messageId;
 
   /// For a reply: the parent's Message-ID and the References chain to send
@@ -399,10 +425,22 @@ class EmailDraft {
   final String? inReplyTo;
   final List<String> references;
 
+  /// Every envelope recipient: To, Cc and Bcc, each address once (compared
+  /// case-insensitively), so one listed in both To and Bcc is not sent
+  /// twice.
+  List<EmailAddress> get allRecipients {
+    final seen = <String>{};
+    return [
+      for (final a in [...to, ...cc, ...bcc])
+        if (seen.add(a.email.trim().toLowerCase())) a,
+    ];
+  }
+
   const EmailDraft({
     required this.from,
     required this.to,
     required this.cc,
+    this.bcc = const [],
     required this.subject,
     required this.body,
     this.attachmentFilePaths = const [],
@@ -415,6 +453,7 @@ class EmailDraft {
         from: from,
         to: to,
         cc: cc,
+        bcc: bcc,
         subject: subject,
         body: body,
         attachmentFilePaths: attachmentFilePaths,
@@ -446,6 +485,33 @@ class SyncEmailsResult {
         skipped: skipped + other.skipped,
         bytesTransferred: bytesTransferred + other.bytesTransferred,
       );
+}
+
+/// The mailbox state an IMAP SELECT reported: the next UID to be assigned,
+/// the message count (EXISTS) and, with CONDSTORE, the HIGHESTMODSEQ. Any of
+/// them is null when the server did not report it.
+///
+/// The sync stores what it saw when it selected a mailbox; the IDLE wait
+/// compares it with its own SELECT to catch changes made in between, which
+/// IDLE itself never reports.
+class ImapMailboxState {
+  const ImapMailboxState({this.uidNext, this.exists, this.highestModSeq});
+
+  final int? uidNext;
+  final int? exists;
+  final int? highestModSeq;
+
+  /// Whether [other] reports a different value for any field both know.
+  bool differsFrom(ImapMailboxState other) {
+    bool differs(int? a, int? b) => a != null && b != null && a != b;
+    return differs(uidNext, other.uidNext) ||
+        differs(exists, other.exists) ||
+        differs(highestModSeq, other.highestModSeq);
+  }
+
+  @override
+  String toString() => 'ImapMailboxState(uidNext: $uidNext, '
+      'exists: $exists, highestModSeq: $highestModSeq)';
 }
 
 class ReliabilityResult {
@@ -644,4 +710,28 @@ class MailboxDiagnostics {
     }
     return out;
   }
+}
+
+/// Newest-first list order: by [Email.receivedAt], and mail from the same
+/// second (bulk mail, mailing lists, scripts) by UID, the IMAP arrival order,
+/// so the newest arrival comes first. [Email.id] makes the order total for
+/// rows with equal UIDs (JMAP and local rows have UID 0). The same key as the
+/// repository's SQL list queries. UIDs are only comparable within one folder:
+/// for results spanning folders or accounts the tiebreak just makes the order
+/// deterministic.
+int compareNewestFirst(Email a, Email b) {
+  final byDate = b.receivedAt.compareTo(a.receivedAt);
+  if (byDate != 0) return byDate;
+  final byUid = b.uid.compareTo(a.uid);
+  if (byUid != 0) return byUid;
+  return b.id.compareTo(a.id);
+}
+
+/// The order of every mail list and search: flagged first, then
+/// [compareNewestFirst]. The same key as the repository's
+/// `_emailListOrderSql`, so lists merged from several SQL queries (each
+/// sorted and limited by that key) keep a stable prefix when paged.
+int compareFlaggedThenNewest(Email a, Email b) {
+  if (a.isFlagged != b.isFlagged) return a.isFlagged ? -1 : 1;
+  return compareNewestFirst(a, b);
 }
