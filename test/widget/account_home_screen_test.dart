@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 
 import 'helpers.dart';
@@ -15,6 +16,7 @@ Future<void> _pumpAccountHome(
   WidgetTester tester,
   List<Mailbox> mailboxes, {
   AccountRepository? accounts,
+  SyncHealthRow? syncHealth,
 }) async {
   await tester.pumpWidget(
     buildApp(
@@ -23,6 +25,7 @@ Future<void> _pumpAccountHome(
         accounts: [kTestAccount],
         mailboxes: mailboxes,
         accountRepository: accounts,
+        syncHealth: syncHealth,
       ),
     ),
   );
@@ -136,6 +139,77 @@ void main() {
       expect(find.textContaining('No inbox found yet'), findsOneWidget);
       // Fell back to the folder list screen.
       expect(find.text('Folders'), findsWidgets);
+    });
+
+    testWidgets('Verify sync health reports the result in a snackbar', (
+      tester,
+    ) async {
+      await _pumpAccountHome(tester, [_inbox]);
+
+      await tester.tap(find.text('Verify sync health'));
+      // runAsync: the probe writes to and reads from the (real, in-memory)
+      // database, which needs real async I/O.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 500)),
+      );
+      await tester.pumpAndSettle();
+
+      // It used to only say "Starting sync verification..." and never
+      // report the outcome on this screen.
+      expect(
+        find.descendant(
+          of: find.byType(SnackBar),
+          matching: find.text('Sync health: Healthy'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Verify sync health tile shows the current status', (
+      tester,
+    ) async {
+      await _pumpAccountHome(
+        tester,
+        [_inbox],
+        syncHealth: SyncHealthRow(
+          accountId: 'acc-1',
+          lastVerifiedAt: DateTime(2024, 6),
+          isHealthy: true,
+        ),
+      );
+
+      final tile = find.widgetWithText(ListTile, 'Verify sync health');
+      expect(
+        find.descendant(of: tile, matching: find.textContaining('Healthy')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Verify sync health result replaces an unrelated snackbar', (
+      tester,
+    ) async {
+      await _pumpAccountHome(tester, [_inbox]);
+      ScaffoldMessenger.of(tester.element(find.text('Verify sync health')))
+          .showSnackBar(
+        const SnackBar(
+          content: Text('Unrelated message'),
+          duration: Duration(minutes: 1),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Verify sync health'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 500)),
+      );
+      await tester.pumpAndSettle();
+
+      // The progress snack used to queue behind the unrelated one; hiding
+      // "the current" snack then hid the wrong one and the progress snack
+      // stayed up forever, with the result stuck behind it.
+      expect(find.text('Sync health: Healthy'), findsOneWidget);
+      expect(find.text('Verifying sync health...'), findsNothing);
+      expect(find.text('Unrelated message'), findsNothing);
     });
   });
 }

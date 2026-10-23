@@ -1,12 +1,13 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/sync_health_status.dart';
 
 /// All per-account actions surfaced from the long-press menu on
 /// [AccountListScreen] and from the account home screen. Kept in one place so
@@ -46,13 +47,39 @@ Future<void> runAccountAction(
       await context.push('/accounts/${account.id}/sync-log');
       break;
     case AccountAction.verifySync:
-      unawaited(ref.read(reliabilityRunnerProvider).checkNow());
-      if (context.mounted) {
-        context.showAppSnackBar(
-          'Starting sync verification...',
-          duration: const Duration(seconds: 5),
+      // Captured before the await: the probe can outlive this screen.
+      // Cleared first so the progress snack is the current one (not queued
+      // behind an unrelated snack) and closing it below closes the right one.
+      final messenger = context.appMessenger()..clearAll();
+      final progress = messenger.show(
+        'Verifying sync health...',
+        // Backstop only: closed in the finally below once the check returns.
+        duration: const Duration(minutes: 2),
+      );
+      String message;
+      AppLogLevel level;
+      try {
+        final health = await ref
+            .read(reliabilityRunnerProvider)
+            .checkAccountNow(account.id);
+        message = syncHealthResultMessage(
+          isHealthy: health?.isHealthy,
+          lastError: health?.lastError,
+          discrepancySummary: health?.discrepancySummary,
         );
+        level = health?.isHealthy == true ? AppLogLevel.info : AppLogLevel.warn;
+      } catch (e) {
+        message = 'Sync check failed: ${userErrorMessage(e)}';
+        level = AppLogLevel.warn;
+      } finally {
+        progress.close();
       }
+      messenger.show(
+        message,
+        level: level,
+        accountId: account.id,
+        duration: const Duration(seconds: 6),
+      );
       break;
     case AccountAction.forceSync:
       final confirmed = await showDialog<bool>(

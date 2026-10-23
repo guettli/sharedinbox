@@ -11,6 +11,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_actions.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
+import 'package:sharedinbox/ui/widgets/sync_health_status.dart';
 
 /// Landing page for a single account, reachable from the unified burger menu
 /// or by tapping an account row in the drawer. Hosts the same per-account
@@ -131,6 +132,7 @@ class _AccountHomeBody extends ConsumerWidget {
         ListTile(
           leading: const Icon(Icons.verified),
           title: const Text('Verify sync health'),
+          subtitle: SyncHealthStatus(accountId: account.id),
           onTap: () =>
               runAccountAction(context, ref, account, AccountAction.verifySync),
         ),
