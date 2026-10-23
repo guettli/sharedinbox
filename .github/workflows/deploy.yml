@@ -80,6 +80,9 @@ jobs:
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.android == 'true'
+    # Record app size commits one row to metrics/android-app-size.tsv.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v5
@@ -128,6 +131,16 @@ jobs:
         run: |
           dagger call --progress=plain -q -m ci --source=. verify-play-store-deploy \
             --play-store-config env:PLAY_STORE_CONFIG_JSON
+
+      # Append one row (date, git hash, delivered size + per-component breakdown)
+      # to metrics/android-app-size.tsv and commit it with [skip ci]. Best-effort
+      # and continue-on-error: recording a size must never fail a real deploy, and
+      # a lost push race is re-recorded on the next build. See metrics/README.md.
+      - name: Record app size
+        continue-on-error: true
+        env:
+          DAGGER_NO_NAG: "1"
+        run: scripts/record_android_size.sh
 
 
   deploy-apk:
