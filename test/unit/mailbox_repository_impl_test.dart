@@ -1321,6 +1321,41 @@ void main() {
           expect(spy.deletedEncodedPath, 'Gesch&AOQ-ftsf&APw-hrer');
         },
       );
+
+      test(
+        'delete without removeEmails refuses a folder that has mail on the '
+        'server (stale "empty" count)',
+        () async {
+          final spy = SnoozeSpyImapClient()..statusMessages = 1;
+          final db = openTestDatabase();
+          final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+          final mailboxes = MailboxRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          );
+          await accounts.addAccount(_account, 'pw');
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'acc-1:Work',
+                  accountId: 'acc-1',
+                  path: 'Work',
+                  name: 'Work',
+                ),
+              );
+
+          await expectLater(
+            mailboxes.deleteMailbox('acc-1', 'Work'),
+            throwsA(isA<Exception>()),
+          );
+          expect(spy.deletedEncodedPath, isNull);
+          expect(await db.select(db.mailboxes).get(), hasLength(1));
+
+          await mailboxes.deleteMailbox('acc-1', 'Work', removeEmails: true);
+          expect(spy.deletedEncodedPath, 'Work');
+          expect(await db.select(db.mailboxes).get(), isEmpty);
+        },
+      );
     });
 
     group('syncMailboxes IMAP reconciles deleted folders', () {
@@ -1681,7 +1716,7 @@ void main() {
               );
         }
 
-        await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1');
+        await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1', removeEmails: true);
 
         final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
         expect(surviving.map((m) => m.path), ['mbx-inbox']);
@@ -1698,7 +1733,9 @@ void main() {
         expect(threads.map((t) => t.id), ['t-e-kept']);
       });
 
-      test('delete: a notDestroyed SetError keeps the folder and reads well',
+      test(
+          'delete without removeEmails: no onDestroyRemoveEmails, and the '
+          "server's mailboxHasEmail keeps the folder with a readable error",
           () async {
         final r = await setupJmap(
           responseFor: () => {
@@ -1709,7 +1746,7 @@ void main() {
                 {
                   'accountId': 'acct1',
                   'notDestroyed': {
-                    'mbx-1': {'type': 'mailboxHasChild'},
+                    'mbx-1': {'type': 'mailboxHasEmail'},
                   },
                 },
                 '0',
@@ -1733,13 +1770,62 @@ void main() {
             predicate(
               (e) =>
                   e.toString() ==
-                  'Exception: the folder still has subfolders on the server '
-                      '(mailboxHasChild)',
+                  'Exception: the folder is not empty on the server any more '
+                      '— reload the folder list and confirm deleting its mail '
+                      '(mailboxHasEmail)',
             ),
           ),
         );
+        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        final args = (body['methodCalls'] as List<dynamic>).first as List;
+        expect(
+          (args[1] as Map<String, dynamic>)
+              .containsKey('onDestroyRemoveEmails'),
+          isFalse,
+        );
         final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
         expect(surviving.map((m) => m.path), ['mbx-1']);
+      });
+
+      test('rename: a notUpdated SetError reads well', () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'notUpdated': {
+                    'mbx-1': {'type': 'alreadyExists'},
+                  },
+                },
+                '0',
+              ],
+            ],
+          },
+        );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Old',
+                displayPath: const Value('Old'),
+              ),
+            );
+
+        await expectLater(
+          r.mailboxes.renameMailbox('jmap-1', 'mbx-1', 'Taken'),
+          throwsA(
+            predicate(
+              (e) =>
+                  e.toString() ==
+                  'Exception: a folder with this name already exists '
+                      '(alreadyExists)',
+            ),
+          ),
+        );
       });
 
       test(

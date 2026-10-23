@@ -321,8 +321,9 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
   @override
   _i6.Future<void> deleteMailbox(
     String? accountId,
-    String? mailboxPath,
-  ) =>
+    String? mailboxPath, {
+    bool? removeEmails = false,
+  }) =>
       (super.noSuchMethod(
         Invocation.method(
           #deleteMailbox,
@@ -330,6 +331,7 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
             accountId,
             mailboxPath,
           ],
+          {#removeEmails: removeEmails},
         ),
         returnValue: _i6.Future<void>.value(),
         returnValueForMissingStub: _i6.Future<void>.value(),

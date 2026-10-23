@@ -125,7 +125,7 @@ void main() {
       await r.mailboxes.syncMailboxes('test');
       final all = await r.mailboxes.observeMailboxes('test').first;
       for (final m in all.where((m) => m.displayPath == folderName)) {
-        await r.mailboxes.deleteMailbox('test', m.path);
+        await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
       }
     }
 
@@ -153,7 +153,15 @@ void main() {
           ),
         );
 
-    await r.mailboxes.deleteMailbox('test', folder.path);
+    // Without removeEmails (the dialog said "empty") the mail is kept.
+    await expectLater(
+      r.mailboxes.deleteMailbox('test', folder.path),
+      throwsA(isA<Exception>()),
+    );
+    final kept = await r.mailboxes.observeMailboxes('test').first;
+    expect(kept.map((m) => m.path), contains(folder.path));
+
+    await r.mailboxes.deleteMailbox('test', folder.path, removeEmails: true);
 
     final local = await (r.db.select(r.db.emails)
           ..where((t) => t.mailboxPath.equals(folder.path)))

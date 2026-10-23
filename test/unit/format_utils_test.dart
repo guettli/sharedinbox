@@ -132,6 +132,7 @@ void main() {
       expect(userErrorMessage(Exception('boom')), 'boom');
       expect(userErrorMessage(ArgumentError.value('x', 'n', 'bad')), 'bad');
       expect(userErrorMessage(StateError('s')), 'Bad state: s');
+      expect(userErrorMessage(ArgumentError()), 'Invalid argument(s)');
     });
   });
 }

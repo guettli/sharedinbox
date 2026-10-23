@@ -191,6 +191,15 @@ List<({FolderNode node, int depth})> _flattenTree(List<FolderNode> roots) {
   return rows;
 }
 
+/// Folders the app or the server depends on: any special-use role (Inbox,
+/// Sent, Drafts, Junk, Trash, Archive, Snoozed) plus the top-level folders
+/// the app manages by name (IMAP `INBOX`, `Notes`, `Snoozed`).
+bool _isAppManagedFolder(Mailbox mailbox) {
+  if (mailbox.role != null) return true;
+  final top = mailbox.displayPath;
+  return top.toUpperCase() == 'INBOX' || top == 'Notes' || top == 'Snoozed';
+}
+
 /// Opens the long-press action sheet for [mailbox]: rename / move / delete.
 Future<void> _showFolderActions(
   BuildContext context,
@@ -228,17 +237,20 @@ Future<void> _showFolderActions(
             subtitle: const Text('Compare folder count with the server'),
             onTap: () => Navigator.pop(ctx, _FolderAction.diagnose),
           ),
-          ListTile(
-            leading: Icon(
-              Icons.delete_outline,
-              color: Theme.of(ctx).colorScheme.error,
+          // Inbox, Trash, Notes, Snoozed, … are recreated or relied on by
+          // the app and the server; deleting them only causes trouble.
+          if (!_isAppManagedFolder(mailbox))
+            ListTile(
+              leading: Icon(
+                Icons.delete_outline,
+                color: Theme.of(ctx).colorScheme.error,
+              ),
+              title: Text(
+                'Delete',
+                style: TextStyle(color: Theme.of(ctx).colorScheme.error),
+              ),
+              onTap: () => Navigator.pop(ctx, _FolderAction.delete),
             ),
-            title: Text(
-              'Delete',
-              style: TextStyle(color: Theme.of(ctx).colorScheme.error),
-            ),
-            onTap: () => Navigator.pop(ctx, _FolderAction.delete),
-          ),
         ],
       ),
     ),
@@ -406,7 +418,13 @@ Future<void> _promptDelete(
   );
   if (confirmed != true || !context.mounted) return;
   try {
-    await repo.deleteMailbox(accountId, mailbox.path);
+    // Only a folder the dialog called non-empty may take its mail with it: a
+    // stale count of 0 must not silently delete mail that arrived since.
+    await repo.deleteMailbox(
+      accountId,
+      mailbox.path,
+      removeEmails: count > 0,
+    );
     if (!context.mounted) return;
     context.showAppSnackBar(
       'Folder "${mailbox.name}" deleted',

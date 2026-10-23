@@ -144,9 +144,9 @@ void main() {
     testWidgets('long-press on a mailbox opens the folder actions sheet', (
       tester,
     ) async {
-      await _pumpMailboxList(tester, [kTestMailbox]);
+      await _pumpMailboxList(tester, [_folder('Work')]);
 
-      await tester.longPress(find.text('INBOX').first);
+      await tester.longPress(find.text('Work').first);
       await tester.pumpAndSettle();
 
       expect(find.text('Rename'), findsOneWidget);
@@ -154,6 +154,25 @@ void main() {
       expect(find.text('Diagnose'), findsOneWidget);
       expect(find.text('Delete'), findsOneWidget);
     });
+
+    for (final managed in [
+      kTestMailbox,
+      _folder('Notes'),
+      _folder('Snoozed'),
+      _folder('Papierkorb', path: 'mbx-trash').copyWith(role: 'trash'),
+    ]) {
+      testWidgets('no Delete action for "${managed.displayPath}"', (
+        tester,
+      ) async {
+        await _pumpMailboxList(tester, [managed]);
+
+        await tester.longPress(find.text(managed.name).first);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Rename'), findsOneWidget);
+        expect(find.text('Delete'), findsNothing);
+      });
+    }
 
     testWidgets(
       'choosing Diagnose navigates to the folder diagnostics screen',
@@ -172,23 +191,40 @@ void main() {
     testWidgets('choosing Delete → confirming calls repo.deleteMailbox', (
       tester,
     ) async {
-      final repo = FakeMailboxRepository([kTestMailbox]);
+      final repo = FakeMailboxRepository([_folder('Work', totalCount: 2)]);
       await _pumpMailboxList(tester, const [], repo: repo);
 
-      await _tapDeleteAction(tester, 'INBOX');
+      await _tapDeleteAction(tester, 'Work');
       expect(find.text('Delete folder?'), findsOneWidget);
       await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
       await tester.pumpAndSettle();
 
-      expect(repo.deleteCalls, ['INBOX']);
+      expect(repo.deleteCalls, ['Work']);
+      // The dialog said "It contains 2 mails" → the mail goes too.
+      expect(repo.deleteRemoveEmails, [true]);
+    });
+
+    testWidgets('deleting a folder shown as empty keeps any mail', (
+      tester,
+    ) async {
+      final repo = FakeMailboxRepository([_folder('Work', totalCount: 0)]);
+      await _pumpMailboxList(tester, const [], repo: repo);
+
+      await _tapDeleteAction(tester, 'Work');
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+
+      // A stale count of 0 must not let mail that arrived since be deleted.
+      expect(repo.deleteRemoveEmails, [false]);
     });
 
     testWidgets('a failed delete shows a readable error snackbar', (
       tester,
     ) async {
-      final repo = FakeMailboxRepository([_folder('Archive')])
+      // A stale count of 0 → no removeEmails → the server refuses.
+      final repo = FakeMailboxRepository([_folder('Archive', totalCount: 0)])
         ..deleteError = Exception(
-          'the folder still has subfolders on the server (mailboxHasChild)',
+          'the folder is not empty on the server any more (mailboxHasEmail)',
         );
       await _pumpMailboxList(tester, const [], repo: repo);
 
@@ -199,8 +235,8 @@ void main() {
 
       expect(
         find.text(
-          'Could not delete folder: the folder still has subfolders on the '
-          'server (mailboxHasChild)',
+          'Could not delete folder: the folder is not empty on the server '
+          'any more (mailboxHasEmail)',
         ),
         findsOneWidget,
       );

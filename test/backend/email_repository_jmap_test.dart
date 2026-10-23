@@ -603,7 +603,8 @@ if header :contains "subject" "lunch" {
       await r.mailboxes.syncMailboxes('test-jmap');
       final all = await r.mailboxes.observeMailboxes('test-jmap').first;
       for (final m in all.where((m) => m.displayPath == folderName)) {
-        await r.mailboxes.deleteMailbox('test-jmap', m.path);
+        await r.mailboxes
+            .deleteMailbox('test-jmap', m.path, removeEmails: true);
       }
     }
 
@@ -662,7 +663,12 @@ if header :contains "subject" "lunch" {
       isNotEmpty,
     );
 
-    await r.mailboxes.deleteMailbox('test-jmap', folder.path);
+    // Sync INBOX once now so the check after the delete goes through the
+    // incremental Email/changes path, not a fresh full sync.
+    await r.emails.syncEmails('test-jmap', inboxId);
+
+    await r.mailboxes
+        .deleteMailbox('test-jmap', folder.path, removeEmails: true);
 
     final localEmails = await (r.db.select(r.db.emails)
           ..where((t) => t.mailboxPath.equals(folder.path)))
