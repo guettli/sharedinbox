@@ -4,15 +4,33 @@ import 'package:sharedinbox/core/models/email.dart';
 abstract class DraftRepository {
   /// Inserts or updates a draft.  Pass [id] to update; omit to create new.
   /// Marks the row as dirty so the next sync cycle pushes it to the server.
+  ///
+  /// Implementations override [writeDraft]; this only bundles the fields.
   Future<SavedDraft> saveDraft({
     int? id,
     String? accountId,
     String? replyToEmailId,
     required String toText,
     required String ccText,
+    String bccText = '',
     required String subjectText,
     required String bodyText,
-  });
+  }) =>
+      writeDraft(
+        DraftInput(
+          id: id,
+          accountId: accountId,
+          replyToEmailId: replyToEmailId,
+          toText: toText,
+          ccText: ccText,
+          bccText: bccText,
+          subjectText: subjectText,
+          bodyText: bodyText,
+        ),
+      );
+
+  /// Stores [input] as [saveDraft] describes.
+  Future<SavedDraft> writeDraft(DraftInput input);
 
   /// Returns the saved new-message drafts (those not tied to a reply),
   /// newest first.

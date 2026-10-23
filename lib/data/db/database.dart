@@ -326,6 +326,8 @@ class Drafts extends Table {
   TextColumn get replyToEmailId => text().nullable()();
   TextColumn get toText => text().withDefault(const Constant(''))();
   TextColumn get ccText => text().withDefault(const Constant(''))();
+  // Added in schema v65: Bcc recipients typed in compose (#1126).
+  TextColumn get bccText => text().withDefault(const Constant(''))();
   TextColumn get subjectText => text().withDefault(const Constant(''))();
   TextColumn get bodyText => text().withDefault(const Constant(''))();
   DateTimeColumn get updatedAt => dateTime()();
@@ -1607,6 +1609,10 @@ class AppDatabase extends _$AppDatabase {
       // stay NULL (unknown, never matches a size condition) until the
       // periodic IMAP/JMAP reconcile backfills them.
       await _addColumnIfMissing(m, emails, emails.sizeBytes);
+    }
+    if (from < 65 && await _tableExists(this, 'drafts')) {
+      // Bcc recipients of a saved draft (#1126).
+      await _addColumnIfMissing(m, drafts, drafts.bccText);
     }
   }
 

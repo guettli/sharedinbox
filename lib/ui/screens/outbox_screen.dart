@@ -173,7 +173,11 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
         : rawSubject;
     final receiver = message.to.isNotEmpty
         ? message.to.join(', ')
-        : (message.cc.isNotEmpty ? message.cc.join(', ') : '(no recipient)');
+        : message.cc.isNotEmpty
+            ? message.cc.join(', ')
+            : message.bcc.isNotEmpty
+                ? 'Bcc: ${message.bcc.join(', ')}'
+                : '(no recipient)';
     final account = widget.account;
     final accountLabel = (account?.displayName.isNotEmpty ?? false)
         ? account!.displayName

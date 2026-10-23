@@ -20,7 +20,7 @@ import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _draftsFolder = 'Drafts';
 
-class DraftRepositoryImpl implements DraftRepository {
+class DraftRepositoryImpl extends DraftRepository {
   DraftRepositoryImpl(
     this._db,
     this._accounts, {
@@ -38,15 +38,17 @@ class DraftRepositoryImpl implements DraftRepository {
   final AppLogger? _appLogger;
 
   @override
-  Future<SavedDraft> saveDraft({
-    int? id,
-    String? accountId,
-    String? replyToEmailId,
-    required String toText,
-    required String ccText,
-    required String subjectText,
-    required String bodyText,
-  }) async {
+  Future<SavedDraft> writeDraft(DraftInput input) async {
+    final DraftInput(
+      :id,
+      :accountId,
+      :replyToEmailId,
+      :toText,
+      :ccText,
+      :bccText,
+      :subjectText,
+      :bodyText,
+    ) = input;
     final now = DateTime.now();
     if (id != null) {
       await _db.transaction(() async {
@@ -64,6 +66,7 @@ class DraftRepositoryImpl implements DraftRepository {
             replyToEmailId: Value(replyToEmailId),
             toText: Value(toText),
             ccText: Value(ccText),
+            bccText: Value(bccText),
             subjectText: Value(subjectText),
             bodyText: Value(bodyText),
             updatedAt: Value(now),
@@ -82,6 +85,7 @@ class DraftRepositoryImpl implements DraftRepository {
         replyToEmailId: replyToEmailId,
         toText: toText,
         ccText: ccText,
+        bccText: bccText,
         subjectText: subjectText,
         bodyText: bodyText,
         updatedAt: now,
@@ -94,6 +98,7 @@ class DraftRepositoryImpl implements DraftRepository {
             replyToEmailId: Value(replyToEmailId),
             toText: Value(toText),
             ccText: Value(ccText),
+            bccText: Value(bccText),
             subjectText: Value(subjectText),
             bodyText: Value(bodyText),
             updatedAt: now,
@@ -106,6 +111,7 @@ class DraftRepositoryImpl implements DraftRepository {
       replyToEmailId: replyToEmailId,
       toText: toText,
       ccText: ccText,
+      bccText: bccText,
       subjectText: subjectText,
       bodyText: bodyText,
       updatedAt: now,
@@ -237,6 +243,7 @@ class DraftRepositoryImpl implements DraftRepository {
                   t.accountId.equals(accountId) &
                   t.toText.equals(row.toText) &
                   t.ccText.equals(row.ccText) &
+                  t.bccText.equals(row.bccText) &
                   t.subjectText.equals(row.subjectText) &
                   t.bodyText.equals(row.bodyText),
             ))
@@ -460,6 +467,9 @@ class DraftRepositoryImpl implements DraftRepository {
         ..from = [HeaderMailAddress(account.displayName, account.email)]
         ..to = _parseAddresses(row.toText)
         ..cc = _parseAddresses(row.ccText)
+        // The server copy is the sender's own, so it keeps Bcc like any
+        // other client's draft does (#1126).
+        ..bcc = _parseAddresses(row.bccText)
         ..subject = encodeUnstructuredHeader(row.subjectText)
         ..subjectEncoding = imap.HeaderEncoding.none
         ..text = row.bodyText;
@@ -546,6 +556,7 @@ class DraftRepositoryImpl implements DraftRepository {
               accountId: Value(accountId),
               toText: Value(_addressListToText(env?.to)),
               ccText: Value(_addressListToText(env?.cc)),
+              bccText: Value(_addressListToText(env?.bcc)),
               subjectText: Value(env?.subject ?? ''),
               bodyText: Value(msg.decodeTextPlainPart() ?? ''),
               updatedAt: env?.date ?? DateTime.now(),
@@ -622,6 +633,8 @@ class DraftRepositoryImpl implements DraftRepository {
         ],
         'to': _parseAddressesJmap(row.toText),
         if (row.ccText.trim().isNotEmpty) 'cc': _parseAddressesJmap(row.ccText),
+        if (row.bccText.trim().isNotEmpty)
+          'bcc': _parseAddressesJmap(row.bccText),
         'subject': row.subjectText,
         'bodyValues': {
           bodyPartId: {
@@ -714,6 +727,7 @@ class DraftRepositoryImpl implements DraftRepository {
             'subject',
             'to',
             'cc',
+            'bcc',
             'textBody',
             'bodyValues',
           ],
@@ -751,6 +765,7 @@ class DraftRepositoryImpl implements DraftRepository {
               accountId: Value(accountId),
               toText: Value(_addressJsonToText(m['to'])),
               ccText: Value(_addressJsonToText(m['cc'])),
+              bccText: Value(_addressJsonToText(m['bcc'])),
               subjectText: Value((m['subject'] as String?) ?? ''),
               bodyText: Value(bodyText),
               updatedAt: receivedAt,
@@ -851,6 +866,7 @@ class DraftRepositoryImpl implements DraftRepository {
         replyToEmailId: row.replyToEmailId,
         toText: row.toText,
         ccText: row.ccText,
+        bccText: row.bccText,
         subjectText: row.subjectText,
         bodyText: row.bodyText,
         updatedAt: row.updatedAt,

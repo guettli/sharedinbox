@@ -268,6 +268,7 @@ Future<void> openMailtoInApp(BuildContext context, String url) async {
       extra: <String, dynamic>{
         if (fields.to != null) 'prefillTo': fields.to,
         if (fields.cc != null) 'prefillCc': fields.cc,
+        if (fields.bcc != null) 'prefillBcc': fields.bcc,
         if (fields.subject != null) 'prefillSubject': fields.subject,
         if (fields.body != null) 'prefillBody': fields.body,
       },

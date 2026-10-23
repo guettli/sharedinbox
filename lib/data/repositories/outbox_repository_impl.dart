@@ -43,6 +43,8 @@ class OutboxRepositoryImpl implements OutboxRepository {
       'from': draft.from.toJson(),
       'to': draft.to.map((a) => a.toJson()).toList(),
       'cc': draft.cc.map((a) => a.toJson()).toList(),
+      if (draft.bcc.isNotEmpty)
+        'bcc': draft.bcc.map((a) => a.toJson()).toList(),
       'subject': draft.subject,
       'body': draft.body,
       if (draft.messageId != null) 'messageId': draft.messageId,
@@ -205,17 +207,25 @@ class OutboxRepositoryImpl implements OutboxRepository {
   }
 }
 
+List<model.EmailAddress> _decodeAddresses(Object? list) => [
+      for (final e in list as List<dynamic>? ?? const [])
+        model.EmailAddress.fromJson(e as Map<String, dynamic>),
+    ];
+
+List<String> _decodeEmails(Object? list) => [
+      for (final e in list as List<dynamic>? ?? const [])
+        (e as Map<String, dynamic>)['email'] as String,
+    ];
+
 model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
   final env = jsonDecode(envelopeJson) as Map<String, dynamic>;
   final atts = jsonDecode(attachmentsJson) as List<dynamic>;
   return model.EmailDraft(
     from: model.EmailAddress.fromJson(env['from'] as Map<String, dynamic>),
-    to: (env['to'] as List<dynamic>)
-        .map((e) => model.EmailAddress.fromJson(e as Map<String, dynamic>))
-        .toList(),
-    cc: (env['cc'] as List<dynamic>)
-        .map((e) => model.EmailAddress.fromJson(e as Map<String, dynamic>))
-        .toList(),
+    to: _decodeAddresses(env['to']),
+    cc: _decodeAddresses(env['cc']),
+    // Absent in rows queued before Bcc existed (#1126).
+    bcc: _decodeAddresses(env['bcc']),
     subject: env['subject'] as String? ?? '',
     body: env['body'] as String? ?? '',
     attachmentFilePaths: atts.cast<String>(),
@@ -232,14 +242,9 @@ OutboxMessage _rowToMessage(OutboxRow row) {
     id: row.id,
     accountId: row.accountId,
     subject: env['subject'] as String? ?? '',
-    to: (env['to'] as List<dynamic>?)
-            ?.map((e) => (e as Map<String, dynamic>)['email'] as String)
-            .toList() ??
-        const [],
-    cc: (env['cc'] as List<dynamic>?)
-            ?.map((e) => (e as Map<String, dynamic>)['email'] as String)
-            .toList() ??
-        const [],
+    to: _decodeEmails(env['to']),
+    cc: _decodeEmails(env['cc']),
+    bcc: _decodeEmails(env['bcc']),
     createdAt: row.createdAt,
     attempts: row.attempts,
     lastError: row.lastError,
@@ -253,6 +258,8 @@ imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
     ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
     ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
     ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+    // A local record only (never transmitted), so Bcc may stay in it.
+    ..bcc = draft.bcc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
     ..subject = encodeUnstructuredHeader(draft.subject)
     ..subjectEncoding = imap.HeaderEncoding.none
     ..messageId = draft.messageId

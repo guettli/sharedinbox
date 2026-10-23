@@ -222,7 +222,8 @@ void main() {
                     onPressed: () => openMailtoInApp(
                       innerCtx,
                       'mailto:alice@example.com'
-                      '?subject=Hello&body=Line1%0ALine2&cc=carol@example.com',
+                      '?subject=Hello&body=Line1%0ALine2&cc=carol@example.com'
+                      '&bcc=dave@example.com',
                     ),
                     child: const Text('open'),
                   ),
@@ -256,6 +257,7 @@ void main() {
         expect(seen, isNotNull);
         expect(seen!['prefillTo'], 'alice@example.com');
         expect(seen!['prefillCc'], 'carol@example.com');
+        expect(seen!['prefillBcc'], 'dave@example.com');
         expect(seen!['prefillSubject'], 'Hello');
         expect(seen!['prefillBody'], 'Line1\nLine2');
       },

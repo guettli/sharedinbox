@@ -113,6 +113,47 @@ void main() {
       expect(seen?.references, ['root@example.com', 'parent@example.com']);
     });
 
+    test('Bcc survives the outbox envelope (#1126)', () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+      const draft = EmailDraft(
+        from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+        to: [EmailAddress(email: 'bob@example.com')],
+        cc: [],
+        bcc: [EmailAddress(name: 'Eve', email: 'eve@example.com')],
+        subject: 'Hidden',
+        body: 'body',
+      );
+      await repo.enqueue(_accountId, draft);
+
+      final listed = await repo.observeOutbox(_accountId).first;
+      expect(listed.single.bcc, ['eve@example.com']);
+
+      EmailDraft? seen;
+      await repo.flush(_accountId, (job) async => seen = job.draft);
+      expect(seen?.bcc.single.email, 'eve@example.com');
+      expect(seen?.bcc.single.name, 'Eve');
+      expect(seen?.allRecipients.map((a) => a.email), [
+        'bob@example.com',
+        'eve@example.com',
+      ]);
+    });
+
+    test('a row queued before Bcc existed decodes with no Bcc', () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+      await repo.enqueue(_accountId, _makeDraft());
+      final row = (await db.select(db.outbox).get()).single;
+      final env = jsonDecode(row.envelopeJson) as Map<String, dynamic>;
+      expect(env, isNot(contains('bcc')));
+
+      EmailDraft? seen;
+      await repo.flush(_accountId, (job) async => seen = job.draft);
+      expect(seen?.bcc, isEmpty);
+    });
+
     test('a reply with still-bracketed ids does not double the brackets',
         () async {
       final (:repo, :mime) = await _enqueueReply(
