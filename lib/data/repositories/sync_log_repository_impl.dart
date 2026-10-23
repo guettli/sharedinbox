@@ -4,7 +4,10 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 class SyncLogRepositoryImpl implements SyncLogRepository {
-  SyncLogRepositoryImpl(this._db);
+  SyncLogRepositoryImpl(this._db, {this.trimChunkSize = 500});
+
+  /// How many sync logs [trim] removes per (short) write transaction.
+  final int trimChunkSize;
 
   final AppDatabase _db;
 
@@ -133,5 +136,59 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
           ..limit(1))
         .watchSingleOrNull()
         .map((row) => (row?.result == 'error') ? row?.errorMessage : null);
+  }
+
+  /// The sync logs [trim] removes: all but the newest log of each account
+  /// that are older than the cutoff (2nd variable) or beyond the newest N
+  /// (1st variable) of their account.
+  static const _trimmedIdsQuery = '''
+    SELECT id FROM (
+      SELECT id, started_at, ROW_NUMBER() OVER (
+        PARTITION BY account_id ORDER BY started_at DESC, id DESC
+      ) AS rn
+      FROM sync_logs
+    )
+    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)''';
+
+  @override
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {
+    // Rank the logs once; logs inserted while the chunks below are deleted
+    // are newer than every listed one, so the list stays correct.
+    final ids = await _db
+        .customSelect(
+          _trimmedIdsQuery,
+          variables: [
+            Variable.withInt(maxPerAccount),
+            Variable.withDateTime(DateTime.now().subtract(maxAge)),
+          ],
+        )
+        .map((r) => r.read<int>('id'))
+        .get();
+    // A long-lived install can hold hundreds of thousands of sync logs, so
+    // delete them in chunks of short transactions instead of one long one
+    // that would block the database (and the background isolate) for seconds.
+    for (var start = 0; start < ids.length; start += trimChunkSize) {
+      if (start > 0) {
+        // Let other database work (UI queries, sync) in between chunks.
+        await Future<void>.delayed(Duration.zero);
+      }
+      final chunk = ids.sublist(
+        start,
+        (start + trimChunkSize).clamp(0, ids.length),
+      );
+      // The foreign keys would cascade / set null on their own; doing it
+      // explicitly keeps the trim correct even where they are not enforced.
+      await _db.transaction(() async {
+        await (_db.delete(_db.syncLogMailboxes)
+              ..where((t) => t.syncLogId.isIn(chunk)))
+            .go();
+        await (_db.update(_db.appLogs)..where((t) => t.syncLogId.isIn(chunk)))
+            .write(const AppLogsCompanion(syncLogId: Value(null)));
+        await (_db.delete(_db.syncLogs)..where((t) => t.id.isIn(chunk))).go();
+      });
+    }
   }
 }

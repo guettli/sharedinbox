@@ -44,6 +44,7 @@ import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
+import 'package:sharedinbox/core/sync/log_retention_scheduler.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
@@ -667,6 +668,21 @@ final desktopPrefetchSchedulerProvider = Provider<DesktopPrefetchScheduler>((
 });
 
 const _desktopPrefetchMaxBatches = 10;
+
+/// Trims `app_logs` and `sync_logs` at launch and periodically while the app
+/// runs. Reading the provider and calling `start()` installs the schedule.
+final logRetentionSchedulerProvider = Provider<LogRetentionScheduler>((ref) {
+  final appLogs = ref.watch(appLogRepositoryProvider);
+  final syncLogs = ref.watch(syncLogRepositoryProvider);
+  final scheduler = LogRetentionScheduler(
+    trim: () async {
+      await appLogs.trim();
+      await syncLogs.trim();
+    },
+  );
+  ref.onDispose(scheduler.dispose);
+  return scheduler;
+});
 
 final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
   ref,

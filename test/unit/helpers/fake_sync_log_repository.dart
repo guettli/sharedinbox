@@ -4,7 +4,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 /// sync was for and whether it succeeded, shared by the sync-manager and
 /// reliability-runner suites instead of each restating the interface (jscpd
 /// duplication gate).
-class FakeSyncLogRepository implements SyncLogRepository {
+class FakeSyncLogRepository extends NoOpSyncLogRepository {
   /// Every [log] call, in order.
   final records = <({String accountId, bool success})>[];
 
@@ -34,11 +34,4 @@ class FakeSyncLogRepository implements SyncLogRepository {
     records.add((accountId: accountId, success: success));
     return _nextId++;
   }
-
-  @override
-  Stream<List<SyncLogEntry>> observeSyncLogs(String accountId) =>
-      Stream.value([]);
-
-  @override
-  Stream<String?> observeLastError(String accountId) => Stream.value(null);
 }
