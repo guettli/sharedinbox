@@ -127,6 +127,12 @@ void main() {
       );
       await repo.enqueue(_accountId, draft);
 
+      // The stored MIME snapshot never carries Bcc; only the envelope does.
+      final row = (await db.select(db.outbox).get()).single;
+      final mime = utf8.decode(base64.decode(row.mimeBase64));
+      expect(mime, isNot(contains(RegExp('^Bcc:', multiLine: true))));
+      expect(mime, isNot(contains('eve@example.com')));
+
       final listed = await repo.observeOutbox(_accountId).first;
       expect(listed.single.bcc, ['eve@example.com']);
 

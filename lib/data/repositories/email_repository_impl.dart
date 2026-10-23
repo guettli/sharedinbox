@@ -7685,10 +7685,10 @@ class EmailRepositoryImpl implements EmailRepository {
       'to': draft.to.map((a) => {'name': a.name, 'email': a.email}).toList(),
       if (draft.cc.isNotEmpty)
         'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
-      // This Email is also the Sent copy, so it keeps Bcc. JMAP servers
-      // (Stalwart, Cyrus, Fastmail) drop the Bcc header from what
-      // EmailSubmission transmits; the Bcc recipients get the message through
-      // the envelope's rcptTo below (#1126).
+      // This Email is also the Sent copy, so it keeps Bcc. RFC 8621 §7.5:
+      // "The server MUST remove any Bcc header field present on the message
+      // during delivery." The Bcc recipients get the message through the
+      // envelope's rcptTo below (#1126).
       if (draft.bcc.isNotEmpty)
         'bcc':
             draft.bcc.map((a) => {'name': a.name, 'email': a.email}).toList(),

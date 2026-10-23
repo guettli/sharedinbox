@@ -8740,6 +8740,38 @@ void main() {
       );
     });
 
+    test('an address in both To and Bcc gets one RCPT TO (#1126)', () async {
+      final smtp = _CapturingSmtpClient();
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async => smtp,
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(appendUid: 13),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: draft.from,
+          to: draft.to,
+          cc: const [EmailAddress(email: 'carol@example.com')],
+          bcc: const [
+            EmailAddress(email: 'BOB@Example.com'),
+            EmailAddress(email: 'Carol@example.com'),
+            EmailAddress(email: 'dave@example.com'),
+          ],
+          subject: 'Test',
+          body: 'Body',
+        ),
+      );
+
+      expect(smtp.recipients, [
+        'bob@example.com',
+        'carol@example.com',
+        'dave@example.com',
+      ]);
+    });
+
     test('without UIDPLUS it still shows up, as a virtual row', () async {
       final r = _makeRepos(
         smtpConnect: (Account _, String __, String ___) async =>

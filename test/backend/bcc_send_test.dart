@@ -4,9 +4,9 @@
 // Run via: stalwart-dev/test.sh
 //
 // The sender is this isolate's pool user. The recipients are the fixed
-// alice@/bob@ principals, which no other backend test uses, and every check
-// looks a message up by its unique subject, so concurrent files never see
-// each other's mail.
+// alice@/bob@ principals, which no other backend test uses, plus the pool's
+// matching bobN; every check looks a message up by its unique subject, so
+// other tests' mail never gets in the way.
 
 import 'dart:async';
 import 'dart:io';
@@ -76,18 +76,20 @@ final _bccLine = RegExp(r'^bcc:', multiLine: true, caseSensitive: false);
 void main() {
   late StalwartEnv env;
   late StalwartTestUser user;
+  late StalwartTestUser poolBob;
   late Directory cacheDir;
 
   setUpAll(() {
     configureSqliteForTests();
     env = StalwartEnv.fromPlatform();
     user = pickPoolUser(env: env);
+    poolBob = pickPoolUser(env: env, prefix: 'bob');
     cacheDir = Directory.systemTemp.createTempSync('bcc_send_test_');
   });
 
   tearDownAll(() => cacheDir.deleteSync(recursive: true));
 
-  /// Sends To alice, Bcc bob from [account] and checks every copy.
+  /// Sends To alice, Bcc bob and bobN from [account] and checks every copy.
   Future<void> sendAndCheck(Account account, String subject) async {
     final db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
@@ -115,7 +117,10 @@ void main() {
         from: EmailAddress(name: user.email, email: user.email),
         to: [EmailAddress(name: 'Alice', email: _alice.email)],
         cc: const [],
-        bcc: [EmailAddress(name: 'Bob', email: _bob.email)],
+        bcc: [
+          EmailAddress(name: 'Bob', email: _bob.email),
+          EmailAddress(name: 'Bob N', email: poolBob.email),
+        ],
         subject: subject,
         body: 'Bcc integration test',
       ),
@@ -124,9 +129,14 @@ void main() {
     final toCopy = await _headersOf(env, _alice, 'INBOX', subject);
     expect(toCopy, isNot(contains(_bccLine)), reason: toCopy);
     expect(toCopy, isNot(contains(_bob.email)), reason: toCopy);
+    expect(toCopy, isNot(contains(poolBob.email)), reason: toCopy);
 
-    final bccCopy = await _headersOf(env, _bob, 'INBOX', subject);
-    expect(bccCopy, isNot(contains(_bccLine)), reason: bccCopy);
+    // Each Bcc recipient gets it, and learns nothing of the other one.
+    for (final (me, other) in [(_bob, poolBob), (poolBob, _bob)]) {
+      final bccCopy = await _headersOf(env, me, 'INBOX', subject);
+      expect(bccCopy, isNot(contains(_bccLine)), reason: bccCopy);
+      expect(bccCopy, isNot(contains(other.email)), reason: bccCopy);
+    }
 
     final sentRow = await (db.select(db.mailboxes)
           ..where((t) => t.accountId.equals(account.id) & t.role.equals('sent'))
@@ -141,11 +151,15 @@ void main() {
     );
     expect(sentCopy, contains(_bccLine), reason: sentCopy);
     expect(sentCopy, contains(_bob.email), reason: sentCopy);
+    expect(sentCopy, contains(poolBob.email), reason: sentCopy);
 
     // The local Sent row shows Bcc right away (#1097's detail header line).
     final local = (await emails.observeEmails(account.id, sentRow.path).first)
         .where((e) => e.subject == subject);
-    expect(local.single.bcc.map((a) => a.email), [_bob.email]);
+    expect(
+      local.single.bcc.map((a) => a.email),
+      [_bob.email, poolBob.email],
+    );
     await db.close();
   }
 

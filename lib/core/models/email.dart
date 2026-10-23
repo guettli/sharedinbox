@@ -425,8 +425,16 @@ class EmailDraft {
   final String? inReplyTo;
   final List<String> references;
 
-  /// Every envelope recipient: To, Cc and Bcc.
-  List<EmailAddress> get allRecipients => [...to, ...cc, ...bcc];
+  /// Every envelope recipient: To, Cc and Bcc, each address once (compared
+  /// case-insensitively), so one listed in both To and Bcc is not sent
+  /// twice.
+  List<EmailAddress> get allRecipients {
+    final seen = <String>{};
+    return [
+      for (final a in [...to, ...cc, ...bcc])
+        if (seen.add(a.email.trim().toLowerCase())) a,
+    ];
+  }
 
   const EmailDraft({
     required this.from,

@@ -258,8 +258,7 @@ imap.MessageBuilder _buildMime(model.EmailDraft draft, String appVersion) {
     ..from = [HeaderMailAddress(draft.from.name, draft.from.email)]
     ..to = draft.to.map((a) => HeaderMailAddress(a.name, a.email)).toList()
     ..cc = draft.cc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
-    // A local record only (never transmitted), so Bcc may stay in it.
-    ..bcc = draft.bcc.map((a) => HeaderMailAddress(a.name, a.email)).toList()
+    // No Bcc here: see OutboxJob.mimeBytes. The envelope JSON carries it.
     ..subject = encodeUnstructuredHeader(draft.subject)
     ..subjectEncoding = imap.HeaderEncoding.none
     ..messageId = draft.messageId
