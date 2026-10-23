@@ -331,6 +331,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
         lowerName == 'spam') {
       return 'junk';
     }
+    // Not a registered role, but the app's own Snoozed folder (created
+    // without a role where the server refuses it) gets the snooze icon.
+    if (lowerName == 'snoozed') return 'snoozed';
     return null;
   }
 

@@ -7204,7 +7204,25 @@ void main() {
           capturedBodies.add(body);
           final calls = body['methodCalls'] as List;
           final methodName = (calls.first as List)[0] as String;
+          if (methodName == 'Mailbox/get') {
+            // The server has no Snoozed mailbox yet.
+            return http.Response(
+              jsonEncode({
+                'sessionState': 's1',
+                'methodResponses': [
+                  [
+                    'Mailbox/get',
+                    {'accountId': 'acct1', 'list': <dynamic>[]},
+                    '0',
+                  ],
+                ],
+              }),
+              200,
+            );
+          }
           if (methodName == 'Mailbox/set') {
+            final args = (calls.first as List)[1] as Map<String, dynamic>;
+            final key = (args['create'] as Map<String, dynamic>).keys.single;
             return http.Response(
               jsonEncode({
                 'sessionState': 's1',
@@ -7214,7 +7232,7 @@ void main() {
                     {
                       'accountId': 'acct1',
                       'created': {
-                        'new-snoozed': {'id': 'mbx-snoozed'},
+                        key: {'id': 'mbx-snoozed'},
                       },
                     },
                     '0',
@@ -7257,14 +7275,17 @@ void main() {
         // Change successfully applied — removed from queue.
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
-        // First API call should be Mailbox/set to create the Snoozed folder.
-        expect(capturedBodies, hasLength(2));
-        final firstCall =
-            ((capturedBodies.first['methodCalls'] as List).first as List)[0];
-        expect(firstCall, 'Mailbox/set');
+        // Look the folder up, create it (Mailbox/set), then Email/set into it.
+        String method(int i) =>
+            ((capturedBodies[i]['methodCalls'] as List).first as List)[0]
+                as String;
+        expect(capturedBodies, hasLength(3));
+        expect(method(0), 'Mailbox/get');
+        expect(method(1), 'Mailbox/set');
+        expect(method(2), 'Email/set');
 
-        // Second call should be Email/set using the newly created mailbox ID.
-        final secondCallArgs = ((capturedBodies[1]['methodCalls'] as List).first
+        // The Email/set uses the newly created mailbox ID.
+        final secondCallArgs = ((capturedBodies[2]['methodCalls'] as List).first
             as List)[1] as Map<String, dynamic>;
         final update = (secondCallArgs['update'] as Map<String, dynamic>)['e1']
             as Map<String, dynamic>;
