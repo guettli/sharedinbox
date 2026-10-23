@@ -5103,13 +5103,19 @@ class EmailRepositoryImpl implements EmailRepository {
 
     snoozedMailbox ??= await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.name.equals('Snoozed'),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.name.equals(_snoozedPlaceholder),
           )
           ..limit(1))
         .getSingleOrNull();
 
-    return snoozedMailbox?.path ?? 'Snoozed';
+    return snoozedMailbox?.path ?? _snoozedPlaceholder;
   }
+
+  /// The Snoozed mailbox's name, and the stand-in path a snooze uses while
+  /// the folder is not known locally yet (the flush resolves or creates it).
+  static const _snoozedPlaceholder = 'Snoozed';
 
   @override
   Future<bool> isSnoozedMailbox(String accountId, String mailboxPath) async =>
@@ -5118,7 +5124,7 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Whether [mailboxPath] is the Snoozed folder at [snoozedPath], or the
   /// literal `Snoozed` a snooze queued before that folder was known uses.
   static bool _isSnoozedPath(String mailboxPath, String snoozedPath) =>
-      mailboxPath == snoozedPath || mailboxPath == 'Snoozed';
+      mailboxPath == snoozedPath || mailboxPath == _snoozedPlaceholder;
 
   @override
   Future<int> wakeUpEmails(String accountId) async {
@@ -6416,6 +6422,105 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
+  /// The JMAP id of [accountId]'s Snoozed mailbox, creating it on the server
+  /// when neither the local cache nor the server has one yet — the case on
+  /// every fresh JMAP account. A snooze queued while the folder was unknown
+  /// targets [_snoozedPlaceholder]; resolving it here, at flush time, keeps
+  /// snoozing usable offline. The mailbox is recorded locally and every row
+  /// still parked under the placeholder is moved onto its real id, so the
+  /// list, [isSnoozedMailbox] and the wake-up all see one Snoozed folder.
+  ///
+  /// The `snoozed` role is not in the IANA registry and servers such as
+  /// Stalwart reject it (`invalidProperties`), so creation retries without a
+  /// role; the folder is then found by name, as [_snoozedMailboxPath] does.
+  Future<String> _ensureJmapSnoozedMailbox(
+    JmapClient jmap,
+    String accountId,
+  ) async {
+    final known = await _snoozedMailboxPath(accountId);
+    if (known != _snoozedPlaceholder) return known;
+
+    final getResponses = await jmap.call([
+      [
+        'Mailbox/get',
+        {
+          'accountId': jmap.accountId,
+          'properties': ['name', 'role', 'parentId'],
+        },
+        '0',
+      ],
+    ]);
+    final list =
+        (_responseArgs(getResponses, 0, 'Mailbox/get')['list'] as List<dynamic>)
+            .cast<Map<String, dynamic>>();
+    final existing = list.where((m) => m['role'] == 'snoozed').firstOrNull ??
+        list
+            .where(
+              (m) => m['name'] == _snoozedPlaceholder && m['parentId'] == null,
+            )
+            .firstOrNull;
+    var id = existing?['id'] as String?;
+    var role = existing?['role'] as String?;
+
+    if (id == null) {
+      for (final withRole in const [true, false]) {
+        final setResponses = await jmap.call([
+          [
+            'Mailbox/set',
+            {
+              'accountId': jmap.accountId,
+              'create': {
+                'snoozed': {
+                  'name': _snoozedPlaceholder,
+                  if (withRole) 'role': 'snoozed',
+                },
+              },
+            },
+            '0',
+          ],
+        ]);
+        final result = _responseArgs(setResponses, 0, 'Mailbox/set');
+        final created = (result['created'] as Map<String, dynamic>?)?['snoozed']
+            as Map<String, dynamic>?;
+        id = created?['id'] as String?;
+        if (id != null) {
+          role = withRole ? 'snoozed' : null;
+          break;
+        }
+      }
+    }
+    if (id == null) {
+      // Not a per-email rejection: keep the snooze queued and retry later.
+      throw StateError('Could not create the Snoozed mailbox on the server');
+    }
+
+    await _db.into(_db.mailboxes).insertOnConflictUpdate(
+          MailboxesCompanion.insert(
+            id: '$accountId:$id',
+            accountId: accountId,
+            path: id,
+            name: _snoozedPlaceholder,
+            role: Value(role),
+            displayPath: const Value(_snoozedPlaceholder),
+          ),
+        );
+    await (_db.update(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(_snoozedPlaceholder),
+          ))
+        .write(EmailsCompanion(mailboxPath: Value(id)));
+    await (_db.update(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(_snoozedPlaceholder),
+          ))
+        .write(ThreadsCompanion(mailboxPath: Value(id)));
+    return id;
+  }
+
   /// `Email/set` patch entries (`keywords/snz:…: null`) that remove every
   /// snooze keyword [jmapEmailId] currently carries on the server.
   Future<Map<String, dynamic>> _jmapSnoozeKeywordRemovals(
@@ -6559,25 +6664,9 @@ class EmailRepositoryImpl implements EmailRepository {
         var destMailboxId = payload['dest'] as String;
         final srcMailboxId = payload['src'] as String;
         // When the Snoozed folder didn't exist at enqueue time, 'dest' holds
-        // the literal name 'Snoozed' rather than a JMAP mailbox ID.  Create it.
-        if (destMailboxId == 'Snoozed') {
-          final createResps = await jmap.call([
-            [
-              'Mailbox/set',
-              {
-                'accountId': jmap.accountId,
-                'create': {
-                  'new-snoozed': {'name': 'Snoozed', 'role': 'snoozed'},
-                },
-              },
-              '0',
-            ],
-          ]);
-          final createResult = _responseArgs(createResps, 0, 'Mailbox/set');
-          final created = createResult['created'] as Map<String, dynamic>?;
-          final newId = (created?['new-snoozed']
-              as Map<String, dynamic>?)?['id'] as String?;
-          if (newId != null) destMailboxId = newId;
+        // the literal name 'Snoozed' rather than a JMAP mailbox ID.
+        if (destMailboxId == _snoozedPlaceholder) {
+          destMailboxId = await _ensureJmapSnoozedMailbox(jmap, row.accountId);
         }
         responses = await jmap.call([
           [
@@ -6597,7 +6686,12 @@ class EmailRepositoryImpl implements EmailRepository {
 
       case 'unsnooze':
         final destMailboxId = payload['dest'] as String;
-        final srcMailboxId = payload['src'] as String;
+        var srcMailboxId = payload['src'] as String;
+        // An unsnooze queued before its snooze reached the server still names
+        // the placeholder; by now that snooze has created the real mailbox.
+        if (srcMailboxId == _snoozedPlaceholder) {
+          srcMailboxId = await _ensureJmapSnoozedMailbox(jmap, row.accountId);
+        }
         final update = <String, dynamic>{
           'mailboxIds/$destMailboxId': true,
           'mailboxIds/$srcMailboxId': null,

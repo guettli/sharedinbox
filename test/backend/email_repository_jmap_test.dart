@@ -410,4 +410,63 @@ if header :contains "subject" "lunch" {
     expect(flags, containsAll([r'\flagged', 'work']));
     expect(flags, isNot(contains(r'\seen')));
   });
+
+  test(
+    'snooze on an account without a Snoozed mailbox creates it and lands '
+    'the mail there with the snz keyword',
+    () async {
+      // A fresh JMAP account has no Snoozed folder. Drop one an earlier test
+      // run may have left for this pool user.
+      final setup = await connectImap(env: env, user: user);
+      for (final box in await setup.listMailboxes()) {
+        if (box.name == 'Snoozed') await setup.deleteMailbox(box);
+      }
+      await setup.logout();
+
+      await appendToInbox('snooze-first');
+      await appendToInbox('snooze-second');
+      final r = makeRepo();
+      final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+      await r.emails.syncEmails('test-jmap', inboxId);
+      final inbox = await r.emails.observeEmails('test-jmap', inboxId).first;
+      expect(inbox, hasLength(2));
+
+      final until = DateTime.now().add(const Duration(days: 1));
+      // Two snoozes before one flush: the second must reuse the mailbox the
+      // first created rather than trip over the placeholder again.
+      for (final e in inbox) {
+        await r.emails.snoozeEmail(e.id, until);
+      }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+      final snoozedRows = await (r.db.select(r.db.mailboxes)
+            ..where(
+              (t) => t.accountId.equals('test-jmap') & t.name.equals('Snoozed'),
+            ))
+          .get();
+      expect(snoozedRows, hasLength(1));
+      final snoozedId = snoozedRows.single.path;
+      expect(snoozedId, isNot('Snoozed'));
+      final local = await (r.db.select(r.db.emails)
+            ..where((t) => t.accountId.equals('test-jmap')))
+          .get();
+      expect(local.map((e) => e.mailboxPath).toSet(), {snoozedId});
+      expect(await r.emails.isSnoozedMailbox('test-jmap', snoozedId), isTrue);
+
+      final client = await connectImap(env: env, user: user);
+      addTearDown(client.logout);
+      expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
+      await client.selectMailboxByPath('Snoozed');
+      final fetch =
+          await client.fetchMessages(MessageSequence.fromAll(), 'FLAGS');
+      expect(fetch.messages, hasLength(2));
+      for (final m in fetch.messages) {
+        expect(
+          (m.flags ?? []).where((f) => f.toLowerCase().startsWith('snz:')),
+          hasLength(1),
+        );
+      }
+    },
+  );
 }
