@@ -1253,6 +1253,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
         {
           'accountId': jmap.accountId,
           'destroy': [row.path],
+          // The user confirmed deleting the folder *with* its mail. Without
+          // this flag the server refuses a non-empty mailbox with
+          // `mailboxHasEmail` (RFC 8621 §2.5). Emails that are also in
+          // another mailbox only lose this one; the rest are destroyed —
+          // the same outcome as IMAP DELETE.
+          'onDestroyRemoveEmails': true,
         },
         '0',
       ],
@@ -1304,8 +1310,22 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final notDestroyed = result['notDestroyed'] as Map<String, dynamic>?;
     if (notDestroyed != null && notDestroyed.containsKey(jmapId)) {
       final err = notDestroyed[jmapId] as Map<String, dynamic>;
-      throw Exception('Mailbox/set destroy failed: ${err['type']}');
+      throw Exception(_jmapDestroyErrorText(err));
     }
+  }
+
+  /// A readable sentence for a `notDestroyed` SetError (RFC 8621 §2.5),
+  /// keeping the raw type in brackets for bug reports.
+  static String _jmapDestroyErrorText(Map<String, dynamic> err) {
+    final type = err['type'];
+    final reason = switch (type) {
+      'mailboxHasChild' => 'the folder still has subfolders on the server',
+      'mailboxHasEmail' => 'the folder still contains mail on the server',
+      'notFound' => 'the folder no longer exists on the server',
+      'forbidden' => 'the server does not allow deleting this folder',
+      _ => err['description'] as String? ?? 'the server refused',
+    };
+    return '$reason ($type)';
   }
 
   /// Recomputes `displayPath` for every locally cached JMAP mailbox in

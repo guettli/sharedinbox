@@ -126,4 +126,12 @@ void main() {
       expect(sniffImageFormat(_bytes([0x89, 0x50])), isNull);
     });
   });
+
+  group('userErrorMessage', () {
+    test('drops the Exception: and ArgumentError wrappers', () {
+      expect(userErrorMessage(Exception('boom')), 'boom');
+      expect(userErrorMessage(ArgumentError.value('x', 'n', 'bad')), 'bad');
+      expect(userErrorMessage(StateError('s')), 'Bad state: s');
+    });
+  });
 }

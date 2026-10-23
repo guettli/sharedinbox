@@ -271,6 +271,9 @@ class FakeMailboxRepository implements MailboxRepository {
 
   final List<({String path, String newName})> renameCalls = [];
   final List<String> deleteCalls = [];
+
+  /// When set, [deleteMailbox] records the call and throws this instead.
+  Object? deleteError;
   final List<({String path, String? newParent})> moveCalls = [];
 
   @override
@@ -296,6 +299,8 @@ class FakeMailboxRepository implements MailboxRepository {
   @override
   Future<void> deleteMailbox(String accountId, String mailboxPath) async {
     deleteCalls.add(mailboxPath);
+    final error = deleteError;
+    if (error != null) throw error;
     _mailboxes.removeWhere(
       (m) => m.accountId == accountId && m.path == mailboxPath,
     );

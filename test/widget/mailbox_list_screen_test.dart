@@ -183,6 +183,30 @@ void main() {
       expect(repo.deleteCalls, ['INBOX']);
     });
 
+    testWidgets('a failed delete shows a readable error snackbar', (
+      tester,
+    ) async {
+      final repo = FakeMailboxRepository([_folder('Archive')])
+        ..deleteError = Exception(
+          'the folder still has subfolders on the server (mailboxHasChild)',
+        );
+      await _pumpMailboxList(tester, const [], repo: repo);
+
+      await _tapDeleteAction(tester, 'Archive');
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.text(
+          'Could not delete folder: the folder still has subfolders on the '
+          'server (mailboxHasChild)',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Archive'), findsOneWidget);
+    });
+
     testWidgets(
       'delete confirmation shows the number of mails the folder contains',
       (tester) async {

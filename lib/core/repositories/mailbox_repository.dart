@@ -48,7 +48,9 @@ abstract class MailboxRepository {
   );
 
   /// Deletes the mailbox with [mailboxPath] under [accountId] on the server
-  /// and removes its local cache (emails, threads, sync state).
+  /// together with the mail it contains (mail that is also in another JMAP
+  /// mailbox stays there) and removes its local cache (emails, threads, sync
+  /// state).
   Future<void> deleteMailbox(String accountId, String mailboxPath);
 
   /// Moves the mailbox with [mailboxPath] under [accountId] to live under

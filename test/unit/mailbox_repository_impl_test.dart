@@ -1621,8 +1621,9 @@ void main() {
         expect((update['mbx-1'] as Map<String, dynamic>)['name'], 'New');
       });
 
-      test('delete: sends Mailbox/set destroy and drops the local row',
-          () async {
+      test(
+          'delete: sends Mailbox/set destroy with onDestroyRemoveEmails and '
+          'drops the local rows', () async {
         final r = await setupJmap(
           responseFor: () => {
             'sessionState': 'sess1',
@@ -1647,17 +1648,98 @@ void main() {
                 displayPath: const Value('Doomed'),
               ),
             );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-inbox',
+                accountId: 'jmap-1',
+                path: 'mbx-inbox',
+                name: 'Inbox',
+                displayPath: const Value('Inbox'),
+              ),
+            );
+        for (final (id, box) in [
+          ('e-doomed', 'mbx-1'),
+          ('e-kept', 'mbx-inbox'),
+        ]) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'jmap-1:$id',
+                  accountId: 'jmap-1',
+                  mailboxPath: box,
+                  uid: 0,
+                  receivedAt: DateTime.now(),
+                ),
+              );
+          await r.db.into(r.db.threads).insert(
+                ThreadsCompanion.insert(
+                  id: 't-$id',
+                  accountId: 'jmap-1',
+                  mailboxPath: box,
+                  latestDate: DateTime.now(),
+                  latestEmailId: 'jmap-1:$id',
+                ),
+              );
+        }
 
         await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1');
 
         final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
-        expect(surviving, isEmpty);
+        expect(surviving.map((m) => m.path), ['mbx-inbox']);
         final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
-        expect(
-          (args[1] as Map<String, dynamic>)['destroy'],
-          ['mbx-1'],
+        final setArgs = args[1] as Map<String, dynamic>;
+        expect(setArgs['destroy'], ['mbx-1']);
+        // Without it the server answers mailboxHasEmail for a non-empty
+        // folder (RFC 8621 §2.5) and nothing is deleted.
+        expect(setArgs['onDestroyRemoveEmails'], isTrue);
+        final emails = await r.db.select(r.db.emails).get();
+        expect(emails.map((e) => e.id), ['jmap-1:e-kept']);
+        final threads = await r.db.select(r.db.threads).get();
+        expect(threads.map((t) => t.id), ['t-e-kept']);
+      });
+
+      test('delete: a notDestroyed SetError keeps the folder and reads well',
+          () async {
+        final r = await setupJmap(
+          responseFor: () => {
+            'sessionState': 'sess1',
+            'methodResponses': [
+              [
+                'Mailbox/set',
+                {
+                  'accountId': 'acct1',
+                  'notDestroyed': {
+                    'mbx-1': {'type': 'mailboxHasChild'},
+                  },
+                },
+                '0',
+              ],
+            ],
+          },
         );
+        await r.db.into(r.db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'jmap-1:mbx-1',
+                accountId: 'jmap-1',
+                path: 'mbx-1',
+                name: 'Parent',
+                displayPath: const Value('Parent'),
+              ),
+            );
+
+        await expectLater(
+          r.mailboxes.deleteMailbox('jmap-1', 'mbx-1'),
+          throwsA(
+            predicate(
+              (e) =>
+                  e.toString() ==
+                  'Exception: the folder still has subfolders on the server '
+                      '(mailboxHasChild)',
+            ),
+          ),
+        );
+        final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
+        expect(surviving.map((m) => m.path), ['mbx-1']);
       });
 
       test(

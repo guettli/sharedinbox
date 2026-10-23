@@ -588,4 +588,109 @@ if header :contains "subject" "lunch" {
       await dropProjects();
     }
   });
+
+  // The user confirmed "Delete "X"? It contains N mails". Without
+  // onDestroyRemoveEmails Stalwart answers mailboxHasEmail and nothing
+  // happens; with it the folder and its own mail go, while a mail that is
+  // also in INBOX only loses the deleted folder (RFC 8621 §2.5).
+  test('deleteMailbox removes a JMAP folder that still contains mail',
+      () async {
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    const folderName = 'DeleteWithMail';
+
+    Future<void> dropFolder() async {
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final all = await r.mailboxes.observeMailboxes('test-jmap').first;
+      for (final m in all.where((m) => m.displayPath == folderName)) {
+        await r.mailboxes.deleteMailbox('test-jmap', m.path);
+      }
+    }
+
+    await dropFolder();
+    final folder = await r.mailboxes.createMailbox('test-jmap', folderName);
+    final jmap = await connectJmap(env: env, user: user);
+
+    await appendToInbox('only-in-folder');
+    await appendToInbox('in-both');
+    final queried = await jmap.call([
+      [
+        'Email/query',
+        {
+          'accountId': jmap.accountId,
+          'filter': {'inMailbox': inboxId},
+        },
+        'q',
+      ],
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          '#ids': {'resultOf': 'q', 'name': 'Email/query', 'path': '/ids'},
+          'properties': ['subject'],
+        },
+        'g',
+      ],
+    ]);
+    final found = ((queried[1] as List)[1] as Map<String, dynamic>)['list']
+        as List<dynamic>;
+    final idBySubject = {
+      for (final e in found.cast<Map<String, dynamic>>())
+        e['subject'] as String: e['id'] as String,
+    };
+    final onlyId = idBySubject['only-in-folder']!;
+    final bothId = idBySubject['in-both']!;
+    await jmap.call([
+      [
+        'Email/set',
+        {
+          'accountId': jmap.accountId,
+          'update': {
+            onlyId: {
+              'mailboxIds': {folder.path: true},
+            },
+            bothId: {'mailboxIds/${folder.path}': true},
+          },
+        },
+        's',
+      ],
+    ]);
+    await r.mailboxes.syncMailboxes('test-jmap');
+    await r.emails.syncEmails('test-jmap', folder.path);
+    expect(
+      await r.emails.observeEmails('test-jmap', folder.path).first,
+      isNotEmpty,
+    );
+
+    await r.mailboxes.deleteMailbox('test-jmap', folder.path);
+
+    final localEmails = await (r.db.select(r.db.emails)
+          ..where((t) => t.mailboxPath.equals(folder.path)))
+        .get();
+    expect(localEmails, isEmpty);
+    await r.mailboxes.syncMailboxes('test-jmap');
+    final all = await r.mailboxes.observeMailboxes('test-jmap').first;
+    expect(all.where((m) => m.path == folder.path), isEmpty);
+
+    final got = await jmap.call([
+      [
+        'Email/get',
+        {
+          'accountId': jmap.accountId,
+          'ids': [onlyId, bothId],
+          'properties': ['mailboxIds'],
+        },
+        'g',
+      ],
+    ]);
+    final args = (got[0] as List)[1] as Map<String, dynamic>;
+    expect(args['notFound'], [onlyId]);
+    final survivor = (args['list'] as List).single as Map<String, dynamic>;
+    expect(survivor['id'], bothId);
+    expect((survivor['mailboxIds'] as Map).keys, [inboxId]);
+
+    await r.emails.syncEmails('test-jmap', inboxId);
+    final inbox = await r.emails.observeEmails('test-jmap', inboxId).first;
+    expect(inbox.map((e) => e.subject), ['in-both']);
+  });
 }

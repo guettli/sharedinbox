@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
@@ -282,7 +283,7 @@ Future<void> _promptRename(
   } catch (e, stack) {
     if (!context.mounted) return;
     context.showAppSnackBar(
-      'Could not rename folder: $e',
+      'Could not rename folder: ${userErrorMessage(e)}',
       level: AppLogLevel.error,
       event: 'mailbox.rename_failed',
       accountId: accountId,
@@ -333,7 +334,7 @@ Future<void> _promptMove(
   } catch (e, stack) {
     if (!context.mounted) return;
     context.showAppSnackBar(
-      'Could not move folder: $e',
+      'Could not move folder: ${userErrorMessage(e)}',
       level: AppLogLevel.error,
       event: 'mailbox.move_failed',
       accountId: accountId,
@@ -413,8 +414,10 @@ Future<void> _promptDelete(
   } catch (e, stack) {
     if (!context.mounted) return;
     context.showAppSnackBar(
-      'Could not delete folder: $e',
+      'Could not delete folder: ${userErrorMessage(e)}',
       level: AppLogLevel.error,
+      // Long enough to read the reason; the App Log keeps it afterwards.
+      duration: const Duration(seconds: 10),
       event: 'mailbox.delete_failed',
       accountId: accountId,
       mailboxPath: mailbox.path,
