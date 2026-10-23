@@ -91,13 +91,16 @@ Future<void> initNotifications() async {
 /// Shows a single new-mail notification. [title] is typically the sender and
 /// [body] the subject line. [payload] travels back to [onNotificationTap] when
 /// the user taps the notification. [id] keeps distinct messages from
-/// collapsing into one slot. Never throws: a failing or hanging backend is
+/// collapsing into one slot. [accountId]/[emailId] only label a failure in the
+/// App Log. Never throws: a failing or hanging backend is
 /// logged and skipped (see [guardNotificationShow]).
 Future<void> showNewMailNotification({
   required String title,
   required String body,
   int? id,
   String? payload,
+  String? accountId,
+  String? emailId,
 }) async {
   if (!notificationsSupported || !_initialized) return;
   await guardNotificationShow(
@@ -117,5 +120,7 @@ Future<void> showNewMailNotification({
         linux: LinuxNotificationDetails(),
       ),
     ),
+    accountId: accountId,
+    emailId: emailId,
   );
 }

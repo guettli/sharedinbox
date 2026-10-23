@@ -19,7 +19,14 @@ typedef NotificationFailureHandler = void Function(
 
 /// Default [NotificationFailureHandler]: prints the failure and records it in
 /// the App Log as a warning, so bug reports show why no notification popped up.
-void logNotificationFailure(String message, Object error, StackTrace? stack) {
+/// [accountId]/[emailId] tie the entry to the mail that failed to notify.
+void logNotificationFailure(
+  String message,
+  Object error,
+  StackTrace? stack, {
+  String? accountId,
+  String? emailId,
+}) {
   debugPrint(message);
   logUncaught(
     'notification.show_failed',
@@ -27,13 +34,17 @@ void logNotificationFailure(String message, Object error, StackTrace? stack) {
     error,
     stack,
     level: AppLogLevel.warn,
+    accountId: accountId,
+    emailId: emailId,
   );
 }
 
 /// Runs [show] so that a failing or hanging notification backend can never
 /// escape to the caller: an exception is caught and a call that does not
 /// complete within [timeout] is abandoned. Returns whether the notification
-/// was shown.
+/// was shown. [accountId]/[emailId] are recorded on the default failure log
+/// entry so it names the mail that could not be shown; they are ignored when
+/// a custom [onFailure] is passed.
 ///
 /// On Linux without a notification daemon the plugin throws
 /// `DBusServiceUnknownException`. Uncaught, it reached `FlutterError.onError`
@@ -41,8 +52,17 @@ void logNotificationFailure(String message, Object error, StackTrace? stack) {
 Future<bool> guardNotificationShow(
   Future<void> Function() show, {
   Duration timeout = kNotificationShowTimeout,
-  NotificationFailureHandler onFailure = logNotificationFailure,
+  NotificationFailureHandler? onFailure,
+  String? accountId,
+  String? emailId,
 }) async {
+  onFailure ??= (message, error, stack) => logNotificationFailure(
+        message,
+        error,
+        stack,
+        accountId: accountId,
+        emailId: emailId,
+      );
   try {
     await show().timeout(timeout);
     return true;

@@ -246,6 +246,8 @@ Future<void> _notifyForNewMail(
         body: _envelopeBody(msg),
         id: emailId.hashCode & 0x7FFFFFFF,
         payload: '${account.id}|$emailId',
+        accountId: account.id,
+        emailId: emailId,
       );
     }
   }
