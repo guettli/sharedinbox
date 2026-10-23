@@ -4,7 +4,10 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 class SyncLogRepositoryImpl implements SyncLogRepository {
-  SyncLogRepositoryImpl(this._db);
+  SyncLogRepositoryImpl(this._db, {this.trimChunkSize = 500});
+
+  /// How many sync logs [trim] removes per (short) write transaction.
+  final int trimChunkSize;
 
   final AppDatabase _db;
 
@@ -135,17 +138,22 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
         .map((row) => (row?.result == 'error') ? row?.errorMessage : null);
   }
 
-  /// Ids of the sync logs [trim] removes: all but the newest log of each
-  /// account that are older than the cutoff (2nd variable) or beyond the
-  /// newest N (1st variable) of their account.
-  static const _trimmedIds = '''
+  /// The oldest sync logs (up to the 3rd variable) that [trim] removes: all
+  /// but the newest log of each account that are older than the cutoff (2nd
+  /// variable) or beyond the newest N (1st variable) of their account.
+  ///
+  /// Oldest first, so removing a chunk never changes the rank of a log that
+  /// is still to be judged by a later chunk.
+  static const _trimChunkQuery = '''
     SELECT id FROM (
       SELECT id, started_at, ROW_NUMBER() OVER (
         PARTITION BY account_id ORDER BY started_at DESC, id DESC
       ) AS rn
       FROM sync_logs
     )
-    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)''';
+    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)
+    ORDER BY started_at, id
+    LIMIT ?3''';
 
   @override
   Future<void> trim({
@@ -155,32 +163,30 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
     final variables = [
       Variable.withInt(maxPerAccount),
       Variable.withDateTime(DateTime.now().subtract(maxAge)),
+      Variable.withInt(trimChunkSize),
     ];
-    try {
+    // A long-lived install can hold hundreds of thousands of sync logs, so
+    // delete them in chunks of short transactions instead of one long one
+    // that would block the database (and the background isolate) for seconds.
+    while (true) {
+      final ids = await _db
+          .customSelect(_trimChunkQuery, variables: variables)
+          .map((r) => r.read<int>('id'))
+          .get();
+      if (ids.isEmpty) return;
       // The foreign keys would cascade / set null on their own; doing it
       // explicitly keeps the trim correct even where they are not enforced.
       await _db.transaction(() async {
-        await _db.customUpdate(
-          'DELETE FROM sync_log_mailboxes WHERE sync_log_id IN ($_trimmedIds)',
-          variables: variables,
-          updates: {_db.syncLogMailboxes},
-          updateKind: UpdateKind.delete,
-        );
-        await _db.customUpdate(
-          'UPDATE app_logs SET sync_log_id = NULL '
-          'WHERE sync_log_id IN ($_trimmedIds)',
-          variables: variables,
-          updates: {_db.appLogs},
-        );
-        await _db.customUpdate(
-          'DELETE FROM sync_logs WHERE id IN ($_trimmedIds)',
-          variables: variables,
-          updates: {_db.syncLogs},
-          updateKind: UpdateKind.delete,
-        );
+        await (_db.delete(_db.syncLogMailboxes)
+              ..where((t) => t.syncLogId.isIn(ids)))
+            .go();
+        await (_db.update(_db.appLogs)..where((t) => t.syncLogId.isIn(ids)))
+            .write(const AppLogsCompanion(syncLogId: Value(null)));
+        await (_db.delete(_db.syncLogs)..where((t) => t.id.isIn(ids))).go();
       });
-    } catch (_) {
-      // Best-effort, like AppLogRepositoryImpl.trim().
+      if (ids.length < trimChunkSize) return;
+      // Let other database work (UI queries, sync) in between chunks.
+      await Future<void>.delayed(Duration.zero);
     }
   }
 }

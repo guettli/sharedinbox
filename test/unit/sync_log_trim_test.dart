@@ -14,7 +14,8 @@ void main() {
 
   setUp(() async {
     db = await openTestDatabaseWithAccounts(['acc1', 'acc2']);
-    repo = SyncLogRepositoryImpl(db);
+    // Small chunks so every test covers more than one chunk.
+    repo = SyncLogRepositoryImpl(db, trimChunkSize: 2);
   });
 
   tearDown(() => db.close());
@@ -85,9 +86,28 @@ void main() {
     expect(await syncLogIds(), {...acc1.skip(3), acc2});
   });
 
-  test('is a no-op on a closed database', () async {
+  test('drops far more logs than one chunk, oldest first', () async {
+    final now = DateTime.now();
+    final acc1 = [
+      for (var i = 9; i > 0; i--)
+        await logAt('acc1', now.subtract(Duration(minutes: i))),
+    ];
+    final acc2 = [
+      for (var i = 20; i > 0; i--)
+        await logAt('acc2', now.subtract(Duration(days: i))),
+    ];
+
+    await repo.trim(maxPerAccount: 3);
+
+    // The newest 3 of each account: for acc2 the cap is stricter than the
+    // 14-day cutoff (days 1..13 survive the cutoff).
+    expect(await syncLogIds(), {...acc1.skip(6), ...acc2.skip(17)});
+    expect(await db.select(db.syncLogMailboxes).get(), hasLength(6));
+  });
+
+  test('throws on a closed database so the scheduler logs it', () async {
     await db.close();
-    await repo.trim();
+    await expectLater(repo.trim(), throwsA(anything));
     db = openTestDatabase();
   });
 }
