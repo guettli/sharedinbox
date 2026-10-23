@@ -88,7 +88,7 @@ curl -s $A/shot -o /tmp/screen.png   # screenshot (then view the PNG)
 c log lines=50                       # app stdout/stderr: assertions, exceptions
 c click name='Add account'           # exact accessible name
 c click name=SSL/TLS contains=1 role='toggle button' index=1
-c click name=From contains=1 role='push button' force=1   # see [disabled] below
+c click name=From contains=1 role='push button'
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …

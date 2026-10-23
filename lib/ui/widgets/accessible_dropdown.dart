@@ -18,7 +18,9 @@ class AccessibleDropdown<T> extends StatelessWidget {
         _child = child;
 
   /// Wraps a [DropdownButtonFormField]: enabled when it has an onChanged
-  /// callback (the form field does not expose its items).
+  /// callback. The form field does not expose its items, so this cannot see
+  /// an empty list: do not use it for a form field that can have zero items,
+  /// or it would announce a disabled dropdown as enabled.
   AccessibleDropdown.formField({
     super.key,
     required DropdownButtonFormField<T> child,
