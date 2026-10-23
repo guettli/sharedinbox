@@ -891,6 +891,43 @@ void main() {
       expect(downloaded, equals(attachmentBytes));
     },
   );
+
+  test('local Sieve star + keyword + fileinto reach the server', () async {
+    await appendToInbox('Lunch on Friday');
+    final client = await connectImap(env: env, user: user);
+    addTearDown(client.logout);
+    await _ensureMailbox(client, 'Trash');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.db.into(r.db.localSieveScripts).insert(
+          LocalSieveScriptsCompanion.insert(
+            accountId: 'test',
+            name: 'lunch',
+            content: const Value(r'''
+require ["fileinto", "imap4flags"];
+if header :contains "subject" "lunch" {
+  setflag "\\Flagged";
+  addflag "Work";
+  fileinto "Trash";
+}
+'''),
+            isActive: const Value(true),
+          ),
+        );
+    await r.emails.syncEmails('test', 'INBOX');
+    expect(await r.emails.applySieveRules('test'), 1);
+    await r.emails.flushPendingChanges('test', user.password);
+    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+    expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
+    await client.selectMailboxByPath('Trash');
+    final fetch =
+        await client.fetchMessages(MessageSequence.fromAll(), 'FLAGS');
+    final flags = fetch.messages.single.flags ?? [];
+    expect(flags, containsAll([r'\Flagged', 'Work']));
+    expect(flags, isNot(contains(r'\Seen')));
+  });
 }
 
 /// INBOX as a fresh SELECT reports it, like the IDLE connection sees it.
