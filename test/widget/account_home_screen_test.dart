@@ -184,5 +184,32 @@ void main() {
         findsOneWidget,
       );
     });
+
+    testWidgets('Verify sync health result replaces an unrelated snackbar', (
+      tester,
+    ) async {
+      await _pumpAccountHome(tester, [_inbox]);
+      ScaffoldMessenger.of(tester.element(find.text('Verify sync health')))
+          .showSnackBar(
+        const SnackBar(
+          content: Text('Unrelated message'),
+          duration: Duration(minutes: 1),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Verify sync health'));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 500)),
+      );
+      await tester.pumpAndSettle();
+
+      // The progress snack used to queue behind the unrelated one; hiding
+      // "the current" snack then hid the wrong one and the progress snack
+      // stayed up forever, with the result stuck behind it.
+      expect(find.text('Sync health: Healthy'), findsOneWidget);
+      expect(find.text('Verifying sync health...'), findsNothing);
+      expect(find.text('Unrelated message'), findsNothing);
+    });
   });
 }

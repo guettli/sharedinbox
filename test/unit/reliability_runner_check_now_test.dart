@@ -195,6 +195,23 @@ void main() {
       expect(folders.keys, contains('Archive/2026'));
       expect(folders['Archive/2026'], isA<Map<String, dynamic>>());
     });
+
+    test('a second check of the same account joins the running one', () async {
+      // A double tap on "Verify sync health" must not start a second probe
+      // (which would also clear the verifying spinner while one still runs).
+      final results = await Future.wait([
+        runner.checkAccountNow('test-account'),
+        runner.checkAccountNow('test-account'),
+      ]);
+
+      expect(emails.verifyCallCount, 1);
+      expect(results[0]?.isHealthy, isTrue);
+      expect(results[1]?.isHealthy, isTrue);
+
+      // Once finished, a new request runs a fresh check.
+      await runner.checkAccountNow('test-account');
+      expect(emails.verifyCallCount, 2);
+    });
   });
 }
 

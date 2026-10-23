@@ -84,9 +84,11 @@ class AppMessenger {
     );
   }
 
-  /// Hides the SnackBar currently shown, e.g. a progress snack about to be
-  /// replaced by its result.
-  void hideCurrent() => _messenger.hideCurrentSnackBar();
+  /// Drops every queued SnackBar and removes the visible one at once, so the
+  /// next [show] becomes the current SnackBar instead of waiting in the queue.
+  void clearAll() => _messenger
+    ..clearSnackBars()
+    ..removeCurrentSnackBar();
 }
 
 extension AppSnackBar on BuildContext {

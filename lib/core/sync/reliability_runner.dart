@@ -47,6 +47,11 @@ class ReliabilityRunner {
   /// Emits the set of account ids currently being verified whenever it changes.
   Stream<Set<String>> get verifyingAccounts => _verifyingController.stream;
 
+  /// Checks currently running, by account id. A second request for the same
+  /// account joins the running check instead of starting another one (which
+  /// would also clear the "verifying" state while the first still runs).
+  final Map<String, Future<void>> _inFlight = {};
+
   static const _checkInterval = Duration(hours: 1);
 
   void start() {
@@ -86,8 +91,34 @@ class ReliabilityRunner {
     final accounts = await _accounts.observeAccounts().first;
     for (final account in accounts) {
       if (!_running) break;
-      await _runForAccount(account.id);
+      await _verifyOnce(account.id);
     }
+  }
+
+  /// Runs one check of [accountId] unless one is already running, in which
+  /// case it returns that one. [force] marks a manual check: it is logged and
+  /// runs even when the periodic runner is stopped.
+  Future<void> _verifyOnce(String accountId, {bool force = false}) {
+    final running = _inFlight[accountId];
+    if (running != null) return running;
+    final check = _logAndRun(accountId, force: force);
+    _inFlight[accountId] = check;
+    // unawaited, not returned: remove() yields this same future, and
+    // whenComplete would then wait on itself forever.
+    return check.whenComplete(() {
+      unawaited(_inFlight.remove(accountId));
+    });
+  }
+
+  Future<void> _logAndRun(String accountId, {required bool force}) async {
+    if (force) {
+      await _appLogger.info(
+        'sync_health',
+        'Manual sync health verification started',
+        accountId: accountId,
+      );
+    }
+    await _runForAccount(accountId, force: force);
   }
 
   Future<void> _runForAccount(String accountId, {bool force = false}) async {
@@ -194,25 +225,15 @@ class ReliabilityRunner {
   /// runner being active.
   Future<void> checkNow() async {
     final accounts = await _accounts.observeAccounts().first;
-    await _appLogger.info(
-      'sync_health',
-      'Manual sync health verification started',
-      data: {'accounts': accounts.length},
-    );
     for (final account in accounts) {
-      await _runForAccount(account.id, force: true);
+      await checkAccountNow(account.id);
     }
   }
 
   /// Verifies only [accountId] right now and returns the stored result, so a
   /// manual "Verify sync health" on one account can report its outcome.
   Future<SyncHealthRow?> checkAccountNow(String accountId) async {
-    await _appLogger.info(
-      'sync_health',
-      'Manual sync health verification started',
-      accountId: accountId,
-    );
-    await _runForAccount(accountId, force: true);
+    await _verifyOnce(accountId, force: true);
     return (_db.select(_db.syncHealth)
           ..where((t) => t.accountId.equals(accountId)))
         .getSingleOrNull();
