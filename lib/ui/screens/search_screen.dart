@@ -440,7 +440,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           Expanded(
             // DropdownButton announces no enabled state of its own, which
             // Flutter's Linux bridge reports as "disabled". Merge an explicit
-            // enabled flag into its button node.
+            // enabled flag into its button node. Hard-coding `true` is safe
+            // only because this picker is built with two or more accounts
+            // (see the early return above) and onChanged is always set; if
+            // it can ever be disabled, derive this flag from that instead.
             child: MergeSemantics(
               child: Semantics(
                 enabled: true,
