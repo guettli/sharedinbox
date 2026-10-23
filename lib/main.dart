@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
+import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -253,6 +254,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // (#353). Reading `reconnectFlushProvider` installs the subscription.
     unawaited(ref.read(connectivityServiceProvider).initialize());
     ref.read(reconnectFlushProvider);
+    // WorkManager (which prefetches bodies on Android) does not exist on
+    // desktop; prefetch in-process while the app runs instead.
+    if (needsInProcessBodyPrefetch) {
+      ref.read(desktopPrefetchSchedulerProvider).start();
+    }
     // Handle "compose email" intents (mailto: links, Share → Email) by
     // pushing /compose onto the running router. No-op on non-Android.
     _mailIntentHandler = MailIntentHandler(
