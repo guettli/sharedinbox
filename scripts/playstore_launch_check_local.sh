@@ -85,11 +85,18 @@ echo "Watching crash logcat for FATAL EXCEPTION for ${WATCH_SECONDS}s…"
 crash_rc=0
 CRASH_LOG=$(timeout "${WATCH_SECONDS}" "$ADB" -s "$EMULATOR_ID" logcat -b crash -d 2>&1) || crash_rc=$?
 [ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH_LOG"; exit 1; }
-if echo "$CRASH_LOG" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
-    echo "----- CRASH DETECTED -----"
+# The crash buffer is device-wide; only crashes naming our package count
+# (other apps on the emulator crash too, see #1174).
+if echo "$CRASH_LOG" | grep -qE "FATAL EXCEPTION|Process .* has died|>>> .* <<<"; then
+    if echo "$CRASH_LOG" | grep -qF "$PACKAGE"; then
+        echo "----- CRASH DETECTED -----"
+        echo "$CRASH_LOG"
+        echo "--------------------------"
+        exit 1
+    fi
+    echo "----- ignoring crash of another app (not $PACKAGE) -----"
     echo "$CRASH_LOG"
     echo "--------------------------"
-    exit 1
 fi
 
 echo "OK — no crash signal in ${WATCH_SECONDS}s for versionCode=$VERSION_CODE."

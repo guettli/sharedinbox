@@ -1972,11 +1972,20 @@ sleep "$WATCH"
 crash_rc=0
 CRASH=$(adb logcat -b crash -d 2>&1) || crash_rc=$?
 [ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH"; exit 1; }
-if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
-    echo "----- CRASH DETECTED -----"
+# The crash buffer is device-wide: preinstalled apps (e.g. Gmail's
+# DeadObjectException, #1174) crash on a freshly booted emulator too. Only a
+# crash naming our package ("Process: <pkg>, PID" for Java, ">>> <pkg> <<<" for
+# native tombstones) fails the check; others are logged as noise.
+if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died|>>> .* <<<"; then
+    if echo "$CRASH" | grep -qF "$PACKAGE"; then
+        echo "----- CRASH DETECTED -----"
+        echo "$CRASH"
+        echo "--------------------------"
+        exit 1
+    fi
+    echo "----- ignoring crash of another app (not $PACKAGE) -----"
     echo "$CRASH"
     echo "--------------------------"
-    exit 1
 fi
 # Belt-and-suspenders: a launch crash kills the process even if the crash
 # buffer detection above misses it. NoClassDefFoundError lands here.
