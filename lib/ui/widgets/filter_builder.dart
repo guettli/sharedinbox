@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_picker_button.dart';
 
 /// A widget that lets the user build a structured [FilterGroup] interactively.
@@ -301,24 +302,28 @@ class _LeafRowState extends State<_LeafRow> {
   /// squeezed to zero by the fixed-width dropdowns on a narrow phone screen.
   static const _narrowBreakpoint = 480.0;
 
-  Widget _fieldDropdown() => DropdownButton<FilterField>(
-        value: widget.leaf.field,
-        onChanged: _onFieldChanged,
-        isDense: true,
-        underline: const SizedBox.shrink(),
-        items: widget.availableFields
-            .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
-            .toList(),
+  Widget _fieldDropdown() => AccessibleDropdown(
+        child: DropdownButton<FilterField>(
+          value: widget.leaf.field,
+          onChanged: _onFieldChanged,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          items: widget.availableFields
+              .map((f) => DropdownMenuItem(value: f, child: Text(f.label)))
+              .toList(),
+        ),
       );
 
-  Widget _comparisonDropdown() => DropdownButton<FilterComparison>(
-        value: widget.leaf.comparison,
-        onChanged: _onCompChanged,
-        isDense: true,
-        underline: const SizedBox.shrink(),
-        items: widget.leaf.field.allowedComparisons
-            .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
-            .toList(),
+  Widget _comparisonDropdown() => AccessibleDropdown(
+        child: DropdownButton<FilterComparison>(
+          value: widget.leaf.comparison,
+          onChanged: _onCompChanged,
+          isDense: true,
+          underline: const SizedBox.shrink(),
+          items: widget.leaf.field.allowedComparisons
+              .map((c) => DropdownMenuItem(value: c, child: Text(c.label)))
+              .toList(),
+        ),
       );
 
   Widget _headerNameField() => TextField(

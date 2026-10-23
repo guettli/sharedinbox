@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 
@@ -176,42 +177,44 @@ class _FilterBar extends StatelessWidget {
                 // does, so the ConstrainedBox gives it something to clamp to.
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 260),
-                  child: DropdownButton<String?>(
-                    isExpanded: true,
-                    value: filter.accountId,
-                    hint: const Text('All accounts'),
-                    // Truncates only the closed button: the menu can never be
-                    // wider than the button, so ellipsizing the items would
-                    // leave the reader picking between unreadable addresses.
-                    selectedItemBuilder: (context) => [
-                      const Text('All accounts'),
-                      for (final a in accounts)
-                        Text(
-                          accountFromLabel(a),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                  child: AccessibleDropdown(
+                    child: DropdownButton<String?>(
+                      isExpanded: true,
+                      value: filter.accountId,
+                      hint: const Text('All accounts'),
+                      // Truncates only the closed button: the menu can never be
+                      // wider than the button, so ellipsizing the items would
+                      // leave the reader picking between unreadable addresses.
+                      selectedItemBuilder: (context) => [
+                        const Text('All accounts'),
+                        for (final a in accounts)
+                          Text(
+                            accountFromLabel(a),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                      items: [
+                        const DropdownMenuItem<String?>(
+                          child: Text('All accounts'),
                         ),
-                    ],
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        child: Text('All accounts'),
-                      ),
-                      // 'name <email>', not the display name alone: this
-                      // filter exists to tell accounts apart, and two accounts
-                      // can share a display name.
-                      for (final a in accounts)
-                        DropdownMenuItem<String?>(
-                          value: a.id,
-                          child: Text(accountFromLabel(a)),
-                        ),
-                    ],
-                    onChanged: (value) {
-                      onChanged(
-                        value == null
-                            ? filter.copyWith(clearAccountId: true)
-                            : filter.copyWith(accountId: value),
-                      );
-                    },
+                        // 'name <email>', not the display name alone: this
+                        // filter exists to tell accounts apart, and two
+                        // accounts can share a display name.
+                        for (final a in accounts)
+                          DropdownMenuItem<String?>(
+                            value: a.id,
+                            child: Text(accountFromLabel(a)),
+                          ),
+                      ],
+                      onChanged: (value) {
+                        onChanged(
+                          value == null
+                              ? filter.copyWith(clearAccountId: true)
+                              : filter.copyWith(accountId: value),
+                        );
+                      },
+                    ),
                   ),
                 ),
               if (filter.syncLogId != null)

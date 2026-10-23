@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
 
@@ -749,53 +750,55 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           if (_accounts.length > 1)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-              child: DropdownButtonFormField<String>(
-                initialValue: _fromAccountId,
-                decoration: const InputDecoration(
-                  labelText: 'From',
-                  border: OutlineInputBorder(),
+              child: AccessibleDropdown.formField(
+                child: DropdownButtonFormField<String>(
+                  initialValue: _fromAccountId,
+                  decoration: const InputDecoration(
+                    labelText: 'From',
+                    border: OutlineInputBorder(),
+                  ),
+                  // Without isExpanded the button sizes itself to the WIDEST
+                  // ITEM, not to whatever is displayed — so this overflowed by
+                  // 426px on a 411dp screen at text scale 2.0 while the short
+                  // "Select an account" hint was the only thing on screen.
+                  // isExpanded clamps the button to the field it sits in.
+                  isExpanded: true,
+                  // With the button clamped, an un-ellipsized item would wrap
+                  // instead, making the collapsed field two or three lines
+                  // tall. selectedItemBuilder truncates only the closed
+                  // button, so the open menu keeps the full address readable
+                  // — the menu can never be wider than the button, so
+                  // ellipsizing the items themselves would leave the user
+                  // choosing between addresses they cannot read.
+                  // No Align: DropdownButton already puts these in an
+                  // IndexedStack aligned centerStart, and a bare Align expands
+                  // to fill any bounded height it is handed.
+                  selectedItemBuilder: (context) => _accounts
+                      .map(
+                        (a) => Text(
+                          accountFromLabel(a),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      )
+                      .toList(),
+                  hint: const Text('Select an account'),
+                  items: _accounts
+                      .map(
+                        (a) => DropdownMenuItem(
+                          value: a.id,
+                          child: Text(accountFromLabel(a)),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    setState(() => _accountId = v);
+                    unawaited(_applySignatureForAccount(v));
+                    // Save the new account like an edit, so a saved draft
+                    // moves even when nothing is typed afterwards.
+                    if (_draftId != null) _onTextChanged();
+                  },
                 ),
-                // Without isExpanded the button sizes itself to the WIDEST
-                // ITEM, not to whatever is displayed — so this overflowed by
-                // 426px on a 411dp screen at text scale 2.0 while the short
-                // "Select an account" hint was the only thing on screen.
-                // isExpanded clamps the button to the field it sits in.
-                isExpanded: true,
-                // With the button clamped, an un-ellipsized item would wrap
-                // instead, making the collapsed field two or three lines tall.
-                // selectedItemBuilder truncates only the closed button, so the
-                // open menu keeps the full address readable — the menu can
-                // never be wider than the button, so ellipsizing the items
-                // themselves would leave the user choosing between addresses
-                // they cannot read.
-                // No Align: DropdownButton already puts these in an
-                // IndexedStack aligned centerStart, and a bare Align expands
-                // to fill any bounded height it is handed.
-                selectedItemBuilder: (context) => _accounts
-                    .map(
-                      (a) => Text(
-                        accountFromLabel(a),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )
-                    .toList(),
-                hint: const Text('Select an account'),
-                items: _accounts
-                    .map(
-                      (a) => DropdownMenuItem(
-                        value: a.id,
-                        child: Text(accountFromLabel(a)),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (v) {
-                  setState(() => _accountId = v);
-                  unawaited(_applySignatureForAccount(v));
-                  // Save the new account like an edit, so a saved draft
-                  // moves even when nothing is typed afterwards.
-                  if (_draftId != null) _onTextChanged();
-                },
               ),
             )
           else if (_accounts.length == 1)

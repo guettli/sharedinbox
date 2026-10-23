@@ -87,6 +87,17 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
+      // Without an explicit enabled flag Flutter's Linux bridge announces
+      // the picker as "disabled" (#1180).
+      expect(
+        tester.getSemantics(find.byType(DropdownButtonFormField<String>)),
+        isSemantics(
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+        ),
+      );
     });
 
     group('From account of a restored draft', () {

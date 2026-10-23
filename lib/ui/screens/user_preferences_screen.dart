@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/sync/background_sync.dart';
 import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
 class UserPreferencesScreen extends ConsumerWidget {
@@ -161,22 +162,24 @@ class UserPreferencesScreen extends ConsumerWidget {
                   children: [
                     const Text('Cache size limit:'),
                     const SizedBox(width: AppSpacing.lg),
-                    DropdownButton<int>(
-                      value: _nearestCacheOption(prefs.bodyCacheLimitMb),
-                      items: const [
-                        DropdownMenuItem(value: 50, child: Text('50 MB')),
-                        DropdownMenuItem(value: 100, child: Text('100 MB')),
-                        DropdownMenuItem(value: 200, child: Text('200 MB')),
-                        DropdownMenuItem(value: 500, child: Text('500 MB')),
-                      ],
-                      onChanged: (value) {
-                        if (value == null) return;
-                        unawaited(
-                          ref
-                              .read(userPreferencesRepositoryProvider)
-                              .updateBodyCacheLimitMb(value),
-                        );
-                      },
+                    AccessibleDropdown(
+                      child: DropdownButton<int>(
+                        value: _nearestCacheOption(prefs.bodyCacheLimitMb),
+                        items: const [
+                          DropdownMenuItem(value: 50, child: Text('50 MB')),
+                          DropdownMenuItem(value: 100, child: Text('100 MB')),
+                          DropdownMenuItem(value: 200, child: Text('200 MB')),
+                          DropdownMenuItem(value: 500, child: Text('500 MB')),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          unawaited(
+                            ref
+                                .read(userPreferencesRepositoryProvider)
+                                .updateBodyCacheLimitMb(value),
+                          );
+                        },
+                      ),
                     ),
                   ],
                 ),

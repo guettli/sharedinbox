@@ -88,7 +88,7 @@ curl -s $A/shot -o /tmp/screen.png   # screenshot (then view the PNG)
 c log lines=50                       # app stdout/stderr: assertions, exceptions
 c click name='Add account'           # exact accessible name
 c click name=SSL/TLS contains=1 role='toggle button' index=1
-c click name=From contains=1 role='push button' force=1   # see [disabled] below
+c click name=From contains=1 role='push button'
 c fill name='Email address' text=bob@example.com
 c fill name=Password text=secret role='password text'
 c key key=Escape                     # xdotool key names: Return, ctrl+a, …
@@ -123,8 +123,10 @@ How to read the output:
   400 nodes. Anything unexpected returns 500 with the traceback.
 - `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
   widget whose semantics carry no enabled state at all as disabled, and
-  `click` then refuses it with "present but not enabled". The From dropdown in
-  Compose and its menu items are examples. Look at a screenshot: if the
+  `click` then refuses it with "present but not enabled". The items of an
+  open dropdown menu are an example; the dropdown buttons themselves carry
+  an explicit enabled flag via `AccessibleDropdown` since #1180, so `force=1`
+  should no longer be needed for the From field. Look at a screenshot: if the
   control is drawn as enabled, click it with `force=1`, always together with
   `role`, so the match cannot land on a text such as an error banner. If it
   then works, the control is not broken, but its missing enabled state is
