@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
@@ -106,7 +107,9 @@ class AppDrawer extends ConsumerWidget {
                     ),
                     error: (e, _) => Padding(
                       padding: const EdgeInsets.all(AppSpacing.lg),
-                      child: Text('Error loading accounts: $e'),
+                      child: Text(
+                        'Error loading accounts: ${userErrorMessage(e)}',
+                      ),
                     ),
                     data: (accounts) => Column(
                       mainAxisSize: MainAxisSize.min,

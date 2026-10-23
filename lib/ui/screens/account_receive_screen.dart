@@ -9,6 +9,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -72,7 +73,7 @@ class _AccountReceiveScreenState extends ConsumerState<AccountReceiveScreen> {
             ),
       );
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = userErrorMessage(e);
         _step = _Step.error;
       });
     }

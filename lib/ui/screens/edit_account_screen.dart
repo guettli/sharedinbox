@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/try_connection.dart';
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 import 'package:sharedinbox/ui/widgets/tls_switch_tile.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
@@ -20,7 +22,8 @@ class EditAccountScreen extends ConsumerStatefulWidget {
   ConsumerState<EditAccountScreen> createState() => _EditAccountScreenState();
 }
 
-class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
+class _EditAccountScreenState extends ConsumerState<EditAccountScreen>
+    with TryConnectionState<EditAccountScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _loading = true;
   bool _saving = false;
@@ -44,11 +47,6 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
   final _signatureCtrl = TextEditingController();
   final _jmapUrlCtrl = TextEditingController();
   bool _hasStoredPassword = false;
-
-  // -- "Try connection" state ------------------------------------------------
-  bool _tryTesting = false;
-  String? _tryOk;
-  String? _tryErr;
 
   @override
   void initState() {
@@ -165,41 +163,12 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
         : await ref
             .read(accountRepositoryProvider)
             .getPassword(widget.accountId);
-    setState(() {
-      _tryTesting = true;
-      _tryOk = null;
-      _tryErr = null;
-    });
-    try {
-      final result = await ref
-          .read(connectionTestServiceProvider)
-          .testConnection(_buildUpdated(), password);
-      if (mounted) {
-        setState(() {
-          _tryTesting = false;
-          _tryOk = result.identityWarning != null
-              ? 'Connected as ${result.username}\n⚠ ${result.identityWarning}'
-              : 'Connected as ${result.username}';
-        });
-      }
-    } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).warn(
-              'account.test_connection_failed',
-              'Connection test failed',
-              screen: 'EditAccountScreen',
-              accountId: widget.accountId,
-              error: e,
-              stack: stack,
-            ),
-      );
-      if (mounted) {
-        setState(() {
-          _tryTesting = false;
-          _tryErr = e.toString();
-        });
-      }
-    }
+    await runTryConnection(
+      buildAccount: _buildUpdated,
+      password: password,
+      screen: 'EditAccountScreen',
+      accountId: widget.accountId,
+    );
   }
 
   Future<void> _save() async {
@@ -258,7 +227,7 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
       if (mounted) {
         setState(() {
           _saving = false;
-          _errorMessage = 'Save failed: $e';
+          _errorMessage = 'Save failed: ${userErrorMessage(e)}';
         });
       }
     }
@@ -399,9 +368,9 @@ class _EditAccountScreenState extends ConsumerState<EditAccountScreen> {
             ),
             TryConnectionButton(
               buttonKey: const Key('editTryConnectionButton'),
-              testing: _tryTesting,
-              okMessage: _tryOk,
-              errorMessage: _tryErr,
+              testing: tryTesting,
+              okMessage: tryOk,
+              errorMessage: tryErr,
               onPressed: _hasStoredPassword || _passwordCtrl.text.isNotEmpty
                   ? _tryConnection
                   : null,

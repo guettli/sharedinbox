@@ -263,7 +263,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       } catch (e, stack) {
         if (!mounted) return;
         context.showAppSnackBar(
-          'Could not sync drafts: $e',
+          'Could not sync drafts: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           event: 'email.detail.draft_sync_failed',
           emailId: widget.emailId,
@@ -823,7 +823,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              '$error',
+              userErrorMessage(error),
               style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
                     color: Theme.of(ctx).colorScheme.outline,
                   ),
@@ -1176,7 +1176,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       if (!mounted) return;
       setState(() => _imageLoadFailed.add(att.filename));
       context.showAppSnackBar(
-        'Loading image failed: $e',
+        'Loading image failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.attachment.open_failed',
         emailId: widget.emailId,
@@ -1234,7 +1234,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(
-        'Opening file failed: $e',
+        'Opening file failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.attachment.open_failed',
         emailId: widget.emailId,
@@ -1291,7 +1291,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           // already defaults to true in Riverpod, so it is not set here.)
           skipLoadingOnReload: true,
           loading: () => const SizedBox.shrink(),
-          error: (e, _) => Text('Error loading notes: $e'),
+          error: (e, _) => Text('Error loading notes: ${userErrorMessage(e)}'),
           data: (list) {
             if (list.isEmpty) {
               return Padding(
@@ -1976,7 +1976,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } catch (e, stack) {
       if (!context.mounted) return;
       context.showAppSnackBar(
-        'Failed to fetch raw email: $e',
+        'Failed to fetch raw email: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.raw.fetch_failed',
         accountId: header?.accountId,
@@ -2105,7 +2105,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } catch (e, stack) {
       if (!context.mounted) return;
       context.showAppSnackBar(
-        'Download failed: $e',
+        'Download failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.raw.download_failed',
         accountId: header?.accountId,
@@ -2146,7 +2146,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     } catch (e, stack) {
       if (context.mounted) {
         messenger.show(
-          'Failed to fetch mail details: $e',
+          'Failed to fetch mail details: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           event: 'email.body.refetch_failed',
           emailId: widget.emailId,
@@ -2507,7 +2507,7 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
     } catch (e, stack) {
       if (!mounted) return;
       messenger.show(
-        'Failed to send unsubscribe: $e',
+        'Failed to send unsubscribe: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.unsubscribe.send_failed',
         accountId: widget.email.accountId,

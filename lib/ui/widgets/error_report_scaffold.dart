@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -145,7 +146,7 @@ class ReportIssueButton extends StatelessWidget {
         } catch (e) {
           if (context.mounted) {
             context.showAppSnackBar(
-              'Error: $e',
+              'Error: ${userErrorMessage(e)}',
               level: AppLogLevel.error,
               error: e,
               duration: const Duration(seconds: 5),

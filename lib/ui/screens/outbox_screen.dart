@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -150,7 +151,7 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
       // the user what happened rather than fail silently — the whole point of
       // #755 ("nothing happens, no useful info").
       messenger.show(
-        'Send failed: $e',
+        'Send failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'outbox.retry',
         accountId: message.accountId,

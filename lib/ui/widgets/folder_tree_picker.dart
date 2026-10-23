@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/folder_tree.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 
@@ -266,7 +267,7 @@ class _FolderTreePickerDialogState
       if (!mounted) return;
       setState(() => _creating = false);
       context.showAppSnackBar(
-        'Could not create folder: $e',
+        'Could not create folder: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'folder_picker.create_failed',
         data: {'name': name, 'parent': parent},

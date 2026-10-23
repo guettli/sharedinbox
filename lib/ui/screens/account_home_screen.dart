@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_actions.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -48,7 +49,7 @@ class AccountHomeScreen extends ConsumerWidget {
       drawer: AppDrawer(current: AppDrawerSelection.account(accountId)),
       body: accountAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => Center(child: Text('Error: ${userErrorMessage(e)}')),
         data: (account) {
           if (account == null) {
             return const Center(child: Text('Account not found'));

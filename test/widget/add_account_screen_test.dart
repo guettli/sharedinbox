@@ -306,7 +306,9 @@ void main() {
       await _expectSavePopsToAccountList(tester, discovery: _jmapDiscovery());
     });
 
-    testWidgets('JMAP connection failure shows error message', (tester) async {
+    testWidgets('JMAP connection failure shows readable error messages', (
+      tester,
+    ) async {
       await _submitEmail(
         tester,
         overrides: baseOverrides(
@@ -316,10 +318,18 @@ void main() {
       );
 
       await _fillCredentials(tester, password: 'wrong');
+      await tester.tap(find.byKey(const Key('tryConnectionButton')));
+      await tester.pumpAndSettle();
+      expect(find.text('auth failed', findRichText: true), findsOneWidget);
+
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Connection failed'), findsOneWidget);
+      expect(find.text('Connection failed: auth failed'), findsOneWidget);
+      expect(
+        find.textContaining('Exception:', findRichText: true),
+        findsNothing,
+      );
     });
 
     testWidgets('JMAP try connection surfaces identity warning', (

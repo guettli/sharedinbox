@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/about_markdown.dart';
@@ -96,7 +97,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     } catch (e, stack) {
       if (context.mounted) {
         context.showAppSnackBar(
-          'Error: $e',
+          'Error: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           event: event,
           data: {'url': url.toString()},

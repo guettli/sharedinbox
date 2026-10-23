@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart'
     show QueueRowActions, SyncNowFn, retryQueueRow;
@@ -43,7 +44,7 @@ class PendingChangesScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Pending Changes')),
       body: rowsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => Center(child: Text('Error: ${userErrorMessage(e)}')),
         data: (rows) {
           if (rows.isEmpty) {
             return const Center(child: Text('No pending changes.'));
