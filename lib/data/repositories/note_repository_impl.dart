@@ -206,6 +206,8 @@ class NoteRepositoryImpl implements NoteRepository {
         'uidValidity': uidValidity,
         'lastUid': maxUid,
       });
+      // Runs every sync cycle — only log when something changed.
+      if (fetched == 0 && pruned == 0) return;
       unawaited(
         _appLogger?.info(
           'note.sync.completed',
@@ -225,9 +227,8 @@ class NoteRepositoryImpl implements NoteRepository {
 
   /// The Notes folder doesn't exist (yet) — the default on most servers.
   /// Clears any stale checkpoint and drops orphaned local notes so the local
-  /// cache mirrors reality. This runs on every sync cycle, so it only logs at
-  /// info when something was actually cleared; the no-op case goes to debug
-  /// to keep the App Log readable.
+  /// cache mirrors reality. This runs on every sync cycle, and every App Log
+  /// row is persisted, so it logs only when something was actually cleared.
   Future<void> _handleNotesFolderMissing(
     String accountId,
     String transport,
@@ -237,30 +238,19 @@ class NoteRepositoryImpl implements NoteRepository {
       'note.sync.folder_missing_wipe',
     );
     final checkpointCleared = await _clearNotesCheckpoint(accountId) > 0;
-    final data = {
-      'transport': transport,
-      'wiped': wiped,
-      'checkpointCleared': checkpointCleared,
-    };
-    if (wiped > 0 || checkpointCleared) {
-      unawaited(
-        _appLogger?.info(
-          'note.sync.completed',
-          'Note sync: Notes folder not found, cleared local cache',
-          accountId: accountId,
-          data: data,
-        ),
-      );
-    } else {
-      unawaited(
-        _appLogger?.debug(
-          'note.sync.completed',
-          'Note sync: Notes folder not found, nothing to sync',
-          accountId: accountId,
-          data: data,
-        ),
-      );
-    }
+    if (wiped == 0 && !checkpointCleared) return;
+    unawaited(
+      _appLogger?.info(
+        'note.sync.completed',
+        'Note sync: Notes folder not found, cleared local cache',
+        accountId: accountId,
+        data: {
+          'transport': transport,
+          'wiped': wiped,
+          'checkpointCleared': checkpointCleared,
+        },
+      ),
+    );
   }
 
   Future<void> _syncAllNotesJmap(
@@ -500,6 +490,8 @@ class NoteRepositoryImpl implements NoteRepository {
       'queryState': newQueryState,
       'emailState': newEmailState,
     });
+    // Runs every sync cycle — only log when something changed.
+    if (toFetch.isEmpty && toRemove.isEmpty) return;
     unawaited(
       _appLogger?.info(
         'note.sync.completed',
