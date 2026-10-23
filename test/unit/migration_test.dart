@@ -16,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 64);
+      expect(db.schemaVersion, 65);
       await db.close();
     });
 
@@ -176,6 +176,7 @@ void main() {
       expect(draftColumns, contains('imap_server_id'));
       expect(draftColumns, contains('jmap_server_id')); // v43
       expect(draftColumns, contains('dirty')); // v43
+      expect(draftColumns, contains('bcc_text')); // v65
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
       final allTables = await db
@@ -374,7 +375,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 64);
+      expect(version.read<int>('user_version'), 65);
       await db.close();
     });
 
@@ -415,7 +416,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 64);
+      expect(version.read<int>('user_version'), 65);
       await db.close();
     });
 
@@ -446,7 +447,45 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 64);
+      expect(version.read<int>('user_version'), 65);
+      await db.close();
+    });
+
+    test('v64→v65 adds an empty drafts.bcc_text to saved drafts', () async {
+      final dbFile = File('test_migration_v64_bcc_text.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x'); // creates the schema
+      await fresh.close();
+
+      var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE drafts DROP COLUMN bcc_text;')
+        ..execute(
+          "INSERT INTO drafts (id, to_text, updated_at) VALUES (1, 'a@b', 0);",
+        )
+        ..execute('PRAGMA user_version = 64;');
+      rawDb.close();
+
+      var db = AppDatabase(NativeDatabase(dbFile));
+      final row = await db
+          .customSelect('SELECT to_text, bcc_text FROM drafts WHERE id = 1')
+          .getSingle();
+      expect(row.read<String>('to_text'), 'a@b');
+      expect(row.read<String>('bcc_text'), '');
+      await db.close();
+
+      // An interrupted earlier upgrade can leave the column at v64 already.
+      rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('PRAGMA user_version = 64;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 65);
       await db.close();
     });
 
@@ -542,7 +581,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 64);
+      expect(version.read<int>('user_version'), 65);
     });
 
     test(
@@ -1075,6 +1114,7 @@ void main() {
       expect(draftColumns, contains('imap_server_id'));
       expect(draftColumns, contains('jmap_server_id')); // v43
       expect(draftColumns, contains('dirty')); // v43
+      expect(draftColumns, contains('bcc_text')); // v65
 
       // v30: duration_ms column on sync_log_mailboxes.
       final syncLogMailboxColumns = await _tableColumns(

@@ -32,6 +32,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.replyToEmailId,
     this.prefillTo,
     this.prefillCc,
+    this.prefillBcc,
     this.prefillSubject,
     this.prefillBody,
     this.draftId,
@@ -41,6 +42,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? replyToEmailId;
   final String? prefillTo;
   final String? prefillCc;
+  final String? prefillBcc;
   final String? prefillSubject;
   final String? prefillBody;
 
@@ -55,8 +57,15 @@ class ComposeScreen extends ConsumerStatefulWidget {
 class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _to = TextEditingController();
   final _cc = TextEditingController();
+  final _bcc = TextEditingController();
   final _toFocus = FocusNode();
   final _ccFocus = FocusNode();
+  final _bccFocus = FocusNode();
+
+  /// Whether the Bcc field is shown. Collapsed by default behind a "Bcc"
+  /// button on the Cc field; opened by that button, or by a prefill or
+  /// restored draft that has Bcc recipients (#1126).
+  bool _showBcc = false;
   final _subject = TextEditingController();
   final _body = TextEditingController();
   String? _accountId;
@@ -109,6 +118,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _replyToEmailId = widget.replyToEmailId;
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
     if (widget.prefillCc != null) _cc.text = widget.prefillCc!;
+    if (widget.prefillBcc != null) _bcc.text = widget.prefillBcc!;
+    _showBcc = _bcc.text.trim().isNotEmpty;
     if (widget.prefillSubject != null) _subject.text = widget.prefillSubject!;
     if (widget.prefillBody != null) {
       _setPristineBody(normalizeNewlines(widget.prefillBody!));
@@ -117,7 +128,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
 
-    for (final c in [_to, _cc, _subject, _body]) {
+    for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.addListener(_onTextChanged);
     }
   }
@@ -247,6 +258,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _replyToEmailId = draft.replyToEmailId ?? _replyToEmailId;
       _to.text = draft.toText;
       _cc.text = draft.ccText;
+      _bcc.text = draft.bccText;
+      if (draft.bccText.trim().isNotEmpty) _showBcc = true;
       _subject.text = draft.subjectText;
       // Drafts pulled from the server come back with CRLF.
       _body.text = normalizeNewlines(draft.bodyText);
@@ -286,6 +299,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       replyToEmailId: _replyToEmailId,
       toText: _to.text,
       ccText: _cc.text,
+      bccText: _bcc.text,
       subjectText: _subject.text,
       bodyText: _body.text,
     );
@@ -303,12 +317,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   @override
   void dispose() {
     _saveTimer?.cancel();
-    for (final c in [_to, _cc, _subject, _body]) {
+    for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.removeListener(_onTextChanged);
       c.dispose();
     }
     _toFocus.dispose();
     _ccFocus.dispose();
+    _bccFocus.dispose();
     // Drop any temp files created for shrunk attachments.
     for (final a in _attachments) {
       if (a.isTemp) unawaited(_deleteTempFile(a.path));
@@ -323,6 +338,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           replyToEmailId: _replyToEmailId,
           toText: _to.text,
           ccText: _cc.text,
+          bccText: _bcc.text,
           subjectText: _subject.text,
           bodyText: _body.text,
         ),
@@ -514,6 +530,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final invalid = [
       ...invalidRecipients(_to.text),
       ...invalidRecipients(_cc.text),
+      ...invalidRecipients(_bcc.text),
     ];
     if (invalid.isNotEmpty) {
       context.showAppSnackBar(
@@ -539,6 +556,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         // address as given, so a raw "Bob <bob@x>" chunk was rejected there.
         to: recipientAddresses(_to.text),
         cc: recipientAddresses(_cc.text),
+        bcc: recipientAddresses(_bcc.text),
         subject: _subject.text,
         body: _body.text,
         attachmentFilePaths: List.unmodifiable(
@@ -788,7 +806,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               ),
             ),
           _addressField(_to, _toFocus, 'To'),
-          _addressField(_cc, _ccFocus, 'Cc'),
+          _addressField(
+            _cc,
+            _ccFocus,
+            'Cc',
+            suffix: _showBcc
+                ? null
+                : TextButton(
+                    key: const Key('compose-show-bcc'),
+                    onPressed: () {
+                      setState(() => _showBcc = true);
+                      _bccFocus.requestFocus();
+                    },
+                    child: const Text('Bcc'),
+                  ),
+          ),
+          if (_showBcc) _addressField(_bcc, _bccFocus, 'Bcc'),
           _field(_subject, 'Subject'),
           const SizedBox(height: AppSpacing.sm),
           TextFormField(
@@ -852,8 +885,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   Widget _addressField(
     TextEditingController ctrl,
     FocusNode focusNode,
-    String label,
-  ) {
+    String label, {
+    Widget? suffix,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
       child: RawAutocomplete<EmailAddress>(
@@ -890,6 +924,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             decoration: InputDecoration(
               labelText: label,
               border: const OutlineInputBorder(),
+              suffixIcon: suffix,
             ),
             onFieldSubmitted: (_) => onFieldSubmitted(),
           );

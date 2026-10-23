@@ -8693,6 +8693,85 @@ void main() {
       expect(body.textBody, 'Body');
     });
 
+    test('Bcc goes into RCPT TO only; the Sent copy keeps the header (#1126)',
+        () async {
+      final smtp = _CapturingSmtpClient();
+      final spy = _AppendCapturingImapClient(appendUid: 12);
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async => smtp,
+        imapConnect: (Account _, String __, String ___) async => spy,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+      // Enough Bcc recipients for the header to be folded over several
+      // lines, which enough_mail's own Bcc stripping only half removes.
+      final bcc = [
+        for (var i = 0; i < 8; i++)
+          EmailAddress(name: 'Hidden $i', email: 'hidden$i@example.com'),
+      ];
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: draft.from,
+          to: draft.to,
+          cc: const [],
+          bcc: bcc,
+          subject: 'Test',
+          body: 'Body',
+        ),
+      );
+
+      expect(smtp.recipients, [
+        'bob@example.com',
+        for (final a in bcc) a.email,
+      ]);
+      expect(smtp.sentMime, isNot(contains(RegExp('^Bcc:', multiLine: true))));
+      expect(smtp.sentMime, isNot(contains('hidden')));
+      expect(spy.appendedMime, contains(RegExp('^Bcc:', multiLine: true)));
+      for (final a in bcc) {
+        expect(spy.appendedMime, contains(a.email));
+      }
+
+      final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      expect(
+        sent.single.bcc.map((a) => a.email),
+        [for (final a in bcc) a.email],
+      );
+    });
+
+    test('an address in both To and Bcc gets one RCPT TO (#1126)', () async {
+      final smtp = _CapturingSmtpClient();
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async => smtp,
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(appendUid: 13),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.sendEmail(
+        'acc-1',
+        EmailDraft(
+          from: draft.from,
+          to: draft.to,
+          cc: const [EmailAddress(email: 'carol@example.com')],
+          bcc: const [
+            EmailAddress(email: 'BOB@Example.com'),
+            EmailAddress(email: 'Carol@example.com'),
+            EmailAddress(email: 'dave@example.com'),
+          ],
+          subject: 'Test',
+          body: 'Body',
+        ),
+      );
+
+      expect(smtp.recipients, [
+        'bob@example.com',
+        'carol@example.com',
+        'dave@example.com',
+      ]);
+    });
+
     test('without UIDPLUS it still shows up, as a virtual row', () async {
       final r = _makeRepos(
         smtpConnect: (Account _, String __, String ___) async =>
@@ -10611,6 +10690,29 @@ class _NoOpSmtpClient extends imap.SmtpClient {
   Future<imap.SmtpResponse> quit() async => imap.SmtpResponse(const []);
 }
 
+/// Records what an SMTP send transmits: the envelope recipients and the
+/// message text as enough_mail would put it on the wire.
+class _CapturingSmtpClient extends _NoOpSmtpClient {
+  List<String>? recipients;
+  String? sentMime;
+
+  @override
+  Future<imap.SmtpResponse> sendMessage(
+    imap.MimeMessage message, {
+    bool use8BitEncoding = false,
+    imap.MailAddress? from,
+    List<imap.MailAddress>? recipients,
+  }) async {
+    this.recipients =
+        (recipients ?? message.recipients).map((a) => a.email).toList();
+    // Same stripping as enough_mail's SmtpSendMailCommand.
+    sentMime = message
+        .renderMessage()
+        .replaceAll(RegExp('^Bcc:.*\r\n', multiLine: true), '');
+    return imap.SmtpResponse(const ['250 OK']);
+  }
+}
+
 class _AppendCapturingImapClient extends FakeImapClient {
   _AppendCapturingImapClient({this.appendUid});
 
@@ -10621,6 +10723,7 @@ class _AppendCapturingImapClient extends FakeImapClient {
 
   Duration? lastAppendTimeout;
   String? appendedToPath;
+  String? appendedMime;
   final List<String> createdMailboxes = [];
 
   @override
@@ -10639,6 +10742,7 @@ class _AppendCapturingImapClient extends FakeImapClient {
   }) async {
     lastAppendTimeout = responseTimeout;
     appendedToPath = targetMailboxPath;
+    appendedMime = message.renderMessage();
     final result = imap.GenericImapResult();
     if (appendUid != null) result.responseCode = 'APPENDUID 1 $appendUid';
     return result;

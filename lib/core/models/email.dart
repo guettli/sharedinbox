@@ -399,6 +399,12 @@ class EmailDraft {
   final EmailAddress from;
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
+
+  /// Blind-copy recipients: they get the message (SMTP `RCPT TO`, JMAP
+  /// `EmailSubmission` envelope) but the transmitted message carries no
+  /// `Bcc:` header, so nobody sees them. Only the sender's own copies (Sent,
+  /// the server draft) keep the header (#1126).
+  final List<EmailAddress> bcc;
   final String subject;
   final String body;
 
@@ -419,10 +425,22 @@ class EmailDraft {
   final String? inReplyTo;
   final List<String> references;
 
+  /// Every envelope recipient: To, Cc and Bcc, each address once (compared
+  /// case-insensitively), so one listed in both To and Bcc is not sent
+  /// twice.
+  List<EmailAddress> get allRecipients {
+    final seen = <String>{};
+    return [
+      for (final a in [...to, ...cc, ...bcc])
+        if (seen.add(a.email.trim().toLowerCase())) a,
+    ];
+  }
+
   const EmailDraft({
     required this.from,
     required this.to,
     required this.cc,
+    this.bcc = const [],
     required this.subject,
     required this.body,
     this.attachmentFilePaths = const [],
@@ -435,6 +453,7 @@ class EmailDraft {
         from: from,
         to: to,
         cc: cc,
+        bcc: bcc,
         subject: subject,
         body: body,
         attachmentFilePaths: attachmentFilePaths,

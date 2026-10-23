@@ -51,6 +51,7 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient
   final created = <String>[];
   final selected = <String>[];
   final appendedTo = <String?>[];
+  final appendedMessages = <imap.MimeMessage>[];
 
   /// UIDs reported back in `APPENDUID`, one per append; none when empty.
   final appendUids = <int>[];
@@ -86,6 +87,7 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient
     Duration? responseTimeout,
   }) async {
     appendedTo.add(targetMailboxPath);
+    appendedMessages.add(message);
     await onAppend?.call();
     final result = imap.GenericImapResult();
     if (appendUids.isNotEmpty) {
@@ -576,6 +578,43 @@ void main() {
           bodyText: bodyText,
         );
 
+    test('Bcc survives save, edit and the IMAP push (#1126)', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [42];
+      final repo = imapRepo(db, client);
+      final saved = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        bccText: 'Eve <eve@example.com>',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+      expect((await repo.getDraft(saved.id))?.bccText, 'Eve <eve@example.com>');
+
+      await repo.syncDrafts('acc-1');
+
+      // The server draft is the sender's own copy, so it keeps Bcc.
+      final pushed = client.appendedMessages.single;
+      expect(pushed.bcc?.map((a) => a.email), ['eve@example.com']);
+      expect((await repo.getDraft(saved.id))?.dirty, isFalse);
+
+      // Dropping only the Bcc (bccText defaults to empty) is an edit too.
+      await repo.saveDraft(
+        id: saved.id,
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+      final row = await repo.getDraft(saved.id);
+      expect(row?.bccText, isEmpty);
+      expect(row?.dirty, isTrue);
+    });
+
     test('an edit during the IMAP append is pushed by the next sync', () async {
       final db = await openTestDatabaseWithAccounts(const ['acc-1']);
       final client = _DraftsSpyImapClient()..appendUids.addAll([42, 43]);
@@ -725,6 +764,32 @@ void main() {
       id = await saveNewDraft(repo);
       return (repo, id);
     }
+
+    test('the JMAP draft push carries Bcc (#1126)', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final (repo, id) = await jmapRepo(
+        db,
+        sets,
+        (repo, id) async {},
+      );
+      await repo.saveDraft(
+        id: id,
+        accountId: 'acc-1',
+        toText: 'alice@example.com',
+        ccText: '',
+        bccText: 'eve@example.com',
+        subjectText: 'Hi',
+        bodyText: 'Draft',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      final create = (sets.single['create'] as Map)['draft'] as Map;
+      expect(create['bcc'], [
+        {'email': 'eve@example.com'},
+      ]);
+    });
 
     test('an edit during the JMAP push is pushed by the next sync', () async {
       final db = openTestDatabase();

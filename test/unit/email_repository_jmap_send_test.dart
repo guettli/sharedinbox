@@ -172,6 +172,22 @@ bool _requiresSubmission(String method) =>
   return (client: client, requests: () => requests);
 }
 
+/// The objects every [method] call in [requests] asked the server to create.
+List<Map<String, dynamic>> _creates(
+  List<Map<String, dynamic>> requests,
+  String method,
+) =>
+    [
+      for (final body in requests)
+        for (final call in (body['methodCalls'] as List<dynamic>).cast<List>())
+          if (call[0] == method &&
+              (call[1] as Map<String, dynamic>).containsKey('create'))
+            ...((call[1] as Map<String, dynamic>)['create']
+                    as Map<String, dynamic>)
+                .values
+                .cast<Map<String, dynamic>>(),
+    ];
+
 EmailDraft _draft() => const EmailDraft(
       from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
       to: [EmailAddress(name: 'Bob', email: 'bob@example.com')],
@@ -260,15 +276,21 @@ void main() {
     },
   );
 
-  test('a reply sends inReplyTo and references on the Email/set create',
-      () async {
+  /// Sends [draft] through a fresh strict server; returns its requests.
+  Future<List<Map<String, dynamic>>> sendOnStrictServer(
+    EmailDraft draft,
+  ) async {
     final server = _strictJmapServer();
     final r = makeRepo(server.client);
     await r.accounts.addAccount(_jmapAccount, 'pw');
+    await r.emails.sendEmail(_jmapAccount.id, draft);
+    return server.requests();
+  }
 
+  test('a reply sends inReplyTo and references on the Email/set create',
+      () async {
     final base = _draft();
-    await r.emails.sendEmail(
-      _jmapAccount.id,
+    final requests = await sendOnStrictServer(
       EmailDraft(
         from: base.from,
         to: base.to,
@@ -281,16 +303,7 @@ void main() {
       ),
     );
 
-    final creates = [
-      for (final body in server.requests())
-        for (final call in (body['methodCalls'] as List<dynamic>).cast<List>())
-          if (call[0] == 'Email/set' &&
-              (call[1] as Map<String, dynamic>).containsKey('create'))
-            ...((call[1] as Map<String, dynamic>)['create']
-                    as Map<String, dynamic>)
-                .values
-                .cast<Map<String, dynamic>>(),
-    ];
+    final creates = _creates(requests, 'Email/set');
     expect(creates, hasLength(1));
     // RFC 8621 §4.1.2.3: arrays of bracket-less ids.
     expect(creates.single['inReplyTo'], ['parent@example.com']);
@@ -298,6 +311,33 @@ void main() {
       creates.single['references'],
       ['root@example.com', 'parent@example.com'],
     );
+  });
+
+  test('Bcc goes into rcptTo and the Sent copy, nowhere else (#1126)',
+      () async {
+    final base = _draft();
+    final requests = await sendOnStrictServer(
+      EmailDraft(
+        from: base.from,
+        to: base.to,
+        cc: base.cc,
+        bcc: const [EmailAddress(name: 'Eve', email: 'eve@example.com')],
+        subject: base.subject,
+        body: base.body,
+      ),
+    );
+
+    final email = _creates(requests, 'Email/set').single;
+    expect(email['bcc'], [
+      {'name': 'Eve', 'email': 'eve@example.com'},
+    ]);
+    expect(jsonEncode(email['to']), isNot(contains('eve@')));
+    final submission = _creates(requests, 'EmailSubmission/set').single;
+    final envelope = submission['envelope'] as Map<String, dynamic>;
+    expect(envelope['rcptTo'], [
+      {'email': 'bob@example.com'},
+      {'email': 'eve@example.com'},
+    ]);
   });
 
   test(

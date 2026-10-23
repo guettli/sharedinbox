@@ -19,6 +19,7 @@ GoRouter _composeRouter() => homeAndComposeRouter(
         return ComposeScreen(
           prefillTo: extra?['prefillTo'] as String?,
           prefillCc: extra?['prefillCc'] as String?,
+          prefillBcc: extra?['prefillBcc'] as String?,
           prefillSubject: extra?['prefillSubject'] as String?,
           prefillBody: extra?['prefillBody'] as String?,
         );
@@ -90,6 +91,7 @@ void main() {
             if (call.method == 'getInitialIntent') {
               return <String, Object?>{
                 'to': 'bob@example.com',
+                'bcc': 'eve@example.com',
                 'subject': 'Hi there',
                 'body': 'Line1\nLine2',
                 'attachmentPaths': <String>[],
@@ -115,6 +117,12 @@ void main() {
           find.widgetWithText(TextFormField, 'bob@example.com'),
           findsOneWidget,
         );
+        // A Bcc in the mailto: opens the otherwise collapsed Bcc field (#1126).
+        expect(
+          find.widgetWithText(TextFormField, 'eve@example.com'),
+          findsOneWidget,
+        );
+        expect(find.widgetWithText(TextFormField, 'Bcc'), findsOneWidget);
         expect(
           find.widgetWithText(TextFormField, 'Hi there'),
           findsOneWidget,

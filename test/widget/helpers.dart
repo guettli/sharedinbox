@@ -136,7 +136,7 @@ class FakeShareKeyRepository implements ShareKeyRepository {
   Future<ShareKeyMaterial?> findByKeyId(dynamic keyId) async => _material;
 }
 
-class FakeDraftRepository implements DraftRepository {
+class FakeDraftRepository extends DraftRepository {
   int _nextId = 1;
   final Map<int, SavedDraft> _drafts = {};
 
@@ -144,29 +144,22 @@ class FakeDraftRepository implements DraftRepository {
   final Set<int> savedIds = {};
 
   /// Awaited at the start of every [saveDraft]. Override it to hold a save
-  /// in flight (or fail it) without restating [saveDraft]'s signature.
+  /// in flight (or fail it) without restating [writeDraft].
   Future<void> beforeSave() async {}
 
   @override
-  Future<SavedDraft> saveDraft({
-    int? id,
-    String? accountId,
-    String? replyToEmailId,
-    required String toText,
-    required String ccText,
-    required String subjectText,
-    required String bodyText,
-  }) async {
+  Future<SavedDraft> writeDraft(DraftInput input) async {
     await beforeSave();
-    final draftId = id ?? _nextId++;
+    final draftId = input.id ?? _nextId++;
     final draft = SavedDraft(
       id: draftId,
-      accountId: accountId,
-      replyToEmailId: replyToEmailId,
-      toText: toText,
-      ccText: ccText,
-      subjectText: subjectText,
-      bodyText: bodyText,
+      accountId: input.accountId,
+      replyToEmailId: input.replyToEmailId,
+      toText: input.toText,
+      ccText: input.ccText,
+      bccText: input.bccText,
+      subjectText: input.subjectText,
+      bodyText: input.bodyText,
       updatedAt: DateTime.now(),
     );
     _drafts[draftId] = draft;
@@ -947,6 +940,7 @@ Widget buildApp({
             replyToEmailId: extra?['replyToEmailId'] as String?,
             prefillTo: extra?['prefillTo'] as String?,
             prefillCc: extra?['prefillCc'] as String?,
+            prefillBcc: extra?['prefillBcc'] as String?,
             prefillSubject: extra?['prefillSubject'] as String?,
             prefillBody: extra?['prefillBody'] as String?,
             draftId: extra?['draftId'] as int?,

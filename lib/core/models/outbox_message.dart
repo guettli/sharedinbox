@@ -8,6 +8,7 @@ class OutboxMessage {
     required this.subject,
     required this.to,
     required this.cc,
+    this.bcc = const [],
     required this.createdAt,
     required this.attempts,
     required this.status,
@@ -20,6 +21,7 @@ class OutboxMessage {
   final String subject;
   final List<String> to;
   final List<String> cc;
+  final List<String> bcc;
   final DateTime createdAt;
   final int attempts;
   final String? lastError;

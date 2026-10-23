@@ -45,6 +45,7 @@ class MailIntent {
   Map<String, dynamic> toComposeExtra() => <String, dynamic>{
         if (to != null) 'prefillTo': to,
         if (cc != null) 'prefillCc': cc,
+        if (bcc != null) 'prefillBcc': bcc,
         if (subject != null) 'prefillSubject': subject,
         if (body != null) 'prefillBody': body,
       };

@@ -6915,6 +6915,7 @@ class EmailRepositoryImpl implements EmailRepository {
             fromJson: Value(_encodeModelAddresses([draft.from])),
             toAddresses: Value(_encodeModelAddresses(draft.to)),
             ccJson: Value(_encodeModelAddresses(draft.cc)),
+            bccJson: Value(_encodeModelAddresses(draft.bcc)),
             preview: Value(preview),
             // You wrote it — mirrors the \Seen flag the APPEND sets, and never
             // nags with an unread badge on your own mail.
@@ -6951,6 +6952,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final recipients = <String>{
       for (final a in draft.to) a.email.toLowerCase().trim(),
       for (final a in draft.cc) a.email.toLowerCase().trim(),
+      for (final a in draft.bcc) a.email.toLowerCase().trim(),
     };
     if (recipients.isEmpty) return;
 
@@ -7266,7 +7268,7 @@ class EmailRepositoryImpl implements EmailRepository {
           : (job.draft.subject.length > 60
               ? '${job.draft.subject.substring(0, 60)}…'
               : job.draft.subject);
-      final recipients = job.draft.to.length + job.draft.cc.length;
+      final recipients = job.draft.allRecipients.length;
       return '"$subject" ($recipients recipient${recipients == 1 ? '' : 's'})';
     }
 
@@ -7388,7 +7390,14 @@ class EmailRepositoryImpl implements EmailRepository {
       final mediaType = imap.MediaType.guessFromFileName(filePath);
       await builder.addFile(file, mediaType);
     }
+    // Built without Bcc, so the transmitted message cannot carry it: Bcc
+    // recipients only go into the SMTP envelope (RCPT TO) below (#1126).
+    // enough_mail would strip a Bcc header itself, but only its first line,
+    // so a long, folded one would leak its continuation lines.
     final mimeMessage = builder.buildMimeMessage();
+    final envelopeRecipients = [
+      for (final a in draft.allRecipients) HeaderMailAddress(a.name, a.email),
+    ];
     final smtpEndpoint = '${account.smtpHost}:${account.smtpPort}';
     final imapEndpoint = '${account.imapHost}:${account.imapPort}';
     final smtpClient = await _withPhase(
@@ -7405,8 +7414,9 @@ class EmailRepositoryImpl implements EmailRepository {
       await _withPhase(
         'SMTP send message',
         smtpEndpoint,
-        () =>
-            smtpClient.sendMessage(mimeMessage).timeout(_sendOperationTimeout),
+        () => smtpClient
+            .sendMessage(mimeMessage, recipients: envelopeRecipients)
+            .timeout(_sendOperationTimeout),
         timing: timing,
       );
     } finally {
@@ -7426,6 +7436,18 @@ class EmailRepositoryImpl implements EmailRepository {
     // delivering the message twice and leaving the row lingering in the Sent
     // Queue until a later attempt finally completed the append.
     try {
+      // The Sent copy is the sender's own record, so it keeps Bcc, as other
+      // clients' copies do.
+      if (draft.bcc.isNotEmpty) {
+        mimeMessage.setHeader(
+          'Bcc',
+          draft.bcc
+              .map((a) => HeaderMailAddress(a.name, a.email).encode())
+              .join(
+                ', ',
+              ),
+        );
+      }
       final appended = await _appendSentCopy(
         account,
         password,
@@ -7663,6 +7685,13 @@ class EmailRepositoryImpl implements EmailRepository {
       'to': draft.to.map((a) => {'name': a.name, 'email': a.email}).toList(),
       if (draft.cc.isNotEmpty)
         'cc': draft.cc.map((a) => {'name': a.name, 'email': a.email}).toList(),
+      // This Email is also the Sent copy, so it keeps Bcc. RFC 8621 §7.5:
+      // "The server MUST remove any Bcc header field present on the message
+      // during delivery." The Bcc recipients get the message through the
+      // envelope's rcptTo below (#1126).
+      if (draft.bcc.isNotEmpty)
+        'bcc':
+            draft.bcc.map((a) => {'name': a.name, 'email': a.email}).toList(),
       'subject': draft.subject,
       // JMAP messageId is an array of bracket-less ids (RFC 8621 §4.1.2.3).
       if (draft.messageId != null)
@@ -7690,8 +7719,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
     // Build the recipient envelope for EmailSubmission.
     final allRecipients = [
-      ...draft.to.map((a) => {'email': a.email}),
-      ...draft.cc.map((a) => {'email': a.email}),
+      for (final a in draft.allRecipients) {'email': a.email},
     ];
 
     // Fail fast if the server can't submit mail at all, rather than issuing an

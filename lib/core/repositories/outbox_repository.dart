@@ -111,6 +111,10 @@ class OutboxJob {
   final int id;
   final String accountId;
   final EmailDraft draft;
+
+  /// The message as rendered at enqueue time. It never contains a `Bcc:`
+  /// header, so it is safe to transmit as is; the Bcc recipients live only
+  /// in [draft] (#1126).
   final List<int> mimeBytes;
   final int attempts;
 

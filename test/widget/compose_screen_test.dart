@@ -260,6 +260,93 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('Bcc is collapsed until its button is tapped (#1126)', (
+      tester,
+    ) async {
+      final email = FakeEmailRepository();
+      await _pumpComposeAndSend(
+        tester,
+        email: email,
+        beforeSend: () async {
+          // Only the button on the Cc field says "Bcc" so far.
+          expect(find.text('Bcc'), findsOneWidget);
+          expect(
+            find.ancestor(
+              of: find.text('Bcc'),
+              matching: find.byKey(const Key('compose-show-bcc')),
+            ),
+            findsOneWidget,
+          );
+          await tester.tap(find.byKey(const Key('compose-show-bcc')));
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('compose-show-bcc')), findsNothing);
+          await tester.enterText(
+            find.widgetWithText(TextFormField, 'Bcc'),
+            'Eve <eve@example.com>',
+          );
+          await tester.pump();
+        },
+      );
+
+      final draft = email.sentEmailDraft!;
+      expect(draft.bcc.map((a) => a.email), ['eve@example.com']);
+      expect(draft.bcc.single.name, 'Eve');
+      // Bcc never leaks into the visible recipients.
+      expect(draft.to.map((a) => a.email), isNot(contains('eve@example.com')));
+      expect(draft.cc, isEmpty);
+    });
+
+    testWidgets('refuses a Bcc entry that is not an address (#1126)', (
+      tester,
+    ) async {
+      final email = FakeEmailRepository();
+      await _pumpComposeAndSend(
+        tester,
+        email: email,
+        beforeSend: () async {
+          await tester.tap(find.byKey(const Key('compose-show-bcc')));
+          await tester.pumpAndSettle();
+          await tester.enterText(
+            find.widgetWithText(TextFormField, 'Bcc'),
+            'eve',
+          );
+          await tester.pump();
+        },
+      );
+
+      expect(find.text('Not an email address: eve'), findsOneWidget);
+      expect(email.sentEmailAccountId, isNull);
+
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a draft with Bcc restores into an open Bcc field (#1126)', (
+      tester,
+    ) async {
+      final fakeDrafts = FakeDraftRepository();
+      final saved = await fakeDrafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        bccText: 'dave@example.com',
+        subjectText: 'Restored subject',
+        bodyText: 'Draft body',
+      );
+      await tester.pumpWidget(
+        _buildDirect(
+          screen: ComposeScreen(draftId: saved.id),
+          overrides: _composeOverrides(drafts: fakeDrafts),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.widgetWithText(TextFormField, 'dave@example.com'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('compose-show-bcc')), findsNothing);
+    });
+
     testWidgets(
       'queues then sends the message immediately and shows the outcome (#755)',
       (tester) async {
