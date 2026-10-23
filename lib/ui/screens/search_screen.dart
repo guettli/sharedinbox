@@ -438,20 +438,31 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           const Icon(Icons.filter_list, size: 20),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
-            child: DropdownButton<String?>(
-              isExpanded: true,
-              value: _selectedAccountId,
-              items: [
-                const DropdownMenuItem<String?>(
-                  child: Text('All accounts'),
+            // DropdownButton announces no enabled state of its own, which
+            // Flutter's Linux bridge reports as "disabled". Merge an explicit
+            // enabled flag into its button node. Hard-coding `true` is safe
+            // only because this picker is built with two or more accounts
+            // (see the early return above) and onChanged is always set; if
+            // it can ever be disabled, derive this flag from that instead.
+            child: MergeSemantics(
+              child: Semantics(
+                enabled: true,
+                child: DropdownButton<String?>(
+                  isExpanded: true,
+                  value: _selectedAccountId,
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      child: Text('All accounts'),
+                    ),
+                    for (final a in accounts)
+                      DropdownMenuItem<String?>(
+                        value: a.id,
+                        child: Text(accountDisplayLabel(a, a.id)),
+                      ),
+                  ],
+                  onChanged: _onAccountScopeChanged,
                 ),
-                for (final a in accounts)
-                  DropdownMenuItem<String?>(
-                    value: a.id,
-                    child: Text(accountDisplayLabel(a, a.id)),
-                  ),
-              ],
-              onChanged: _onAccountScopeChanged,
+              ),
             ),
           ),
         ],
@@ -679,11 +690,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
       selected: !hidden,
       showCheckmark: false,
-      // Deactivated chips stay put and re-include the account when tapped, so
-      // hiding is always reversible without re-running the search.
-      onPressed: hidden
-          ? () => setState(() => _hiddenAccountIds.remove(accountId))
-          : null,
+      // Tapping the chip toggles the account, so the chip itself is an enabled,
+      // actionable button for keyboard and screen-reader users (not just the
+      // small X). Deactivated chips stay put, so hiding is always reversible
+      // without re-running the search.
+      onPressed: () => setState(() {
+        if (!_hiddenAccountIds.remove(accountId)) {
+          _hiddenAccountIds.add(accountId);
+        }
+      }),
       onDeleted: hidden
           ? null
           : () => setState(() => _hiddenAccountIds.add(accountId)),
