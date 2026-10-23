@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -9,11 +10,15 @@ import 'package:sharedinbox/di.dart';
 /// "Try connection" state shared by the add- and edit-account forms, rendered
 /// by `TryConnectionButton` from [tryTesting], [tryOk] and [tryErr].
 mixin TryConnectionState<T extends ConsumerStatefulWidget> on ConsumerState<T> {
+  @protected
   bool tryTesting = false;
+  @protected
   String? tryOk;
+  @protected
   String? tryErr;
 
   /// Clears the result without calling `setState`.
+  @protected
   void resetTryConnection() {
     tryTesting = false;
     tryOk = null;
@@ -23,12 +28,15 @@ mixin TryConnectionState<T extends ConsumerStatefulWidget> on ConsumerState<T> {
   /// Tests [buildAccount]'s connection with [password] and stores the message
   /// to show. A failure is logged as `account.test_connection_failed` with the
   /// raw exception; [tryErr] gets the readable [userErrorMessage].
+  @protected
   Future<void> runTryConnection({
     required Account Function() buildAccount,
     required String password,
     required String screen,
     String? accountId,
   }) async {
+    // The edit screen awaits the stored password before calling this.
+    if (!mounted) return;
     setState(() {
       resetTryConnection();
       tryTesting = true;

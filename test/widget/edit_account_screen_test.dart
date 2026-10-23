@@ -161,7 +161,9 @@ void main() {
       expect(button.onPressed, isNull);
     });
 
-    testWidgets('connection error shows error message', (tester) async {
+    testWidgets('connection error shows readable error messages', (
+      tester,
+    ) async {
       await _pumpEditAccount(
         tester,
         connectionError: Exception('auth failed'),
@@ -171,11 +173,20 @@ void main() {
         find.byKey(const Key('editPasswordField')),
         'wrongpassword',
       );
+      final tryButton = find.byKey(const Key('editTryConnectionButton'));
+      await tester.ensureVisible(tryButton);
+      await tester.tap(tryButton);
+      await tester.pumpAndSettle();
+      expect(find.text('auth failed', findRichText: true), findsOneWidget);
+
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       expect(find.text('Save failed: auth failed'), findsOneWidget);
-      expect(find.textContaining('Exception:'), findsNothing);
+      expect(
+        find.textContaining('Exception:', findRichText: true),
+        findsNothing,
+      );
     });
 
     testWidgets('IMAP and SMTP SSL switches show for remote hosts', (
