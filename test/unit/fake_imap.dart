@@ -18,15 +18,21 @@ class FakeImapClient extends imap.ImapClient {
 }
 
 /// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
-/// mailbox of that name.
+/// mailbox of that name — or throws [selectError] when one is given.
 class SelectingFakeImapClient extends FakeImapClient {
+  SelectingFakeImapClient({this.selectError});
+
+  final Object? selectError;
+
   @override
   Future<imap.Mailbox> selectMailboxByPath(
     String path, {
     bool enableCondStore = false,
     imap.QResyncParameters? qresync,
-  }) async =>
-      fakeMailbox(path);
+  }) async {
+    if (selectError case final error?) throw error;
+    return fakeMailbox(path);
+  }
 }
 
 /// An empty, flagless mailbox at [path].
