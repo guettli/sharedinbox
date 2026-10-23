@@ -1734,6 +1734,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// The human part of a folder-create failure: no `Exception:` /
+  /// `Invalid argument(s)` wrapper in front of the snackbar text.
+  static String _errorMessage(Object e) {
+    if (e is ArgumentError) return '${e.message}';
+    final text = e.toString();
+    const prefix = 'Exception: ';
+    return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+  }
+
   Future<void> _moveTo(BuildContext context, Email header) async {
     final nextEmail = await _getNextEmailIfNeeded(header);
 
@@ -1790,8 +1799,24 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         textCapitalization: TextCapitalization.words,
       );
       if (name == null || !context.mounted) return;
-      final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
-      destination = mailbox.path;
+      // "Projects/2026" creates 2026 inside Projects on IMAP and JMAP alike;
+      // a malformed name ("a//b") or a server refusal lands here.
+      try {
+        final mailbox = await mailboxRepo.createMailbox(header.accountId, name);
+        destination = mailbox.path;
+      } catch (e, stack) {
+        if (!context.mounted) return;
+        context.showAppSnackBar(
+          'Could not create folder: ${_errorMessage(e)}',
+          level: AppLogLevel.error,
+          event: 'email.move.create_folder_failed',
+          emailId: widget.emailId,
+          data: {'name': name},
+          error: e,
+          stack: stack,
+        );
+        return;
+      }
     }
 
     await _runDimmed(

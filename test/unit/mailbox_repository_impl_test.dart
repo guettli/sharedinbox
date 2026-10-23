@@ -39,7 +39,11 @@ const _jmapAccount = Account(
 
 // Builds a mock HTTP client that serves a JMAP session + sequence of
 // API responses for each POST to the API URL.
-http.Client _mockJmap({required List<Map<String, dynamic>> apiResponses}) {
+/// [requests], when given, collects every API request body in call order.
+http.Client _mockJmap({
+  required List<Map<String, dynamic>> apiResponses,
+  List<String>? requests,
+}) {
   var callIndex = 0;
   return MockClient((req) async {
     if (req.url.path.contains('well-known')) {
@@ -61,6 +65,7 @@ http.Client _mockJmap({required List<Map<String, dynamic>> apiResponses}) {
       );
     }
     // API call
+    requests?.add(req.body);
     final resp = apiResponses[callIndex % apiResponses.length];
     callIndex++;
     return http.Response(jsonEncode(resp), 200);
@@ -755,7 +760,7 @@ void main() {
                     {
                       'accountId': 'acct1',
                       'created': {
-                        'new-mailbox': {'id': 'mbx-archive'},
+                        'c0': {'id': 'mbx-archive'},
                       },
                     },
                     '0',
@@ -852,8 +857,8 @@ void main() {
 
           expect(spy.createdMailbox, 'INBOX.Work.Tasks');
           expect(result.path, 'INBOX.Work.Tasks');
-          // displayPath is always joined with `/` for the UI.
-          expect(result.displayPath, 'INBOX/Work/Tasks');
+          // Matches what syncMailboxes stores: the server path as-is.
+          expect(result.displayPath, 'INBOX.Work.Tasks');
         },
       );
 
@@ -919,7 +924,7 @@ void main() {
                       {
                         'accountId': 'acct1',
                         'created': {
-                          'new-mailbox': {'id': 'mbx-child'},
+                          'c0': {'id': 'mbx-child'},
                         },
                       },
                       '0',
@@ -962,10 +967,271 @@ void main() {
           final calls = body['methodCalls'] as List<dynamic>;
           final args = (calls.first as List)[1] as Map<String, dynamic>;
           final create = args['create'] as Map<String, dynamic>;
-          final mbx = create['new-mailbox'] as Map<String, dynamic>;
+          final mbx = create['c0'] as Map<String, dynamic>;
           expect(mbx['parentId'], 'mbx-parent');
         },
       );
+
+      group('nested names ("Projects/2026")', () {
+        Map<String, dynamic> setCreated(Map<String, String> ids) => {
+              'sessionState': 'sess1',
+              'methodResponses': [
+                [
+                  'Mailbox/set',
+                  {
+                    'accountId': 'acct1',
+                    'created': {
+                      for (final e in ids.entries) e.key: {'id': e.value},
+                    },
+                  },
+                  '0',
+                ],
+              ],
+            };
+
+        // The `create` map of the Mailbox/set in request [body].
+        Map<String, dynamic> createArgs(String body) {
+          final calls = (jsonDecode(body) as Map)['methodCalls'] as List;
+          final call = calls.single as List;
+          expect(call[0], 'Mailbox/set');
+          return (call[1] as Map<String, dynamic>)['create']
+              as Map<String, dynamic>;
+        }
+
+        test(
+          'JMAP: creates every missing level chained by parentId and stores '
+          'them all locally',
+          () async {
+            final requests = <String>[];
+            final r = _makeRepos(
+              httpClient: _mockJmap(
+                requests: requests,
+                apiResponses: [
+                  _mailboxGetResponse(
+                    state: 's1',
+                    list: [
+                      {'id': 'mbx-inbox', 'name': 'Inbox', 'parentId': null},
+                      // Same name, wrong level: must not be reused.
+                      {
+                        'id': 'mbx-deep',
+                        'name': 'Projects',
+                        'parentId': 'mbx-inbox',
+                      },
+                    ],
+                  ),
+                  setCreated({'c0': 'mbx-projects', 'c1': 'mbx-2026'}),
+                ],
+              ),
+            );
+            await r.accounts.addAccount(_jmapAccount, 'pw');
+
+            final result =
+                await r.mailboxes.createMailbox('jmap-1', 'Projects/2026');
+
+            expect(requests, hasLength(2));
+            expect(createArgs(requests[1]), {
+              'c0': {'name': 'Projects'},
+              'c1': {'name': '2026', 'parentId': '#c0'},
+            });
+            expect(result.name, '2026');
+            expect(result.path, 'mbx-2026');
+            expect(result.parentId, 'mbx-projects');
+            expect(result.displayPath, 'Projects/2026');
+
+            final all = await r.mailboxes.observeMailboxes('jmap-1').first;
+            final projects = all.singleWhere((m) => m.path == 'mbx-projects');
+            expect(projects.name, 'Projects');
+            expect(projects.parentId, isNull);
+            expect(projects.displayPath, 'Projects');
+          },
+        );
+
+        test('JMAP: reuses an existing ancestor from the server', () async {
+          final requests = <String>[];
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              requests: requests,
+              apiResponses: [
+                _mailboxGetResponse(
+                  state: 's1',
+                  list: [
+                    {'id': 'mbx-projects', 'name': 'Projects'},
+                    {
+                      'id': 'mbx-2026',
+                      'name': '2026',
+                      'parentId': 'mbx-projects',
+                    },
+                  ],
+                ),
+                setCreated({'c0': 'mbx-2027'}),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+
+          final result =
+              await r.mailboxes.createMailbox('jmap-1', 'Projects/2027');
+
+          expect(createArgs(requests[1]), {
+            'c0': {'name': '2027', 'parentId': 'mbx-projects'},
+          });
+          expect(result.path, 'mbx-2027');
+          expect(result.parentId, 'mbx-projects');
+          expect(result.displayPath, 'Projects/2027');
+          // The existing ancestor was not in the cache: it is added so the
+          // tree is complete before the next sync.
+          final all = await r.mailboxes.observeMailboxes('jmap-1').first;
+          expect(
+            all.map((m) => m.displayPath),
+            containsAll(<String>['Projects', 'Projects/2027']),
+          );
+        });
+
+        test('JMAP: nests below a chosen parent and puts the role on the leaf',
+            () async {
+          final requests = <String>[];
+          final r = _makeRepos(
+            httpClient: _mockJmap(
+              requests: requests,
+              apiResponses: [
+                _mailboxGetResponse(
+                  state: 's1',
+                  list: [
+                    {'id': 'mbx-parent', 'name': 'Archive'},
+                  ],
+                ),
+                setCreated({'c0': 'mbx-a', 'c1': 'mbx-b'}),
+              ],
+            ),
+          );
+          await r.accounts.addAccount(_jmapAccount, 'pw');
+          await r.db.into(r.db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'jmap-1:mbx-parent',
+                  accountId: 'jmap-1',
+                  path: 'mbx-parent',
+                  name: 'Archive',
+                  displayPath: const Value('Archive'),
+                ),
+              );
+
+          final result = await r.mailboxes.createMailboxWithRole(
+            'jmap-1',
+            'A/B',
+            'archive',
+            parentDisplayPath: 'Archive',
+          );
+
+          expect(createArgs(requests[1]), {
+            'c0': {'name': 'A', 'parentId': 'mbx-parent'},
+            'c1': {'name': 'B', 'role': 'archive', 'parentId': '#c0'},
+          });
+          expect(result.displayPath, 'Archive/A/B');
+          expect(result.role, 'archive');
+        });
+
+        for (final bad in ['a//b', '/a', 'a/', ' / ']) {
+          test('rejects "$bad" before touching the server', () async {
+            final requests = <String>[];
+            final r = _makeRepos(
+              httpClient: _mockJmap(requests: requests, apiResponses: [{}]),
+            );
+            await r.accounts.addAccount(_jmapAccount, 'pw');
+            await expectLater(
+              r.mailboxes.createMailbox('jmap-1', bad),
+              throwsA(isA<ArgumentError>()),
+            );
+            expect(requests, isEmpty);
+          });
+        }
+
+        for (final sep in ['/', '.']) {
+          test(
+            'IMAP: joins the levels with the server delimiter "$sep" and '
+            'caches the ancestor',
+            () async {
+              final spy = _SeparatorSpyImapClient(sep);
+              final db = openTestDatabase();
+              final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+              final mailboxes = MailboxRepositoryImpl(
+                db,
+                accounts,
+                imapConnect: (_, __, ___) async => spy,
+              );
+              await accounts.addAccount(_account, 'pw');
+
+              final result = await mailboxes.createMailbox(
+                'acc-1',
+                'Projects/2026',
+              );
+
+              final leafPath = 'Projects${sep}2026';
+              expect(spy.createdMailbox, leafPath);
+              expect(result.name, '2026');
+              expect(result.path, leafPath);
+              // IMAP sync stores displayPath = server path; match it.
+              expect(result.displayPath, leafPath);
+              final all = await mailboxes.observeMailboxes('acc-1').first;
+              final projects = all.singleWhere((m) => m.path == 'Projects');
+              expect(projects.name, 'Projects');
+              expect(projects.displayPath, 'Projects');
+            },
+          );
+        }
+
+        test(
+          'JMAP: caches the levels created before a refused one and says so',
+          () async {
+            final r = _makeRepos(
+              httpClient: _mockJmap(
+                apiResponses: [
+                  _mailboxGetResponse(state: 's1', list: []),
+                  {
+                    'sessionState': 'sess1',
+                    'methodResponses': [
+                      [
+                        'Mailbox/set',
+                        {
+                          'accountId': 'acct1',
+                          'created': {
+                            'c0': {'id': 'mbx-projects'},
+                          },
+                          'notCreated': {
+                            'c1': {
+                              'type': 'invalidProperties',
+                              'description': 'name too long',
+                            },
+                          },
+                        },
+                        '0',
+                      ],
+                    ],
+                  },
+                ],
+              ),
+            );
+            await r.accounts.addAccount(_jmapAccount, 'pw');
+
+            await expectLater(
+              r.mailboxes.createMailbox('jmap-1', 'Projects/2026'),
+              throwsA(
+                isA<Exception>().having(
+                  (e) => e.toString(),
+                  'message',
+                  allOf(
+                    contains('invalidProperties (name too long)'),
+                    contains('"Projects" was created'),
+                  ),
+                ),
+              ),
+            );
+            final all = await r.mailboxes.observeMailboxes('jmap-1').first;
+            expect(all.map((m) => (m.path, m.displayPath, m.parentId)), [
+              ('mbx-projects', 'Projects', null),
+            ]);
+          },
+        );
+      });
 
       test('JMAP: throws when server returns no created ID', () async {
         final r = _makeRepos(
@@ -980,7 +1246,7 @@ void main() {
                       'accountId': 'acct1',
                       'created': null,
                       'notCreated': {
-                        'new-mailbox': {'type': 'serverFail'},
+                        'c0': {'type': 'serverFail'},
                       },
                     },
                     '0',
@@ -1607,4 +1873,22 @@ class _AllMailImapClient extends SnoozeSpyImapClient {
 
   @override
   Future<dynamic> logout() async {}
+}
+
+/// [SnoozeSpyImapClient] whose LIST reports [separator] as the hierarchy
+/// delimiter (e.g. `.` like Dovecot/Courier).
+class _SeparatorSpyImapClient extends SnoozeSpyImapClient {
+  _SeparatorSpyImapClient(this.separator);
+
+  final String separator;
+
+  @override
+  List<imap.Mailbox> get listedMailboxes => [
+        imap.Mailbox(
+          encodedName: 'INBOX',
+          encodedPath: 'INBOX',
+          pathSeparator: separator,
+          flags: [],
+        ),
+      ];
 }
