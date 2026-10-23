@@ -86,7 +86,7 @@ void main() {
     expect(await syncLogIds(), {...acc1.skip(3), acc2});
   });
 
-  test('drops far more logs than one chunk, oldest first', () async {
+  test('drops far more logs than one chunk', () async {
     final now = DateTime.now();
     final acc1 = [
       for (var i = 9; i > 0; i--)

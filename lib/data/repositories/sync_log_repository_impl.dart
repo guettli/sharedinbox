@@ -138,55 +138,57 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
         .map((row) => (row?.result == 'error') ? row?.errorMessage : null);
   }
 
-  /// The oldest sync logs (up to the 3rd variable) that [trim] removes: all
-  /// but the newest log of each account that are older than the cutoff (2nd
-  /// variable) or beyond the newest N (1st variable) of their account.
-  ///
-  /// Oldest first, so removing a chunk never changes the rank of a log that
-  /// is still to be judged by a later chunk.
-  static const _trimChunkQuery = '''
+  /// The sync logs [trim] removes: all but the newest log of each account
+  /// that are older than the cutoff (2nd variable) or beyond the newest N
+  /// (1st variable) of their account.
+  static const _trimmedIdsQuery = '''
     SELECT id FROM (
       SELECT id, started_at, ROW_NUMBER() OVER (
         PARTITION BY account_id ORDER BY started_at DESC, id DESC
       ) AS rn
       FROM sync_logs
     )
-    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)
-    ORDER BY started_at, id
-    LIMIT ?3''';
+    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)''';
 
   @override
   Future<void> trim({
     int maxPerAccount = 1000,
     Duration maxAge = const Duration(days: 14),
   }) async {
-    final variables = [
-      Variable.withInt(maxPerAccount),
-      Variable.withDateTime(DateTime.now().subtract(maxAge)),
-      Variable.withInt(trimChunkSize),
-    ];
+    // Rank the logs once; logs inserted while the chunks below are deleted
+    // are newer than every listed one, so the list stays correct.
+    final ids = await _db
+        .customSelect(
+          _trimmedIdsQuery,
+          variables: [
+            Variable.withInt(maxPerAccount),
+            Variable.withDateTime(DateTime.now().subtract(maxAge)),
+          ],
+        )
+        .map((r) => r.read<int>('id'))
+        .get();
     // A long-lived install can hold hundreds of thousands of sync logs, so
     // delete them in chunks of short transactions instead of one long one
     // that would block the database (and the background isolate) for seconds.
-    while (true) {
-      final ids = await _db
-          .customSelect(_trimChunkQuery, variables: variables)
-          .map((r) => r.read<int>('id'))
-          .get();
-      if (ids.isEmpty) return;
+    for (var start = 0; start < ids.length; start += trimChunkSize) {
+      if (start > 0) {
+        // Let other database work (UI queries, sync) in between chunks.
+        await Future<void>.delayed(Duration.zero);
+      }
+      final chunk = ids.sublist(
+        start,
+        (start + trimChunkSize).clamp(0, ids.length),
+      );
       // The foreign keys would cascade / set null on their own; doing it
       // explicitly keeps the trim correct even where they are not enforced.
       await _db.transaction(() async {
         await (_db.delete(_db.syncLogMailboxes)
-              ..where((t) => t.syncLogId.isIn(ids)))
+              ..where((t) => t.syncLogId.isIn(chunk)))
             .go();
-        await (_db.update(_db.appLogs)..where((t) => t.syncLogId.isIn(ids)))
+        await (_db.update(_db.appLogs)..where((t) => t.syncLogId.isIn(chunk)))
             .write(const AppLogsCompanion(syncLogId: Value(null)));
-        await (_db.delete(_db.syncLogs)..where((t) => t.id.isIn(ids))).go();
+        await (_db.delete(_db.syncLogs)..where((t) => t.id.isIn(chunk))).go();
       });
-      if (ids.length < trimChunkSize) return;
-      // Let other database work (UI queries, sync) in between chunks.
-      await Future<void>.delayed(Duration.zero);
     }
   }
 }
