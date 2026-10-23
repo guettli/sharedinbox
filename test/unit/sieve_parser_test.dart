@@ -226,6 +226,19 @@ if header :contains "Subject" "hi" {
       final ctx = run(script, _email(subject: 'hi there'));
       expect(ctx.flagsToAdd, contains(r'\Flagged'));
     });
+
+    test('a list with \\Seen and more flags keeps every flag', () {
+      const script = r'''
+require ["imap4flags"];
+if header :contains "Subject" "hi" {
+  setflag ["\\Seen", "\\Flagged", "Work"];
+}
+''';
+      final rules = parser.parse(script);
+      final action = rules.first.actions.single;
+      expect(action, isA<FlagAction>());
+      expect((action as FlagAction).flags, [r'\Seen', r'\Flagged', 'Work']);
+    });
   });
 
   group('SieveParser — keep and stop', () {

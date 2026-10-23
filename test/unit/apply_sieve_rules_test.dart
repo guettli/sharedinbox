@@ -296,5 +296,22 @@ $actions
       expect(payload['uid'], 1);
       expect(payload['mailboxPath'], 'INBOX');
     });
+
+    test('one string with \\Seen \\Flagged sets both', () async {
+      final (_, row) = await runLunchFilter(r'setflag "\\Seen \\Flagged";');
+
+      expect(row.isSeen, isTrue);
+      expect(row.isFlagged, isTrue);
+    });
+
+    test('keywords are split on spaces and invalid ones dropped', () async {
+      final (db, row) = await runLunchFilter(
+        'addflag ["Work Urgent", "a(b", "Bad\r\nA1 LOGOUT"];',
+      );
+
+      expect(row.isSeen, isFalse);
+      final payload = await expectSinglePendingChange(db, 'add_keywords');
+      expect(payload['keywords'], ['Urgent', 'Work']);
+    });
   });
 }
