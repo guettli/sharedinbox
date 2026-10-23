@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/sieve_script.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/sieve/sieve_diagnostics.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -76,7 +77,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       );
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = userErrorMessage(e);
           _loading = false;
         });
       }
@@ -176,7 +177,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       _reportScriptError(
         'sieve.activate_failed',
         'Failed to activate sieve script',
-        'Failed to activate: $e',
+        'Failed to activate: ${userErrorMessage(e)}',
         script,
         e,
         stack,
@@ -212,7 +213,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       _reportScriptError(
         'sieve.deactivate_failed',
         'Failed to deactivate sieve script',
-        'Failed to deactivate: $e',
+        'Failed to deactivate: ${userErrorMessage(e)}',
         script,
         e,
         stack,
@@ -254,7 +255,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       _reportScriptError(
         'sieve.delete_failed',
         'Failed to delete sieve script',
-        'Failed to delete: $e',
+        'Failed to delete: ${userErrorMessage(e)}',
         script,
         e,
         stack,
@@ -314,7 +315,7 @@ class _SieveScriptsScreenState extends ConsumerState<SieveScriptsScreen> {
       );
       if (mounted) {
         messenger.show(
-          'Diagnose failed: $e',
+          'Diagnose failed: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           error: e,
           stack: stack,

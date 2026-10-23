@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -67,7 +68,7 @@ class _ShrinkImageScreenState extends ConsumerState<ShrinkImageScreen> {
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(
-        'Failed to shrink image: $e',
+        'Failed to shrink image: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'shrink_image.failed',
         error: e,

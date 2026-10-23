@@ -174,7 +174,8 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Save failed'), findsOneWidget);
+      expect(find.text('Save failed: auth failed'), findsOneWidget);
+      expect(find.textContaining('Exception:'), findsNothing);
     });
 
     testWidgets('IMAP and SMTP SSL switches show for remote hosts', (

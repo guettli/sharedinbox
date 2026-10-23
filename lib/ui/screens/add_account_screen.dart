@@ -6,10 +6,12 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/discovery_result.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/try_connection.dart';
 import 'package:sharedinbox/ui/widgets/linkified_text.dart';
 import 'package:sharedinbox/ui/widgets/tls_switch_tile.dart';
 import 'package:sharedinbox/ui/widgets/try_connection_button.dart';
@@ -23,7 +25,8 @@ class AddAccountScreen extends ConsumerStatefulWidget {
   ConsumerState<AddAccountScreen> createState() => _AddAccountScreenState();
 }
 
-class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
+class _AddAccountScreenState extends ConsumerState<AddAccountScreen>
+    with TryConnectionState<AddAccountScreen> {
   var _step = _Step.email;
   String? _errorMessage;
 
@@ -44,11 +47,6 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   final _smtpPortCtrl = TextEditingController(text: '465');
   var _imapSsl = true;
   var _smtpSsl = true;
-
-  // -- "Try connection" state ------------------------------------------------
-  bool _tryTesting = false;
-  String? _tryOk;
-  String? _tryErr;
 
   // -- form keys -------------------------------------------------------------
   final _emailFormKey = GlobalKey<FormState>();
@@ -162,41 +160,11 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
     Account Function() buildAccount,
   ) async {
     if (!formKey.currentState!.validate()) return;
-    setState(() {
-      _tryTesting = true;
-      _tryOk = null;
-      _tryErr = null;
-    });
-    try {
-      final account = buildAccount();
-      final result = await ref
-          .read(connectionTestServiceProvider)
-          .testConnection(account, _passwordCtrl.text);
-      if (mounted) {
-        setState(() {
-          _tryTesting = false;
-          _tryOk = result.identityWarning != null
-              ? 'Connected as ${result.username}\n⚠ ${result.identityWarning}'
-              : 'Connected as ${result.username}';
-        });
-      }
-    } catch (e, stack) {
-      unawaited(
-        ref.read(appLoggerProvider).warn(
-              'account.test_connection_failed',
-              'Connection test failed',
-              screen: 'AddAccountScreen',
-              error: e,
-              stack: stack,
-            ),
-      );
-      if (mounted) {
-        setState(() {
-          _tryTesting = false;
-          _tryErr = e.toString();
-        });
-      }
-    }
+    await runTryConnection(
+      buildAccount: buildAccount,
+      password: _passwordCtrl.text,
+      screen: 'AddAccountScreen',
+    );
   }
 
   Future<void> _saveJmap() async {
@@ -242,7 +210,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       if (mounted) {
         setState(() {
           _step = _Step.jmapForm;
-          _errorMessage = 'Connection failed: $e';
+          _errorMessage = 'Connection failed: ${userErrorMessage(e)}';
         });
       }
     }
@@ -284,7 +252,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
       if (mounted) {
         setState(() {
           _step = _Step.imapForm;
-          _errorMessage = 'Connection failed: $e';
+          _errorMessage = 'Connection failed: ${userErrorMessage(e)}';
         });
       }
     }
@@ -398,11 +366,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
   /// so without this a green "Connected as …" from a JMAP test stays on screen
   /// above an empty IMAP form — a success message for a connection that was
   /// never made with the settings shown.
-  void _resetTryState() {
-    _tryTesting = false;
-    _tryOk = null;
-    _tryErr = null;
-  }
+  void _resetTryState() => resetTryConnection();
 
   /// Switches to the JMAP form, re-seeding the detected session URL when
   /// discovery found one and clearing it otherwise.
@@ -480,9 +444,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             _field(_passwordCtrl, 'Password', obscure: true),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),
-              testing: _tryTesting,
-              okMessage: _tryOk,
-              errorMessage: _tryErr,
+              testing: tryTesting,
+              okMessage: tryOk,
+              errorMessage: tryErr,
               onPressed: () => _tryConnection(_jmapFormKey, _buildJmapAccount),
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -541,9 +505,9 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
             ),
             TryConnectionButton(
               buttonKey: const Key('tryConnectionButton'),
-              testing: _tryTesting,
-              okMessage: _tryOk,
-              errorMessage: _tryErr,
+              testing: tryTesting,
+              okMessage: tryOk,
+              errorMessage: tryErr,
               onPressed: () => _tryConnection(_imapFormKey, _buildImapAccount),
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -593,7 +557,7 @@ class _AddAccountScreenState extends ConsumerState<AddAccountScreen> {
                     // Disabled mid-test: _tryConnection captures its form and
                     // builder at call time, so a result landing after a switch
                     // would report on settings that are no longer shown.
-                    onPressed: _tryTesting ? null : onSwitch,
+                    onPressed: tryTesting ? null : onSwitch,
                     child: Text(switchLabel),
                   ),
                 ),

@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SieveParseException;
 import 'package:sharedinbox/core/sieve/sieve_actions.dart';
 import 'package:sharedinbox/core/sieve/sieve_serializer.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -169,7 +170,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       );
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = userErrorMessage(e);
           _loadingContent = false;
         });
       }
@@ -237,7 +238,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
       );
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = userErrorMessage(e);
           _saving = false;
         });
       }
@@ -301,7 +302,10 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
               stack: stack,
             ),
       );
-      messenger.show('Failed to activate: $e', level: AppLogLevel.error);
+      messenger.show(
+        'Failed to activate: ${userErrorMessage(e)}',
+        level: AppLogLevel.error,
+      );
     }
   }
 
@@ -327,7 +331,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     } catch (e) {
       if (mounted) {
         messenger.show(
-          'Preview failed: $e',
+          'Preview failed: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           error: e,
         );
@@ -431,7 +435,7 @@ class _SieveScriptEditScreenState extends ConsumerState<SieveScriptEditScreen>
     } catch (e) {
       if (mounted) {
         messenger.show(
-          'Failed to apply filter: $e',
+          'Failed to apply filter: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           error: e,
         );

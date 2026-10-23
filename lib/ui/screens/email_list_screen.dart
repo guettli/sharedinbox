@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
     show syncErrorKey;
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -460,7 +461,7 @@ class _EmailListScreenState extends ConsumerState<EmailListScreen> {
               } catch (e) {
                 if (!mounted) return;
                 context.showAppSnackBar(
-                  'Sync failed: $e',
+                  'Sync failed: ${userErrorMessage(e)}',
                   level: AppLogLevel.error,
                   error: e,
                   duration: const Duration(seconds: 5),

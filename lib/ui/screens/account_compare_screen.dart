@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/text_diff.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -54,7 +55,8 @@ class AccountCompareScreen extends ConsumerWidget {
       ),
       body: result.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Comparison failed: $e')),
+        error: (e, _) =>
+            Center(child: Text('Comparison failed: ${userErrorMessage(e)}')),
         data: (data) => _CompareBody(
           result: data,
           labelA: labelA,

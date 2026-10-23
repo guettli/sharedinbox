@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -391,7 +392,7 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
   void _invoke(Future<void> Function() body) {
     final messenger = context.appMessenger();
     void onError(Object e, StackTrace st) => messenger.show(
-          'Action failed: $e',
+          'Action failed: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           error: e,
           stack: st,
@@ -657,7 +658,7 @@ Widget buildSelectionBottomBar(
         busyLabel: busyLabel,
         onDone: onAfterAction,
         onError: (e, st) => messenger.show(
-          'Action failed: $e',
+          'Action failed: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           error: e,
           stack: st,

@@ -319,7 +319,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Connection failed'), findsOneWidget);
+      expect(find.text('Connection failed: auth failed'), findsOneWidget);
     });
 
     testWidgets('JMAP try connection surfaces identity warning', (

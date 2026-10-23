@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/server_capabilities_service.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
@@ -125,7 +126,7 @@ class _ErrorView extends ConsumerWidget {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppSpacing.sm),
-            Text('$error', textAlign: TextAlign.center),
+            Text(userErrorMessage(error), textAlign: TextAlign.center),
             const SizedBox(height: AppSpacing.lg),
             FilledButton.tonalIcon(
               icon: const Icon(Icons.refresh),

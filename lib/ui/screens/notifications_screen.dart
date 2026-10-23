@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/notification_rule.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/sender_address.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -35,7 +36,7 @@ class NotificationsScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Notifications')),
       body: accountAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => Center(child: Text('Error: ${userErrorMessage(e)}')),
         data: (account) {
           if (account == null) {
             return const Center(child: Text('Account not found'));
@@ -95,7 +96,7 @@ class NotificationsScreen extends ConsumerWidget {
         ),
         error: (e, _) => Padding(
           padding: const EdgeInsets.all(16),
-          child: Text('Error: $e'),
+          child: Text('Error: ${userErrorMessage(e)}'),
         ),
         data: (rules) => rules.isEmpty
             ? const Padding(

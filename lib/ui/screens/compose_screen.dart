@@ -406,7 +406,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } catch (e, stack) {
       if (mounted) {
         context.showAppSnackBar(
-          'Failed to shrink image: $e',
+          'Failed to shrink image: ${userErrorMessage(e)}',
           level: AppLogLevel.error,
           event: 'compose.attachment.shrink_failed',
           error: e,
@@ -460,7 +460,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } catch (e, stack) {
       if (!mounted) return;
       context.showAppSnackBar(
-        'Failed to open file: $e',
+        'Failed to open file: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'compose.attachment.open_failed',
         data: {'index': index},
@@ -632,7 +632,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         // The outbox already holds the message and retries it on every sync
         // cycle, so report it as queued and close, as for a transient failure.
         messenger.show(
-          'Queued — will retry: $e',
+          'Queued — will retry: ${userErrorMessage(e)}',
           level: AppLogLevel.warn,
           event: 'compose.send_queued',
           accountId: _accountId,
@@ -644,7 +644,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         return;
       }
       messenger.show(
-        'Queue failed: $e',
+        'Queue failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'compose.enqueue_failed',
         accountId: _accountId,
@@ -678,7 +678,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } catch (e, stack) {
       if (!mounted) return;
       messenger.show(
-        'Discard failed: $e',
+        'Discard failed: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'compose.discard_failed',
         accountId: _accountId,

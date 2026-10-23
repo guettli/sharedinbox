@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/update_service.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_actions.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -101,7 +102,7 @@ class _AccountTile extends ConsumerWidget {
                 data: (_) =>
                     const Icon(Icons.check_circle, color: Colors.green),
                 error: (e, _) => Tooltip(
-                  message: e.toString(),
+                  message: userErrorMessage(e),
                   child: const Icon(Icons.error_outline, color: Colors.red),
                 ),
               ),
@@ -210,7 +211,7 @@ class _AccountTile extends ConsumerWidget {
             loading: () => isVerifying
                 ? const _SyncHealthVerifyingRow()
                 : const Text('Sync health: checking...'),
-            error: (e, _) => Text('Sync health error: $e'),
+            error: (e, _) => Text('Sync health error: ${userErrorMessage(e)}'),
           ),
         ),
       ],
@@ -273,7 +274,7 @@ class _SyncHealthErrorRow extends StatelessWidget {
           color: Colors.red,
         ),
         const SizedBox(width: AppSpacing.xs),
-        Expanded(child: Text('Sync check failed: $error')),
+        Expanded(child: Text('Sync check failed: ${userErrorMessage(error)}')),
       ],
     );
   }

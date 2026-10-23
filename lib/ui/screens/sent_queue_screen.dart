@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart' show OutboxQueueTile;
 
@@ -24,7 +25,7 @@ class SentQueueScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Sent Queue')),
       body: rowsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => Center(child: Text('Error: ${userErrorMessage(e)}')),
         data: (rows) {
           if (rows.isEmpty) {
             return const Center(child: Text('No messages waiting to be sent.'));
