@@ -80,7 +80,7 @@ jobs:
     timeout-minutes: 60
     needs: [check-changes]
     if: needs.check-changes.outputs.android == 'true'
-    # Record app size commits one row to metrics/android-app-size.tsv.
+    # The Record-app-size step pushes one row to the app-size-history branch.
     permissions:
       contents: write
 
@@ -133,9 +133,11 @@ jobs:
             --play-store-config env:PLAY_STORE_CONFIG_JSON
 
       # Append one row (date, git hash, delivered size + per-component breakdown)
-      # to metrics/android-app-size.tsv and commit it with [skip ci]. Best-effort
-      # and continue-on-error: recording a size must never fail a real deploy, and
-      # a lost push race is re-recorded on the next build. See metrics/README.md.
+      # to the android-app-size.tsv on the dedicated, unprotected
+      # `app-size-history` branch (main requires a PR, so it can't be appended by
+      # CI). Best-effort + continue-on-error: recording a size must never fail a
+      # real deploy, and a lost push race is re-recorded on the next build. A
+      # push to that branch triggers no workflow. See metrics/README.md.
       - name: Record app size
         continue-on-error: true
         env:

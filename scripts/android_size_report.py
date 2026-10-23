@@ -9,12 +9,15 @@ change points at its own cause instead of needing an archaeology session.
 
 What it measures (all from the AAB zip, no network, no bundletool needed):
 
-  * install-arm64 — the uncompressed bytes Play actually delivers to an
-    arm64-v8a device: the base module's manifest + dex + arm64 libs + assets +
-    res. This is the number that tracks the user-visible download/install size.
-    Other ABIs are excluded (an AAB ships only the device's ABI), and so is
-    BUNDLE-METADATA/ (the debugSymbolLevel=FULL native symbols, which Play
-    strips before download — counting them would be the classic red herring).
+  * install-arm64 — the uncompressed bytes an arm64-v8a device receives: the
+    base module's manifest + dex + arm64 libs + assets + res. This is an
+    on-device *install-size proxy*: it TRENDS with the Play download/update size
+    the user sees, but reads larger — Play serves these entries compressed and
+    drops unused screen densities and languages. Matching the Play number
+    exactly is a non-goal; a consistent, diffable trend is the goal. Other ABIs
+    are excluded (an AAB ships only the device's ABI), and so is BUNDLE-METADATA/
+    (the debugSymbolLevel=FULL native symbols Play strips before download —
+    counting them would be the classic red herring).
 
   * a per-component breakdown — libapp.so (your Dart code, AOT-compiled),
     libflutter.so (the engine), other native libs (SQLCipher/OpenSSL,
