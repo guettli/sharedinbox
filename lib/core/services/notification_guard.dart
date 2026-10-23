@@ -43,7 +43,8 @@ void logNotificationFailure(
 /// escape to the caller: an exception is caught and a call that does not
 /// complete within [timeout] is abandoned. Returns whether the notification
 /// was shown. [accountId]/[emailId] are recorded on the default failure log
-/// entry so it names the mail that could not be shown.
+/// entry so it names the mail that could not be shown; they are ignored when
+/// a custom [onFailure] is passed.
 ///
 /// On Linux without a notification daemon the plugin throws
 /// `DBusServiceUnknownException`. Uncaught, it reached `FlutterError.onError`

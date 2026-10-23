@@ -56,9 +56,8 @@ void main() {
     late AppDatabase db;
 
     setUp(() async {
-      db = openTestDatabase();
-      // The ids name no seeded rows; without FKs the log keeps them as given.
-      await db.customStatement('PRAGMA foreign_keys = OFF');
+      db = await openTestDatabaseWithAccounts(['acc-1']);
+      await seedEmailRow(db, 'acc-1:INBOX:42', 'acc-1');
       crashLogger = AppLogger(AppLogRepositoryImpl(db));
     });
 
@@ -67,15 +66,8 @@ void main() {
       await db.close();
     });
 
-    test('records which account and mail failed to notify', () async {
-      final shown = await guardNotificationShow(
-        () async => throw StateError('ServiceUnknown'),
-        accountId: 'acc-1',
-        emailId: 'acc-1:INBOX:42',
-      );
-      expect(shown, isFalse);
-
-      // logUncaught inserts fire-and-forget; poll until the row lands.
+    // logUncaught inserts fire-and-forget; poll until the row lands.
+    Future<AppLogRow> failureRow() async {
       var rows = <AppLogRow>[];
       for (var i = 0; i < 200 && rows.isEmpty; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 5));
@@ -84,8 +76,34 @@ void main() {
       final row = rows.single;
       expect(row.event, 'notification.show_failed');
       expect(row.level, 'warn');
+      return row;
+    }
+
+    Future<bool> failingShow({String? accountId, String? emailId}) =>
+        guardNotificationShow(
+          () async => throw StateError('ServiceUnknown'),
+          accountId: accountId,
+          emailId: emailId,
+        );
+
+    test('records which account and mail failed to notify', () async {
+      expect(
+        await failingShow(accountId: 'acc-1', emailId: 'acc-1:INBOX:42'),
+        isFalse,
+      );
+      final row = await failureRow();
       expect(row.accountId, 'acc-1');
       expect(row.emailId, 'acc-1:INBOX:42');
+    });
+
+    test('still logs the failure when the ids name no rows', () async {
+      expect(
+        await failingShow(accountId: 'gone', emailId: 'gone:INBOX:1'),
+        isFalse,
+      );
+      final row = await failureRow();
+      expect(row.accountId, isNull);
+      expect(row.emailId, isNull);
     });
   });
 }

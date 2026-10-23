@@ -21,17 +21,6 @@ Future<List<String>> _ids(AppDatabase db, String sql) async => [
         r.data.values.first.toString(),
     ];
 
-Future<void> _insertEmail(AppDatabase db, String id, String accountId) =>
-    db.into(db.emails).insert(
-          EmailsCompanion.insert(
-            id: id,
-            accountId: accountId,
-            mailboxPath: 'INBOX',
-            uid: 1,
-            receivedAt: DateTime(2026),
-          ),
-        );
-
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -57,7 +46,7 @@ void main() {
     final db = openTestDatabase();
     addTearDown(db.close);
     await seedAccountRow(db, 'acc');
-    await _insertEmail(db, 'acc:INBOX:1', 'acc');
+    await seedEmailRow(db, 'acc:INBOX:1', 'acc');
     await db.into(db.emailBodies).insert(
           EmailBodiesCompanion.insert(emailId: 'acc:INBOX:1'),
         );
