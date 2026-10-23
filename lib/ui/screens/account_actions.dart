@@ -1,12 +1,12 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/sync_health_status.dart';
 
 /// All per-account actions surfaced from the long-press menu on
 /// [AccountListScreen] and from the account home screen. Kept in one place so
@@ -46,13 +46,28 @@ Future<void> runAccountAction(
       await context.push('/accounts/${account.id}/sync-log');
       break;
     case AccountAction.verifySync:
-      unawaited(ref.read(reliabilityRunnerProvider).checkNow());
-      if (context.mounted) {
-        context.showAppSnackBar(
-          'Starting sync verification...',
-          duration: const Duration(seconds: 5),
+      // Captured before the await: the probe can outlive this screen.
+      final messenger = context.appMessenger();
+      messenger.show(
+        'Verifying sync health...',
+        // Stays up until the result below replaces it.
+        persist: true,
+      );
+      final health =
+          await ref.read(reliabilityRunnerProvider).checkAccountNow(account.id);
+      messenger
+        ..hideCurrent()
+        ..show(
+          syncHealthResultMessage(
+            isHealthy: health?.isHealthy,
+            lastError: health?.lastError,
+            discrepancySummary: health?.discrepancySummary,
+          ),
+          level:
+              health?.isHealthy == true ? AppLogLevel.info : AppLogLevel.warn,
+          accountId: account.id,
+          duration: const Duration(seconds: 6),
         );
-      }
       break;
     case AccountAction.forceSync:
       final confirmed = await showDialog<bool>(

@@ -83,6 +83,10 @@ class AppMessenger {
       ),
     );
   }
+
+  /// Hides the SnackBar currently shown, e.g. a progress snack about to be
+  /// replaced by its result.
+  void hideCurrent() => _messenger.hideCurrentSnackBar();
 }
 
 extension AppSnackBar on BuildContext {

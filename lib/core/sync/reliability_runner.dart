@@ -203,4 +203,18 @@ class ReliabilityRunner {
       await _runForAccount(account.id, force: true);
     }
   }
+
+  /// Verifies only [accountId] right now and returns the stored result, so a
+  /// manual "Verify sync health" on one account can report its outcome.
+  Future<SyncHealthRow?> checkAccountNow(String accountId) async {
+    await _appLogger.info(
+      'sync_health',
+      'Manual sync health verification started',
+      accountId: accountId,
+    );
+    await _runForAccount(accountId, force: true);
+    return (_db.select(_db.syncHealth)
+          ..where((t) => t.accountId.equals(accountId)))
+        .getSingleOrNull();
+  }
 }
