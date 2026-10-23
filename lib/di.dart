@@ -29,6 +29,7 @@ import 'package:sharedinbox/core/repositories/undo_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/core/services/body_cache_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
@@ -42,6 +43,7 @@ import 'package:sharedinbox/core/services/undo_service.dart';
 import 'package:sharedinbox/core/services/unified_push_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
+import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
@@ -627,6 +629,42 @@ Future<AfterMailViewAction> storedAfterMailViewAction(
   UserPreferencesRepository repo,
 ) async =>
     (await repo.observePreferences().first).afterMailViewAction;
+
+/// In-process body prefetch for platforms without WorkManager (desktop).
+/// Follows the stored prefetch preference and runs the same
+/// [BodyCacheService] pass as the Android WorkManager task, at most hourly.
+/// Unlike the WorkManager task (one batch of 20 per run) a desktop run keeps
+/// going for up to [_desktopPrefetchMaxBatches] batches while it makes
+/// progress, with a short pause between fetches so the UI stays responsive.
+/// Reading the provider and calling `start()` installs the schedule.
+final desktopPrefetchSchedulerProvider = Provider<DesktopPrefetchScheduler>((
+  ref,
+) {
+  // One service for the app's lifetime so it remembers recently failed
+  // messages across runs.
+  final service = BodyCacheService(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
+  );
+  final scheduler = DesktopPrefetchScheduler(
+    modes: ref
+        .watch(userPreferencesRepositoryProvider)
+        .observePreferences()
+        .map((p) => p.prefetchMode),
+    runPrefetch: () async {
+      await service.run(
+        maxBatches: _desktopPrefetchMaxBatches,
+        pauseBetweenFetches: const Duration(milliseconds: 200),
+      );
+    },
+  );
+  ref.onDispose(scheduler.dispose);
+  return scheduler;
+});
+
+const _desktopPrefetchMaxBatches = 10;
 
 final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
   ref,
