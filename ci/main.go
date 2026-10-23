@@ -1926,7 +1926,8 @@ func (m *Ci) TestAndroidFirebase(
 // fragility and because it runs via `su ci` — the emulator refuses to run as
 // root and the AVD lives in ci's HOME. It boots the AVD cold, waits for a full
 // boot, installs the release APK, launches MainActivity and fails if the app
-// crashes (FATAL EXCEPTION / process death) or is not running after launch.
+// crashes (a crash buffer entry naming the package — crashes of the image's
+// system apps are ignored) or is not running after launch (retried once).
 const smokeTestScript = `#!/usr/bin/env bash
 set -euo pipefail
 export HOME=/home/ci
@@ -1960,30 +1961,62 @@ echo "Emulator booted."
 echo "Installing release APK…"
 adb install -r /tmp/app-release.apk
 
-echo "Clearing crash logcat buffer…"
-adb logcat -b crash -c
-
-echo "Launching $PACKAGE/.MainActivity…"
-adb shell am start -W -n "$PACKAGE/.MainActivity"
-
 WATCH=20
-echo "Watching crash logcat for ${WATCH}s…"
-sleep "$WATCH"
-crash_rc=0
-CRASH=$(adb logcat -b crash -d 2>&1) || crash_rc=$?
-[ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $CRASH"; exit 1; }
-if echo "$CRASH" | grep -qE "FATAL EXCEPTION|Process .* has died"; then
-    echo "----- CRASH DETECTED -----"
-    echo "$CRASH"
-    echo "--------------------------"
-    exit 1
-fi
+
+# launch_and_watch starts MainActivity cold, waits WATCH seconds and returns
+# 0 when the app is still running, 1 when it crashed (FATAL EXCEPTION / native
+# crash of $PACKAGE in the crash buffer — exits the script right away) and 2
+# when it is simply not running without any crash signal.
+launch_and_watch() {
+    adb shell am force-stop "$PACKAGE" || true
+    adb logcat -b crash -c
+    adb logcat -b main,system,events -c || true
+    echo "Launching $PACKAGE/.MainActivity…"
+    adb shell am start -W -n "$PACKAGE/.MainActivity"
+    echo "Watching crash logcat for ${WATCH}s…"
+    sleep "$WATCH"
+    local crash_rc=0 crash
+    crash=$(adb logcat -b crash -d 2>&1) || crash_rc=$?
+    [ "$crash_rc" -eq 0 ] || { echo "ERROR: adb logcat -b crash -d failed (rc=$crash_rc): $crash"; exit 1; }
+    # The google_apis image runs system apps (Gmail, GMS, …) that sometimes
+    # crash during a cold boot. Their crashes are not ours: only a crash buffer
+    # entry naming $PACKAGE ("Process: $PACKAGE, PID: …" for Java,
+    # ">>> $PACKAGE <<<" for native) fails the test.
+    if echo "$crash" | grep -qF "$PACKAGE"; then
+        echo "----- CRASH DETECTED -----"
+        echo "$crash"
+        echo "--------------------------"
+        exit 1
+    fi
+    if [ -n "$crash" ]; then
+        echo "--- crash buffer (other apps, ignored) ---"
+        echo "$crash" | grep -E "FATAL EXCEPTION|Process: |>>> .* <<<" || true
+    fi
+    adb get-state >/dev/null 2>&1 || { echo "ERROR: adb lost the emulator after launch"; tail -50 /tmp/emulator.log; exit 1; }
+    adb shell pidof "$PACKAGE" >/dev/null 2>&1 && return 0
+    echo "WARNING: $PACKAGE is not running ${WATCH}s after launch, with no crash in the crash buffer."
+    echo "--- process/activity log ---"
+    adb logcat -b main,system,events -d 2>/dev/null \
+        | grep -iE "$PACKAGE|AndroidRuntime|NoClassDefFound|flutter|am_proc_died|am_anr|am_kill|lowmemorykiller|ANR in" \
+        | tail -100 || true
+    return 2
+}
+
 # Belt-and-suspenders: a launch crash kills the process even if the crash
-# buffer detection above misses it. NoClassDefFoundError lands here.
-if ! adb shell pidof "$PACKAGE" >/dev/null 2>&1; then
-    echo "ERROR: $PACKAGE is not running ${WATCH}s after launch — it crashed on startup."
-    echo "--- crash buffer ---"; echo "$CRASH"
-    echo "--- last main log ---"; adb logcat -d -t 200 2>/dev/null | grep -iE "$PACKAGE|AndroidRuntime|NoClassDefFound|flutter" || true
+# buffer detection misses it (NoClassDefFoundError lands here). A single
+# launch on a freshly cold-booted emulator can also lose the process without
+# any crash (system still busy: am start times out, the process gets killed),
+# so a missing process is retried once; an app that really dies on startup
+# is not running after the second launch either.
+rc=0
+launch_and_watch || rc=$?
+if [ "$rc" -eq 2 ]; then
+    echo "Retrying the launch once…"
+    rc=0
+    launch_and_watch || rc=$?
+fi
+if [ "$rc" -ne 0 ]; then
+    echo "ERROR: $PACKAGE is not running ${WATCH}s after launch (twice) — it crashed on startup."
     exit 1
 fi
 echo "OK — $PACKAGE launched and survived ${WATCH}s with no crash signal."
