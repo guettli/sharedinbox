@@ -112,21 +112,7 @@ class NoteRepositoryImpl implements NoteRepository {
         selected = await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
         if (isImapMailboxNotFound(e)) {
-          // Notes folder doesn't exist yet — clear any stale checkpoint and
-          // drop orphaned local notes so the local cache mirrors reality.
-          final wiped = await _clearNotesForAccount(
-            account.id,
-            'note.sync.folder_missing_wipe',
-          );
-          await _clearNotesCheckpoint(account.id);
-          unawaited(
-            _appLogger?.info(
-              'note.sync.completed',
-              'Note sync: Notes folder not found, cleared local cache',
-              accountId: account.id,
-              data: {'transport': 'imap', 'wiped': wiped},
-            ),
-          );
+          await _handleNotesFolderMissing(account.id, 'imap');
           return;
         }
         rethrow;
@@ -237,6 +223,46 @@ class NoteRepositoryImpl implements NoteRepository {
     }
   }
 
+  /// The Notes folder doesn't exist (yet) — the default on most servers.
+  /// Clears any stale checkpoint and drops orphaned local notes so the local
+  /// cache mirrors reality. This runs on every sync cycle, so it only logs at
+  /// info when something was actually cleared; the no-op case goes to debug
+  /// to keep the App Log readable.
+  Future<void> _handleNotesFolderMissing(
+    String accountId,
+    String transport,
+  ) async {
+    final wiped = await _clearNotesForAccount(
+      accountId,
+      'note.sync.folder_missing_wipe',
+    );
+    final checkpointCleared = await _clearNotesCheckpoint(accountId) > 0;
+    final data = {
+      'transport': transport,
+      'wiped': wiped,
+      'checkpointCleared': checkpointCleared,
+    };
+    if (wiped > 0 || checkpointCleared) {
+      unawaited(
+        _appLogger?.info(
+          'note.sync.completed',
+          'Note sync: Notes folder not found, cleared local cache',
+          accountId: accountId,
+          data: data,
+        ),
+      );
+    } else {
+      unawaited(
+        _appLogger?.debug(
+          'note.sync.completed',
+          'Note sync: Notes folder not found, nothing to sync',
+          accountId: accountId,
+          data: data,
+        ),
+      );
+    }
+  }
+
   Future<void> _syncAllNotesJmap(
     account_model.Account account,
     String password,
@@ -253,19 +279,7 @@ class NoteRepositoryImpl implements NoteRepository {
 
     final mailboxId = await _findNotesMailboxJmap(jmap);
     if (mailboxId == null) {
-      final wiped = await _clearNotesForAccount(
-        account.id,
-        'note.sync.folder_missing_wipe',
-      );
-      await _clearNotesCheckpoint(account.id);
-      unawaited(
-        _appLogger?.info(
-          'note.sync.completed',
-          'Note sync: Notes mailbox not found, cleared local cache',
-          accountId: account.id,
-          data: {'transport': 'jmap', 'wiped': wiped},
-        ),
-      );
+      await _handleNotesFolderMissing(account.id, 'jmap');
       return;
     }
 
@@ -1038,8 +1052,9 @@ class NoteRepositoryImpl implements NoteRepository {
         );
   }
 
-  Future<void> _clearNotesCheckpoint(String accountId) async {
-    await (_db.delete(_db.syncStates)
+  /// Deletes the notes checkpoint; returns the number of rows removed.
+  Future<int> _clearNotesCheckpoint(String accountId) async {
+    return (_db.delete(_db.syncStates)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
