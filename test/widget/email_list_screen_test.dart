@@ -1449,9 +1449,13 @@ void main() {
         await tester.tap(find.byIcon(Icons.archive));
         await tester.pumpAndSettle();
 
-        expect(find.text('No archive folder found'), findsOneWidget);
+        expect(
+          find.text('No archive folder for alice@example.com'),
+          findsOneWidget,
+        );
         expect(find.text('Choose existing folder'), findsOneWidget);
         expect(find.text('Create "Archive"'), findsOneWidget);
+        expect(find.text('Cancel'), findsOneWidget);
       });
 
       testWidgets('tapping Create creates the folder and moves emails', (

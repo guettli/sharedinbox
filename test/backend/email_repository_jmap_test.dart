@@ -469,4 +469,63 @@ if header :contains "subject" "lunch" {
       }
     },
   );
+
+  // The batch Archive prompt's "Create "Archive"" must work for JMAP accounts
+  // too: Mailbox/set creates the mailbox with role archive, and a move into it
+  // reaches the server.
+  test('createMailboxWithRole archive creates the mailbox and accepts a move',
+      () async {
+    // Drops any Archive left behind by an earlier run so the create below is
+    // not refused as a duplicate name/role.
+    Future<void> dropArchive(
+      MailboxRepositoryImpl mailboxes,
+      String accountId,
+    ) async {
+      final client = await connectImap(env: env, user: user);
+      try {
+        await clearMailbox(client, mailboxPath: 'Archive');
+      } finally {
+        await client.logout();
+      }
+      await mailboxes.syncMailboxes(accountId);
+      final old = await mailboxes.findMailboxByRole(accountId, 'archive');
+      if (old != null) await mailboxes.deleteMailbox(accountId, old.path);
+    }
+
+    await appendToInbox('archive-me');
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    await dropArchive(r.mailboxes, 'test-jmap');
+    try {
+      final archive = await r.mailboxes
+          .createMailboxWithRole('test-jmap', 'Archive', 'archive');
+      expect(archive.role, 'archive');
+      expect(
+        (await r.mailboxes.findMailboxByRole('test-jmap', 'archive'))?.path,
+        archive.path,
+      );
+
+      await r.emails.syncEmails('test-jmap', inboxId);
+      final inbox = await r.emails.observeEmails('test-jmap', inboxId).first;
+      await r.emails.moveEmail(inbox.single.id, archive.path);
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+
+      // The server, not just the local cache, has the role and the mail.
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final synced =
+          await r.mailboxes.findMailboxByRole('test-jmap', 'archive');
+      expect(synced?.path, archive.path);
+      await r.emails.syncEmails('test-jmap', inboxId);
+      expect(
+        await r.emails.observeEmails('test-jmap', inboxId).first,
+        isEmpty,
+      );
+      await r.emails.syncEmails('test-jmap', archive.path);
+      final archived =
+          await r.emails.observeEmails('test-jmap', archive.path).first;
+      expect(archived.map((e) => e.subject), ['archive-me']);
+    } finally {
+      await dropArchive(r.mailboxes, 'test-jmap');
+    }
+  });
 }
