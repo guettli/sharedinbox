@@ -9,7 +9,7 @@ import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 void main() {
   late StreamController<PrefetchMode> modes;
   late int runs;
-  late DesktopPrefetchScheduler scheduler;
+  DesktopPrefetchScheduler? scheduler;
 
   DesktopPrefetchScheduler build({
     Future<void> Function()? runPrefetch,
@@ -28,7 +28,8 @@ void main() {
   });
 
   tearDown(() {
-    scheduler.dispose();
+    scheduler?.dispose();
+    scheduler = null;
     unawaited(modes.close());
   });
 
@@ -57,7 +58,7 @@ void main() {
       modes.add(PrefetchMode.disabled);
       async.elapse(const Duration(hours: 5));
       expect(runs, 0);
-      expect(scheduler.isScheduled, isFalse);
+      expect(scheduler!.isScheduled, isFalse);
     });
   });
 
@@ -71,12 +72,12 @@ void main() {
       modes.add(PrefetchMode.disabled);
       async.elapse(const Duration(hours: 3));
       expect(runs, 1);
-      expect(scheduler.isScheduled, isFalse);
+      expect(scheduler!.isScheduled, isFalse);
 
       modes.add(PrefetchMode.always);
       async.elapse(const Duration(minutes: 1));
       expect(runs, 2);
-      expect(scheduler.isScheduled, isTrue);
+      expect(scheduler!.isScheduled, isTrue);
     });
   });
 
@@ -137,13 +138,14 @@ void main() {
     fakeAsync((async) {
       scheduler = build()..start();
       modes.add(PrefetchMode.always);
-      scheduler.dispose();
+      scheduler!.dispose();
       async.elapse(const Duration(hours: 2));
       expect(runs, 0);
     });
   });
 
   test('in-process prefetch is needed on desktop only', () {
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     for (final platform in TargetPlatform.values) {
       debugDefaultTargetPlatformOverride = platform;
       final desktop = platform == TargetPlatform.linux ||
@@ -151,6 +153,15 @@ void main() {
           platform == TargetPlatform.windows;
       expect(needsInProcessBodyPrefetch, desktop, reason: platform.name);
     }
-    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('an error on the preference stream does not stop the schedule', () {
+    fakeAsync((async) {
+      scheduler = build()..start();
+      modes.addError(StateError('db closed'));
+      modes.add(PrefetchMode.always);
+      async.elapse(const Duration(minutes: 1));
+      expect(runs, 1);
+    });
   });
 }

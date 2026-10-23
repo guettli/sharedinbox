@@ -56,7 +56,14 @@ class DesktopPrefetchScheduler {
 
   /// Starts following the prefetch preference. Calling it again is a no-op.
   void start() {
-    _sub ??= _modes.distinct().listen(_onMode);
+    _sub ??= _modes.distinct().listen(
+          _onMode,
+          onError: (Object e, StackTrace st) => log(
+            'prefetch preference stream failed',
+            error: e,
+            stackTrace: st,
+          ),
+        );
   }
 
   void _onMode(PrefetchMode mode) {

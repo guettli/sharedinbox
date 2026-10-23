@@ -633,22 +633,38 @@ Future<AfterMailViewAction> storedAfterMailViewAction(
 /// In-process body prefetch for platforms without WorkManager (desktop).
 /// Follows the stored prefetch preference and runs the same
 /// [BodyCacheService] pass as the Android WorkManager task, at most hourly.
+/// Unlike the WorkManager task (one batch of 20 per run) a desktop run keeps
+/// going for up to [_desktopPrefetchMaxBatches] batches while it makes
+/// progress, with a short pause between fetches so the UI stays responsive.
 /// Reading the provider and calling `start()` installs the schedule.
 final desktopPrefetchSchedulerProvider = Provider<DesktopPrefetchScheduler>((
   ref,
 ) {
-  final db = ref.watch(dbProvider);
-  final accountRepo = ref.watch(accountRepositoryProvider);
+  // One service for the app's lifetime so it remembers recently failed
+  // messages across runs.
+  final service = BodyCacheService(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
+  );
   final scheduler = DesktopPrefetchScheduler(
     modes: ref
         .watch(userPreferencesRepositoryProvider)
         .observePreferences()
         .map((p) => p.prefetchMode),
-    runPrefetch: () => BodyCacheService(db, accountRepo).run(),
+    runPrefetch: () async {
+      await service.run(
+        maxBatches: _desktopPrefetchMaxBatches,
+        pauseBetweenFetches: const Duration(milliseconds: 200),
+      );
+    },
   );
   ref.onDispose(scheduler.dispose);
   return scheduler;
 });
+
+const _desktopPrefetchMaxBatches = 10;
 
 final userPreferencesProvider = StreamProvider.autoDispose<UserPreferences>((
   ref,
