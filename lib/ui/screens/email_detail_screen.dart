@@ -1734,6 +1734,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// The human part of a folder-create failure: no `Exception:` /
+  /// `Invalid argument(s)` wrapper in front of the snackbar text.
+  static String _errorMessage(Object e) {
+    if (e is ArgumentError) return '${e.message}';
+    final text = e.toString();
+    const prefix = 'Exception: ';
+    return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+  }
+
   Future<void> _moveTo(BuildContext context, Email header) async {
     final nextEmail = await _getNextEmailIfNeeded(header);
 
@@ -1798,7 +1807,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       } catch (e, stack) {
         if (!context.mounted) return;
         context.showAppSnackBar(
-          'Could not create folder: ${e is ArgumentError ? e.message : e}',
+          'Could not create folder: ${_errorMessage(e)}',
           level: AppLogLevel.error,
           event: 'email.move.create_folder_failed',
           emailId: widget.emailId,

@@ -727,12 +727,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
     } finally {
       await client.logout();
     }
-    var displayPath = parent?.displayPath;
     String? id;
     for (var i = 0; i < segments.length; i++) {
       final isLeaf = i == segments.length - 1;
-      displayPath =
-          displayPath == null ? segments[i] : '$displayPath/${segments[i]}';
       id = '${account.id}:${serverPaths[i]}';
       final row = MailboxesCompanion.insert(
         id: id,
@@ -740,7 +737,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
         path: serverPaths[i],
         name: segments[i],
         role: Value(isLeaf ? role : null),
-        displayPath: Value(displayPath),
+        // Same as [syncMailboxes]: an IMAP displayPath mirrors the server
+        // path, delimiter included, so the next sync changes nothing.
+        displayPath: Value(serverPaths[i]),
       );
       await _insertCreatedMailbox(row, isNew: isLeaf);
     }
@@ -829,28 +828,26 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final created = result['created'] as Map<String, dynamic>?;
     final notCreated = result['notCreated'] as Map<String, dynamic>?;
     final newIds = <String>[];
+    Map<String, dynamic>? failure;
     for (var i = 0; i < toCreate.length; i++) {
       final newId =
           (created?['c$i'] as Map<String, dynamic>?)?['id'] as String?;
       if (newId == null) {
-        final err = notCreated?['c$i'] as Map<String, dynamic>?;
-        throw Exception(
-          'Failed to create mailbox "${segments.join('/')}": '
-          '${err?['type'] ?? 'server returned no ID'}'
-          '${err?['description'] != null ? ' (${err!['description']})' : ''}',
-        );
+        failure = (notCreated?['c$i'] as Map<String, dynamic>?) ?? {};
+        break;
       }
       newIds.add(newId);
     }
 
-    // Store every level locally so the folder list and the Move dialog show
-    // the hierarchy right away; the next sync confirms. displayPath matches
-    // the parentId walk in [_upsertJmapMailboxes].
+    // Store every level the server now has locally so the folder list and
+    // the Move dialog show the hierarchy right away — on a partial failure
+    // too, so a parent that did get created is not invisible until the next
+    // sync. displayPath matches the parentId walk in [_upsertJmapMailboxes].
     final serverIds = [...existingIds, ...newIds];
     var displayPath = parent?.displayPath;
     String? levelParent = parent?.path;
     late String dbId;
-    for (var i = 0; i < segments.length; i++) {
+    for (var i = 0; i < serverIds.length; i++) {
       final isLeaf = i == segments.length - 1;
       final isNew = i >= existingIds.length;
       displayPath =
@@ -869,6 +866,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
         isNew: isNew,
       );
       levelParent = serverIds[i];
+    }
+    if (failure != null) {
+      final reason = [
+        failure['type'] ?? 'server returned no ID',
+        if (failure['description'] != null) '(${failure['description']})',
+      ].join(' ');
+      final createdPart = newIds.isEmpty
+          ? ''
+          : '; "${segments.take(serverIds.length).join('/')}" was created';
+      throw Exception(
+        'Failed to create mailbox "${segments.join('/')}": '
+        '$reason$createdPart',
+      );
     }
     final row = await (_db.select(
       _db.mailboxes,

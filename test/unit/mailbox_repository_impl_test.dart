@@ -857,8 +857,8 @@ void main() {
 
           expect(spy.createdMailbox, 'INBOX.Work.Tasks');
           expect(result.path, 'INBOX.Work.Tasks');
-          // displayPath is always joined with `/` for the UI.
-          expect(result.displayPath, 'INBOX/Work/Tasks');
+          // Matches what syncMailboxes stores: the server path as-is.
+          expect(result.displayPath, 'INBOX.Work.Tasks');
         },
       );
 
@@ -1145,32 +1145,90 @@ void main() {
           });
         }
 
+        for (final sep in ['/', '.']) {
+          test(
+            'IMAP: joins the levels with the server delimiter "$sep" and '
+            'caches the ancestor',
+            () async {
+              final spy = _SeparatorSpyImapClient(sep);
+              final db = openTestDatabase();
+              final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+              final mailboxes = MailboxRepositoryImpl(
+                db,
+                accounts,
+                imapConnect: (_, __, ___) async => spy,
+              );
+              await accounts.addAccount(_account, 'pw');
+
+              final result = await mailboxes.createMailbox(
+                'acc-1',
+                'Projects/2026',
+              );
+
+              final leafPath = 'Projects${sep}2026';
+              expect(spy.createdMailbox, leafPath);
+              expect(result.name, '2026');
+              expect(result.path, leafPath);
+              // IMAP sync stores displayPath = server path; match it.
+              expect(result.displayPath, leafPath);
+              final all = await mailboxes.observeMailboxes('acc-1').first;
+              final projects = all.singleWhere((m) => m.path == 'Projects');
+              expect(projects.name, 'Projects');
+              expect(projects.displayPath, 'Projects');
+            },
+          );
+        }
+
         test(
-          'IMAP: joins the levels with the server delimiter and caches '
-          'the ancestor',
+          'JMAP: caches the levels created before a refused one and says so',
           () async {
-            final spy = SnoozeSpyImapClient();
-            final db = openTestDatabase();
-            final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-            final mailboxes = MailboxRepositoryImpl(
-              db,
-              accounts,
-              imapConnect: (_, __, ___) async => spy,
+            final r = _makeRepos(
+              httpClient: _mockJmap(
+                apiResponses: [
+                  _mailboxGetResponse(state: 's1', list: []),
+                  {
+                    'sessionState': 'sess1',
+                    'methodResponses': [
+                      [
+                        'Mailbox/set',
+                        {
+                          'accountId': 'acct1',
+                          'created': {
+                            'c0': {'id': 'mbx-projects'},
+                          },
+                          'notCreated': {
+                            'c1': {
+                              'type': 'invalidProperties',
+                              'description': 'name too long',
+                            },
+                          },
+                        },
+                        '0',
+                      ],
+                    ],
+                  },
+                ],
+              ),
             );
-            await accounts.addAccount(_account, 'pw');
+            await r.accounts.addAccount(_jmapAccount, 'pw');
 
-            final result = await mailboxes.createMailbox(
-              'acc-1',
-              'Projects/2026',
+            await expectLater(
+              r.mailboxes.createMailbox('jmap-1', 'Projects/2026'),
+              throwsA(
+                isA<Exception>().having(
+                  (e) => e.toString(),
+                  'message',
+                  allOf(
+                    contains('invalidProperties (name too long)'),
+                    contains('"Projects" was created'),
+                  ),
+                ),
+              ),
             );
-
-            expect(spy.createdMailbox, 'Projects/2026');
-            expect(result.name, '2026');
-            expect(result.path, 'Projects/2026');
-            expect(result.displayPath, 'Projects/2026');
-            final all = await mailboxes.observeMailboxes('acc-1').first;
-            final projects = all.singleWhere((m) => m.path == 'Projects');
-            expect(projects.name, 'Projects');
+            final all = await r.mailboxes.observeMailboxes('jmap-1').first;
+            expect(all.map((m) => (m.path, m.displayPath, m.parentId)), [
+              ('mbx-projects', 'Projects', null),
+            ]);
           },
         );
       });
@@ -1815,4 +1873,22 @@ class _AllMailImapClient extends SnoozeSpyImapClient {
 
   @override
   Future<dynamic> logout() async {}
+}
+
+/// [SnoozeSpyImapClient] whose LIST reports [separator] as the hierarchy
+/// delimiter (e.g. `.` like Dovecot/Courier).
+class _SeparatorSpyImapClient extends SnoozeSpyImapClient {
+  _SeparatorSpyImapClient(this.separator);
+
+  final String separator;
+
+  @override
+  List<imap.Mailbox> get listedMailboxes => [
+        imap.Mailbox(
+          encodedName: 'INBOX',
+          encodedPath: 'INBOX',
+          pathSeparator: separator,
+          flags: [],
+        ),
+      ];
 }
