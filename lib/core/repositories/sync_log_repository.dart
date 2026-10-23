@@ -91,6 +91,15 @@ abstract class SyncLogRepository {
   /// Emits the error message of the most recent sync attempt for [accountId],
   /// or null when the last sync succeeded (or no syncs have run yet).
   Stream<String?> observeLastError(String accountId);
+
+  /// Removes sync logs (and their per-mailbox rows) older than [maxAge] or
+  /// beyond the newest [maxPerAccount] of their account. The newest log of
+  /// each account is always kept. Best-effort and idempotent — safe to call
+  /// any time.
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  });
 }
 
 class NoOpSyncLogRepository implements SyncLogRepository {
@@ -122,4 +131,10 @@ class NoOpSyncLogRepository implements SyncLogRepository {
 
   @override
   Stream<String?> observeLastError(String accountId) => Stream.value(null);
+
+  @override
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {}
 }

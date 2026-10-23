@@ -241,8 +241,8 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Give the global, out-of-widget error handlers a logger too so uncaught
     // crashes land in the App Log for bug reports (#534).
     crashLogger = ref.read(appLoggerProvider);
-    // Trim retained log rows once per launch.
-    unawaited(ref.read(appLogRepositoryProvider).trim());
+    // Trim retained app/sync log rows now and periodically while running.
+    ref.read(logRetentionSchedulerProvider).start();
     // Start background IMAP sync once — runs for the lifetime of the app.
     ref.read(syncManagerProvider).start();
     ref.read(reliabilityRunnerProvider).start();

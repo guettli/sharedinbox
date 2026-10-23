@@ -134,4 +134,53 @@ class SyncLogRepositoryImpl implements SyncLogRepository {
         .watchSingleOrNull()
         .map((row) => (row?.result == 'error') ? row?.errorMessage : null);
   }
+
+  /// Ids of the sync logs [trim] removes: all but the newest log of each
+  /// account that are older than the cutoff (2nd variable) or beyond the
+  /// newest N (1st variable) of their account.
+  static const _trimmedIds = '''
+    SELECT id FROM (
+      SELECT id, started_at, ROW_NUMBER() OVER (
+        PARTITION BY account_id ORDER BY started_at DESC, id DESC
+      ) AS rn
+      FROM sync_logs
+    )
+    WHERE rn > 1 AND (rn > ?1 OR started_at < ?2)''';
+
+  @override
+  Future<void> trim({
+    int maxPerAccount = 1000,
+    Duration maxAge = const Duration(days: 14),
+  }) async {
+    final variables = [
+      Variable.withInt(maxPerAccount),
+      Variable.withDateTime(DateTime.now().subtract(maxAge)),
+    ];
+    try {
+      // The foreign keys would cascade / set null on their own; doing it
+      // explicitly keeps the trim correct even where they are not enforced.
+      await _db.transaction(() async {
+        await _db.customUpdate(
+          'DELETE FROM sync_log_mailboxes WHERE sync_log_id IN ($_trimmedIds)',
+          variables: variables,
+          updates: {_db.syncLogMailboxes},
+          updateKind: UpdateKind.delete,
+        );
+        await _db.customUpdate(
+          'UPDATE app_logs SET sync_log_id = NULL '
+          'WHERE sync_log_id IN ($_trimmedIds)',
+          variables: variables,
+          updates: {_db.appLogs},
+        );
+        await _db.customUpdate(
+          'DELETE FROM sync_logs WHERE id IN ($_trimmedIds)',
+          variables: variables,
+          updates: {_db.syncLogs},
+          updateKind: UpdateKind.delete,
+        );
+      });
+    } catch (_) {
+      // Best-effort, like AppLogRepositoryImpl.trim().
+    }
+  }
 }
