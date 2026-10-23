@@ -114,4 +114,69 @@ void main() {
       await dropProjects();
     }
   });
+
+  test('deleteMailbox removes an IMAP folder that still contains mail',
+      () async {
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    const folderName = 'DeleteWithMail';
+
+    Future<void> dropFolder() async {
+      await r.mailboxes.syncMailboxes('test');
+      final all = await r.mailboxes.observeMailboxes('test').first;
+      for (final m in all.where((m) => m.displayPath == folderName)) {
+        await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
+      }
+    }
+
+    await dropFolder();
+    final folder = await r.mailboxes.createMailbox('test', folderName);
+    final client = await connectImap(env: env, user: user);
+    try {
+      await appendMessage(
+        client,
+        subject: 'doomed',
+        userEmail: user.email,
+        mailboxPath: folder.path,
+      );
+    } finally {
+      await client.logout();
+    }
+    await r.mailboxes.syncMailboxes('test');
+    await r.db.into(r.db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'test:${folder.path}:1',
+            accountId: 'test',
+            mailboxPath: folder.path,
+            uid: 1,
+            receivedAt: DateTime.now(),
+          ),
+        );
+
+    // Without removeEmails (the dialog said "empty") the mail is kept.
+    await expectLater(
+      r.mailboxes.deleteMailbox('test', folder.path),
+      throwsA(isA<Exception>()),
+    );
+    final kept = await r.mailboxes.observeMailboxes('test').first;
+    expect(kept.map((m) => m.path), contains(folder.path));
+
+    await r.mailboxes.deleteMailbox('test', folder.path, removeEmails: true);
+
+    final local = await (r.db.select(r.db.emails)
+          ..where((t) => t.mailboxPath.equals(folder.path)))
+        .get();
+    expect(local, isEmpty);
+    await r.mailboxes.syncMailboxes('test');
+    final all = await r.mailboxes.observeMailboxes('test').first;
+    expect(all.where((m) => m.displayPath == folderName), isEmpty);
+
+    final check = await connectImap(env: env, user: user);
+    try {
+      final boxes = await check.listMailboxes();
+      expect(boxes.where((b) => b.name == folderName), isEmpty);
+    } finally {
+      await check.logout();
+    }
+  });
 }

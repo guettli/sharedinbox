@@ -10,6 +10,18 @@ String fmtSize(int bytes) {
   return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
 }
 
+/// The human part of an error for a snackbar: no `Exception:` /
+/// `Invalid argument(s)` wrapper in front of the text.
+String userErrorMessage(Object e) {
+  if (e is ArgumentError) {
+    final message = e.message;
+    return message == null ? e.toString() : '$message';
+  }
+  final text = e.toString();
+  const prefix = 'Exception: ';
+  return text.startsWith(prefix) ? text.substring(prefix.length) : text;
+}
+
 /// Whether an attachment [contentType] names an image format that Flutter's
 /// built-in decoder can render inline (PNG, JPEG, GIF, WebP, BMP).
 ///

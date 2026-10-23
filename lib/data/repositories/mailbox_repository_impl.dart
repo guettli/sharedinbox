@@ -959,15 +959,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
   }
 
   @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {
+  Future<void> deleteMailbox(
+    String accountId,
+    String mailboxPath, {
+    bool removeEmails = false,
+  }) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final row = await _requireRow(accountId, mailboxPath);
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _deleteMailboxImap(account, password, row);
+        await _deleteMailboxImap(account, password, row, removeEmails);
       case account_model.AccountType.jmap:
-        await _deleteMailboxJmap(account, password, row);
+        await _deleteMailboxJmap(account, password, row, removeEmails);
     }
     await removeLocalMailbox(_db, accountId, row.path);
   }
@@ -1041,6 +1045,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     account_model.Account account,
     String password,
     MailboxRow row,
+    bool removeEmails,
   ) async {
     final client = await _imapConnect(
       account,
@@ -1048,7 +1053,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
       password,
     );
     try {
-      await client.deleteMailbox(_imapBoxFor(row));
+      final box = _imapBoxFor(row);
+      // IMAP DELETE always takes the mail with it, so check first when the
+      // user was told the folder is empty.
+      if (!removeEmails) {
+        final status =
+            await client.statusMailbox(box, [imap.StatusFlags.messages]);
+        if (status.messagesExists > 0) {
+          throw Exception(_hasMailText);
+        }
+      }
+      await client.deleteMailbox(box);
     } finally {
       await client.logout();
     }
@@ -1245,6 +1260,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     account_model.Account account,
     String password,
     MailboxRow row,
+    bool removeEmails,
   ) async {
     final jmap = await _connectJmap(account, password);
     final responses = await jmap.call([
@@ -1253,6 +1269,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
         {
           'accountId': jmap.accountId,
           'destroy': [row.path],
+          // Only when the user confirmed deleting the folder *with* its
+          // mail. Without it the server refuses a non-empty mailbox with
+          // `mailboxHasEmail` (RFC 8621 §2.5). Emails that are also in
+          // another mailbox only lose this one; the rest are destroyed —
+          // the same outcome as IMAP DELETE.
+          if (removeEmails) 'onDestroyRemoveEmails': true,
         },
         '0',
       ],
@@ -1295,7 +1317,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
     if (notUpdated != null && notUpdated.containsKey(jmapId)) {
       final err = notUpdated[jmapId] as Map<String, dynamic>;
-      throw Exception('Mailbox/set update failed: ${err['type']}');
+      throw Exception(_jmapSetErrorText(err));
     }
   }
 
@@ -1304,8 +1326,28 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final notDestroyed = result['notDestroyed'] as Map<String, dynamic>?;
     if (notDestroyed != null && notDestroyed.containsKey(jmapId)) {
       final err = notDestroyed[jmapId] as Map<String, dynamic>;
-      throw Exception('Mailbox/set destroy failed: ${err['type']}');
+      throw Exception(_jmapSetErrorText(err));
     }
+  }
+
+  static const _hasMailText =
+      'the folder is not empty on the server any more — reload the folder '
+      'list and confirm deleting its mail';
+
+  /// A readable sentence for a `Mailbox/set` SetError (RFC 8620 §5.3,
+  /// RFC 8621 §2.5), keeping the raw type in brackets for bug reports.
+  static String _jmapSetErrorText(Map<String, dynamic> err) {
+    final type = err['type'];
+    final reason = switch (type) {
+      'mailboxHasChild' => 'the folder still has subfolders on the server',
+      'mailboxHasEmail' => _hasMailText,
+      'notFound' => 'the folder no longer exists on the server',
+      'forbidden' => 'the server does not allow changing this folder',
+      'alreadyExists' => 'a folder with this name already exists',
+      'invalidProperties' => 'the server rejected the new name or place',
+      _ => err['description'] as String? ?? 'the server refused',
+    };
+    return '$reason ($type)';
   }
 
   /// Recomputes `displayPath` for every locally cached JMAP mailbox in

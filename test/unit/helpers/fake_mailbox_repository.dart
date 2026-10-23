@@ -68,7 +68,11 @@ class FakeMailboxRepositoryBase implements MailboxRepository {
       );
 
   @override
-  Future<void> deleteMailbox(String accountId, String mailboxPath) async {}
+  Future<void> deleteMailbox(
+    String accountId,
+    String mailboxPath, {
+    bool removeEmails = false,
+  }) async {}
 
   @override
   Future<Mailbox> moveMailbox(

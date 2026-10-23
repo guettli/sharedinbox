@@ -131,6 +131,16 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     return fakeMailbox(newName);
   }
 
+  /// What `STATUS … (MESSAGES)` reports for any mailbox.
+  int statusMessages = 0;
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox box,
+    List<imap.StatusFlags> flags,
+  ) async =>
+      box..messagesExists = statusMessages;
+
   @override
   Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
     deletedEncodedPath = box.encodedPath;
