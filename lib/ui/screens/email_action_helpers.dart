@@ -15,24 +15,37 @@ enum _MissingFolderChoice { chooseExisting, createNew }
 
 /// Resolves a mailbox by role, prompting the user to choose or create one when
 /// the role is not found.  Returns the target [Mailbox], or null if cancelled.
+///
+/// [folderKind] names the folder in the prompt ("No archive folder found").
+/// Pass [accountLabel] (the account's address) when the action may span
+/// several accounts, so each account's prompt says which account it is about
+/// ("No archive folder for alice@example.com").
 Future<Mailbox?> resolveMailboxByRole(
   BuildContext context,
   MailboxRepository mailboxRepo,
   String accountId,
   String currentMailboxPath,
   String role, {
-  required String dialogTitle,
+  required String folderKind,
   required String createFolderName,
+  String? accountLabel,
 }) async {
   Mailbox? mailbox = await mailboxRepo.findMailboxByRole(accountId, role);
   if (!context.mounted) return null;
   if (mailbox != null) return mailbox;
 
+  final dialogTitle = accountLabel == null
+      ? 'No $folderKind folder found'
+      : 'No $folderKind folder for $accountLabel';
   final choice = await showDialog<_MissingFolderChoice>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: Text(dialogTitle),
       actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
         TextButton(
           onPressed: () =>
               Navigator.pop(ctx, _MissingFolderChoice.chooseExisting),
@@ -109,7 +122,7 @@ Future<void> batchArchive(
       ref,
       threads: threads,
       role: 'archive',
-      dialogTitle: 'No archive folder found',
+      folderKind: 'archive',
       createFolderName: 'Archive',
     );
 
@@ -124,7 +137,7 @@ Future<void> batchMarkSpam(
       ref,
       threads: threads,
       role: 'junk',
-      dialogTitle: 'No spam folder found',
+      folderKind: 'spam',
       createFolderName: 'Junk',
     );
 
@@ -141,7 +154,7 @@ Future<void> batchMoveToInbox(
       ref,
       threads: threads,
       role: 'inbox',
-      dialogTitle: 'No inbox folder found',
+      folderKind: 'inbox',
       createFolderName: 'Inbox',
     );
 
@@ -150,28 +163,40 @@ Future<void> _batchMoveToRole(
   WidgetRef ref, {
   required List<EmailThread> threads,
   required String role,
-  required String dialogTitle,
+  required String folderKind,
   required String createFolderName,
 }) async {
   if (threads.isEmpty) return;
   final mailboxRepo = ref.read(mailboxRepositoryProvider);
+  final accountRepo = ref.read(accountRepositoryProvider);
+  // Prompt from the root navigator: it outlives the list or row that started
+  // the action, so a later account's prompt cannot be skipped because the
+  // first account's move rebuilt the screen underneath.
+  final promptContext = Navigator.of(context, rootNavigator: true).context;
 
-  final byAccount = _groupByAccount(threads);
-  for (final entry in byAccount.entries) {
-    if (!context.mounted) return;
-    final accountId = entry.key;
-    final accountThreads = entry.value;
+  // Settle every account's destination before moving anything, so no row
+  // leaves the list while a prompt for another account is still open, and
+  // a cancelled account simply keeps its rows.
+  final moves = <(List<EmailThread>, Mailbox)>[];
+  for (final MapEntry(key: accountId, value: accountThreads)
+      in _groupByAccount(threads).entries) {
+    if (!promptContext.mounted) return;
+    final account = await accountRepo.getAccount(accountId);
+    if (!promptContext.mounted) return;
     final mailbox = await resolveMailboxByRole(
-      context,
+      promptContext,
       mailboxRepo,
       accountId,
       accountThreads.first.mailboxPath,
       role,
-      dialogTitle: dialogTitle,
+      folderKind: folderKind,
       createFolderName: createFolderName,
+      accountLabel: account?.email ?? accountId,
     );
-    if (mailbox == null) continue;
+    if (mailbox != null) moves.add((accountThreads, mailbox));
+  }
 
+  for (final (accountThreads, mailbox) in moves) {
     await _moveThreadsTo(ref, accountThreads, mailbox.path, role: role);
   }
 }

@@ -1596,7 +1596,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       header.accountId,
       header.mailboxPath,
       'archive',
-      dialogTitle: 'No archive folder found',
+      folderKind: 'archive',
       createFolderName: 'Archive',
     );
 
@@ -1637,7 +1637,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       header.accountId,
       header.mailboxPath,
       'junk',
-      dialogTitle: 'No spam folder found',
+      folderKind: 'spam',
       createFolderName: 'Junk',
     );
 
@@ -1681,7 +1681,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       header.accountId,
       header.mailboxPath,
       'inbox',
-      dialogTitle: 'No inbox folder found',
+      folderKind: 'inbox',
       createFolderName: 'Inbox',
     );
 
