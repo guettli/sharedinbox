@@ -179,5 +179,26 @@ void main() {
     expect(emails.moves, {'bob:1': 'bob-Archive'});
     expect(find.text('Team sync'), findsNothing);
     expect(find.text('For Alice B'), findsOneWidget);
+    // The skipped account is reported, not dropped silently.
+    expect(find.text('Not archived: alice@example.com'), findsOneWidget);
+  });
+
+  testWidgets('a tap beside the prompt does not skip the account', (
+    tester,
+  ) async {
+    await archiveBoth(tester);
+
+    await answer(tester, 'Create "Archive"');
+    // A stray tap on the barrier (e.g. where the drawer button sits) used to
+    // dismiss the second prompt and drop that account from the batch.
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('No archive folder for alice@example.com'),
+      findsOneWidget,
+    );
+    await answer(tester, 'Create "Archive"');
+
+    expect(emails.moves.keys, ['bob:1', 'alice:1']);
   });
 }
