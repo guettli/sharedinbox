@@ -1,4 +1,6 @@
-import 'package:drift/drift.dart' show Value;
+import 'dart:convert';
+
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -210,6 +212,106 @@ if header :contains "subject" ["NEVER_MATCHES_XYZ"] {
 
       final pending = await db.select(db.pendingChanges).get();
       expect(pending, hasLength(2));
+    });
+  });
+
+  // Flag actions used to all collapse into "mark as read": a "Star message"
+  // filter left the mail read and unstarred.
+  group('applySieveRules flag actions', () {
+    /// Runs a filter with [actions] on subject "lunch" over one matching
+    /// INBOX mail and returns the database and that mail's row afterwards.
+    Future<(AppDatabase, Email)> runLunchFilter(String actions) async {
+      final (db, repo) = await _makeSetup('''
+require ["fileinto", "imap4flags"];
+if header :contains "subject" "lunch" {
+$actions
+}
+''');
+      await _insertInboxEmail(
+        db,
+        id: 'sieve-acc:1',
+        messageId: '<msg1@test>',
+        subject: 'Lunch on Friday',
+      );
+      expect(await repo.applySieveRules(_account.id), 1);
+      final row = await (db.select(db.emails)
+            ..where((t) => t.id.equals('sieve-acc:1')))
+          .getSingle();
+      return (db, row);
+    }
+
+    test('star action stars the message and leaves it unread', () async {
+      final (db, row) = await runLunchFilter(r'setflag "\\Flagged";');
+
+      expect(row.isFlagged, isTrue);
+      expect(row.isSeen, isFalse);
+      expect(row.mailboxPath, 'INBOX');
+      final payload = await expectSinglePendingChange(db, 'flag_flagged');
+      expect(payload['flagged'], isTrue);
+      expect(payload['uid'], 1);
+      expect(payload['mailboxPath'], 'INBOX');
+    });
+
+    test('mark-as-read action marks the message read', () async {
+      final (db, row) = await runLunchFilter(r'setflag "\\Seen";');
+
+      expect(row.isSeen, isTrue);
+      expect(row.isFlagged, isFalse);
+      final payload = await expectSinglePendingChange(db, 'flag_seen');
+      expect(payload['seen'], isTrue);
+    });
+
+    test('fileinto + star stars, then moves, in that order', () async {
+      final (db, row) = await runLunchFilter(
+        r'setflag "\\Flagged"; fileinto "Archive";',
+      );
+
+      expect(row.isFlagged, isTrue);
+      expect(row.isSeen, isFalse);
+      expect(row.mailboxPath, 'Archive');
+
+      final pending = await (db.select(db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(pending.map((p) => p.changeType), ['flag_flagged', 'move']);
+      // The flag change addresses the source UID, so it must be flushed
+      // before the move re-keys the message.
+      final flagPayload =
+          jsonDecode(pending.first.payload) as Map<String, dynamic>;
+      expect(flagPayload['mailboxPath'], 'INBOX');
+      final movePayload =
+          jsonDecode(pending.last.payload) as Map<String, dynamic>;
+      expect(movePayload['dest'], 'Archive');
+    });
+
+    test('custom keyword is queued as add_keywords, not mark-read', () async {
+      final (db, row) = await runLunchFilter(
+        r'addflag ["Work", "\\Answered"];',
+      );
+
+      expect(row.isSeen, isFalse);
+      expect(row.isFlagged, isFalse);
+      final payload = await expectSinglePendingChange(db, 'add_keywords');
+      expect(payload['keywords'], unorderedEquals([r'\Answered', 'Work']));
+      expect(payload['uid'], 1);
+      expect(payload['mailboxPath'], 'INBOX');
+    });
+
+    test('one string with \\Seen \\Flagged sets both', () async {
+      final (_, row) = await runLunchFilter(r'setflag "\\Seen \\Flagged";');
+
+      expect(row.isSeen, isTrue);
+      expect(row.isFlagged, isTrue);
+    });
+
+    test('keywords are split on spaces and invalid ones dropped', () async {
+      final (db, row) = await runLunchFilter(
+        'addflag ["Work Urgent", "a(b", "Bad\r\nA1 LOGOUT"];',
+      );
+
+      expect(row.isSeen, isFalse);
+      final payload = await expectSinglePendingChange(db, 'add_keywords');
+      expect(payload['keywords'], ['Urgent', 'Work']);
     });
   });
 }

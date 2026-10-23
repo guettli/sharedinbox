@@ -363,4 +363,51 @@ void main() {
     final trashAfter = await r.emails.observeEmails('test-jmap', trashId).first;
     expect(trashAfter, isNotEmpty);
   });
+
+  test('local Sieve star + keyword + fileinto reach the JMAP server', () async {
+    await appendToInbox('Lunch on Friday');
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    final trash = await (r.db.select(r.db.mailboxes)
+          ..where(
+            (t) => t.accountId.equals('test-jmap') & t.role.equals('trash'),
+          ))
+        .getSingleOrNull();
+    if (trash == null) {
+      markTestSkipped('No trash mailbox found on this Stalwart instance');
+      return;
+    }
+    await r.db.into(r.db.localSieveScripts).insert(
+          LocalSieveScriptsCompanion.insert(
+            accountId: 'test-jmap',
+            name: 'lunch',
+            content: Value('''
+require ["fileinto", "imap4flags"];
+if header :contains "subject" "lunch" {
+  setflag "\\\\Flagged";
+  addflag "Work";
+  fileinto "${trash.name}";
+}
+'''),
+            isActive: const Value(true),
+          ),
+        );
+    await r.emails.syncEmails('test-jmap', inboxId);
+    expect(await r.emails.applySieveRules('test-jmap'), 1);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
+    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+    // Read the server truth over IMAP, as the flag_seen test above does.
+    final client = await connectImap(env: env, user: user);
+    addTearDown(client.logout);
+    expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
+    await client.selectMailboxByPath(trash.name);
+    final fetch =
+        await client.fetchMessages(MessageSequence.fromAll(), 'FLAGS');
+    final flags = (fetch.messages.single.flags ?? [])
+        .map((f) => f.toLowerCase())
+        .toList();
+    expect(flags, containsAll([r'\flagged', 'work']));
+    expect(flags, isNot(contains(r'\seen')));
+  });
 }

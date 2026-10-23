@@ -567,4 +567,24 @@ if header :contains "subject" "spam" {
       );
     });
   });
+
+  group('FilterSieveConverter flag lists', () {
+    final conv = FilterSieveConverter();
+
+    test('a flag list it cannot show stays out of the visual editor', () {
+      // The visual editor only offers "Mark as read" and "Star message";
+      // showing these as one of them (or as "Keep") would drop flags on save.
+      for (final flags in [
+        r'["\\Seen", "\\Flagged"]',
+        r'"\\Seen \\Flagged"',
+        '"Work"',
+      ]) {
+        final script = '''
+if header :contains "subject" "lunch" {
+  addflag $flags;
+}''';
+        expect(conv.parse(script), isNull, reason: flags);
+      }
+    });
+  });
 }

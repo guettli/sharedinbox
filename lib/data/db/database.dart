@@ -228,8 +228,8 @@ class PendingChanges extends Table {
       text().references(Accounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get resourceType => text()();
   TextColumn get resourceId => text()();
-  // "flag_seen" | "flag_flagged" | "move" | "delete" | "snooze"
-  //   | "unsnooze" | "clear_snooze" (strip `snz:` keywords only)
+  // "flag_seen" | "flag_flagged" | "add_keywords" | "move" | "delete"
+  //   | "snooze" | "unsnooze" | "clear_snooze" (strip `snz:` keywords only)
   TextColumn get changeType => text()();
   // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
   TextColumn get payload => text()();

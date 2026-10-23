@@ -182,7 +182,10 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
               t.accountId.equals(messageRef.accountId) &
               t.resourceId.equals(messageRef.emailId),
         )
-        ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        ..orderBy([
+          (t) => OrderingTerm.asc(t.createdAt),
+          (t) => OrderingTerm.asc(t.id),
+        ]))
       .get();
   final account = await (database.select(database.accounts)
         ..where((t) => t.id.equals(messageRef.accountId)))

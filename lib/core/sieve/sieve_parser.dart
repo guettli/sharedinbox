@@ -366,18 +366,7 @@ class SieveParser {
       }
       s.skipWhitespaceAndComments();
       s.expectChar(';');
-      if (flags.any(
-        (f) => f.toLowerCase() == r'\seen' || f.toLowerCase() == r'\\seen',
-      )) {
-        return MarkAsSeenAction();
-      }
-      if (flags.any(
-        (f) =>
-            f.toLowerCase() == r'\flagged' || f.toLowerCase() == r'\\flagged',
-      )) {
-        return StarMessageAction();
-      }
-      return FlagAction(flags);
+      return sieveFlagAction(flags);
     }
     if (word == 'mark') {
       s.readWord();

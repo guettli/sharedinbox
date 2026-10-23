@@ -20,6 +20,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/core/sieve/sieve_flags.dart';
 import 'package:sharedinbox/core/sieve/sieve_interpreter.dart';
 import 'package:sharedinbox/core/sieve/sieve_parser.dart';
 import 'package:sharedinbox/core/sieve/sieve_rule.dart';
@@ -4014,6 +4015,8 @@ class EmailRepositoryImpl implements EmailRepository {
         return 'read/unread change';
       case 'flag_flagged':
         return 'flag change';
+      case 'add_keywords':
+        return 'keyword change';
       case 'snooze':
         return 'snooze';
       case 'unsnooze':
@@ -4368,7 +4371,17 @@ class EmailRepositoryImpl implements EmailRepository {
   // ── Mutations ──────────────────────────────────────────────────────────────
 
   @override
-  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) =>
+      _setFlag(emailId, seen: seen, flagged: flagged);
+
+  /// [setFlag] with an optional [source] recorded in the `email.flag` log
+  /// entry (e.g. `sieve` when a local filter set the flag).
+  Future<void> _setFlag(
+    String emailId, {
+    bool? seen,
+    bool? flagged,
+    String? source,
+  }) async {
     final row = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
@@ -4415,7 +4428,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.mailboxPath,
         row.threadId ?? emailId,
       );
-      _logFlag(row, account, seen: seen, flagged: flagged);
+      _logFlag(row, account, seen: seen, flagged: flagged, source: source);
       return;
     }
 
@@ -4454,7 +4467,7 @@ class EmailRepositoryImpl implements EmailRepository {
       row.mailboxPath,
       row.threadId ?? emailId,
     );
-    _logFlag(row, account, seen: seen, flagged: flagged);
+    _logFlag(row, account, seen: seen, flagged: flagged, source: source);
   }
 
   /// Writes a per-message `email.flag` log row so the read/unread/star change
@@ -4465,6 +4478,7 @@ class EmailRepositoryImpl implements EmailRepository {
     account_model.Account account, {
     bool? seen,
     bool? flagged,
+    String? source,
   }) {
     if (seen == null && flagged == null) return;
     final parts = <String>[
@@ -4482,6 +4496,7 @@ class EmailRepositoryImpl implements EmailRepository {
           if (seen != null) 'seen': seen,
           if (flagged != null) 'flagged': flagged,
           'protocol': account.type.name,
+          if (source != null) 'source': source,
         },
       ),
     );
@@ -4895,6 +4910,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // be collapsed here (#644).
     if (changeType == 'flag_seen' ||
         changeType == 'flag_flagged' ||
+        changeType == 'add_keywords' ||
         changeType == 'clear_snooze') {
       final existing = await (_db.select(_db.pendingChanges)
             ..where(
@@ -5727,11 +5743,28 @@ class EmailRepositoryImpl implements EmailRepository {
 
       if (result.isCancelled) {
         await _enqueueSieveDelete(account, row);
-      } else if (result.targetFolders.isNotEmpty) {
-        final dest = result.targetFolders.first;
-        await _enqueueSieveMove(account, row, dest);
-      } else if (result.flagsToAdd.isNotEmpty) {
-        await _enqueueSieveFlagSeen(account, row);
+        continue;
+      }
+      // Flags first: an IMAP move re-keys the row (new UID in the
+      // destination), so a flag change queued after it would address the
+      // vanished source UID. Queued before, it is flushed first and the
+      // MOVE carries the flags along (RFC 6851 keeps them; JMAP ids are
+      // stable anyway). This also matches RFC 5232, where `fileinto`
+      // files the message with the flags set so far.
+      if (result.flagsToAdd.isNotEmpty) {
+        await _enqueueSieveFlags(account, row, result.flagsToAdd);
+      }
+      if (result.targetFolders.isNotEmpty) {
+        // The local model holds a message in exactly one folder, so a
+        // script with several `fileinto` targets (copies, in Sieve) is
+        // applied as a move to the first one.
+        if (result.targetFolders.length > 1) {
+          log(
+            'Sieve: message ${row.id} has ${result.targetFolders.length} '
+            'fileinto targets; moving to the first only',
+          );
+        }
+        await _enqueueSieveMove(account, row, result.targetFolders.first);
       }
     }
     return matched;
@@ -5844,33 +5877,71 @@ class EmailRepositoryImpl implements EmailRepository {
     await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
   }
 
-  Future<void> _enqueueSieveFlagSeen(
+  /// Applies the Sieve `setflag` / `addflag` / mark / star actions in
+  /// [flags] to [row]. `\Seen` and `\Flagged` go through [setFlag], the same
+  /// path as the read/star buttons, so the local row, thread and push stay
+  /// consistent. Any other flag or keyword is queued as an `add_keywords`
+  /// change; the app has no local column for those, so it is server-only.
+  /// Strings that are not valid IMAP flags are dropped (see
+  /// [normalizeSieveFlags]) and logged.
+  Future<void> _enqueueSieveFlags(
     account_model.Account account,
     Email row,
+    Set<String> flags,
   ) async {
-    if (account.type == account_model.AccountType.jmap) {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'flag_seen',
-        jsonEncode({'seen': true}),
+    final normalized = normalizeSieveFlags(flags);
+    if (normalized.dropped.isNotEmpty) {
+      log(
+        'Sieve: ignoring invalid flags ${normalized.dropped} for message '
+        '${row.id}',
       );
-    } else {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'flag_seen',
-        jsonEncode({
-          'uid': row.uid,
-          'mailboxPath': row.mailboxPath,
-          'seen': true,
-        }),
+      unawaited(
+        _appLogger?.warn(
+          'sieve.flag_ignored',
+          'Local filter flag(s) ignored: ${normalized.dropped.join(', ')}',
+          accountId: account.id,
+          emailId: row.id,
+          mailboxPath: row.mailboxPath,
+        ),
       );
     }
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      const EmailsCompanion(isSeen: Value(true)),
+    final seen = normalized.flags.contains(r'\Seen');
+    final flagged = normalized.flags.contains(r'\Flagged');
+    if (seen || flagged) {
+      await _setFlag(
+        row.id,
+        seen: seen ? true : null,
+        flagged: flagged ? true : null,
+        source: 'sieve',
+      );
+    }
+    final keywords = normalized.flags
+        .where((f) => f != r'\Seen' && f != r'\Flagged')
+        .toList()
+      ..sort();
+    if (keywords.isEmpty) return;
+    await _enqueueChange(
+      account.id,
+      row.id,
+      'add_keywords',
+      jsonEncode(
+        account.type == account_model.AccountType.jmap
+            ? {'keywords': keywords}
+            : {
+                'uid': row.uid,
+                'mailboxPath': row.mailboxPath,
+                'keywords': keywords,
+              },
+      ),
     );
-    await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
+  }
+
+  /// Maps an IMAP flag or keyword from [normalizeSieveFlags] to its JMAP
+  /// keyword (RFC 8621 §4.1.1): system flags become their `$` form, keywords
+  /// are case-insensitive and lower-cased.
+  static String _imapFlagToJmapKeyword(String flag) {
+    final lower = flag.toLowerCase();
+    return lower.startsWith(r'\') ? '\$${lower.substring(1)}' : lower;
   }
 
   /// Drains pending changes for [accountId] via the appropriate protocol.
@@ -5879,7 +5950,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<int> flushPendingChanges(String accountId, String password) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          // Flush in enqueue order. The autoincrement id gives that exactly;
+          // `createdAt` can tie for changes queued together (a Sieve flag +
+          // move) and would follow the wall clock if it steps back.
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
         .get();
     if (rows.isEmpty) return 0;
 
@@ -6034,6 +6108,9 @@ class EmailRepositoryImpl implements EmailRepository {
         flagged
             ? await client.uidMarkFlagged(seq)
             : await client.uidMarkUnflagged(seq);
+      case 'add_keywords':
+        final keywords = (payload['keywords'] as List<dynamic>).cast<String>();
+        await client.uidStore(seq, keywords, action: imap.StoreAction.add);
       case 'move':
         final dest = payload['dest'] as String;
         if (payload['clearSnooze'] == true) {
@@ -6416,6 +6493,22 @@ class EmailRepositoryImpl implements EmailRepository {
               'update': {
                 jmapEmailId: {'keywords/\$flagged': flagged},
               },
+            }),
+            '0',
+          ],
+        ]);
+
+      case 'add_keywords':
+        final update = <String, dynamic>{
+          for (final k in (payload['keywords'] as List<dynamic>).cast<String>())
+            'keywords/${_imapFlagToJmapKeyword(k)}': true,
+        };
+        if (update.isEmpty) return;
+        responses = await jmap.call([
+          [
+            'Email/set',
+            setArgs({
+              'update': {jmapEmailId: update},
             }),
             '0',
           ],
@@ -8618,7 +8711,10 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) => t.accountId.equals(accountId) & t.lastError.isNotNull(),
           )
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map(
           (rows) => rows
@@ -8653,7 +8749,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Stream<List<model.PendingChange>> observePendingChanges(String accountId) {
     return (_db.select(_db.pendingChanges)
           ..where((t) => t.accountId.equals(accountId))
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map((rows) => rows.map(_toPendingChange).toList());
   }
@@ -8661,7 +8760,10 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Stream<List<model.PendingChange>> observeAllPendingChanges() {
     return (_db.select(_db.pendingChanges)
-          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+          ..orderBy([
+            (t) => OrderingTerm.asc(t.createdAt),
+            (t) => OrderingTerm.asc(t.id),
+          ]))
         .watch()
         .map((rows) => rows.map(_toPendingChange).toList());
   }

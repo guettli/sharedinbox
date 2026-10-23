@@ -497,7 +497,7 @@ class _FailedMutationBanner extends StatelessWidget {
 
   String _label(FailedMutation m) {
     final noun = switch (m.changeType) {
-      'flag_seen' || 'flag_flagged' => 'flag change',
+      'flag_seen' || 'flag_flagged' || 'add_keywords' => 'flag change',
       'move' => 'move',
       'delete' => 'deletion',
       _ => 'change',
