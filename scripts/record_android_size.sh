@@ -29,6 +29,26 @@ HASH=$(git rev-parse --short HEAD)
 VERSION_NAME=$(python3 -c "import re;m=re.search(r'^version:\s*([^+\s]+)',open('pubspec.yaml').read(),re.M);print(m.group(1) if m else 'unknown')")
 FLUTTER=$(python3 -c "import json;print(json.load(open('.fvmrc')).get('flutter','unknown'))")
 
+# The real Play download size — the figure the store listing shows a user — via
+# bundletool get-size (the Dagger AndroidDownloadSizeCsv function). Best-effort:
+# on any failure (bundletool fetch, engine, format) we record "unknown" and keep
+# going, so the row and the deploy are never lost to a size-tooling hiccup.
+DOWNLOAD_BYTES=unknown
+if size_csv=$(dagger call --progress=plain -q -m ci --source=. \
+        android-download-size-csv --aab "$AAB" 2>/dev/null); then
+    DOWNLOAD_BYTES=$(printf '%s\n' "$size_csv" | python3 -c '
+import sys
+val = "unknown"
+for line in sys.stdin:
+    parts = [p.strip() for p in line.strip().split(",")]
+    if len(parts) >= 3 and parts[0] == "arm64-v8a" and parts[-1].isdigit():
+        val = parts[-1]
+print(val)
+' 2>/dev/null) || DOWNLOAD_BYTES=unknown
+    [ -n "$DOWNLOAD_BYTES" ] || DOWNLOAD_BYTES=unknown
+fi
+echo "download size (bundletool, arm64): ${DOWNLOAD_BYTES} bytes"
+
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -55,6 +75,7 @@ python3 "$REPO_ROOT/scripts/android_size_report.py" "$REPO_ROOT/$AAB" \
     --version-name "$VERSION_NAME" \
     --version-code "${VERSION_CODE:-unknown}" \
     --flutter "$FLUTTER" \
+    --download-bytes "$DOWNLOAD_BYTES" \
     --append "$WT/$HISTORY_FILE"
 
 cd "$WT"

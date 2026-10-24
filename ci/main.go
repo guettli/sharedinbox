@@ -2126,6 +2126,38 @@ func (m *Ci) FetchPlayStoreApks(
 		Directory("/tmp/apks")
 }
 
+// AndroidDownloadSizeCsv runs bundletool `get-size total` on [aab] and returns
+// the per-ABI size CSV (header: `ABI,MIN,MAX`, bytes). This is the real
+// Play-delivered download/install size — the figure the Play listing shows a
+// user — as opposed to the uncompressed on-device sum scripts/android_size_report.py
+// derives from the AAB zip. Used by scripts/record_android_size.sh to log it.
+//
+// bundletool is fetched at a pinned version into a JDK container; `build-apks`
+// auto-signs with a debug key, which does not affect sizing. Any failure (bad
+// version, network, format change) surfaces as an error; the caller records the
+// download column as "unknown" and the deploy is unaffected.
+func (m *Ci) AndroidDownloadSizeCsv(ctx context.Context, aab *dagger.File) (string, error) {
+	const bundletoolVersion = "1.17.2"
+	jarURL := fmt.Sprintf(
+		"https://github.com/google/bundletool/releases/download/%s/bundletool-all-%s.jar",
+		bundletoolVersion, bundletoolVersion,
+	)
+	script := strings.Join([]string{
+		"set -euo pipefail",
+		"apt-get update -qq >/dev/null",
+		"apt-get install -y --no-install-recommends curl ca-certificates >/dev/null",
+		fmt.Sprintf("curl -fsSL -o /bundletool.jar %q", jarURL),
+		"java -jar /bundletool.jar build-apks --bundle=/app.aab --output=/app.apks --mode=default --overwrite >/dev/null",
+		// Only this last command writes to stdout — the CSV the caller parses.
+		"java -jar /bundletool.jar get-size total --apks=/app.apks --dimensions=ABI",
+	}, "\n")
+	return dag.Container().
+		From("eclipse-temurin:17-jdk").
+		WithFile("/app.aab", aab).
+		WithExec([]string{"bash", "-c", script}).
+		Stdout(ctx)
+}
+
 // UploadToPlayStore uploads a pre-built AAB to the Play Store closed-testing (alpha) track.
 // When mappingFile is provided, its contents are also uploaded as the R8
 // deobfuscation file so Play Console can deobfuscate stack traces.
