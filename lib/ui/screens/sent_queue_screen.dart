@@ -4,12 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
-import 'package:sharedinbox/ui/screens/outbox_screen.dart' show OutboxQueueTile;
+import 'package:sharedinbox/ui/screens/outbox_screen.dart'
+    show OutboxQueueTile, editQueuedMessageFor;
 
 /// Global view of every queued-but-not-yet-sent message across all accounts.
 /// Columns: account, account type, receiver, date, start of subject. Rows reuse
 /// the per-account [OutboxScreen]'s tile (via [OutboxQueueTile]) so the Retry /
-/// Discard actions behave identically and users can act on rows without
+/// Edit / Discard actions behave identically and users can act on rows without
 /// navigating into the owning account first.
 class SentQueueScreen extends ConsumerWidget {
   const SentQueueScreen({super.key});
@@ -40,6 +41,7 @@ class SentQueueScreen extends ConsumerWidget {
               account: accountsById[rows[i].accountId],
               repo: repo,
               sendNow: sendNow,
+              onEdit: editQueuedMessageFor(context, ref),
               showAccountHeader: true,
             ),
           );

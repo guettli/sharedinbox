@@ -37,7 +37,27 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillSubject,
     this.prefillBody,
     this.draftId,
+    this.attachmentPaths = const [],
+    this.inReplyTo,
+    this.references = const [],
   });
+
+  /// Builds the screen from a `/compose` route's `extra` map. Shared by the
+  /// app router and the widget-test router so the two cannot drift.
+  factory ComposeScreen.fromExtra(Map<String, dynamic>? extra) => ComposeScreen(
+        accountId: extra?['accountId'] as String?,
+        replyToEmailId: extra?['replyToEmailId'] as String?,
+        prefillTo: extra?['prefillTo'] as String?,
+        prefillCc: extra?['prefillCc'] as String?,
+        prefillBcc: extra?['prefillBcc'] as String?,
+        prefillSubject: extra?['prefillSubject'] as String?,
+        prefillBody: extra?['prefillBody'] as String?,
+        draftId: extra?['draftId'] as int?,
+        attachmentPaths:
+            (extra?['attachmentPaths'] as List<String>?) ?? const [],
+        inReplyTo: extra?['inReplyTo'] as String?,
+        references: (extra?['references'] as List<String>?) ?? const [],
+      );
 
   final String? accountId;
   final String? replyToEmailId;
@@ -50,6 +70,18 @@ class ComposeScreen extends ConsumerStatefulWidget {
   /// The saved draft to resume. Compose only ever restores a draft the user
   /// explicitly picked — without this it always starts blank (#1047).
   final int? draftId;
+
+  /// Files to attach from the start: those of a queued message taken back
+  /// for editing. Not ours to delete — they are the user's files, or a
+  /// shrunk copy the outbox kept. Missing ones are skipped with a notice.
+  final List<String> attachmentPaths;
+
+  /// Threading headers of a queued message taken back for editing. When
+  /// [inReplyTo] is set, Send uses these as they were queued instead of
+  /// re-deriving them from [replyToEmailId] (the original may not be in the
+  /// local database at all).
+  final String? inReplyTo;
+  final List<String> references;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -76,6 +108,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _replyToEmailId;
   List<Account> _accounts = [];
   bool _sending = false;
+
+  /// Set once Send queued the message: the outbox now refers to the
+  /// attachment files, so [dispose] must not delete the shrunk temp copies.
+  bool _queued = false;
   final List<_AttachmentInfo> _attachments = [];
   bool _opening = false;
   // Last shrink settings the user accepted, so re-attaching / adjusting further
@@ -128,6 +164,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _accountId = widget.accountId;
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
+    if (widget.attachmentPaths.isNotEmpty) {
+      unawaited(_loadInitialAttachments(widget.attachmentPaths));
+    }
 
     for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.addListener(_onTextChanged);
@@ -246,6 +285,43 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
+  /// Adds the files of [paths] that still exist; tells the user about the
+  /// others, so a message is not sent without them unnoticed.
+  Future<void> _loadInitialAttachments(List<String> paths) async {
+    final found = <_AttachmentInfo>[];
+    final missing = <String>[];
+    for (final path in paths) {
+      try {
+        final stat = await File(path).stat();
+        if (stat.type == FileSystemEntityType.notFound) {
+          missing.add(p.basename(path));
+          continue;
+        }
+        final name = p.basename(path);
+        found.add(
+          _AttachmentInfo(
+            path: path,
+            filename: name,
+            size: stat.size,
+            contentType: _guessMimeType(name),
+          ),
+        );
+      } on FileSystemException {
+        missing.add(p.basename(path));
+      }
+    }
+    if (!mounted) return;
+    setState(() => _attachments.addAll(found));
+    if (missing.isNotEmpty) {
+      context.showAppSnackBar(
+        'Attachment no longer available: ${missing.join(', ')}',
+        level: AppLogLevel.warn,
+        event: 'compose.attachment.missing',
+        duration: const Duration(seconds: 8),
+      );
+    }
+  }
+
   Future<void> _restoreDraft(int id) async {
     final draft = await _draftRepo.getDraft(id);
     if (draft == null || !mounted) return;
@@ -325,9 +401,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _toFocus.dispose();
     _ccFocus.dispose();
     _bccFocus.dispose();
-    // Drop any temp files created for shrunk attachments.
-    for (final a in _attachments) {
-      if (a.isTemp) unawaited(_deleteTempFile(a.path));
+    // Drop any temp files created for shrunk attachments — unless the
+    // message was queued: the outbox sends (and may retry) from these files.
+    if (!_queued) {
+      for (final a in _attachments) {
+        if (a.isTemp) unawaited(_deleteTempFile(a.path));
+      }
     }
     // Flush any pending save synchronously — we can't await in dispose, but
     // scheduling a microtask still runs before the isolate exits.
@@ -558,7 +637,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     try {
       final account =
           (await ref.read(accountRepositoryProvider).getAccount(_accountId!))!;
-      final threading = await _replyThreading();
+      final queuedInReplyTo = widget.inReplyTo;
+      final threading = queuedInReplyTo != null
+          ? (inReplyTo: queuedInReplyTo, references: widget.references)
+          : await _replyThreading();
       final draft = EmailDraft(
         from: EmailAddress(name: account.displayName, email: account.email),
         // Parsed into name and address here: the JMAP send path uses the
@@ -580,6 +662,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           .read(emailRepositoryProvider)
           .enqueueSend(_accountId!, draft);
       queued = true;
+      _queued = true;
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on. As in [_discard], first stop the
       // pending auto-save and the [dispose] flush: typing and pressing Send

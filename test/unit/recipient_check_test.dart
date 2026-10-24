@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
 
 void main() {
@@ -49,5 +50,23 @@ void main() {
     expect(a.name, 'Bob');
     expect(a.email, 'bob@example.org');
     expect(recipientAddresses('bob@example.org').single.name, isNull);
+  });
+
+  test('formatRecipients round-trips through recipientAddresses', () {
+    const addresses = [
+      EmailAddress(email: 'bob@example.org'),
+      EmailAddress(name: 'Carol', email: 'carol@example.com'),
+      EmailAddress(name: 'Doe, John', email: 'john@example.com'),
+      EmailAddress(name: 'A; "B"', email: 'ab@example.com'),
+    ];
+    final field = formatRecipients(addresses);
+    expect(
+      field,
+      'bob@example.org, Carol <carol@example.com>, '
+      '"Doe, John" <john@example.com>, "A; \\"B\\"" <ab@example.com>',
+    );
+    final parsed = recipientAddresses(field);
+    expect(parsed.map((a) => a.email), addresses.map((a) => a.email));
+    expect(parsed.map((a) => a.name), addresses.map((a) => a.name));
   });
 }

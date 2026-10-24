@@ -34,6 +34,13 @@ class OutboxRepositoryImpl implements OutboxRepository {
   /// never select and transmit the same outbox row concurrently (#755).
   final Map<String, Future<void>> _flushChain = {};
 
+  /// Ids of rows someone holds right now: [flush] while it hands a row to
+  /// the sender, [takeForEdit] while it moves a row into a draft. Claiming is
+  /// synchronous, so the two never both get the same row — an edited message
+  /// is never also sent, and a message being sent is never also turned into
+  /// a draft (which would send it twice).
+  final Set<int> _claimed = {};
+
   @override
   Future<int> enqueue(String accountId, model.EmailDraft draft) async {
     final builder = _buildMime(draft, _appVersion);
@@ -109,50 +116,88 @@ class OutboxRepositoryImpl implements OutboxRepository {
     if (rows.isEmpty) return 0;
 
     var sent = 0;
-    for (final row in rows) {
-      final draft = _decodeEnvelope(row.envelopeJson, row.attachmentsJson);
-      final mimeBytes = base64.decode(row.mimeBase64);
-      final job = OutboxJob(
-        id: row.id,
-        accountId: row.accountId,
-        draft: draft,
-        mimeBytes: mimeBytes,
-        attempts: row.attempts,
-        createdAt: row.createdAt,
-      );
-      _safeNotify(() => observer?.onAttempt?.call(job));
+    for (final selected in rows) {
+      // Taken for edit right now: skip it, it is about to leave the outbox.
+      if (!_claimed.add(selected.id)) continue;
       try {
-        await sender(job);
-        await (_db.delete(_db.outbox)..where((t) => t.id.equals(row.id))).go();
-        sent++;
-        _safeNotify(() => observer?.onOk?.call(job));
-      } on PermanentSendException catch (e) {
-        await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
-          OutboxCompanion(
-            status: const Value('failed'),
-            lastError: Value(e.message),
-            attempts: Value(row.attempts + 1),
-          ),
-        );
-        _safeNotify(() => observer?.onPermanent?.call(job, e));
-      } catch (e, stack) {
-        final attempts = row.attempts + 1;
-        final delaySec = _backoffSeconds[
-            (attempts - 1).clamp(0, _backoffSeconds.length - 1)];
-        final nextAttemptAt = at.add(Duration(seconds: delaySec));
-        await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
-          OutboxCompanion(
-            attempts: Value(attempts),
-            lastError: Value(e.toString()),
-            nextAttemptAt: Value(nextAttemptAt),
-          ),
-        );
-        _safeNotify(
-          () => observer?.onTransient?.call(job, e, stack, nextAttemptAt),
-        );
+        if (await _sendRow(selected.id, sender, at, observer)) sent++;
+      } finally {
+        _claimed.remove(selected.id);
       }
     }
     return sent;
+  }
+
+  /// Sends the outbox row [id] if it is still queued; true when it was sent.
+  /// The caller holds the claim on [id].
+  Future<bool> _sendRow(
+    int id,
+    Future<void> Function(OutboxJob job) sender,
+    DateTime at,
+    OutboxFlushObserver? observer,
+  ) async {
+    // Re-read under the claim: the batch was selected before earlier rows
+    // were sent, and a row taken for edit (or discarded) since then must not
+    // go out anyway.
+    final row = await (_db.select(_db.outbox)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (row == null || row.status != 'pending') return false;
+    final job = _jobFromRow(row);
+    _safeNotify(() => observer?.onAttempt?.call(job));
+    try {
+      await sender(job);
+      await (_db.delete(_db.outbox)..where((t) => t.id.equals(row.id))).go();
+      _safeNotify(() => observer?.onOk?.call(job));
+      return true;
+    } on PermanentSendException catch (e) {
+      await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
+        OutboxCompanion(
+          status: const Value('failed'),
+          lastError: Value(e.message),
+          attempts: Value(row.attempts + 1),
+        ),
+      );
+      _safeNotify(() => observer?.onPermanent?.call(job, e));
+    } catch (e, stack) {
+      final attempts = row.attempts + 1;
+      final delaySec =
+          _backoffSeconds[(attempts - 1).clamp(0, _backoffSeconds.length - 1)];
+      final nextAttemptAt = at.add(Duration(seconds: delaySec));
+      await (_db.update(_db.outbox)..where((t) => t.id.equals(row.id))).write(
+        OutboxCompanion(
+          attempts: Value(attempts),
+          lastError: Value(e.toString()),
+          nextAttemptAt: Value(nextAttemptAt),
+        ),
+      );
+      _safeNotify(
+        () => observer?.onTransient?.call(job, e, stack, nextAttemptAt),
+      );
+    }
+    return false;
+  }
+
+  @override
+  Future<T?> takeForEdit<T>(
+    int id,
+    Future<T> Function(OutboxJob job) handOff,
+  ) async {
+    if (!_claimed.add(id)) throw OutboxRowInFlightException(id);
+    try {
+      // One transaction: if [handOff] (saving the draft) fails, the row stays
+      // queued, so the message is never lost in between.
+      return await _db.transaction(() async {
+        final row = await (_db.select(_db.outbox)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        if (row == null) return null;
+        final result = await handOff(_jobFromRow(row));
+        await (_db.delete(_db.outbox)..where((t) => t.id.equals(id))).go();
+        return result;
+      });
+    } finally {
+      _claimed.remove(id);
+    }
   }
 
   // Observer hooks are best-effort — a buggy callback (e.g. a logger that
@@ -235,6 +280,15 @@ model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
         (env['references'] as List<dynamic>? ?? const []).cast<String>(),
   );
 }
+
+OutboxJob _jobFromRow(OutboxRow row) => OutboxJob(
+      id: row.id,
+      accountId: row.accountId,
+      draft: _decodeEnvelope(row.envelopeJson, row.attachmentsJson),
+      mimeBytes: base64.decode(row.mimeBase64),
+      attempts: row.attempts,
+      createdAt: row.createdAt,
+    );
 
 OutboxMessage _rowToMessage(OutboxRow row) {
   final env = jsonDecode(row.envelopeJson) as Map<String, dynamic>;

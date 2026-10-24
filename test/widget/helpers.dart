@@ -365,6 +365,23 @@ class FakeOutboxRepository implements OutboxRepository {
 
   @override
   Future<void> discard(int id) async {}
+
+  /// Jobs [takeForEdit] hands off, keyed by row id. A row without one is
+  /// treated as gone (null), like the real repository.
+  final Map<int, OutboxJob> jobs = {};
+
+  @override
+  Future<T?> takeForEdit<T>(
+    int id,
+    Future<T> Function(OutboxJob job) handOff,
+  ) async {
+    final job = jobs[id];
+    if (job == null) return null;
+    final result = await handOff(job);
+    jobs.remove(id);
+    messages.removeWhere((m) => m.id == id);
+    return result;
+  }
 }
 
 /// A minimal but valid 1×1 transparent PNG, used as the default bytes written
@@ -946,19 +963,9 @@ Widget buildApp({
       ),
       GoRoute(
         path: '/compose',
-        builder: (ctx, state) {
-          final extra = state.extra as Map<String, dynamic>?;
-          return ComposeScreen(
-            accountId: extra?['accountId'] as String?,
-            replyToEmailId: extra?['replyToEmailId'] as String?,
-            prefillTo: extra?['prefillTo'] as String?,
-            prefillCc: extra?['prefillCc'] as String?,
-            prefillBcc: extra?['prefillBcc'] as String?,
-            prefillSubject: extra?['prefillSubject'] as String?,
-            prefillBody: extra?['prefillBody'] as String?,
-            draftId: extra?['draftId'] as int?,
-          );
-        },
+        builder: (ctx, state) => ComposeScreen.fromExtra(
+          state.extra as Map<String, dynamic>?,
+        ),
       ),
       GoRoute(
         path: '/inbox',

@@ -6,11 +6,14 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -29,6 +32,111 @@ typedef SendNowFn = Future<SendNowResult> Function(
   String accountId, {
   int? outboxRowId,
 });
+
+/// Takes a queued message back for editing: see
+/// [editQueuedMessage]. Callback-shape so the tiles stay testable.
+typedef EditQueuedFn = Future<void> Function(OutboxMessage message);
+
+/// [editQueuedMessage] wired to the app's repositories, for a queue screen.
+EditQueuedFn editQueuedMessageFor(BuildContext context, WidgetRef ref) =>
+    (message) => editQueuedMessage(
+          context,
+          message: message,
+          outbox: ref.read(outboxRepositoryProvider),
+          drafts: ref.read(draftRepositoryProvider),
+          emails: ref.read(emailRepositoryProvider),
+        );
+
+/// Moves the queued [message] out of the outbox into a saved draft and opens
+/// Compose on it, with its account, recipients (Bcc too), subject, body,
+/// reply threading and attachments. A permanent rejection (a mistyped
+/// address) can never succeed on Retry, and Discard threw the whole text
+/// away. Saving the draft first means nothing is lost when the user leaves
+/// Compose — except the attachments, which drafts cannot hold yet (#955).
+///
+/// Refused while the message is being sent right now, so it is never both
+/// sent and turned into a draft.
+Future<void> editQueuedMessage(
+  BuildContext context, {
+  required OutboxMessage message,
+  required OutboxRepository outbox,
+  required DraftRepository drafts,
+  required EmailRepository emails,
+}) async {
+  // Captured before the async gap: taking the row out disposes its tile.
+  final messenger = context.appMessenger();
+  final router = GoRouter.of(context);
+  final ({int draftId, EmailDraft draft})? taken;
+  try {
+    taken = await outbox.takeForEdit(message.id, (job) async {
+      final draft = job.draft;
+      final saved = await drafts.saveDraft(
+        accountId: job.accountId,
+        replyToEmailId: await _localParentId(emails, job),
+        toText: formatRecipients(draft.to),
+        ccText: formatRecipients(draft.cc),
+        bccText: formatRecipients(draft.bcc),
+        subjectText: draft.subject,
+        bodyText: draft.body,
+      );
+      return (draftId: saved.id, draft: draft);
+    });
+  } on OutboxRowInFlightException {
+    messenger.show(
+      'This message is being sent right now — try again in a moment',
+      level: AppLogLevel.warn,
+      event: 'outbox.edit',
+      accountId: message.accountId,
+    );
+    return;
+  } catch (e, stack) {
+    messenger.show(
+      'Could not edit the message: ${userErrorMessage(e)}',
+      level: AppLogLevel.error,
+      event: 'outbox.edit',
+      accountId: message.accountId,
+      error: e,
+      stack: stack,
+    );
+    return;
+  }
+  if (taken == null) {
+    messenger.show(
+      'This message is no longer in the queue',
+      level: AppLogLevel.warn,
+      event: 'outbox.edit',
+      accountId: message.accountId,
+    );
+    return;
+  }
+  final draft = taken.draft;
+  unawaited(
+    router.push(
+      '/compose',
+      extra: {
+        'accountId': message.accountId,
+        'draftId': taken.draftId,
+        if (draft.attachmentFilePaths.isNotEmpty)
+          'attachmentPaths': draft.attachmentFilePaths,
+        if (draft.inReplyTo != null) 'inReplyTo': draft.inReplyTo,
+        if (draft.references.isNotEmpty) 'references': draft.references,
+      },
+    ),
+  );
+}
+
+/// The local id of the message [job] replies to, so the saved draft stays a
+/// reply when resumed later. Null for a new message or when the original is
+/// not in the local database — editing must not fail over it.
+Future<String?> _localParentId(EmailRepository emails, OutboxJob job) async {
+  final inReplyTo = job.draft.inReplyTo;
+  if (inReplyTo == null) return null;
+  try {
+    return (await emails.findEmailByMessageId(job.accountId, inReplyTo))?.id;
+  } catch (_) {
+    return null;
+  }
+}
 
 final _dateFmt = DateFormat('MMM d, HH:mm');
 
@@ -49,7 +157,8 @@ String pendingOutboxStatus(OutboxMessage message, {DateTime? now}) {
 /// Lists messages queued in the offline send queue for [accountId].
 /// Each row offers Retry (resets the backoff and kicks the account sync loop
 /// so the next attempt runs immediately, then reports the outcome via a
-/// SnackBar) and Discard (drops the message from the queue).
+/// SnackBar), Edit (takes it back into Compose, see [editQueuedMessage]) and
+/// Discard (drops the message from the queue).
 class OutboxScreen extends ConsumerWidget {
   const OutboxScreen({super.key, required this.accountId});
 
@@ -77,6 +186,7 @@ class OutboxScreen extends ConsumerWidget {
               message: rows[i],
               repo: repo,
               sendNow: ref.read(emailRepositoryProvider).sendNow,
+              onEdit: editQueuedMessageFor(context, ref),
             ),
           );
         },
@@ -97,6 +207,7 @@ class OutboxQueueTile extends StatefulWidget {
     required this.message,
     required this.repo,
     required this.sendNow,
+    required this.onEdit,
     this.account,
     this.showAccountHeader = false,
   });
@@ -104,6 +215,9 @@ class OutboxQueueTile extends StatefulWidget {
   final OutboxMessage message;
   final OutboxRepository repo;
   final SendNowFn sendNow;
+
+  /// Takes the message back into Compose (row button and details dialog).
+  final EditQueuedFn onEdit;
 
   /// Owning account, supplied by the global Sent Queue so the row can name the
   /// account the message belongs to. May be null there if the account was
@@ -207,13 +321,20 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
             ),
           OutboxStatusLine(
             message: message,
-            onErrorTap: () => showOutboxErrorDetails(context, message),
+            onErrorTap: () => showOutboxErrorDetails(
+              context,
+              message,
+              onEdit: () => unawaited(widget.onEdit(message)),
+            ),
           ),
         ],
       ),
       trailing: QueueRowActions(
         retrying: _retrying,
         onRetry: _retrying ? null : _handleRetry,
+        showEdit: true,
+        // Not while Retry is sending it: that send is already under way.
+        onEdit: _retrying ? null : () => unawaited(widget.onEdit(message)),
         onDiscard: () => unawaited(widget.repo.discard(message.id)),
       ),
     );
@@ -294,8 +415,17 @@ class QueueRowActions extends StatelessWidget {
     super.key,
     required this.onRetry,
     required this.onDiscard,
+    this.onEdit,
+    this.showEdit = false,
     this.retrying = false,
   });
+
+  /// Tapped to take the row back for editing. Null disables the button.
+  final VoidCallback? onEdit;
+
+  /// Whether the row offers Edit at all — queued messages do, pending
+  /// changes (Pending Changes screen) do not.
+  final bool showEdit;
 
   /// Tapped to retry the row. Null disables the button — e.g. while a retry is
   /// already in flight.
@@ -325,6 +455,12 @@ class QueueRowActions extends StatelessWidget {
             icon: const Icon(Icons.refresh),
             tooltip: 'Retry now',
             onPressed: onRetry,
+          ),
+        if (showEdit)
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Edit',
+            onPressed: onEdit,
           ),
         IconButton(
           icon: const Icon(Icons.delete_outline),
@@ -370,10 +506,14 @@ Future<void> retryQueueRow({
 /// Shows the full last-error text alongside a "View in application log"
 /// button. Extracted so the same dialog can be launched from both the
 /// per-account Outbox screen and the global Sent Queue screen.
+///
+/// [onEdit], when given, adds an Edit button that closes the dialog and
+/// takes the message back into Compose.
 Future<void> showOutboxErrorDetails(
   BuildContext context,
-  OutboxMessage message,
-) {
+  OutboxMessage message, {
+  VoidCallback? onEdit,
+}) {
   final theme = Theme.of(context);
   return showDialog<void>(
     context: context,
@@ -407,6 +547,14 @@ Future<void> showOutboxErrorDetails(
         ),
       ),
       actions: [
+        if (onEdit != null)
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              onEdit();
+            },
+            child: const Text('Edit'),
+          ),
         TextButton(
           onPressed: () {
             Navigator.of(ctx).pop();

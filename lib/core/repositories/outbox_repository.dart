@@ -48,6 +48,33 @@ abstract class OutboxRepository {
 
   /// Permanently removes a queued message.
   Future<void> discard(int id);
+
+  /// Takes the queued message [id] out of the outbox so the user can edit it
+  /// — e.g. to fix a mistyped address after a permanent rejection.
+  ///
+  /// [handOff] receives the decoded message and stores it elsewhere (the
+  /// caller saves it as a draft); the row is deleted only once [handOff]
+  /// returned, in the same transaction, so a failed hand-off leaves the
+  /// message queued. Returns what [handOff] returned, or null when the row
+  /// no longer exists (sent or discarded meanwhile).
+  ///
+  /// Throws [OutboxRowInFlightException] while a flush is sending the row:
+  /// editing it then would send the message twice. While the hand-off runs
+  /// the row is held, so a flush starting meanwhile skips it.
+  Future<T?> takeForEdit<T>(
+    int id,
+    Future<T> Function(OutboxJob job) handOff,
+  );
+}
+
+/// Thrown by [OutboxRepository.takeForEdit] when the row is being sent right
+/// now; the caller should tell the user and let them try again.
+class OutboxRowInFlightException implements Exception {
+  OutboxRowInFlightException(this.id);
+  final int id;
+
+  @override
+  String toString() => 'OutboxRowInFlightException: row $id is being sent';
 }
 
 /// Thrown by a sender to indicate the row should be marked `failed` and not

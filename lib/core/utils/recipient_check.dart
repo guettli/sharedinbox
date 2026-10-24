@@ -96,3 +96,19 @@ List<String> invalidRecipients(String field) => [
     ];
 
 final _address = RegExp(r'^[^\s@<>]+@[^\s@<>]+$');
+
+/// [addresses] as a typed recipient field, the inverse of
+/// [recipientAddresses]: `Name <address>` entries joined by `, `. A name
+/// with a separator, quote or angle bracket is quoted, so
+/// [parseRecipients] reads it back as one entry.
+String formatRecipients(List<EmailAddress> addresses) => [
+      for (final a in addresses)
+        if (a.name == null || a.name!.trim().isEmpty)
+          a.email
+        else if (_needsQuoting.hasMatch(a.name!))
+          '"${a.name!.replaceAll('"', r'\"')}" <${a.email}>'
+        else
+          '${a.name} <${a.email}>',
+    ].join(', ');
+
+final _needsQuoting = RegExp('[,;"<>]');
