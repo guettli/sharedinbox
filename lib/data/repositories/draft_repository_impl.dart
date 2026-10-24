@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:drift/drift.dart';
@@ -164,30 +165,41 @@ class DraftRepositoryImpl extends DraftRepository {
       :attachments,
     ) = input;
     final now = DateTime.now();
-    final newId = await _db.into(_db.drafts).insert(
-          DraftsCompanion.insert(
-            accountId: Value(accountId),
-            replyToEmailId: Value(replyToEmailId),
-            toText: Value(toText),
-            ccText: Value(ccText),
-            bccText: Value(bccText),
-            subjectText: Value(subjectText),
-            bodyText: Value(bodyText),
-            updatedAt: now,
-            dirty: const Value(true),
-          ),
-        );
-    // The id is only known now, and the row exists before its folder does.
-    var stored = attachments;
-    if (attachments.isNotEmpty) {
-      stored = await _serialized(newId, () async {
-        final kept = await _files.keep(newId, attachments);
-        await (_db.update(_db.drafts)..where((t) => t.id.equals(newId))).write(
-          DraftsCompanion(attachmentsJson: Value(encodeDraftAttachments(kept))),
-        );
-        return kept;
+    // One transaction: if copying the files fails, no row is left behind
+    // for the next auto-save to duplicate (it still has no id).
+    final (newId, stored) = await _db.transaction(() async {
+      final newId = await _db.into(_db.drafts).insert(
+            DraftsCompanion.insert(
+              accountId: Value(accountId),
+              replyToEmailId: Value(replyToEmailId),
+              toText: Value(toText),
+              ccText: Value(ccText),
+              bccText: Value(bccText),
+              subjectText: Value(subjectText),
+              bodyText: Value(bodyText),
+              updatedAt: now,
+              dirty: const Value(true),
+            ),
+          );
+      if (attachments.isEmpty) return (newId, attachments);
+      // The id is only known now, and the row exists before its folder.
+      return _serialized(newId, () async {
+        try {
+          final kept = await _files.keep(newId, attachments);
+          await (_db.update(_db.drafts)..where((t) => t.id.equals(newId)))
+              .write(
+            DraftsCompanion(
+              attachmentsJson: Value(encodeDraftAttachments(kept)),
+            ),
+          );
+          return (newId, kept);
+        } catch (_) {
+          // The row is rolled back; do not leave its copies behind.
+          await _files.delete(newId);
+          rethrow;
+        }
       });
-    }
+    });
     return SavedDraft(
       id: newId,
       accountId: accountId,
@@ -289,11 +301,15 @@ class DraftRepositoryImpl extends DraftRepository {
     await _files.delete(row.id);
   }
 
-  /// Deletes the draft row [row] that sync found gone from the server.
-  Future<void> _dropSyncedRow(Draft row) async {
-    await (_db.delete(_db.drafts)..where((t) => t.id.equals(row.id))).go();
-    await _deleteFilesOf(row);
-  }
+  /// Deletes the draft row [row] that sync found gone from the server —
+  /// unless it was edited since sync read it (it is dirty again then, and
+  /// its edit is pushed as a new copy).
+  Future<void> _dropSyncedRow(Draft row) => _serialized(row.id, () async {
+        final deleted = await (_db.delete(_db.drafts)
+              ..where((t) => t.id.equals(row.id) & t.dirty.equals(false)))
+            .go();
+        if (deleted > 0) await _deleteFilesOf(row);
+      });
 
   @override
   Future<void> deleteOrphanedAttachments() async {
@@ -583,55 +599,129 @@ class DraftRepositoryImpl extends DraftRepository {
           ..where((t) => t.accountId.equals(account.id) & t.dirty.equals(true)))
         .get();
 
+    final appendLimit = _appendLimit(client);
     for (final row in dirty) {
-      final builder = imap.MessageBuilder()
-        ..from = [HeaderMailAddress(account.displayName, account.email)]
-        ..to = _parseAddresses(row.toText)
-        ..cc = _parseAddresses(row.ccText)
-        // The server copy is the sender's own, so it keeps Bcc like any
-        // other client's draft does (#1126).
-        ..bcc = _parseAddresses(row.bccText)
-        ..subject = encodeUnstructuredHeader(row.subjectText)
-        ..subjectEncoding = imap.HeaderEncoding.none
-        ..text = row.bodyText;
-      for (final a in decodeDraftAttachments(row.attachmentsJson)) {
-        final file = File(a.path);
-        // A file gone missing is left out rather than failing every push;
-        // compose tells the user when the draft is opened.
-        if (!await file.exists()) continue;
-        await builder.addFile(file, imap.MediaType.fromText(a.contentType));
+      // One draft the server refuses (too large, say) must not hold back
+      // the others, nor the pull below.
+      try {
+        await _pushOneImap(client, account, draftsPath, row, appendLimit);
+      } catch (e, stack) {
+        _warnPushFailed(account.id, row, e, stack);
       }
-      final mime = builder.buildMimeMessage();
+    }
+  }
 
-      final appendResult = await client.appendMessage(
-        mime,
-        targetMailboxPath: draftsPath,
-        flags: [r'\Draft'],
+  Future<void> _pushOneImap(
+    imap.ImapClient client,
+    account_model.Account account,
+    String draftsPath,
+    Draft row,
+    int? appendLimit,
+  ) async {
+    final builder = imap.MessageBuilder()
+      ..from = [HeaderMailAddress(account.displayName, account.email)]
+      ..to = _parseAddresses(row.toText)
+      ..cc = _parseAddresses(row.ccText)
+      // The server copy is the sender's own, so it keeps Bcc like any
+      // other client's draft does (#1126).
+      ..bcc = _parseAddresses(row.bccText)
+      ..subject = encodeUnstructuredHeader(row.subjectText)
+      ..subjectEncoding = imap.HeaderEncoding.none
+      ..text = row.bodyText;
+    // Each file is read into memory whole (there is no size ceiling,
+    // #955); the server's own limit is checked below.
+    for (final a in await _existingAttachments(account.id, row)) {
+      await builder.addFile(
+        File(a.path),
+        imap.MediaType.fromText(a.contentType),
       );
-      final uidList =
-          appendResult.responseCodeAppendUid?.targetSequence.toList();
-      final newUid = (uidList != null && uidList.isNotEmpty)
-          ? uidList.first.toString()
-          : null;
+    }
+    final mime = builder.buildMimeMessage();
+    if (appendLimit != null) {
+      final size = utf8.encode(mime.renderMessage()).length;
+      if (size > appendLimit) {
+        throw _DraftTooLargeException(size, appendLimit);
+      }
+    }
 
-      // After appending the new copy, expunge the old one so server-side
-      // edits replace the previous version instead of accumulating.
-      final oldUid = row.imapServerId;
-      if (oldUid != null && oldUid.isNotEmpty && oldUid != newUid) {
-        final oldUidInt = int.tryParse(oldUid);
-        if (oldUidInt != null) {
-          try {
-            final seq = imap.MessageSequence.fromId(oldUidInt, isUid: true);
-            await client.uidMarkDeleted(seq);
-            await client.uidExpunge(seq);
-          } catch (_) {
-            // Old copy already gone — fine.
-          }
+    final appendResult = await client.appendMessage(
+      mime,
+      targetMailboxPath: draftsPath,
+      flags: [r'\Draft'],
+    );
+    final uidList = appendResult.responseCodeAppendUid?.targetSequence.toList();
+    final newUid = (uidList != null && uidList.isNotEmpty)
+        ? uidList.first.toString()
+        : null;
+
+    // After appending the new copy, expunge the old one so server-side
+    // edits replace the previous version instead of accumulating.
+    final oldUid = row.imapServerId;
+    if (oldUid != null && oldUid.isNotEmpty && oldUid != newUid) {
+      final oldUidInt = int.tryParse(oldUid);
+      if (oldUidInt != null) {
+        try {
+          final seq = imap.MessageSequence.fromId(oldUidInt, isUid: true);
+          await client.uidMarkDeleted(seq);
+          await client.uidExpunge(seq);
+        } catch (_) {
+          // Old copy already gone — fine.
         }
       }
-
-      await _recordPush(row, account.id, newUid, jmap: false);
     }
+
+    await _recordPush(row, account.id, newUid, jmap: false);
+  }
+
+  /// The server's `APPENDLIMIT` (RFC 7889), if it advertises one.
+  int? _appendLimit(imap.ImapClient client) {
+    for (final cap
+        in client.serverInfo.capabilities ?? const <imap.Capability>[]) {
+      final name = cap.name.toUpperCase();
+      if (name.startsWith('APPENDLIMIT=')) {
+        return int.tryParse(name.substring('APPENDLIMIT='.length));
+      }
+    }
+    return null;
+  }
+
+  /// [row]'s attachments whose file still exists. A file gone missing is
+  /// left out (and logged) rather than failing every push; compose tells
+  /// the user when the draft is opened.
+  Future<List<DraftAttachment>> _existingAttachments(
+    String accountId,
+    Draft row,
+  ) async {
+    final result = <DraftAttachment>[];
+    for (final a in decodeDraftAttachments(row.attachmentsJson)) {
+      if (await File(a.path).exists()) {
+        result.add(a);
+        continue;
+      }
+      unawaited(
+        _appLogger?.warn(
+          'draft.push.attachment_missing',
+          'A draft attachment file is gone; pushing the draft without it',
+          accountId: accountId,
+          data: {'draftId': row.id, 'filename': a.filename},
+        ),
+      );
+    }
+    return result;
+  }
+
+  void _warnPushFailed(String accountId, Draft row, Object e, StackTrace st) {
+    unawaited(
+      _appLogger?.warn(
+        'draft.push.failed',
+        'Could not save a draft on the server; it stays queued for the '
+            'next sync: $e',
+        accountId: accountId,
+        data: {'draftId': row.id},
+        error: e,
+        stack: st,
+      ),
+    );
   }
 
   Future<void> _pullDraftsImap(
@@ -679,95 +769,101 @@ class DraftRepositoryImpl extends DraftRepository {
       if (uid == null) continue;
       if (msg.flags?.contains(r'\Deleted') ?? false) continue;
       final env = msg.envelope;
-      final parts = _attachmentPartsImap(msg, accountId);
-      final newId = await _db.into(_db.drafts).insert(
-            DraftsCompanion.insert(
-              accountId: Value(accountId),
-              toText: Value(_addressListToText(env?.to)),
-              ccText: Value(_addressListToText(env?.cc)),
-              bccText: Value(_addressListToText(env?.bcc)),
-              subjectText: Value(env?.subject ?? ''),
-              bodyText: Value(msg.decodeTextPlainPart() ?? ''),
-              updatedAt: env?.date ?? DateTime.now(),
-              imapServerId: Value(uid),
-              dirty: const Value(false),
-            ),
-          );
-      await _storePulledAttachments(newId, parts);
+      await _importPulledDraft(
+        accountId,
+        () async => _attachmentPartsImap(msg),
+        DraftsCompanion.insert(
+          accountId: Value(accountId),
+          toText: Value(_addressListToText(env?.to)),
+          ccText: Value(_addressListToText(env?.cc)),
+          bccText: Value(_addressListToText(env?.bcc)),
+          subjectText: Value(env?.subject ?? ''),
+          bodyText: Value(msg.decodeTextPlainPart() ?? ''),
+          updatedAt: env?.date ?? DateTime.now(),
+          imapServerId: Value(uid),
+          dirty: const Value(false),
+        ),
+      );
     }
   }
 
   /// The attachments of a server draft fetched with `BODY.PEEK[]`, decoded.
-  /// A part that cannot be decoded is logged and left out.
-  List<_PulledAttachment> _attachmentPartsImap(
-    imap.MimeMessage msg,
-    String accountId,
-  ) {
+  /// Throws when one cannot be decoded.
+  List<_PulledAttachment> _attachmentPartsImap(imap.MimeMessage msg) {
     final result = <_PulledAttachment>[];
-    final List<imap.ContentInfo> infos;
-    try {
-      infos = msg.findContentInfo();
-    } catch (e, stack) {
-      _warnAttachmentPull(accountId, e, stack);
-      return result;
-    }
-    for (final info in infos) {
-      try {
-        final part = info.fetchId.isEmpty ? null : msg.getPart(info.fetchId);
-        final bytes = part?.decodeContentBinary();
-        if (bytes == null) continue;
-        result.add(
-          _PulledAttachment(
-            filename: mimePartFileName(
-                  info.contentDisposition,
-                  info.contentType,
-                ) ??
-                'attachment',
-            contentType:
-                info.contentType?.mediaType.text ?? 'application/octet-stream',
-            bytes: bytes,
-          ),
-        );
-      } catch (e, stack) {
-        _warnAttachmentPull(accountId, e, stack);
+    for (final info in msg.findContentInfo()) {
+      // An empty fetch id is a message that is itself the attachment.
+      final part = info.fetchId.isEmpty ? msg : msg.getPart(info.fetchId);
+      final bytes = part?.decodeContentBinary();
+      if (bytes == null) {
+        throw StateError('attachment part ${info.fetchId} cannot be decoded');
       }
+      result.add(
+        _PulledAttachment(
+          filename:
+              mimePartFileName(info.contentDisposition, info.contentType) ??
+                  'attachment',
+          contentType:
+              info.contentType?.mediaType.text ?? 'application/octet-stream',
+          bytes: bytes,
+        ),
+      );
     }
     return result;
   }
 
-  void _warnAttachmentPull(String accountId, Object e, StackTrace stack) {
-    unawaited(
-      _appLogger?.warn(
-        'draft.pull.attachment_failed',
-        'Could not read an attachment of a server draft',
-        accountId: accountId,
-        error: e,
-        stack: stack,
-      ),
-    );
-  }
-
-  /// Writes [parts] into the folder of the just-pulled draft [draftId].
-  Future<void> _storePulledAttachments(
-    int draftId,
-    List<_PulledAttachment> parts,
+  /// Stores a draft pulled from the server, with its attachments, or not at
+  /// all. A draft stored without an attachment would lose it on the server
+  /// too: the next edit pushes a copy without it and removes the original.
+  /// So when [readAttachments] (or storing them) fails, nothing is stored
+  /// and the next sync tries again.
+  Future<void> _importPulledDraft(
+    String accountId,
+    Future<List<_PulledAttachment>> Function() readAttachments,
+    DraftsCompanion row,
   ) async {
-    if (parts.isEmpty) return;
-    final stored = <DraftAttachment>[];
-    for (final part in parts) {
-      final path = await _files.add(draftId, part.filename, part.bytes);
-      stored.add(
-        DraftAttachment(
-          path: path,
-          filename: p.basename(path),
-          contentType: part.contentType,
-          size: part.bytes.length,
+    try {
+      final parts = await readAttachments();
+      await _db.transaction(() async {
+        final draftId = await _db.into(_db.drafts).insert(row);
+        if (parts.isEmpty) return;
+        try {
+          final stored = <DraftAttachment>[];
+          for (final part in parts) {
+            final path = await _files.add(draftId, part.filename, part.bytes);
+            stored.add(
+              DraftAttachment(
+                path: path,
+                filename: p.basename(path),
+                contentType: part.contentType,
+                size: part.bytes.length,
+              ),
+            );
+          }
+          await (_db.update(_db.drafts)..where((t) => t.id.equals(draftId)))
+              .write(
+            DraftsCompanion(
+              attachmentsJson: Value(encodeDraftAttachments(stored)),
+            ),
+          );
+        } catch (_) {
+          // The row is rolled back; do not leave its files behind.
+          await _files.delete(draftId);
+          rethrow;
+        }
+      });
+    } catch (e, stack) {
+      unawaited(
+        _appLogger?.warn(
+          'draft.pull.skipped',
+          'Could not read the attachments of a server draft; it is retried '
+              'on the next sync: $e',
+          accountId: accountId,
+          error: e,
+          stack: stack,
         ),
       );
     }
-    await (_db.update(_db.drafts)..where((t) => t.id.equals(draftId))).write(
-      DraftsCompanion(attachmentsJson: Value(encodeDraftAttachments(stored))),
-    );
   }
 
   // ── JMAP ────────────────────────────────────────────────────────────────
@@ -827,67 +923,118 @@ class DraftRepositoryImpl extends DraftRepository {
         .get();
 
     for (final row in dirty) {
-      const bodyPartId = '1';
-      final create = <String, dynamic>{
-        'mailboxIds': {mailboxId: true},
-        'keywords': {r'$draft': true},
-        'from': [
-          {'name': account.displayName, 'email': account.email},
-        ],
-        'to': _parseAddressesJmap(row.toText),
-        if (row.ccText.trim().isNotEmpty) 'cc': _parseAddressesJmap(row.ccText),
-        if (row.bccText.trim().isNotEmpty)
-          'bcc': _parseAddressesJmap(row.bccText),
-        'subject': row.subjectText,
-        'bodyValues': {
-          bodyPartId: {
-            'value': row.bodyText,
-            'isEncodingProblem': false,
-            'isTruncated': false,
-          },
-        },
-        'textBody': [
-          {'partId': bodyPartId, 'type': 'text/plain'},
-        ],
-      };
-      final attachments = <Map<String, dynamic>>[];
-      for (final a in decodeDraftAttachments(row.attachmentsJson)) {
-        final file = File(a.path);
-        // As for IMAP: a missing file is left out, not a failed push.
-        if (!await file.exists()) continue;
-        final blobId = await jmap.uploadBlob(
-          await file.readAsBytes(),
-          a.contentType,
-        );
-        attachments.add({
-          'blobId': blobId,
-          'type': a.contentType,
-          'name': a.filename,
-          'disposition': 'attachment',
-        });
+      // As for IMAP: one refused draft must not hold back the others.
+      try {
+        await _pushOneJmap(jmap, account, mailboxId, row);
+      } catch (e, stack) {
+        _warnPushFailed(account.id, row, e, stack);
       }
-      if (attachments.isNotEmpty) create['attachments'] = attachments;
-
-      final destroyIds = <String>[];
-      final oldId = row.jmapServerId;
-      if (oldId != null && oldId.isNotEmpty) destroyIds.add(oldId);
-
-      final setArgs = <String, dynamic>{
-        'accountId': jmap.accountId,
-        'create': {'draft': create},
-      };
-      if (destroyIds.isNotEmpty) setArgs['destroy'] = destroyIds;
-
-      final resp = await jmap.call([
-        ['Email/set', setArgs, '0'],
-      ]);
-      final result = _responseArgs(resp, 0, 'Email/set');
-      final created = result['created'] as Map<String, dynamic>?;
-      final newEmail = created?['draft'] as Map<String, dynamic>?;
-      final newId = newEmail?['id'] as String?;
-
-      await _recordPush(row, account.id, newId, jmap: true);
     }
+  }
+
+  Future<void> _pushOneJmap(
+    JmapClient jmap,
+    account_model.Account account,
+    String mailboxId,
+    Draft row,
+  ) async {
+    const bodyPartId = '1';
+    final create = <String, dynamic>{
+      'mailboxIds': {mailboxId: true},
+      'keywords': {r'$draft': true},
+      'from': [
+        {'name': account.displayName, 'email': account.email},
+      ],
+      'to': _parseAddressesJmap(row.toText),
+      if (row.ccText.trim().isNotEmpty) 'cc': _parseAddressesJmap(row.ccText),
+      if (row.bccText.trim().isNotEmpty)
+        'bcc': _parseAddressesJmap(row.bccText),
+      'subject': row.subjectText,
+      'bodyValues': {
+        bodyPartId: {
+          'value': row.bodyText,
+          'isEncodingProblem': false,
+          'isTruncated': false,
+        },
+      },
+      'textBody': [
+        {'partId': bodyPartId, 'type': 'text/plain'},
+      ],
+    };
+    final attachments = <Map<String, dynamic>>[];
+    for (final a in await _existingAttachments(account.id, row)) {
+      final file = File(a.path);
+      final limit = jmap.maxSizeUpload;
+      if (limit != null && await file.length() > limit) {
+        throw _DraftTooLargeException(await file.length(), limit);
+      }
+      // Read into memory whole: there is no size ceiling (#955).
+      final blobId = await jmap.uploadBlob(
+        await file.readAsBytes(),
+        a.contentType,
+      );
+      attachments.add({
+        'blobId': blobId,
+        'type': a.contentType,
+        'name': a.filename,
+        'disposition': 'attachment',
+      });
+    }
+    if (attachments.isNotEmpty) create['attachments'] = attachments;
+
+    final resp = await jmap.call([
+      [
+        'Email/set',
+        {
+          'accountId': jmap.accountId,
+          'create': {'draft': create},
+        },
+        '0',
+      ],
+    ]);
+    final result = _responseArgs(resp, 0, 'Email/set');
+    final created = result['created'] as Map<String, dynamic>?;
+    final newId =
+        (created?['draft'] as Map<String, dynamic>?)?['id'] as String?;
+    if (newId == null) {
+      // Refused (tooLarge, blobNotFound, ...): the old copy stays, and so
+      // does the row's dirty flag, for the next sync.
+      final notCreated = result['notCreated'] as Map<String, dynamic>?;
+      final error = notCreated?['draft'] as Map<String, dynamic>?;
+      throw JmapException(
+        'Email/set refused the draft: ${error?['type'] ?? 'no id returned'}'
+        '${error?['description'] != null ? ' (${error!['description']})' : ''}',
+      );
+    }
+
+    // Only now that the new copy exists: remove the one it replaces.
+    final oldId = row.jmapServerId;
+    if (oldId != null && oldId.isNotEmpty && oldId != newId) {
+      try {
+        await jmap.call([
+          [
+            'Email/set',
+            {
+              'accountId': jmap.accountId,
+              'destroy': [oldId],
+            },
+            '0',
+          ],
+        ]);
+      } catch (e, stack) {
+        unawaited(
+          _appLogger?.warn(
+            'draft.push.old_copy_kept',
+            'Could not remove the replaced server copy of a draft',
+            accountId: account.id,
+            error: e,
+            stack: stack,
+          ),
+        );
+      }
+    }
+
+    await _recordPush(row, account.id, newId, jmap: true);
   }
 
   Future<void> _pullDraftsJmap(
@@ -980,47 +1127,42 @@ class DraftRepositoryImpl extends DraftRepository {
 
       final receivedAt =
           DateTime.tryParse(m['receivedAt'] as String? ?? '') ?? DateTime.now();
-      final parts = await _attachmentPartsJmap(jmap, m, accountId);
 
-      final newId = await _db.into(_db.drafts).insert(
-            DraftsCompanion.insert(
-              accountId: Value(accountId),
-              toText: Value(_addressJsonToText(m['to'])),
-              ccText: Value(_addressJsonToText(m['cc'])),
-              bccText: Value(_addressJsonToText(m['bcc'])),
-              subjectText: Value((m['subject'] as String?) ?? ''),
-              bodyText: Value(bodyText),
-              updatedAt: receivedAt,
-              jmapServerId: Value(id),
-              dirty: const Value(false),
-            ),
-          );
-      await _storePulledAttachments(newId, parts);
+      await _importPulledDraft(
+        accountId,
+        () => _attachmentPartsJmap(jmap, m),
+        DraftsCompanion.insert(
+          accountId: Value(accountId),
+          toText: Value(_addressJsonToText(m['to'])),
+          ccText: Value(_addressJsonToText(m['cc'])),
+          bccText: Value(_addressJsonToText(m['bcc'])),
+          subjectText: Value((m['subject'] as String?) ?? ''),
+          bodyText: Value(bodyText),
+          updatedAt: receivedAt,
+          jmapServerId: Value(id),
+          dirty: const Value(false),
+        ),
+      );
     }
   }
 
-  /// Downloads the attachments of the server draft [email]. One that cannot
-  /// be downloaded is logged and left out.
+  /// Downloads the attachments of the server draft [email]. Throws when
+  /// one cannot be downloaded.
   Future<List<_PulledAttachment>> _attachmentPartsJmap(
     JmapClient jmap,
     Map<String, dynamic> email,
-    String accountId,
   ) async {
     final result = <_PulledAttachment>[];
     final list = email['attachments'] as List<dynamic>? ?? const [];
     for (final entry in list.whereType<Map<String, dynamic>>()) {
       final blobId = entry['blobId'] as String?;
-      if (blobId == null) continue;
+      if (blobId == null) throw StateError('attachment without blobId');
       final name = (entry['name'] as String?) ?? 'attachment';
       final type = (entry['type'] as String?) ?? 'application/octet-stream';
-      try {
-        final bytes = await jmap.downloadBlob(blobId, name: name, type: type);
-        result.add(
-          _PulledAttachment(filename: name, contentType: type, bytes: bytes),
-        );
-      } catch (e, stack) {
-        _warnAttachmentPull(accountId, e, stack);
-      }
+      final bytes = await jmap.downloadBlob(blobId, name: name, type: type);
+      result.add(
+        _PulledAttachment(filename: name, contentType: type, bytes: bytes),
+      );
     }
     return result;
   }
@@ -1124,6 +1266,17 @@ class DraftRepositoryImpl extends DraftRepository {
         dirty: row.dirty,
         attachments: decodeDraftAttachments(row.attachmentsJson),
       );
+}
+
+/// The draft is larger than the server accepts.
+class _DraftTooLargeException implements Exception {
+  _DraftTooLargeException(this.size, this.limit);
+  final int size;
+  final int limit;
+
+  @override
+  String toString() =>
+      'the draft is $size bytes, the server accepts at most $limit';
 }
 
 /// An attachment of a server draft, read during a pull.

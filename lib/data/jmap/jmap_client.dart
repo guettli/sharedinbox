@@ -25,6 +25,7 @@ class JmapClient {
     required Uri apiUrl,
     required String accountId,
     required Set<String> capabilities,
+    int? maxSizeUpload,
     String? uploadUrl,
     String? downloadUrl,
     String? eventSourceUrl,
@@ -33,6 +34,7 @@ class JmapClient {
         _apiUrl = apiUrl,
         _accountId = accountId,
         _capabilities = capabilities,
+        _maxSizeUpload = maxSizeUpload,
         _uploadUrl = uploadUrl,
         _downloadUrl = downloadUrl,
         _eventSourceUrl = eventSourceUrl;
@@ -42,6 +44,7 @@ class JmapClient {
   final Uri _apiUrl;
   final String _accountId;
   final Set<String> _capabilities;
+  final int? _maxSizeUpload;
   final String? _uploadUrl;
   final String? _downloadUrl;
   final String? _eventSourceUrl;
@@ -57,6 +60,10 @@ class JmapClient {
   /// All capability URNs advertised by the server's Session object
   /// (RFC 8620 §2), e.g. `urn:ietf:params:jmap:core`.
   Set<String> get capabilities => _capabilities;
+
+  /// The largest blob [uploadBlob] may send, in bytes: the core
+  /// capability's `maxSizeUpload` (RFC 8620 §2). Null when not advertised.
+  int? get maxSizeUpload => _maxSizeUpload;
 
   /// SSE push URL advertised by the server, or null if push is unsupported.
   String? get eventSourceUrl => _eventSourceUrl;
@@ -194,6 +201,7 @@ class JmapClient {
       apiUrl: apiUrl,
       accountId: accountId,
       capabilities: capabilities,
+      maxSizeUpload: _extractMaxSizeUpload(json),
       uploadUrl: uploadUrl,
       downloadUrl: downloadUrl,
       eventSourceUrl: eventSourceUrl,
@@ -547,6 +555,15 @@ class JmapClient {
       '$label ($raw) is not an https URL — refusing to send credentials over '
       'cleartext. Use https (or localhost for development).',
     );
+  }
+
+  static int? _extractMaxSizeUpload(Map<String, dynamic> session) {
+    final caps = session['capabilities'];
+    if (caps is! Map) return null;
+    final core = caps['urn:ietf:params:jmap:core'];
+    if (core is! Map) return null;
+    final max = core['maxSizeUpload'];
+    return max is int && max > 0 ? max : null;
   }
 
   static Set<String> _extractCapabilities(Map<String, dynamic> session) {

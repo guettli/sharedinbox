@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SendNowOutcome;
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/attachment_files.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
@@ -142,6 +143,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool _suppressAutoSave = false;
   // Captured in initState so it remains accessible in dispose() after ref is gone.
   late final DraftRepository _draftRepo;
+  late final AppLogger _appLogger;
 
   static const _saveDelay = Duration(seconds: 2);
 
@@ -149,6 +151,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   void initState() {
     super.initState();
     _draftRepo = ref.read(draftRepositoryProvider);
+    _appLogger = ref.read(appLoggerProvider);
     // Before the body prefill: a reply parks the cursor at the top.
     _replyToEmailId = widget.replyToEmailId;
     if (widget.prefillTo != null) _to.text = widget.prefillTo!;
@@ -483,8 +486,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
     unawaited(() async {
       await _settle(pending);
-      try {
-        if (dirty) {
+      if (dirty) {
+        try {
           await _draftRepo.saveDraft(
             id: _draftId,
             accountId: input.accountId,
@@ -496,11 +499,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             bodyText: input.bodyText,
             attachments: input.attachments,
           );
+        } on Object catch (e, stack) {
+          // Not saved: the temp files may be the only copy of a shrunk
+          // image, so they stay (the OS clears the temp directory).
+          await _appLogger.warn(
+            'compose.draft.final_save_failed',
+            'Could not save the draft when Compose closed',
+            screen: 'ComposeScreen',
+            error: e,
+            stack: stack,
+          );
+          return;
         }
-      } finally {
-        for (final path in temps) {
-          await _deleteTempFile(path);
-        }
+      }
+      for (final path in temps) {
+        await _deleteTempFile(path);
       }
     }());
     super.dispose();

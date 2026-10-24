@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -56,7 +57,7 @@ class AttachmentStore {
       }
       final slot = await _freeSlot(dir, used);
       used.add(slot);
-      final name = _safeName(a.filename.isEmpty ? a.path : a.filename);
+      final name = safeAttachmentName(a.filename.isEmpty ? a.path : a.filename);
       final target = p.join(dir.path, slot, name);
       await Directory(p.dirname(target)).create(recursive: true);
       await source.copy(target);
@@ -84,7 +85,7 @@ class AttachmentStore {
       }
     }
     final slot = await _freeSlot(dir, used);
-    final target = p.join(dir.path, slot, _safeName(filename));
+    final target = p.join(dir.path, slot, safeAttachmentName(filename));
     await Directory(p.dirname(target)).create(recursive: true);
     await File(target).writeAsBytes(bytes, flush: true);
     return target;
@@ -107,7 +108,9 @@ class AttachmentStore {
   /// Deletes the folders of owners that no longer exist. [liveOwnerIds] is
   /// called only after the folders were listed: an owner's row is written
   /// before its folder, so a folder created meanwhile always belongs to a
-  /// row the query sees.
+  /// row the query sees. (A row still inside a transaction counts: the
+  /// owners write their rows on the one database connection of the main
+  /// isolate, so the query waits for that transaction.)
   Future<void> deleteOrphans(Future<Set<int>> Function() liveOwnerIds) async {
     final root = await _root();
     if (!await root.exists()) return;
@@ -152,9 +155,33 @@ class AttachmentStore {
   }
 }
 
-/// [name] reduced to a plain file name: no directories, never empty.
-String _safeName(String name) {
-  final base = p.basename(name.replaceAll(r'\', '/')).trim();
+/// Longest file name [safeAttachmentName] returns, in UTF-8 bytes. File
+/// systems allow 255; the margin leaves room for what others append.
+const _maxNameBytes = 200;
+
+/// [name] reduced to a file name every platform can store: no directories,
+/// no control characters or characters Windows refuses, no trailing dots or
+/// spaces, at most [_maxNameBytes] UTF-8 bytes (the extension is kept), and
+/// never empty.
+String safeAttachmentName(String name) {
+  var base = name.replaceAll(r'\', '/').split('/').last;
+  base = base.replaceAll(RegExp(r'[\x00-\x1f\x7f<>:"|?*]'), '_');
+  base = base.replaceFirst(RegExp(r'[. ]+$'), '').trim();
   if (base.isEmpty || base == '.' || base == '..') return 'attachment';
-  return base;
+  if (utf8.encode(base).length <= _maxNameBytes) return base;
+  final ext = p.extension(base);
+  final keepExt = utf8.encode(ext).length <= 20 ? ext : '';
+  final stem = base.substring(0, base.length - keepExt.length);
+  final budget = _maxNameBytes - utf8.encode(keepExt).length;
+  final out = StringBuffer();
+  var used = 0;
+  for (final rune in stem.runes) {
+    final char = String.fromCharCode(rune);
+    final bytes = utf8.encode(char).length;
+    if (used + bytes > budget) break;
+    out.write(char);
+    used += bytes;
+  }
+  final truncated = out.toString().replaceFirst(RegExp(r'[. ]+$'), '');
+  return '${truncated.isEmpty ? 'attachment' : truncated}$keepExt';
 }

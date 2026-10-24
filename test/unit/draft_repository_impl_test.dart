@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
@@ -811,8 +812,11 @@ void main() {
 
       // The second push replaces the copy the first one made.
       row = await repo.getDraft(id);
-      expect(sets, hasLength(2));
-      expect(sets[1]['destroy'], ['M1']);
+      // Create first, then destroy the replaced copy in a call of its own:
+      // a refused create must not take the old copy with it.
+      expect(sets, hasLength(3));
+      expect(sets[1]['destroy'], isNull);
+      expect(sets[2]['destroy'], ['M1']);
       expect(row?.jmapServerId, 'M2');
       expect(row?.dirty, isFalse);
     });
@@ -1189,6 +1193,207 @@ void main() {
       // Removing the attachment alone marks the draft for another push.
       await save(repo, [], id: saved.id);
       expect((await repo.getDraft(saved.id))!.dirty, isTrue);
+    });
+
+    test('a failed copy of a new draft leaves no row behind', () async {
+      final db = openTestDatabase();
+      // A store whose root is a file: creating the draft folder fails.
+      final blocker = File(p.join(tmp.path, 'not-a-dir'))
+        ..writeAsStringSync('');
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: AttachmentStore(() async => Directory(blocker.path)),
+      );
+      final picked = await pickedFile('a.pdf', 'a');
+
+      await expectLater(
+        save(repo, [picked]),
+        throwsA(isA<FileSystemException>()),
+      );
+      // Compose still has no id, so its next save inserts again: there must
+      // be nothing for that to duplicate.
+      expect(await db.select(db.drafts).get(), isEmpty);
+    });
+
+    /// A JMAP server holding one draft `S1` with attachment blob `b1`, whose
+    /// download fails while [failDownload] returns true.
+    http.Client serverWithAttachedDraft(bool Function() failDownload) =>
+        jmapFakeServer(
+          accountId: 'u1',
+          downloadUrl:
+              'https://jmap.example.com/download/{accountId}/{blobId}/{name}',
+          handleRaw: (req) {
+            if (!req.url.path.startsWith('/download/')) return null;
+            return failDownload()
+                ? http.Response('busy', 503)
+                : http.Response.bytes([0, 1, 2, 255], 200);
+          },
+          handle: (call) async {
+            switch (call.method) {
+              case 'Mailbox/get':
+                return [
+                  'Mailbox/get',
+                  {
+                    'list': [
+                      {'id': 'mb-drafts', 'role': 'drafts'},
+                    ],
+                  },
+                  call.callId,
+                ];
+              case 'Email/query':
+                return [
+                  'Email/query',
+                  {
+                    'ids': ['S1'],
+                  },
+                  call.callId,
+                ];
+              case 'Email/get':
+                return [
+                  'Email/get',
+                  {
+                    'list': [
+                      {
+                        'id': 'S1',
+                        'subject': 'From webmail',
+                        'textBody': <dynamic>[],
+                        'bodyValues': <String, dynamic>{},
+                        'attachments': [
+                          {
+                            'blobId': 'b1',
+                            'name': 'r.bin',
+                            'type': 'application/octet-stream',
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  call.callId,
+                ];
+            }
+            return null;
+          },
+        );
+
+    test('a pulled draft whose attachment fails is not stored, and retried',
+        () async {
+      final db = openTestDatabase();
+      var fail = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _JmapAccounts(),
+        httpClient: serverWithAttachedDraft(() => fail),
+        attachmentStore: store,
+      );
+
+      await repo.syncDrafts('acc-1');
+      // Stored without it, the next edit would remove it from the server.
+      expect(await db.select(db.drafts).get(), isEmpty);
+      expect(await storeRoot.exists(), isFalse);
+
+      fail = false;
+      await repo.syncDrafts('acc-1');
+
+      final row = (await db.select(db.drafts).get()).single;
+      expect(row.jmapServerId, 'S1');
+      final attachment = decodeDraftAttachments(row.attachmentsJson).single;
+      expect(attachment.filename, 'r.bin');
+      expect(await File(attachment.path).readAsBytes(), [0, 1, 2, 255]);
+    });
+
+    test(
+        'a draft the JMAP server refuses keeps its old copy and does not '
+        'hold back the others', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final onServer = <String>['OLD'];
+      final server = jmapFakeServer(
+        accountId: 'u1',
+        handle: (call) async {
+          switch (call.method) {
+            case 'Mailbox/get':
+              return [
+                'Mailbox/get',
+                {
+                  'list': [
+                    {'id': 'mb-drafts', 'role': 'drafts'},
+                  ],
+                },
+                call.callId,
+              ];
+            case 'Email/set':
+              sets.add(call.args);
+              final create = (call.args['create'] as Map?)?['draft'] as Map?;
+              if (create == null) {
+                final destroy = (call.args['destroy'] as List?) ?? const [];
+                onServer.removeWhere(destroy.contains);
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              }
+              if (create['subject'] == 'big') {
+                return [
+                  'Email/set',
+                  {
+                    'notCreated': {
+                      'draft': {'type': 'tooLarge'},
+                    },
+                  },
+                  call.callId,
+                ];
+              }
+              onServer.add('NEW');
+              return [
+                'Email/set',
+                {
+                  'created': {
+                    'draft': {'id': 'NEW'},
+                  },
+                },
+                call.callId,
+              ];
+            case 'Email/query':
+              return [
+                'Email/query',
+                {'ids': List.of(onServer)},
+                call.callId,
+              ];
+          }
+          return null;
+        },
+      );
+      final repo = DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
+      final big = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'big',
+        bodyText: 'x',
+      );
+      // Its earlier version is on the server as OLD.
+      await (db.update(db.drafts)..where((t) => t.id.equals(big.id)))
+          .write(const DraftsCompanion(jmapServerId: Value('OLD')));
+      final small = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'small',
+        bodyText: 'y',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      expect(sets.where((x) => x.containsKey('destroy')), isEmpty);
+      expect(onServer, ['OLD', 'NEW']);
+      final bigRow = (await repo.getDraft(big.id))!;
+      expect(bigRow.dirty, isTrue);
+      expect(bigRow.jmapServerId, 'OLD');
+      final smallRow = (await repo.getDraft(small.id))!;
+      expect(smallRow.dirty, isFalse);
+      expect(smallRow.jmapServerId, 'NEW');
     });
   });
 }
