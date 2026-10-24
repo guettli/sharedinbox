@@ -1443,6 +1443,42 @@ void main() {
       expect(find.text('Mark as unread'), findsOneWidget);
     });
 
+    testWidgets('Mark as unread from a folder returns to the folder list', (
+      tester,
+    ) async {
+      final first = testEmail();
+      final next = testEmail(id: 'acc-1:43', subject: 'Next mail');
+      const body = EmailBody(emailId: 'acc-1:42', attachments: []);
+      final emails = FakeEmailRepository(
+        emails: [first, next],
+        emailDetail: first,
+        emailBody: body,
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: _overrides(body: body, emails: emails),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byType(PopupMenuButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Mark as unread'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(EmailDetailScreen), findsNothing);
+      expect(find.byType(EmailListScreen), findsOneWidget);
+      expect(
+        emails.setFlagCalls.lastWhere((c) => c.emailId == 'acc-1:42').seen,
+        isFalse,
+      );
+      expect(
+        emails.setFlagCalls.where((c) => c.emailId == 'acc-1:43'),
+        isEmpty,
+      );
+    });
+
     testWidgets('Move to a new folder closes the name dialog without crashing',
         (
       tester,
