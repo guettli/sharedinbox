@@ -45,6 +45,7 @@ import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_snippet.dart';
+import 'package:sharedinbox/data/imap/rcpt_checking_smtp_client.dart';
 import 'package:sharedinbox/data/imap/reply_headers.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
@@ -7125,6 +7126,11 @@ class EmailRepositoryImpl implements EmailRepository {
               ),
             );
           }
+        } on SmtpRecipientsRejectedException catch (e) {
+          // Nothing was sent. A permanently refused address fails the
+          // row so the user can fix it via Edit; an all-4xx refusal retries.
+          if (e.isPermanent) throw PermanentSendException(e.toString());
+          rethrow;
         } on imap.SmtpException catch (e) {
           // Permanent SMTP rejections come back as 5xx response codes — those
           // will fail the same way on every retry, so fail the row out.
@@ -7839,6 +7845,37 @@ class EmailRepositoryImpl implements EmailRepository {
           'identity email: ${identityEmail ?? 'unknown'})',
         );
       }
+      // A created submission is no proof of delivery: Stalwart creates it even
+      // when it refused every recipient, and reports the refusals only in the
+      // submission's deliveryStatus.
+      final submissionId =
+          ((subResult['created'] as Map<String, dynamic>?)?['sub1']
+              as Map<String, dynamic>?)?['id'] as String?;
+      final rejected = submissionId == null
+          ? const <RejectedRecipient>[]
+          : await _jmapRejectedRecipients(jmap, submissionId);
+      if (rejected.isNotEmpty) {
+        final description = describeRejectedRecipients(rejected);
+        final refused = {for (final r in rejected) r.email.toLowerCase()};
+        if (draft.allRecipients
+            .every((a) => refused.contains(a.email.toLowerCase()))) {
+          // Nobody gets it: fail the row (and drop the Sent copy below), so
+          // the user can fix the address via Edit.
+          throw PermanentSendException(description);
+        }
+        // The others already have it and a submission cannot be recalled, so
+        // failing the row would only re-send it to them. Say who missed out.
+        unawaited(
+          _appLogger?.error(
+            'outbox.send.recipient_rejected',
+            'Message sent, but not to everyone. $description',
+            accountId: account.id,
+            data: {
+              'rejected': [for (final r in rejected) r.email],
+            },
+          ),
+        );
+      }
     } catch (_) {
       await _destroyJmapEmail(jmap, emailId);
       rethrow;
@@ -7867,6 +7904,50 @@ class EmailRepositoryImpl implements EmailRepository {
           stack: stack,
         ),
       );
+    }
+  }
+
+  /// The recipients [jmap] already reports as undeliverable
+  /// (`delivered: "no"`, RFC 8621 §7) for the submission [submissionId].
+  /// Best-effort: a failed lookup must not turn a sent message into a failed
+  /// send, so it reports nobody.
+  Future<List<RejectedRecipient>> _jmapRejectedRecipients(
+    JmapClient jmap,
+    String submissionId,
+  ) async {
+    try {
+      final responses = await jmap.call(
+        [
+          [
+            'EmailSubmission/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': [submissionId],
+              'properties': ['deliveryStatus'],
+            },
+            'g',
+          ],
+        ],
+        withSubmission: true,
+      );
+      final list = _responseArgs(responses, 0, 'EmailSubmission/get')['list']
+          as List<dynamic>?;
+      final status = (list == null || list.isEmpty)
+          ? null
+          : (list.first as Map<String, dynamic>)['deliveryStatus']
+              as Map<String, dynamic>?;
+      return [
+        for (final MapEntry(key: email, value: s) in (status ?? {}).entries)
+          if (s is Map<String, dynamic> && s['delivered'] == 'no')
+            RejectedRecipient(
+              email,
+              imap.SmtpResponseLine.parse(
+                s['smtpReply'] as String? ?? '550 not delivered',
+              ),
+            ),
+      ];
+    } catch (_) {
+      return const [];
     }
   }
 

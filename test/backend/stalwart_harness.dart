@@ -22,6 +22,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/data/imap/rcpt_checking_smtp_client.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 import 'localhost_mapping_client.dart';
@@ -245,7 +246,8 @@ Future<SmtpClient> testSmtpConnect(
 ) async {
   final atIndex = a.email.lastIndexOf('@');
   final domain = atIndex != -1 ? a.email.substring(atIndex + 1) : a.smtpHost;
-  final client = SmtpClient(domain);
+  // The production client class, so backend sends check every RCPT reply.
+  final client = RcptCheckingSmtpClient(domain);
   await client.connectToServer(a.smtpHost, a.smtpPort, isSecure: false);
   await client.ehlo();
   await client.authenticate(username, password);

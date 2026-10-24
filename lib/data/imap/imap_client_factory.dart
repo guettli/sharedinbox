@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
+import 'package:sharedinbox/data/imap/rcpt_checking_smtp_client.dart';
 import 'package:sharedinbox/data/imap/tls_error.dart';
 
 typedef ImapConnectFn = Future<ImapClient> Function(
@@ -214,7 +215,7 @@ Future<SmtpClient> connectSmtp(
   final clientDomain =
       atIndex != -1 ? account.email.substring(atIndex + 1) : account.smtpHost;
 
-  final client = SmtpClient(clientDomain);
+  final client = RcptCheckingSmtpClient(clientDomain);
   try {
     await connectWithRetry(
       () => client.connectToServer(
