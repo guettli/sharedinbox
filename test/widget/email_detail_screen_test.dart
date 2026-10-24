@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -428,10 +429,17 @@ void main() {
       );
       final pdfBytes = Uint8List.fromList(utf8.encode('%PDF-1.4 test'));
 
+      late FakeEmailRepository repo;
+
       Future<void> pumpDetail(
         WidgetTester tester,
         SaveLocationPicker picker,
       ) async {
+        repo = FakeEmailRepository(
+          emailDetail: testEmail(hasAttachment: true),
+          emailBody: body,
+          attachmentBytes: pdfBytes,
+        );
         await tester.pumpWidget(
           buildApp(
             initialLocation:
@@ -440,11 +448,7 @@ void main() {
               ..._overrides(
                 body: body,
                 email: testEmail(hasAttachment: true),
-                emails: FakeEmailRepository(
-                  emailDetail: testEmail(hasAttachment: true),
-                  emailBody: body,
-                  attachmentBytes: pdfBytes,
-                ),
+                emails: repo,
               ),
               saveLocationPickerProvider.overrideWithValue(picker),
             ],
@@ -497,6 +501,69 @@ void main() {
           await tapSaveAs(tester);
           expect(find.textContaining('Saved to'), findsNothing);
           expect(find.textContaining('Saving file failed'), findsNothing);
+          // The dialog comes first, so cancelling costs no download.
+          expect(repo.downloadAttachmentCalls, 0);
+        });
+      });
+
+      testWidgets('desktop: overwrites an existing file at the chosen path', (
+        tester,
+      ) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          final dir = Directory.systemTemp.createTempSync('save_as');
+          addTearDown(() => dir.deleteSync(recursive: true));
+          final target = File('${dir.path}/invoice.pdf')
+            ..writeAsStringSync('an older, longer file that must be replaced');
+          await pumpDetail(tester, (_) async => target.path);
+          await tapSaveAs(tester);
+          expect(target.readAsBytesSync(), pdfBytes);
+          expect(find.text('Saved to ${target.path}'), findsOneWidget);
+        });
+      });
+
+      testWidgets('desktop: a second click while the dialog is open is ignored',
+          (tester) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          final dialog = Completer<String?>();
+          var opened = 0;
+          await pumpDetail(tester, (_) {
+            opened++;
+            return dialog.future;
+          });
+          await tester.tap(find.byTooltip('Save as…'));
+          await tester.pump();
+          await tester.tap(find.byTooltip('Save as…'));
+          await tester.pump();
+          expect(opened, 1);
+          dialog.complete(null);
+          await tester.pumpAndSettle();
+          // Once the dialog closed, Save as… works again.
+          await tester.tap(find.byTooltip('Save as…'));
+          await tester.pump();
+          expect(opened, 2);
+        });
+      });
+
+      testWidgets('desktop: no file chooser portal gives a readable error', (
+        tester,
+      ) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          await pumpDetail(
+            tester,
+            (_) => withPortalHint(
+              () => throw DBusServiceUnknownException(
+                DBusMethodErrorResponse(
+                  'org.freedesktop.DBus.Error.ServiceUnknown',
+                ),
+              ),
+            ),
+          );
+          await tapSaveAs(tester);
+          expect(
+            find.text('Saving file failed: $noFileChooserMessage'),
+            findsOneWidget,
+          );
+          expect(repo.downloadAttachmentCalls, 0);
         });
       });
 
@@ -514,13 +581,22 @@ void main() {
         });
       });
 
-      testWidgets('mobile keeps only download-and-open', (tester) async {
-        await onPlatform(TargetPlatform.android, () async {
-          await pumpDetail(tester, (_) async => fail('no dialog on mobile'));
-          expect(find.byTooltip('Download and open'), findsOneWidget);
-          expect(find.byTooltip('Save as…'), findsNothing);
+      for (final platform in [
+        TargetPlatform.android,
+        TargetPlatform.iOS,
+        TargetPlatform.windows,
+        TargetPlatform.macOS,
+      ]) {
+        testWidgets('${platform.name} keeps only download-and-open', (
+          tester,
+        ) async {
+          await onPlatform(platform, () async {
+            await pumpDetail(tester, (_) async => fail('no Save as… here'));
+            expect(find.byTooltip('Download and open'), findsOneWidget);
+            expect(find.byTooltip('Save as…'), findsNothing);
+          });
         });
-      });
+      }
     });
 
     testWidgets(

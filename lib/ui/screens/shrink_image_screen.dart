@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -54,13 +53,9 @@ class _ShrinkImageScreenState extends ConsumerState<ShrinkImageScreen> {
         fileName: '$base-shrunk.jpg',
         bytes: shrunk.bytes,
       );
+      // file_picker 12.x writes the bytes to the chosen path itself, on
+      // desktop as well as mobile, so there is nothing left to write here.
       if (savedPath == null || !mounted) return;
-      // On desktop the picker only chooses a location; on mobile it writes the
-      // bytes itself. Write on desktop so both paths end up with the file.
-      if (!Platform.isAndroid && !Platform.isIOS) {
-        await File(savedPath).writeAsBytes(shrunk.bytes);
-      }
-      if (!mounted) return;
       context.showAppSnackBar(
         'Saved shrunk image',
         duration: const Duration(seconds: 3),

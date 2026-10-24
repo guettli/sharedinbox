@@ -639,11 +639,15 @@ class FakeEmailRepository implements EmailRepository {
   /// override with garbage to exercise the "could not be displayed" fallback.
   final Uint8List attachmentBytes;
 
+  /// How often [downloadAttachment] was called.
+  int downloadAttachmentCalls = 0;
+
   @override
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,
   ) async {
+    downloadAttachmentCalls++;
     final dir = Directory.systemTemp.createTempSync('fake_attachment');
     // Sanitised like the real repository, so crafted names stay in [dir].
     final file = File('${dir.path}/${safeFileName(attachment.filename)}')
