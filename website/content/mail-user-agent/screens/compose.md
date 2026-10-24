@@ -7,7 +7,10 @@ description: 'Write a new email, reply, or forward.'
 
 The **Compose** screen writes a new email — from scratch, as a reply, or as a
 forward. Reply / Reply all pre-fills *To*, *Cc*, and *Subject* (`Re:`) from the
-original.
+original. Forward pre-fills *Subject* (`Fwd:`) and the quoted text, and
+attaches the original's attachments (embedded inline images are not carried
+over); remove any you do not want to pass on. A file shared to SharedInbox
+from another app arrives attached the same way.
 
 **Source:** `lib/ui/screens/compose_screen.dart` — `ComposeScreen`.
 

@@ -14,6 +14,10 @@ attachments. Opening the screen also marks the message as read.
 
 - **Reply / Reply all** — opens [Compose](/mail-user-agent/screens/compose/)
   prefilled from the original.
+- **Forward** (overflow menu) — downloads the attachments, then opens
+  [Compose](/mail-user-agent/screens/compose/) with the quoted message and the
+  attachments already attached. One that cannot be downloaded is left out and
+  named in a warning.
 - **Star / unstar** — the amber star icon in the AppBar; synced to the server.
 - **Move** — opens a folder-picker bottom sheet. IMAP MOVE is queued if the
   device is offline.

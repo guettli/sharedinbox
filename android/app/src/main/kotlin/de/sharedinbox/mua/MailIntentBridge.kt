@@ -163,10 +163,14 @@ class MailIntentBridge(messenger: BinaryMessenger, private val context: Context)
         val resolver = context.contentResolver
         val name = queryDisplayName(resolver, uri) ?: "attachment-${UUID.randomUUID()}"
         val safeName = name.replace(File.separatorChar, '_')
-        val dir = File(context.cacheDir, "mail_intent_attachments").apply { mkdirs() }
-        // Prefix with a UUID so two attachments with the same display name
-        // don't clobber each other.
-        val dest = File(dir, "${UUID.randomUUID()}-$safeName")
+        // A folder of its own per copy, so two attachments with the same
+        // display name don't clobber each other and the file keeps exactly
+        // its name: Compose and the recipient see "report.pdf".
+        val dir = File(
+            File(context.cacheDir, "mail_intent_attachments"),
+            UUID.randomUUID().toString(),
+        ).apply { mkdirs() }
+        val dest = File(dir, safeName)
         return try {
             resolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(dest).use { output ->

@@ -37,6 +37,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillBcc,
     this.prefillSubject,
     this.prefillBody,
+    this.prefillAttachmentPaths = const [],
     this.draftId,
     this.inReplyTo,
     this.references = const [],
@@ -52,6 +53,9 @@ class ComposeScreen extends ConsumerStatefulWidget {
         prefillBcc: extra?['prefillBcc'] as String?,
         prefillSubject: extra?['prefillSubject'] as String?,
         prefillBody: extra?['prefillBody'] as String?,
+        prefillAttachmentPaths:
+            (extra?['prefillAttachmentPaths'] as List?)?.cast<String>() ??
+                const [],
         draftId: extra?['draftId'] as int?,
         inReplyTo: extra?['inReplyTo'] as String?,
         references: (extra?['references'] as List<String>?) ?? const [],
@@ -64,6 +68,12 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? prefillBcc;
   final String? prefillSubject;
   final String? prefillBody;
+
+  /// Files to attach from the start: a forward's downloaded attachments, or
+  /// files shared to the app. They are attached as if picked, so they stay
+  /// where they are — removing one never deletes the file — and a saved
+  /// draft keeps its own copies. A path whose file is gone is skipped.
+  final List<String> prefillAttachmentPaths;
 
   /// The saved draft to resume, attachments included. Compose only ever
   /// restores a draft the user explicitly picked — without this it always
@@ -103,9 +113,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   List<Account> _accounts = [];
   bool _sending = false;
 
-  /// True until the restored draft's attachments are checked and attached;
-  /// Send waits, so the message never goes out without them.
-  late bool _loadingAttachments = widget.draftId != null;
+  /// True until the restored draft's or prefilled attachments are checked
+  /// and attached; Send waits, so the message never goes out without them.
+  late bool _loadingAttachments =
+      widget.draftId != null || widget.prefillAttachmentPaths.isNotEmpty;
   final List<_AttachmentInfo> _attachments = [];
 
   /// Shrunk temp copies replaced by the draft's own copies. Deleted in
@@ -164,7 +175,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     _accountId = widget.accountId;
     unawaited(_loadAccounts());
-    if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
+    if (widget.draftId != null) {
+      unawaited(_restoreDraft(widget.draftId!));
+    } else if (widget.prefillAttachmentPaths.isNotEmpty) {
+      unawaited(_attachPrefilled(widget.prefillAttachmentPaths));
+    }
 
     for (final c in [_to, _cc, _bcc, _subject, _body]) {
       c.addListener(_markDraftDirty);
@@ -344,14 +359,35 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _loadingAttachments = false;
     });
     _suppressAutoSave = false;
-    if (checked.missing.isNotEmpty) {
-      context.showAppSnackBar(
-        'Attachment no longer available: ${checked.missing.join(', ')}',
-        level: AppLogLevel.warn,
-        event: 'compose.attachment.missing',
-        duration: const Duration(seconds: 8),
-      );
+    _reportMissing(checked.missing);
+  }
+
+  void _reportMissing(List<String> missing) {
+    if (missing.isEmpty) return;
+    context.showAppSnackBar(
+      'Attachment no longer available: ${missing.join(', ')}',
+      level: AppLogLevel.warn,
+      event: 'compose.attachment.missing',
+      duration: const Duration(seconds: 8),
+    );
+  }
+
+  /// Attaches the prefilled files [paths] that still exist, the same way
+  /// picked files are attached, and names the others.
+  Future<void> _attachPrefilled(List<String> paths) async {
+    final checked = await _checkAttachments([
+      for (final path in paths) await describeAttachmentFile(path),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _attachments.addAll(checked.found);
+      _loadingAttachments = false;
+    });
+    // Saved with the draft only once there is one, like the prefilled text.
+    if (_draftId != null || _draftDirty || _autoSaveInFlight != null) {
+      _markDraftDirty();
     }
+    _reportMissing(checked.missing);
   }
 
   /// Schedules an auto-save: the text or the attachments changed.

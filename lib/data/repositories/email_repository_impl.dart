@@ -7989,17 +7989,22 @@ class EmailRepositoryImpl implements EmailRepository {
     model.EmailAttachment attachment,
   ) async {
     final cacheDir = await _getCacheDir();
-    final dir = Directory(
-      p.join(
-        cacheDir.path,
-        'sharedinbox',
-        'attachments',
-        emailId.replaceAll(':', '_'),
-      ),
+    final emailDir = p.join(
+      cacheDir.path,
+      'sharedinbox',
+      'attachments',
+      emailId.replaceAll(':', '_'),
     );
-    await dir.create(recursive: true);
-
-    final file = File(p.join(dir.path, safeFileName(attachment.filename)));
+    final name = safeFileName(attachment.filename);
+    // One folder per part, so two parts with the same file name stay apart
+    // and each keeps its real name. Without a part id only the old layout
+    // (`<email>/<name>`) can hold it.
+    final partDir = 'part-${safeFileName(attachment.fetchPartId)}';
+    final file = File(
+      attachment.fetchPartId.isEmpty
+          ? p.join(emailDir, name)
+          : p.join(emailDir, partDir, name),
+    );
     if (await file.exists()) {
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
@@ -8031,7 +8036,7 @@ class EmailRepositoryImpl implements EmailRepository {
         name: attachment.filename,
         type: attachment.contentType,
       );
-      await file.writeAsBytes(bytes);
+      await _writeCachedAttachment(file, bytes);
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
     }
@@ -8070,12 +8075,22 @@ class EmailRepositoryImpl implements EmailRepository {
       if (bytes == null) {
         throw StateError('Failed to decode attachment ${attachment.filename}.');
       }
-      await file.writeAsBytes(bytes);
+      await _writeCachedAttachment(file, bytes);
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
     } finally {
       await client.logout();
     }
+  }
+
+  /// Writes [bytes] to [file] through a temp file renamed into place, so an
+  /// interrupted download never leaves a truncated file that later counts
+  /// as cached.
+  Future<void> _writeCachedAttachment(File file, List<int> bytes) async {
+    await file.parent.create(recursive: true);
+    final temp = File('${file.path}.download');
+    await temp.writeAsBytes(bytes, flush: true);
+    await temp.rename(file.path);
   }
 
   /// Upserts an [AttachmentFiles] row after the attachment has been flushed

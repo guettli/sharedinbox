@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -14,16 +17,8 @@ import 'helpers.dart';
 /// Minimal mirror of the real route table: an initial location the intent has
 /// to navigate away from, plus `/compose` reading the prefill `extra`.
 GoRouter _composeRouter() => homeAndComposeRouter(
-      compose: (state) {
-        final extra = state.extra as Map<String, dynamic>?;
-        return ComposeScreen(
-          prefillTo: extra?['prefillTo'] as String?,
-          prefillCc: extra?['prefillCc'] as String?,
-          prefillBcc: extra?['prefillBcc'] as String?,
-          prefillSubject: extra?['prefillSubject'] as String?,
-          prefillBody: extra?['prefillBody'] as String?,
-        );
-      },
+      compose: (state) =>
+          ComposeScreen.fromExtra(state.extra as Map<String, dynamic>?),
     );
 
 /// A `/compose` that renders a bare marker instead of the real screen, for the
@@ -51,12 +46,12 @@ void _useMockIntentChannels(
     MailIntentHandler.methodChannel,
     onMethodCall ?? (call) async => null,
   );
-  if (streamHandler != null) {
-    tester.binding.defaultBinaryMessenger.setMockStreamHandler(
-      MailIntentHandler.eventChannel,
-      streamHandler,
-    );
-  }
+  // Always mocked: an unmocked event channel fails its listen / cancel
+  // asynchronously, and that error lands in whichever test is running then.
+  tester.binding.defaultBinaryMessenger.setMockStreamHandler(
+    MailIntentHandler.eventChannel,
+    streamHandler ?? MockStreamHandler.inline(onListen: (_, __) {}),
+  );
   addTearDown(() {
     MailIntentHandler.isAndroidForTest = prevIsAndroid;
     tester.binding.defaultBinaryMessenger
@@ -225,6 +220,60 @@ void main() {
         expect(find.widgetWithText(TextFormField, 'Lunch?'), findsOneWidget);
       },
     );
+
+    testWidgets('a shared file is attached in compose (#933)', (tester) async {
+      // Tall enough for the Attachments section below the body.
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final dir = Directory.systemTemp.createTempSync('shared_file');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      // Laid out like MailIntentBridge.copyToCache: a folder per copy, the
+      // file under its own name.
+      final shared = File(
+        '${dir.path}/mail_intent_attachments/'
+        '3f2a9c4e-1b7d-4e0a-9f6c-2d8b5a7e1c03/report.pdf',
+      )
+        ..createSync(recursive: true)
+        ..writeAsBytesSync([1, 2]);
+      _useMockIntentChannels(
+        tester,
+        onMethodCall: (call) async => call.method == 'getInitialIntent'
+            ? <String, Object?>{
+                'attachmentPaths': <String>[shared.path],
+              }
+            : null,
+      );
+      final router = _composeRouter();
+      await _pumpApp(
+        tester,
+        router,
+        overrides: [
+          ...baseOverrides(accounts: [kTestAccount]),
+          // Compose stats the file for real; keep the app log off the
+          // real database.
+          appLogRepositoryProvider.overrideWithValue(
+            const NoOpAppLogRepository(),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      final handler = MailIntentHandler(router: router);
+      await handler.initialize();
+      addTearDown(handler.dispose);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Compose'), findsOneWidget);
+      expect(find.text('Attachments'), findsOneWidget);
+      expect(find.text('report.pdf'), findsOneWidget);
+      expect(find.textContaining('3f2a9c4e'), findsNothing);
+    });
 
     testWidgets(
       'no-op when getInitialIntent returns null (normal launch)',

@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -1025,6 +1026,102 @@ void main() {
         await tester.tap(find.text('Forward'));
         await tester.pumpAndSettle();
         expect(selectedFrom(tester), 'acc-1');
+      });
+    });
+
+    group('Forward carries the attachments (#933)', () {
+      Future<void> forward(
+        WidgetTester tester,
+        FakeEmailRepository repo,
+      ) async {
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+                emails: repo,
+              ),
+              draftRepositoryProvider.overrideWithValue(FakeDraftRepository()),
+              // Compose stats the downloaded files for real; keep the
+              // mirrored SnackBars off the real database.
+              appLogRepositoryProvider.overrideWithValue(
+                const NoOpAppLogRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Forward'));
+        for (var i = 0; i < 10; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+        await tester.pumpAndSettle();
+      }
+
+      Finder inCompose(String text) => find.descendant(
+            of: find.byType(ComposeScreen),
+            matching: find.text(text),
+          );
+
+      FakeEmailRepository repoWith(List<String> names) => FakeEmailRepository(
+            emailDetail: testEmail(),
+            emailBody: EmailBody(
+              emailId: 'acc-1:42',
+              // A text part keeps _quotedBody off the compute() isolate.
+              textBody: 'Hi',
+              attachments: [
+                for (final (i, name) in names.indexed)
+                  EmailAttachment(
+                    filename: name,
+                    contentType: 'application/pdf',
+                    size: 3,
+                    fetchPartId: '${i + 2}',
+                  ),
+              ],
+            ),
+          );
+
+      testWidgets('downloads each one and attaches it in Compose', (
+        tester,
+      ) async {
+        final repo = repoWith(['a.pdf', 'b.pdf', '']);
+        await forward(tester, repo);
+        // The nameless part is skipped, not downloaded.
+        expect(repo.downloadedAttachmentNames, ['a.pdf', 'b.pdf']);
+        expect(find.text('Compose'), findsOneWidget);
+        expect(inCompose('a.pdf'), findsOneWidget);
+        expect(inCompose('b.pdf'), findsOneWidget);
+      });
+
+      testWidgets('two parts with the same name are both attached', (
+        tester,
+      ) async {
+        final repo = repoWith(['scan.pdf', 'scan.pdf']);
+        await forward(tester, repo);
+        expect(repo.downloadedAttachmentNames, ['scan.pdf', 'scan.pdf']);
+        expect(inCompose('scan.pdf'), findsNWidgets(2));
+      });
+
+      testWidgets('a failed download is named, the others still attached', (
+        tester,
+      ) async {
+        final repo = repoWith(['a.pdf', 'b.pdf'])
+          ..failingAttachmentNames.add('a.pdf');
+        await forward(tester, repo);
+        expect(repo.downloadedAttachmentNames, ['a.pdf', 'b.pdf']);
+        expect(find.text('Compose'), findsOneWidget);
+        expect(inCompose('b.pdf'), findsOneWidget);
+        expect(find.text('Could not attach: a.pdf'), findsOneWidget);
       });
     });
 

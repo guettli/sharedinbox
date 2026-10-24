@@ -105,6 +105,7 @@ void main() {
         bcc: 'e@f',
         subject: 'S',
         body: 'B',
+        attachmentPaths: ['/cache/a.pdf'],
       );
       expect(intent.toComposeExtra(), {
         'prefillTo': 'a@b',
@@ -112,6 +113,7 @@ void main() {
         'prefillBcc': 'e@f',
         'prefillSubject': 'S',
         'prefillBody': 'B',
+        'prefillAttachmentPaths': ['/cache/a.pdf'],
       });
     });
   });

@@ -19,8 +19,10 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
 import 'helpers/jmap_test_server.dart';
@@ -99,8 +101,59 @@ http.Client _jmapServer() {
   );
 }
 
+/// Fake JMAP server whose downloads return the blob id as the file's bytes.
+http.Client _blobEchoServer() => jmapFakeServer(
+      accountId: _accountId,
+      downloadUrl: 'https://jmap.example.com/download/'
+          '{accountId}/{blobId}/{name}?type={type}',
+      uploadUrl: 'https://jmap.example.com/upload/{accountId}',
+      handleRaw: (req) {
+        if (req.method != 'GET' || !req.url.path.contains('/download/')) {
+          return null;
+        }
+        final blobId = req.url.pathSegments[req.url.pathSegments.length - 2];
+        return http.Response(blobId, 200);
+      },
+      handle: (_) => null,
+    );
+
 void main() {
   final cacheDir = useJmapTestEnv('jmap_att_test_');
+
+  test('two parts with the same file name are cached apart (#933)', () async {
+    final r = await openJmapTestRepos(
+      httpClient: _blobEchoServer(),
+      account: _jmapAccount,
+      cacheDir: cacheDir(),
+    );
+    const emailId = 'jmap-att:email-2';
+    await r.db.into(r.db.emails).insert(
+          EmailsCompanion.insert(
+            id: emailId,
+            accountId: _jmapAccount.id,
+            mailboxPath: 'INBOX',
+            uid: 2,
+            receivedAt: DateTime.now(),
+          ),
+        );
+    EmailAttachment scan(String blobId) => EmailAttachment(
+          filename: 'scan.pdf',
+          contentType: 'application/pdf',
+          size: 6,
+          fetchPartId: blobId,
+        );
+
+    final first = await r.emails.downloadAttachment(emailId, scan('blob-a'));
+    final second = await r.emails.downloadAttachment(emailId, scan('blob-b'));
+
+    expect(second, isNot(first));
+    expect(p.basename(first), 'scan.pdf');
+    expect(p.basename(second), 'scan.pdf');
+    expect(await File(first).readAsString(), 'blob-a');
+    expect(await File(second).readAsString(), 'blob-b');
+    // Cached: asking again returns the same file for each part.
+    expect(await r.emails.downloadAttachment(emailId, scan('blob-a')), first);
+  });
 
   test('JMAP attachments can be downloaded after opening the email', () async {
     final r = await openJmapTestRepos(

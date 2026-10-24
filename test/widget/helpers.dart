@@ -651,12 +651,22 @@ class FakeEmailRepository implements EmailRepository {
   /// How often [downloadAttachment] was called.
   int downloadAttachmentCalls = 0;
 
+  /// File names [downloadAttachment] was called for, in call order.
+  final List<String> downloadedAttachmentNames = [];
+
+  /// File names whose [downloadAttachment] throws.
+  final Set<String> failingAttachmentNames = {};
+
   @override
   Future<String> downloadAttachment(
     String emailId,
     EmailAttachment attachment,
   ) async {
     downloadAttachmentCalls++;
+    downloadedAttachmentNames.add(attachment.filename);
+    if (failingAttachmentNames.contains(attachment.filename)) {
+      throw Exception('download of ${attachment.filename} failed');
+    }
     final dir = Directory.systemTemp.createTempSync('fake_attachment');
     // Sanitised like the real repository, so crafted names stay in [dir].
     final file = File('${dir.path}/${safeFileName(attachment.filename)}')

@@ -48,6 +48,8 @@ class MailIntent {
         if (bcc != null) 'prefillBcc': bcc,
         if (subject != null) 'prefillSubject': subject,
         if (body != null) 'prefillBody': body,
+        if (attachmentPaths.isNotEmpty)
+          'prefillAttachmentPaths': attachmentPaths,
       };
 
   /// Field-by-field summary for the App Log. Only the *shape* of the intent is
