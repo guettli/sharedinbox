@@ -6,14 +6,16 @@
 // IMAP/SMTP: one refused address aborts the whole send before DATA, so the
 // other recipient gets nothing and the outbox row fails naming the address.
 // JMAP: Stalwart accepts the EmailSubmission and reports refusals only in its
-// deliveryStatus; the app reads it back. All refused -> the row fails.
+// deliveryStatus; the app reads it back. All refused -> the row fails and
+// the Sent copy is destroyed; partly refused -> sent, with a warning.
 
 import 'dart:io';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
-    show SendNowOutcome;
+    show SendNowOutcome, SendNowResult;
+import 'package:sharedinbox/data/db/database.dart' show AppDatabase;
 import 'package:test/test.dart';
 
 import '../unit/db_test_helper.dart';
@@ -22,11 +24,16 @@ import 'stalwart_harness.dart';
 
 final _alice = StalwartTestUser(email: 'alice@example.com', password: 'secret');
 
-/// How many messages with [subject] are in alice's INBOX right now.
-Future<int> _aliceCount(StalwartEnv env, String subject) async {
-  final client = await connectImap(env: env, user: _alice);
+/// How many messages with [subject] are in [user]'s [mailbox] right now.
+Future<int> _count(
+  StalwartEnv env,
+  String subject, {
+  StalwartTestUser? user,
+  String mailbox = 'INBOX',
+}) async {
+  final client = await connectImap(env: env, user: user ?? _alice);
   try {
-    await client.selectMailboxByPath('INBOX');
+    await client.selectMailboxByPath(mailbox);
     final found =
         await client.uidSearchMessages(searchCriteria: 'SUBJECT "$subject"');
     return found.matchingSequence?.length ?? 0;
@@ -51,7 +58,12 @@ void main() {
 
   /// Queues a message from [account] To a nonexistent address (plus Cc alice
   /// when [ccAlice]) and sends it now.
-  Future<({SendNowOutcome outcome, String? message, String subject})> send(
+  Future<
+      ({
+        AppDatabase db,
+        SendNowResult result,
+        String subject,
+      })> send(
     Account account, {
     required bool ccAlice,
   }) async {
@@ -71,11 +83,7 @@ void main() {
       ),
     );
     final result = await emails.sendNow(account.id, outboxRowId: rowId);
-    return (
-      outcome: result.outcome,
-      message: result.message,
-      subject: subject,
-    );
+    return (db: db, result: result, subject: subject);
   }
 
   test(
@@ -85,12 +93,12 @@ void main() {
         user.imapAccount(id: 'rcpt-imap', env: env),
         ccAlice: true,
       );
-      expect(r.outcome, SendNowOutcome.permanentlyFailed);
-      expect(r.message, startsWith('Rejected recipient nobody-'));
-      expect(r.message, contains('5.1.2'));
+      expect(r.result.outcome, SendNowOutcome.permanentlyFailed);
+      expect(r.result.message, startsWith('Rejected recipient nobody-'));
+      expect(r.result.message, contains('5.1.2'));
       // Local delivery takes well under this; the bug delivered it to alice.
       await Future<void>.delayed(const Duration(seconds: 5));
-      expect(await _aliceCount(env, r.subject), 0);
+      expect(await _count(env, r.subject), 0);
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
@@ -102,9 +110,17 @@ void main() {
         user.jmapAccount(id: 'rcpt-jmap', env: env),
         ccAlice: false,
       );
-      expect(r.outcome, SendNowOutcome.permanentlyFailed);
-      expect(r.message, startsWith('Rejected recipient nobody-'));
-      expect(r.message, contains('5.1.2'));
+      expect(r.result.outcome, SendNowOutcome.permanentlyFailed);
+      expect(r.result.message, startsWith('Rejected recipient nobody-'));
+      expect(r.result.message, contains('5.1.2'));
+      // The Email/set that doubles as the Sent copy is destroyed again.
+      final sent = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.role.equals('sent')))
+          .getSingle();
+      expect(
+        await _count(env, r.subject, user: user, mailbox: sent.name),
+        0,
+      );
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
@@ -119,9 +135,24 @@ void main() {
         user.jmapAccount(id: 'rcpt-jmap-cc', env: env),
         ccAlice: true,
       );
-      expect(r.outcome, SendNowOutcome.sent);
+      expect(r.result.outcome, SendNowOutcome.sent);
+      expect(r.result.warning, startsWith('Not delivered to nobody-'));
+      expect(r.result.warning, contains('5.1.2'));
+      // The app-log entry is written unawaited.
+      final logDeadline = DateTime.now().add(const Duration(seconds: 5));
+      var logged = 0;
+      while (logged == 0 && DateTime.now().isBefore(logDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        logged = (await (r.db.select(r.db.appLogs)
+                  ..where(
+                    (t) => t.event.equals('outbox.send.recipient_rejected'),
+                  ))
+                .get())
+            .length;
+      }
+      expect(logged, 1);
       final deadline = DateTime.now().add(const Duration(seconds: 20));
-      while (await _aliceCount(env, r.subject) == 0) {
+      while (await _count(env, r.subject) == 0) {
         if (DateTime.now().isAfter(deadline)) fail('alice never got it');
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }

@@ -2,20 +2,39 @@
 import 'package:enough_mail/enough_mail.dart';
 import 'package:enough_mail/src/private/smtp/smtp_command.dart';
 
-/// One envelope recipient the SMTP server refused at `RCPT TO`.
+/// One envelope recipient the server refused.
 class RejectedRecipient {
-  const RejectedRecipient(this.email, this.reply);
+  const RejectedRecipient(this.email, this.code, this.message);
+
+  /// From an SMTP reply such as `550 5.1.2 Mailbox does not exist.` — as JMAP
+  /// reports it in an EmailSubmission's `deliveryStatus.smtpReply`. A reply
+  /// without a leading 3-digit code counts as a permanent (550) refusal.
+  factory RejectedRecipient.fromReply(String email, String? reply) {
+    final text = (reply ?? '').trim();
+    final code = text.length >= 3 ? int.tryParse(text.substring(0, 3)) : null;
+    if (code == null) {
+      return RejectedRecipient(
+        email,
+        550,
+        text.isEmpty ? 'not delivered' : text,
+      );
+    }
+    return RejectedRecipient(email, code, text.substring(3).trim());
+  }
 
   final String email;
 
-  /// The server's reply to this recipient's `RCPT TO`.
-  final SmtpResponseLine reply;
+  /// The reply code, e.g. 550.
+  final int code;
+
+  /// The reply text after the code; every line of a multi-line reply.
+  final String message;
 
   /// A 5xx reply: retrying the same address will fail the same way.
-  bool get isPermanent => reply.code >= 500;
+  bool get isPermanent => code >= 500;
 
   @override
-  String toString() => '$email: ${reply.message}';
+  String toString() => '$email: $message';
 }
 
 /// The server refused one or more `RCPT TO` recipients, so the message was
@@ -40,7 +59,7 @@ class SmtpRecipientsRejectedException extends SmtpException {
   bool get isPermanent => rejected.any((r) => r.isPermanent);
 
   static int _code(List<RejectedRecipient> rejected) =>
-      rejected.any((r) => r.isPermanent) ? 550 : rejected.first.reply.code;
+      rejected.any((r) => r.isPermanent) ? 550 : rejected.first.code;
 
   @override
   String toString() => message ?? describeRejectedRecipients(rejected);
@@ -61,6 +80,15 @@ String describeRejectedRecipients(List<RejectedRecipient> rejected) =>
 /// success. Here any rejected recipient aborts the transaction with `RSET`
 /// before `DATA`, nobody gets the message, and [sendMessage] throws a
 /// [SmtpRecipientsRejectedException] naming the refused addresses.
+///
+/// Built on enough_mail internals (`SmtpCommand` and the way
+/// `SmtpClient.onServerResponse` drives it), which is why pubspec.yaml pins
+/// enough_mail to an exact version. The fake-server tests in
+/// test/unit/rcpt_checking_smtp_client_test.dart are the canary for an
+/// upgrade: run them before raising the pin.
+///
+/// The other send methods would bypass the check: [sendMessageData] and
+/// [sendMessageText] go through it too, the `BDAT` variants are unsupported.
 class RcptCheckingSmtpClient extends SmtpClient {
   RcptCheckingSmtpClient(super.clientDomain);
 
@@ -70,27 +98,106 @@ class RcptCheckingSmtpClient extends SmtpClient {
     bool use8BitEncoding = false,
     MailAddress? from,
     List<MailAddress>? recipients,
+  }) =>
+      _send(
+        // Same Bcc stripping as enough_mail's SmtpSendMailCommand.
+        () => _stripBcc(message.renderMessage()),
+        from?.email ?? message.fromEmail,
+        recipients?.map((r) => r.email).toList() ?? message.recipientAddresses,
+        use8BitEncoding: use8BitEncoding,
+      );
+
+  @override
+  Future<SmtpResponse> sendMessageData(
+    MimeData data,
+    MailAddress from,
+    List<MailAddress> recipients, {
+    bool use8BitEncoding = false,
+  }) =>
+      _send(
+        () => _stripBcc(data.toString()),
+        from.email,
+        recipients.map((r) => r.email).toList(),
+        use8BitEncoding: use8BitEncoding,
+      );
+
+  @override
+  Future<SmtpResponse> sendMessageText(
+    String text,
+    MailAddress from,
+    List<MailAddress> recipients, {
+    bool use8BitEncoding = false,
+  }) =>
+      _send(
+        () => text,
+        from.email,
+        recipients.map((r) => r.email).toList(),
+        use8BitEncoding: use8BitEncoding,
+      );
+
+  @override
+  Future<SmtpResponse> sendChunkedMessage(
+    MimeMessage message, {
+    required bool supportUnicode,
+    bool use8BitEncoding = false,
+    MailAddress? from,
+    List<MailAddress>? recipients,
+  }) =>
+      throw _bdatUnsupported;
+
+  @override
+  Future<SmtpResponse> sendChunkedMessageData(
+    MimeData data,
+    MailAddress from,
+    List<MailAddress> recipients, {
+    required bool supportUnicode,
+    bool use8BitEncoding = false,
+  }) =>
+      throw _bdatUnsupported;
+
+  @override
+  Future<SmtpResponse> sendChunkedMessageText(
+    String text,
+    MailAddress from,
+    List<MailAddress> recipients, {
+    required bool supportUnicode,
+    bool use8BitEncoding = false,
+  }) =>
+      throw _bdatUnsupported;
+
+  static final _bdatUnsupported = UnsupportedError(
+    'BDAT does not check each RCPT TO reply; use sendMessage',
+  );
+
+  static String _stripBcc(String text) =>
+      text.replaceAll(RegExp('^Bcc:.*\r\n', multiLine: true), '');
+
+  Future<SmtpResponse> _send(
+    String Function() getData,
+    String? fromEmail,
+    List<String> recipients, {
+    required bool use8BitEncoding,
   }) {
-    final recipientEmails = recipients != null
-        ? recipients.map((r) => r.email).toList()
-        : message.recipientAddresses;
-    if (recipientEmails.isEmpty) {
+    if (recipients.isEmpty) {
       throw SmtpException(this, SmtpResponse(['500 no recipients']));
     }
     return sendCommand(
       _RcptCheckingSendCommand(
         this,
-        // Same Bcc stripping as enough_mail's SmtpSendMailCommand.
-        () => message
-            .renderMessage()
-            .replaceAll(RegExp('^Bcc:.*\r\n', multiLine: true), ''),
-        from?.email ?? message.fromEmail,
-        recipientEmails,
+        getData,
+        fromEmail,
+        recipients,
         use8BitEncoding: use8BitEncoding,
       ),
     );
   }
 }
+
+/// RFC 5321 §4.5.2 dot-stuffing: a "." that starts a line gets another.
+String dotStuff(String data) => data.replaceAllMapped(
+      RegExp(r'(^|\r\n)\.'),
+      (m) => '${m[1]}..',
+    );
 
 enum _Step { mailFrom, rcptTo, reset, data, done }
 
@@ -132,7 +239,8 @@ class _RcptCheckingSendCommand extends SmtpCommand {
           _rejected.add(
             RejectedRecipient(
               _recipients[_nextRecipient - 1],
-              response.responseLines.last,
+              response.code ?? 550,
+              response.responseLines.map((l) => l.message).join(' '),
             ),
           );
         }
@@ -148,10 +256,7 @@ class _RcptCheckingSendCommand extends SmtpCommand {
       case _Step.data:
         if (response.code != 354) throw SmtpException(_client, response);
         _step = _Step.done;
-        // RFC 5321 §4.5.2 dot-stuffing: a line starting with "." gets another.
-        final data =
-            _getData().replaceAll(RegExp(r'^\.', multiLine: true), '..');
-        return '$data\r\n.';
+        return '${dotStuff(_getData())}\r\n.';
       case _Step.done:
         return null;
     }

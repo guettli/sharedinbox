@@ -352,7 +352,10 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
 (String, AppLogLevel) _describeRetryResult(SendNowResult result) {
   switch (result.outcome) {
     case SendNowOutcome.sent:
-      return ('Message sent', AppLogLevel.info);
+      final warning = result.warning;
+      return warning == null
+          ? ('Message sent', AppLogLevel.info)
+          : ('Message sent. $warning', AppLogLevel.warn);
     case SendNowOutcome.transientFailed:
       return ('Send failed, will retry: ${result.message}', AppLogLevel.warn);
     case SendNowOutcome.permanentlyFailed:

@@ -25,7 +25,10 @@ dependencies:
   # Not used directly, but required to silence Flutter's "missing CupertinoIcons font" build warning.
   cupertino_icons: ^1.0.8
 
-  enough_mail: ^2.1.7
+  # Pinned exactly: lib/data/imap/rcpt_checking_smtp_client.dart builds on
+  # enough_mail internals (SmtpCommand). Run its fake-server tests before
+  # raising this.
+  enough_mail: 2.1.7
   http: ^1.2.0
 
   # Local persistence (offline-first)

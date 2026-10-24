@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
@@ -13,7 +15,8 @@ import 'stalwart_harness.dart';
 
 /// A fresh database with [account] (signed in with [password]) whose folder
 /// list is synced — a send files its Sent copy into the folder that sync found
-/// — and an [EmailRepositoryImpl] wired to the dev Stalwart.
+/// — and an [EmailRepositoryImpl] wired to the dev Stalwart, logging to the
+/// database's app log.
 Future<({AppDatabase db, EmailRepositoryImpl emails})> openSendRepos(
   Account account,
   String password,
@@ -29,6 +32,7 @@ Future<({AppDatabase db, EmailRepositoryImpl emails})> openSendRepos(
     smtpConnect: testSmtpConnect,
     httpClient: http,
     getCacheDir: () async => cacheDir,
+    appLogger: AppLogger(AppLogRepositoryImpl(db)),
   );
   await accounts.addAccount(account, password);
   await MailboxRepositoryImpl(

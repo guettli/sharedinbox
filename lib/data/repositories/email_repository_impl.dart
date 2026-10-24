@@ -7075,10 +7075,13 @@ class EmailRepositoryImpl implements EmailRepository {
   /// [sendNow] (UI-initiated). [extraObserver], when supplied, is notified of
   /// every row outcome alongside the app-log observer, letting a caller capture
   /// the fate of a specific row without duplicating the sender/timing wiring.
+  /// [warnings], when supplied, receives a row's [_sendEmailJmap] warning
+  /// (keyed by row id) before its `onOk` fires.
   Future<int> _flushOutbox(
     String accountId,
     String password, {
     OutboxFlushObserver? extraObserver,
+    Map<int, String>? warnings,
   }) async {
     final account = (await _accounts.getAccount(accountId))!;
     // Per-row timing breakdowns, keyed by outbox row id, so the log observer
@@ -7108,7 +7111,9 @@ class EmailRepositoryImpl implements EmailRepository {
             case account_model.AccountType.imap:
               await _sendEmailImap(account, password, job.draft, timing);
             case account_model.AccountType.jmap:
-              await _sendEmailJmap(account, password, job.draft);
+              final warning =
+                  await _sendEmailJmap(account, password, job.draft);
+              if (warning != null) warnings?[job.id] = warning;
           }
           // Accepted by the server: only now may a mail to one of our own
           // accounts show up in that inbox (#545). Best-effort, like the Sent
@@ -7163,12 +7168,16 @@ class EmailRepositoryImpl implements EmailRepository {
     // can report the concrete result to the user (#755). Runs alongside the
     // app-log observer via [_combineObservers].
     SendNowResult? captured;
+    final warnings = <int, String>{};
     final observer = outboxRowId == null
         ? null
         : OutboxFlushObserver(
             onOk: (job) {
               if (job.id == outboxRowId) {
-                captured = const SendNowResult(SendNowOutcome.sent);
+                captured = SendNowResult(
+                  SendNowOutcome.sent,
+                  warning: warnings[job.id],
+                );
               }
             },
             onTransient: (job, error, stack, nextAttemptAt) {
@@ -7192,6 +7201,7 @@ class EmailRepositoryImpl implements EmailRepository {
       accountId,
       password,
       extraObserver: observer,
+      warnings: warnings,
     );
     if (captured != null) return captured!;
     if (outboxRowId == null) {
@@ -7632,7 +7642,9 @@ class EmailRepositoryImpl implements EmailRepository {
     );
   }
 
-  Future<void> _sendEmailJmap(
+  /// Returns a warning for the user when the message went out but the server
+  /// refused some of its recipients, otherwise null.
+  Future<String?> _sendEmailJmap(
     account_model.Account account,
     String password,
     model.EmailDraft draft,
@@ -7804,6 +7816,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // email was already created in the Sent mailbox above; destroy it so a
     // message that was never actually sent doesn't linger in Sent and make the
     // user think it went out.
+    String? warning;
     try {
       final submissionResponses = await jmap.call(
         [
@@ -7864,7 +7877,9 @@ class EmailRepositoryImpl implements EmailRepository {
           throw PermanentSendException(description);
         }
         // The others already have it and a submission cannot be recalled, so
-        // failing the row would only re-send it to them. Say who missed out.
+        // failing the row would only re-send it to them. Say who missed out,
+        // to the user (via the caller) and in the app log.
+        warning = 'Not delivered to ${rejected.join('; ')}';
         unawaited(
           _appLogger?.error(
             'outbox.send.recipient_rejected',
@@ -7885,7 +7900,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // mirror it locally so Sent shows it now rather than after the next sync
     // of that folder (#918). Best-effort in its own right: a DB hiccup here
     // must not look like a failed send and get the message delivered twice.
-    if (sentMailbox == null) return;
+    if (sentMailbox == null) return warning;
     try {
       await _storeSentCopyLocally(
         accountId: account.id,
@@ -7905,6 +7920,7 @@ class EmailRepositoryImpl implements EmailRepository {
         ),
       );
     }
+    return warning;
   }
 
   /// The recipients [jmap] already reports as undeliverable
@@ -7939,12 +7955,7 @@ class EmailRepositoryImpl implements EmailRepository {
       return [
         for (final MapEntry(key: email, value: s) in (status ?? {}).entries)
           if (s is Map<String, dynamic> && s['delivered'] == 'no')
-            RejectedRecipient(
-              email,
-              imap.SmtpResponseLine.parse(
-                s['smtpReply'] as String? ?? '550 not delivered',
-              ),
-            ),
+            RejectedRecipient.fromReply(email, s['smtpReply']?.toString()),
       ];
     } catch (_) {
       return const [];

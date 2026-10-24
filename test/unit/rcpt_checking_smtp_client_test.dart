@@ -17,23 +17,27 @@ import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 
 /// A minimal SMTP server on loopback. [rcptReplies] maps a recipient address
-/// to its `RCPT TO` reply (default `250 OK`). Records every command and the
+/// to its `RCPT TO` reply (default `250 OK`); [verbReplies] overrides the
+/// reply to a command such as `MAIL` or `DATA`. Records every command and the
 /// DATA payload, so a test can tell whether anything was transmitted.
 class _FakeSmtpServer {
-  _FakeSmtpServer(this._server, this.rcptReplies) {
+  _FakeSmtpServer(this._server, this.rcptReplies, this.verbReplies) {
     _server.listen(_serve);
   }
 
   static Future<_FakeSmtpServer> start([
     Map<String, String> rcptReplies = const {},
+    Map<String, String> verbReplies = const {},
   ]) async =>
       _FakeSmtpServer(
         await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
         rcptReplies,
+        verbReplies,
       );
 
   final ServerSocket _server;
   final Map<String, String> rcptReplies;
+  final Map<String, String> verbReplies;
   final commands = <String>[];
   String? data;
 
@@ -65,7 +69,10 @@ class _FakeSmtpServer {
         }
         commands.add(line);
         final verb = line.split(RegExp('[ :]')).first.toUpperCase();
-        if (verb == 'RCPT') {
+        final override = verbReplies[verb];
+        if (override != null) {
+          socket.write('$override\r\n');
+        } else if (verb == 'RCPT') {
           final rcpt = RegExp('<(.*)>').firstMatch(line)!.group(1)!;
           socket.write('${rcptReplies[rcpt] ?? '250 2.1.5 OK'}\r\n');
         } else if (verb == 'DATA') {
@@ -171,6 +178,85 @@ void main() {
     expect(server.commands, contains('DATA'));
     expect(server.commands, isNot(contains('RSET')));
     expect(server.data, contains('\r\n..hidden\r\n'));
+  });
+
+  test('a refused MAIL FROM fails before any RCPT TO', () async {
+    server = await _FakeSmtpServer.start(const {}, {
+      'MAIL': '553 5.7.1 Sender not allowed',
+    });
+
+    await expectLater(
+      send(),
+      throwsA(
+        isA<imap.SmtpException>()
+            .having((e) => e.response.code, 'code', 553)
+            .having((e) => e.message, 'message', '5.7.1 Sender not allowed'),
+      ),
+    );
+    expect(server.commands.where((c) => c.startsWith('RCPT')), isEmpty);
+    expect(server.data, isNull);
+  });
+
+  test('DATA answered with anything but 354 fails without sending', () async {
+    server = await _FakeSmtpServer.start(const {}, {
+      'DATA': '554 5.3.4 Message too big',
+    });
+
+    await expectLater(
+      send(),
+      throwsA(
+        isA<imap.SmtpException>().having((e) => e.response.code, 'code', 554),
+      ),
+    );
+    expect(server.data, isNull);
+  });
+
+  test('a 4xx plus a 5xx refusal is permanent, every line in the text',
+      () async {
+    server = await _FakeSmtpServer.start({
+      'carol@example.com': '550-5.1.2 Mailbox\r\n550 does not exist.',
+      'alice@example.com': '450 4.2.1 Try later',
+    });
+
+    await expectLater(
+      send(),
+      throwsA(
+        isA<SmtpRecipientsRejectedException>()
+            .having((e) => e.isPermanent, 'isPermanent', isTrue)
+            .having((e) => e.response.code, 'code', 550)
+            .having(
+              (e) => e.toString(),
+              'toString',
+              'Rejected recipients: '
+                  'carol@example.com: 5.1.2 Mailbox does not exist.; '
+                  'alice@example.com: 4.2.1 Try later',
+            ),
+      ),
+    );
+    expect(server.data, isNull);
+  });
+
+  test('the BDAT variants, which would skip the check, are unsupported', () {
+    final client = RcptCheckingSmtpClient('example.com');
+    expect(
+      () => client.sendChunkedMessageText(
+        'x',
+        const imap.MailAddress('', 'bob@example.com'),
+        const [imap.MailAddress('', 'alice@example.com')],
+        supportUnicode: false,
+      ),
+      throwsUnsupportedError,
+    );
+  });
+
+  test('dotStuff doubles a dot only at the start of a line', () {
+    expect(dotStuff('.a\r\nb.c\r\n.d\n.e'), '..a\r\nb.c\r\n..d\n.e');
+  });
+
+  test('RejectedRecipient.fromReply survives a reply without a code', () {
+    expect(RejectedRecipient.fromReply('a@x', 'ok').toString(), 'a@x: ok');
+    expect(RejectedRecipient.fromReply('a@x', null).isPermanent, isTrue);
+    expect(RejectedRecipient.fromReply('a@x', '451 4.3.0 Later').code, 451);
   });
 
   test('the outbox fails the row naming the rejected address', () async {
