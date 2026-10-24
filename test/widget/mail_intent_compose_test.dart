@@ -46,12 +46,12 @@ void _useMockIntentChannels(
     MailIntentHandler.methodChannel,
     onMethodCall ?? (call) async => null,
   );
-  if (streamHandler != null) {
-    tester.binding.defaultBinaryMessenger.setMockStreamHandler(
-      MailIntentHandler.eventChannel,
-      streamHandler,
-    );
-  }
+  // Always mocked: an unmocked event channel fails its listen / cancel
+  // asynchronously, and that error lands in whichever test is running then.
+  tester.binding.defaultBinaryMessenger.setMockStreamHandler(
+    MailIntentHandler.eventChannel,
+    streamHandler ?? MockStreamHandler.inline(onListen: (_, __) {}),
+  );
   addTearDown(() {
     MailIntentHandler.isAndroidForTest = prevIsAndroid;
     tester.binding.defaultBinaryMessenger
@@ -221,8 +221,6 @@ void main() {
       },
     );
 
-    // Runs right after a test with a mocked event channel: this one waits on
-    // real I/O, which would surface an earlier test's unmocked stream cancel.
     testWidgets('a shared file is attached in compose (#933)', (tester) async {
       // Tall enough for the Attachments section below the body.
       tester.view.physicalSize = const Size(800, 3000);
@@ -230,7 +228,14 @@ void main() {
       addTearDown(tester.view.reset);
       final dir = Directory.systemTemp.createTempSync('shared_file');
       addTearDown(() => dir.deleteSync(recursive: true));
-      final shared = File('${dir.path}/report.pdf')..writeAsBytesSync([1, 2]);
+      // Laid out like MailIntentBridge.copyToCache: a folder per copy, the
+      // file under its own name.
+      final shared = File(
+        '${dir.path}/mail_intent_attachments/'
+        '3f2a9c4e-1b7d-4e0a-9f6c-2d8b5a7e1c03/report.pdf',
+      )
+        ..createSync(recursive: true)
+        ..writeAsBytesSync([1, 2]);
       _useMockIntentChannels(
         tester,
         onMethodCall: (call) async => call.method == 'getInitialIntent'
@@ -238,8 +243,6 @@ void main() {
                 'attachmentPaths': <String>[shared.path],
               }
             : null,
-        // Compose's real file I/O lets the event channel's listen through.
-        streamHandler: MockStreamHandler.inline(onListen: (_, __) {}),
       );
       final router = _composeRouter();
       await _pumpApp(
@@ -269,6 +272,7 @@ void main() {
       expect(find.text('Compose'), findsOneWidget);
       expect(find.text('Attachments'), findsOneWidget);
       expect(find.text('report.pdf'), findsOneWidget);
+      expect(find.textContaining('3f2a9c4e'), findsNothing);
     });
 
     testWidgets(

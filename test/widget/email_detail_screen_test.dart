@@ -1103,6 +1103,15 @@ void main() {
         expect(inCompose('b.pdf'), findsOneWidget);
       });
 
+      testWidgets('two parts with the same name are both attached', (
+        tester,
+      ) async {
+        final repo = repoWith(['scan.pdf', 'scan.pdf']);
+        await forward(tester, repo);
+        expect(repo.downloadedAttachmentNames, ['scan.pdf', 'scan.pdf']);
+        expect(inCompose('scan.pdf'), findsNWidgets(2));
+      });
+
       testWidgets('a failed download is named, the others still attached', (
         tester,
       ) async {
