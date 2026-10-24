@@ -101,6 +101,31 @@ String syncErrorMessage(Object e) {
   return e.toString();
 }
 
+/// Time bounds of the IMAP IDLE wait (see `_AccountSync._idle`). Only tests
+/// pass anything but the defaults.
+class ImapIdleTimings {
+  const ImapIdleTimings({
+    this.commandTimeout = const Duration(seconds: 30),
+    this.refreshInterval = const Duration(minutes: 9),
+    this.maxIdle = const Duration(minutes: 25),
+  });
+
+  /// How long a command on the IDLE connection (SELECT, IDLE, DONE, NOOP,
+  /// LOGOUT) may go unanswered before the connection counts as dead.
+  final Duration commandTimeout;
+
+  /// How often IDLE is re-issued with a NOOP in between: the liveness check
+  /// that detects a blackholed connection (open, but no bytes flow), which
+  /// never reports its loss. RFC 2177 asks for re-issuing well within 29
+  /// minutes; NAT gateways and mobile networks commonly drop idle TCP
+  /// mappings after about 10, so 9 keeps those alive too.
+  final Duration refreshInterval;
+
+  /// How long one IDLE session lasts before the loop runs a full sync of all
+  /// folders (IDLE only watches INBOX).
+  final Duration maxIdle;
+}
+
 /// Invoked once per completed sync cycle with the account id, after new mail
 /// has been stored locally. Wired to the notification dispatcher, which decides
 /// whether any of the account's rules should pop up.
@@ -181,7 +206,9 @@ class AccountSyncManager {
     DraftRepository? drafts,
     NoteRepository? notes,
     OnNewMailCallback? onNewMail,
+    ImapIdleTimings imapIdleTimings = const ImapIdleTimings(),
   })  : _imapConnect = imapConnect,
+        _imapIdleTimings = imapIdleTimings,
         _syncLog = syncLog,
         _appLogger = appLogger ?? AppLogger(const NoOpAppLogRepository()),
         _drafts = drafts,
@@ -192,6 +219,7 @@ class AccountSyncManager {
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final ImapConnectFn _imapConnect;
+  final ImapIdleTimings _imapIdleTimings;
   final SyncLogRepository _syncLog;
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
@@ -235,6 +263,7 @@ class AccountSyncManager {
               _drafts,
               _notes,
               _onNewMail,
+              idleTimings: _imapIdleTimings,
               onSyncStart: () => _emitSyncing(id, syncing: true),
               onSyncEnd: () => _emitSyncing(id, syncing: false),
             ),
@@ -649,6 +678,7 @@ class AccountSyncManager {
           _drafts,
           _notes,
           _onNewMail,
+          idleTimings: _imapIdleTimings,
           onSyncStart: () => _emitSyncing(accountId, syncing: true),
           onSyncEnd: () => _emitSyncing(accountId, syncing: false),
         ),
@@ -744,12 +774,15 @@ class _AccountSync with _KickableWait {
     this._drafts,
     this._notes,
     this._onNewMail, {
+    required ImapIdleTimings idleTimings,
     void Function()? onSyncStart,
     void Function()? onSyncEnd,
-  })  : _onSyncStart = onSyncStart,
+  })  : _idleTimings = idleTimings,
+        _onSyncStart = onSyncStart,
         _onSyncEnd = onSyncEnd;
 
   final Account account;
+  final ImapIdleTimings _idleTimings;
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
@@ -1061,12 +1094,71 @@ class _AccountSync with _KickableWait {
         account.username.isNotEmpty ? account.username : account.email;
     final client = await _imapConnect(account, username, password);
     _idleClient = client;
+
+    // Completes when the socket closes or fails (TCP FIN/RST, e.g. Wi-Fi
+    // lost or a NAT dropping the mapping): enough_mail then fires
+    // ImapConnectionLostEvent but completes none of the pending commands.
+    // The IDLE wait used to listen only for mailbox changes, so a dropped
+    // connection left the loop idling on a dead socket until the 25-minute
+    // cap, and a kick ("Sync all") then hung for good: the LOGOUT in the
+    // finally block queued behind the IDLE command that will never get its
+    // tagged response. Only an app restart recovered.
+    final lost = Completer<void>();
+    final changed = Completer<void>();
+
+    // Any change the server reports for INBOX wakes the loop: new mail
+    // (EXISTS), a removed message (EXPUNGE) and a flag change made on
+    // another device (an untagged FETCH, e.g. a mail read or starred
+    // elsewhere). Flag changes used to be ignored, so they only arrived
+    // with the next full sync, up to 25 minutes later. VANISHED is handled
+    // defensively only: servers send it instead of EXPUNGE after ENABLE
+    // QRESYNC, which this connection does not send today.
+    //
+    // The app's own flag pushes cannot echo into an endless sync loop: they
+    // are only sent by flushPendingChanges() inside a sync cycle, and this
+    // IDLE connection is opened after that cycle and logged out before the
+    // next one. A server only reports changes made after SELECT, so the
+    // app's STOREs never reach it; at worst a late notification costs one
+    // extra cycle, which itself has nothing to flush.
+    final sub = client.eventBus.on<imap.ImapEvent>().listen((e) {
+      final target = switch (e) {
+        imap.ImapConnectionLostEvent() => lost,
+        imap.ImapMessagesExistEvent() ||
+        imap.ImapExpungeEvent() ||
+        imap.ImapVanishedEvent() ||
+        imap.ImapFetchEvent() =>
+          changed,
+        _ => null,
+      };
+      if (target != null && !target.isCompleted) target.complete();
+    });
+
+    // Every command on this connection is bounded and gives up as soon as the
+    // connection is lost, so neither a closed nor a blackholed connection
+    // (open, but no bytes flow) can stall the loop. Either failure surfaces
+    // as a SocketException: the loop logs it like any other transient
+    // network failure and reconnects after its usual backoff.
+    Future<T> bounded<T>(Future<T> command, String name) => Future.any<T>([
+          command,
+          lost.future.then<T>((_) => throw _idleConnectionLost()),
+        ]).timeout(
+          _idleTimings.commandTimeout,
+          onTimeout: () => throw SocketException(
+            'IMAP IDLE connection: no answer to $name within '
+            '${_idleTimings.commandTimeout.inSeconds}s',
+          ),
+        );
+
+    var failed = false;
     try {
       final supportsCondStore = client.serverInfo.supports('CONDSTORE') ||
           client.serverInfo.supports('QRESYNC');
-      final inbox = await client.selectMailboxByPath(
-        'INBOX',
-        enableCondStore: supportsCondStore,
+      final inbox = await bounded(
+        client.selectMailboxByPath(
+          'INBOX',
+          enableCondStore: supportsCondStore,
+        ),
+        'SELECT',
       );
       // IDLE only reports changes made after this SELECT. Mail delivered (or
       // flags changed) while the last cycle ran, after it had synced INBOX,
@@ -1076,61 +1168,85 @@ class _AccountSync with _KickableWait {
       if (await _inboxChangedSinceSync(inbox)) return;
       _catchUpCycles = 0;
 
-      final changeCompleter = Completer<void>();
+      await bounded(client.idleStart(), 'IDLE');
 
-      // Any change the server reports for INBOX wakes the loop: new mail
-      // (EXISTS), a removed message (EXPUNGE) and a flag change made on
-      // another device (an untagged FETCH, e.g. a mail read or starred
-      // elsewhere). Flag changes used to be ignored, so they only arrived
-      // with the next full sync, up to 25 minutes later. VANISHED is handled
-      // defensively only: servers send it instead of EXPUNGE after ENABLE
-      // QRESYNC, which this connection does not send today.
-      //
-      // The app's own flag pushes cannot echo into an endless sync loop: they
-      // are only sent by flushPendingChanges() inside a sync cycle, and this
-      // IDLE connection is opened after that cycle and logged out before the
-      // next one. A server only reports changes made after SELECT, so the
-      // app's STOREs never reach it; at worst a late notification costs one
-      // extra cycle, which itself has nothing to flush.
-      final sub = client.eventBus
-          .on<imap.ImapEvent>()
-          .where(
-            (e) =>
-                e is imap.ImapMessagesExistEvent ||
-                e is imap.ImapExpungeEvent ||
-                e is imap.ImapVanishedEvent ||
-                e is imap.ImapFetchEvent,
-          )
-          .listen((e) {
-        if (!changeCompleter.isCompleted) changeCompleter.complete();
-      });
-
-      await client.idleStart();
-
-      // Cap IDLE at 25 minutes (RFC 2177). Also wakes up when stop() is
-      // called or the server reports a change (see above).
-      final idleTimer = Timer(const Duration(minutes: 25), () {
-        if (_stopSignal != null && !_stopSignal!.isCompleted) {
-          _stopSignal!.complete();
+      // Cap IDLE at 25 minutes (RFC 2177), after which the loop runs a full
+      // sync (IDLE only watches INBOX). Also wakes up when stop()/kick() is
+      // called, the server reports a change (see above) or the connection
+      // is lost. In between, IDLE is re-issued every [refreshInterval] with a
+      // NOOP: a blackholed connection never reports its loss, so this
+      // round trip is what detects it (and it keeps NAT mappings alive).
+      final deadline = DateTime.now().add(_idleTimings.maxIdle);
+      while (true) {
+        final remaining = deadline.difference(DateTime.now());
+        final refresh = Completer<void>();
+        final refreshTimer = Timer(
+          remaining < _idleTimings.refreshInterval
+              ? remaining
+              : _idleTimings.refreshInterval,
+          refresh.complete,
+        );
+        try {
+          await Future.any([
+            changed.future,
+            lost.future,
+            _stopSignal!.future,
+            refresh.future,
+          ]);
+        } finally {
+          refreshTimer.cancel();
         }
-      });
-      try {
-        await Future.any([changeCompleter.future, _stopSignal!.future]);
-      } finally {
-        idleTimer.cancel();
-      }
+        if (lost.isCompleted) throw _idleConnectionLost();
 
-      await client.idleDone();
-      await sub.cancel();
+        await bounded(client.idleDone(), 'DONE');
+        if (changed.isCompleted ||
+            _stopSignal!.isCompleted ||
+            !DateTime.now().isBefore(deadline)) {
+          break;
+        }
+        await bounded(client.noop(), 'NOOP');
+        await bounded(client.idleStart(), 'IDLE');
+      }
 
       // A change detected during IDLE wakes the loop, which runs a full sync
       // (storing new messages and flags) and then fires notifications from
       // _sync(). We do not notify here because the envelopes are not fetched
       // yet.
+    } catch (_) {
+      failed = true;
+      rethrow;
     } finally {
-      await client.logout();
+      unawaited(sub.cancel());
       _idleClient = null;
       _stopSignal = null;
+      await _closeIdleClient(client, logout: !failed);
+    }
+  }
+
+  static SocketException _idleConnectionLost() =>
+      const SocketException('IMAP IDLE connection lost');
+
+  /// Ends the IDLE session. LOGOUT only on a healthy connection: on a lost or
+  /// unresponsive one it would never be answered (it queues behind the
+  /// unanswered IDLE), so the socket is just dropped. Errors are swallowed —
+  /// the session is over either way, and a failure that ended it is already
+  /// on its way to the loop's error handling.
+  Future<void> _closeIdleClient(
+    imap.ImapClient client, {
+    required bool logout,
+  }) async {
+    try {
+      if (logout) {
+        await client.logout().timeout(_idleTimings.commandTimeout);
+        return;
+      }
+    } catch (_) {
+      // Fall through and drop the connection.
+    }
+    try {
+      await client.disconnect().timeout(_idleTimings.commandTimeout);
+    } catch (_) {
+      // Nothing left to clean up.
     }
   }
 
@@ -1484,11 +1600,13 @@ class _JmapAccountSync with _KickableWait {
 
     // Try JMAP push (RFC 8887 EventSource). When the stream stays open the
     // loop waits for real StateChange events — just like IMAP IDLE waits for
-    // EXISTS/EXPUNGE — with no periodic timer in between. The 25-min cap on
-    // the underlying SSE connection ([email_repository_impl] `watchJmapPush`)
-    // is what bounds the wait when the server is silent. Only when the push
-    // stream ends (no eventSourceUrl, connect failure, IMAP-only account,
-    // or the SSE stream itself timed out) do we fall back to a 30 s poll.
+    // EXISTS/EXPUNGE — with no periodic timer in between. A lost connection
+    // ends the stream (onDone/onError below); a blackholed one, which never
+    // reports its loss, is ended by the SSE silence timeout in
+    // [email_repository_impl] `watchJmapPush` (the server pings every 30 s).
+    // Only when the push stream ends (no eventSourceUrl, connect failure,
+    // IMAP-only account, or the SSE stream died) do we fall back to a 30 s
+    // poll.
     final pushEvent = Completer<void>();
     final pushClosed = Completer<void>();
     final pushSub = _emails.watchJmapPush(account.id, password).listen(

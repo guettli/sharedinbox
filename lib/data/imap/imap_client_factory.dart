@@ -105,6 +105,32 @@ Future<void> upgradeImapToStartTls(
   await client.capability();
 }
 
+/// Bounds on the two steps of [connectImap] that enough_mail leaves
+/// unbounded: its own connect timeout covers only the TCP/TLS connect, not the
+/// server greeting after it, and LOGIN has no response timeout. A connection
+/// that is accepted but then blackholed (no bytes flow — e.g. a captive portal
+/// or a stale NAT path) used to hang the sync loop there forever.
+const _imapGreetingTimeout = Duration(seconds: 45);
+const _imapLoginTimeout = Duration(seconds: 30);
+
+/// One connect attempt of [connectImap], bounded by [_imapGreetingTimeout].
+Future<void> _connectBounded(ImapClient client, Account account) => client
+        .connectToServer(
+      account.imapHost,
+      account.imapPort,
+      isSecure: account.imapSsl,
+    )
+        .timeout(
+      _imapGreetingTimeout,
+      onTimeout: () {
+        unawaited(client.disconnect());
+        throw TimeoutException(
+          'No IMAP greeting from ${account.imapHost}',
+          _imapGreetingTimeout,
+        );
+      },
+    );
+
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// When [account.imapSsl] is false, STARTTLS is required and the connection
@@ -126,20 +152,15 @@ Future<ImapClient> connectImap(
     isLogEnabled: verboseSink != null,
   );
   try {
-    await connectWithRetry(
-      () => client.connectToServer(
-        account.imapHost,
-        account.imapPort,
-        isSecure: account.imapSsl,
-      ),
-    );
+    await connectWithRetry(() => _connectBounded(client, account));
   } catch (e, st) {
     rethrowConnectError(e, st, account.imapHost, account.imapPort);
   }
   if (imapNeedsStartTls(account)) {
     await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
   }
-  await client.login(username, password);
+  // enough_mail sends LOGIN without a response timeout.
+  await client.login(username, password).timeout(_imapLoginTimeout);
   return client;
 }
 
