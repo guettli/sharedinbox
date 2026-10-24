@@ -150,9 +150,10 @@ How to read the output:
 
 **Add the test account.** The Stalwart in the service has `alice@example.com`
 and `bob@example.com`, both with password `secret`. The app allows plaintext
-IMAP and SMTP only to `localhost`, so the service forwards localhost:1430 and
-localhost:1025 to Stalwart. Inside the app, use those ports, not the offset
-host ports.
+IMAP and SMTP only to `localhost`, so the app reaches Stalwart through
+localhost:1430 and localhost:1025, which run through the fault proxy (see
+**Break the network**). Inside the app, use those ports, not the offset host
+ports.
 
 ```bash
 c click name='Add account'
@@ -221,10 +222,11 @@ changes it (`proto` defaults to all):
 | `up` | normal |
 | `down` | new connections are refused, open ones closed (FIN): server gone |
 | `reset` | open connections get an RST, once; then `up` again |
-| `blackhole` | connections are accepted and kept, but no bytes move either way: a dead link, which only a timeout notices. Queued bytes flow again after `up` |
-| `slow` | `delay_ms` per chunk (default 500) and/or `rate` bytes/s per direction |
+| `blackhole` | connections are accepted and kept, but no bytes move either way: a dead link, which only a timeout notices. Unlike a real dead link, nothing is lost: bytes the app sent meanwhile wait in the kernel and are delivered after `up`. So a duplicate after a blackhole may be the proxy's doing (the app retried, then the held original arrived too), not necessarily an app bug |
+| `slow` | `delay_ms` per chunk (default 500) and/or `rate`, a cap in bytes/s for each connection, shared by both directions |
 
-Each change lands in `c log`, as an `[explore]` line between the app's own
+A mode change the proxy cannot apply (the port cannot be listened on again)
+returns HTTP 409 and leaves the mode as it was. Each change lands in `c log`, as an `[explore]` line between the app's own
 output, so you can see what the app logged right after it. The mode survives
 `c restart`. Your own host ports (21430, 21025, 28080) are never affected.
 

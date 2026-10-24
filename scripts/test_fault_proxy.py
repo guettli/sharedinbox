@@ -42,6 +42,19 @@ class EchoServer:
         self.sock.close()
 
 
+class FloodServer(EchoServer):
+    """Sends without end and never reads: fills every buffer on the way."""
+
+    @staticmethod
+    def _echo(conn):
+        with conn:
+            try:
+                while True:
+                    conn.sendall(b"x" * 65536)
+            except OSError:
+                return
+
+
 class FaultProxyTest(unittest.TestCase):
     def setUp(self):
         self.echo = EchoServer()
@@ -128,11 +141,53 @@ class FaultProxyTest(unittest.TestCase):
         self.assertIn("mode=up", self.proxy.status())
         self.assertEqual(self.roundtrip(self.connect()), b"ping")
 
+    def test_reset_after_down_listens_again(self):
+        self.proxy.set("down", "imap")
+        self.assert_refused()
+        self.assertIn("now up", self.proxy.set("reset", "imap"))
+        self.assertIn("mode=up", self.proxy.status())
+        self.assertEqual(self.roundtrip(self.connect()), b"ping")
+
+    def test_up_fails_cleanly_when_port_taken(self):
+        self.proxy.set("down", "imap")
+        squatter = socket.create_server(self.addr)
+        self.addCleanup(squatter.close)
+        with self.assertRaises(fp.NetError):
+            self.proxy.set("up", "imap")
+        self.assertIn("cannot listen", self.logged[-1])
+        self.assertIn("mode=down", self.proxy.status().splitlines()[0])
+        squatter.close()
+        self.proxy.set("up", "imap")
+        self.assertEqual(self.roundtrip(self.connect()), b"ping")
+
+    def _stalled_connection(self):
+        """A connection whose proxy thread is stuck sending to the client."""
+        self.echo.close()
+        self.echo = FloodServer()
+        self.proxy.listeners["imap"].target = self.echo.addr
+        sock = self.connect()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        self.wait_open(1)
+        time.sleep(0.5)  # until the buffers are full and the send blocks
+        return sock
+
+    def test_down_closes_a_stalled_connection(self):
+        self._stalled_connection()
+        self.proxy.set("down", "imap")
+        self.wait_open(0)
+
+    def test_reset_closes_a_stalled_connection(self):
+        sock = self._stalled_connection()
+        self.proxy.set("reset", "imap")
+        self.wait_open(0)
+        with self.assertRaises(ConnectionResetError):
+            while sock.recv(65536):  # drain what got through, then the RST
+                pass
+
     def test_blackhole_holds_bytes_until_up(self):
         sock = self.connect(timeout=0.5)
         self.assertEqual(self.roundtrip(sock), b"ping")
         self.proxy.set("blackhole")
-        time.sleep(fp.POLL * 3)  # let the pump notice
         sock.sendall(b"lost?")
         with self.assertRaises(TimeoutError):
             sock.recv(10)

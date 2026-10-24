@@ -17,11 +17,13 @@ Modes, per protocol:
                either direction (data waits in the kernel buffers and flows
                again after `up`, like a healed partition): exposes missing
                timeouts and dead IDLE connections
-    slow       forward, but wait delay_ms before every chunk and cap each
-               direction at rate bytes per second (0 = no cap)
+    slow       forward, but wait delay_ms before every chunk and cap the
+               connection at rate bytes per second, both directions
+               together (0 = no cap)
 
-Stdlib only, one thread per connection. Every blocking call polls with a
-short timeout, so a mode change takes effect within POLL seconds.
+Stdlib only, one thread per connection. Every blocking call, sends
+included, polls with a short timeout, so a mode change takes effect within
+POLL seconds even on a connection whose peer stopped reading.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ import select
 import socket
 import struct
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -37,11 +40,15 @@ POLL = 0.1
 CHUNK = 65536
 
 
+class NetError(Exception):
+    """A mode change that could not be applied, e.g. the port is taken."""
+
+
 @dataclass
 class Fault:
     mode: str = "up"
     delay_ms: int = 0
-    rate: int = 0  # bytes per second and direction, 0 = unlimited
+    rate: int = 0  # bytes per second, both directions together; 0 = unlimited
 
     def describe(self) -> str:
         if self.mode != "slow":
@@ -88,12 +95,16 @@ class Listener:
         sock.settimeout(POLL)
         if self.listen[1] == 0:  # tests: an ephemeral port
             self.listen = sock.getsockname()
-        self._sock = sock
+        with self._lock:
+            self._sock = sock
         threading.Thread(target=self._accept_loop, args=(sock,),
                          name=f"net-{self.name}", daemon=True).start()
 
     def stop(self) -> None:
-        sock, self._sock = self._sock, None
+        # Under the lock: the accept loop adds a connection only while its
+        # socket is current, so none is added after this returns.
+        with self._lock:
+            sock, self._sock = self._sock, None
         if sock is None:
             return
         # close() alone leaves the socket listening until the accept loop's
@@ -109,16 +120,21 @@ class Listener:
         while self._sock is sock:
             try:
                 client, _ = sock.accept()
-            except TimeoutError:
+            except (TimeoutError, socket.timeout):
                 continue
-            except OSError:
-                return  # closed by stop()
-            if self._sock is not sock:  # went down while accepting
-                client.close()
-                return
+            except OSError as exc:
+                if self._sock is not sock:
+                    return  # closed by stop()
+                # E.g. EMFILE: keep serving rather than die with _sock set.
+                self.proxy.log(f"net {self.name}: accept failed: {exc}")
+                time.sleep(POLL)
+                continue
             client.settimeout(None)
             conn = _Conn(client)
             with self._lock:
+                if self._sock is not sock:  # went down while accepting
+                    client.close()
+                    return
                 self.conns.add(conn)
                 self.total += 1
             threading.Thread(target=self._serve, args=(conn,),
@@ -127,9 +143,19 @@ class Listener:
     # -- mode changes -----------------------------------------------------
 
     def set(self, fault: Fault) -> int:
-        """Apply fault; return how many open connections it closed."""
+        """Apply fault; return how many open connections it closed.
+
+        Raises NetError, with the mode unchanged, when the port cannot be
+        listened on again.
+        """
         if fault.mode == "down":
             self.stop()  # first, so no new connection slips in meanwhile
+        elif self._sock is None:  # every other mode, reset too, listens
+            try:
+                self.start()
+            except OSError as exc:
+                raise NetError(f"net {self.name}: cannot listen on "
+                               f"{self.listen[0]}:{self.listen[1]}: {exc}") from exc
         # reset is one-shot: the open connections go, the network stays up.
         self.fault = Fault() if fault.mode == "reset" else fault
         with self._lock:
@@ -138,8 +164,6 @@ class Listener:
             for conn in conns:
                 conn.abort("close" if fault.mode == "down" else "reset")
             return len(conns)
-        if self._sock is None:
-            self.start()
         for conn in conns:
             conn.wake.set()  # end a slow-mode pause early
         return 0
@@ -186,6 +210,8 @@ class Listener:
                 continue
             readable, _, _ = select.select(list(peer), [], [], POLL)
             fault = self.fault  # after the wait: it may have changed meanwhile
+            if fault.mode == "blackhole":
+                continue
             for src in readable:
                 size = CHUNK
                 if fault.mode == "slow" and fault.rate:
@@ -200,7 +226,32 @@ class Listener:
                         pause += len(data) / fault.rate
                     if not self._wait(conn, pause):
                         return
-                peer[src].sendall(data)
+                if not self._send(conn, peer[src], data):
+                    return
+
+    def _send(self, conn: _Conn, sock: socket.socket, data: bytes) -> bool:
+        """sendall that gives up when the connection is aborted.
+
+        A plain sendall to a peer that stopped reading blocks for good, and
+        down or reset could then never close the connection. A chunk read
+        just before a switch to blackhole is held here, not let through.
+        Returns False when aborted.
+        """
+        view = memoryview(data)
+        while view:
+            if conn.action is not None:
+                return False
+            if self.fault.mode == "blackhole":
+                self._wait(conn, POLL)
+                continue
+            _, writable, _ = select.select([], [sock], [], POLL)
+            if not writable:
+                continue
+            try:
+                view = view[sock.send(view, socket.MSG_DONTWAIT):]
+            except BlockingIOError:
+                pass
+        return True
 
     def _close(self, conn: _Conn) -> None:
         if conn.action == "reset":
@@ -261,7 +312,13 @@ class Proxy:
                 listener = self.listeners[name]
                 before = listener.fault.describe()
                 fault = Fault(mode, delay_ms, rate) if mode == "slow" else Fault(mode)
-                closed = listener.set(fault)
+                try:
+                    closed = listener.set(fault)
+                except NetError as exc:
+                    lines.append(str(exc))
+                    for line in lines:
+                        self.log(line)
+                    raise
                 line = f"net {name}: {before} -> {fault.describe()}"
                 if mode in ("down", "reset"):
                     line += f" ({'reset' if mode == 'reset' else 'closed'} {closed} connections)"

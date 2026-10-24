@@ -54,7 +54,7 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
                           mode is up, down (refused, open ones closed), reset
                           (RST to open ones, then up), blackhole (connected,
                           no bytes move) or slow (delay_ms per chunk, default
-                          500; rate in bytes/s per direction); proto defaults
+                          500; rate in bytes/s per connection); proto defaults
                           to all. Logged to /log. The tester's host ports
                           bypass it (see scripts/fault_proxy.py)
 
@@ -495,7 +495,8 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     _GUI_LOCK.release()
             self._send(200, body.encode())
-        except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
+        except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError,
+                fault_proxy.NetError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
         except Exception:  # noqa: BLE001 — e.g. GLib.GError when a node vanishes mid-walk
             self._send(500, traceback.format_exc().encode())
