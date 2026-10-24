@@ -124,13 +124,15 @@ How to read the output:
 - `[disabled]` is not always true on Linux. Flutter's Linux bridge reports a
   widget whose semantics carry no enabled state at all as disabled, and
   `click` then refuses it with "present but not enabled". The items of an
-  open dropdown menu are an example; the dropdown buttons themselves carry
-  an explicit enabled flag via `AccessibleDropdown` since #1180, so `force=1`
-  should no longer be needed for the From field. Look at a screenshot: if the
-  control is drawn as enabled, click it with `force=1`, always together with
-  `role`, so the match cannot land on a text such as an error banner. If it
-  then works, the control is not broken, but its missing enabled state is
-  still an accessibility gap: a screen reader may call it disabled.
+  open dropdown menu are an example: to pick an account in Compose, use
+  `c click name='Alice' contains=1 role='push button' force=1`. The dropdown
+  buttons themselves carry an explicit enabled flag via `AccessibleDropdown`
+  since #1180, so the From field opens without `force=1`. Look at a
+  screenshot: if the control is drawn as enabled, click it with `force=1`,
+  always together with `role`, so the match cannot land on a text such as an
+  error banner. If it then works, the control is not broken, but its missing
+  enabled state is still an accessibility gap: a screen reader may call it
+  disabled.
 - `click-unnamed` presses a button that has no accessible name (`role`, `index`
   in tree order). On Linux that includes icon buttons that only have a tooltip:
   Flutter's Linux embedder does not pass tooltips on as AT-SPI names, while
