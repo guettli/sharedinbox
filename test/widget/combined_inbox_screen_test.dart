@@ -12,12 +12,22 @@ void main() {
     // Nothing on the combined inbox watches the preferences provider, so the
     // detail screen used to read no value and always moved on to the next
     // mail, whatever the user had chosen.
-    Future<void> openFirstAndDelete(
+    Future<FakeEmailRepository> openFirstAnd(
       WidgetTester tester,
       AfterMailViewAction action,
+      Future<void> Function() act,
     ) async {
       final first = testEmail(id: 'acc-1:1', subject: 'First mail');
       final second = testEmail(id: 'acc-1:2', subject: 'Second mail');
+      final repo = FakeEmailRepository(
+        emails: [first, second],
+        emailDetail: first,
+        emailBody: const EmailBody(
+          emailId: 'acc-1:1',
+          textBody: 'Hi',
+          attachments: [],
+        ),
+      );
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/inbox',
@@ -30,17 +40,7 @@ void main() {
             mailboxRepositoryProvider.overrideWithValue(
               FakeMailboxRepository(),
             ),
-            emailRepositoryProvider.overrideWithValue(
-              FakeEmailRepository(
-                emails: [first, second],
-                emailDetail: first,
-                emailBody: const EmailBody(
-                  emailId: 'acc-1:1',
-                  textBody: 'Hi',
-                  attachments: [],
-                ),
-              ),
-            ),
+            emailRepositoryProvider.overrideWithValue(repo),
           ],
         ),
       );
@@ -48,11 +48,24 @@ void main() {
 
       await tester.tap(find.text('First mail'));
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Delete'),
-      );
+      await act();
       await tester.pumpAndSettle();
+      return repo;
     }
+
+    Future<void> openFirstAndDelete(
+      WidgetTester tester,
+      AfterMailViewAction action,
+    ) =>
+        openFirstAnd(
+          tester,
+          action,
+          () => tester.tap(
+            find.byWidgetPredicate(
+              (w) => w is Tooltip && w.message == 'Delete',
+            ),
+          ),
+        );
 
     testWidgets('after deleting, "Return to mailbox" goes back to the inbox', (
       tester,
@@ -69,6 +82,30 @@ void main() {
       await openFirstAndDelete(tester, AfterMailViewAction.nextMessage);
 
       expect(find.byTooltip('Delete'), findsOneWidget);
+    });
+
+    // "Mark as unread" keeps a mail for later; moving on to the next mail
+    // would open it and mark it read although the user never chose it.
+    testWidgets(
+        'mark as unread returns to the inbox and leaves the next mail unread '
+        'even with "Next message"', (tester) async {
+      final repo = await openFirstAnd(
+        tester,
+        AfterMailViewAction.nextMessage,
+        () async {
+          await tester.tap(find.byType(PopupMenuButton<String>));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Mark as unread'));
+        },
+      );
+
+      expect(find.text('Combined Inbox'), findsOneWidget);
+      expect(find.byTooltip('Delete'), findsNothing);
+      expect(
+        repo.setFlagCalls,
+        contains((emailId: 'acc-1:1', seen: false, flagged: null)),
+      );
+      expect(repo.setFlagCalls.where((c) => c.emailId == 'acc-1:2'), isEmpty);
     });
 
     testWidgets(

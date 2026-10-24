@@ -581,9 +581,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               } else if (value == 'select_text' && body != null) {
                 _showSelectText(context, body);
               } else if (value == 'mark_unread') {
-                final nextEmail = await _getNextEmailIfNeeded(header);
+                // Always back to the list, whatever "After mail action" says:
+                // opening the next mail would mark it read although the user
+                // never chose to open it.
                 await repo.setFlag(widget.emailId, seen: false);
-                if (context.mounted) _navigateTo(context, header, nextEmail);
+                if (context.mounted) _navigateTo(context, header, null);
               } else if (value == 'headers' && body != null && header != null) {
                 unawaited(_showHeaders(context, body, header.accountId));
               } else if (value == 'structure' && body != null) {
