@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/utils/attachment_files.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
@@ -51,8 +52,8 @@ EditQueuedFn editQueuedMessageFor(BuildContext context, WidgetRef ref) =>
 /// Compose on it, with its account, recipients (Bcc too), subject, body,
 /// reply threading and attachments. A permanent rejection (a mistyped
 /// address) can never succeed on Retry, and Discard threw the whole text
-/// away. Saving the draft first means nothing is lost when the user leaves
-/// Compose — except the attachments, which drafts cannot hold yet (#955).
+/// away. Saving the draft first, attachments included, means nothing is
+/// lost when the user leaves Compose.
 ///
 /// Refused while the message is being sent right now, so it is never both
 /// sent and turned into a draft.
@@ -78,6 +79,12 @@ Future<void> editQueuedMessage(
         bccText: formatRecipients(draft.bcc),
         subjectText: draft.subject,
         bodyText: draft.body,
+        // The draft copies the files; the outbox deletes its own copies once
+        // the row is gone.
+        attachments: [
+          for (final path in draft.attachmentFilePaths)
+            await describeAttachmentFile(path),
+        ],
       );
       return (draftId: saved.id, draft: draft);
     });
@@ -116,10 +123,6 @@ Future<void> editQueuedMessage(
       extra: {
         'accountId': message.accountId,
         'draftId': taken.draftId,
-        if (draft.attachmentFilePaths.isNotEmpty)
-          'attachmentPaths': draft.attachmentFilePaths,
-        if (draft.tempAttachmentPaths.isNotEmpty)
-          'tempAttachmentPaths': draft.tempAttachmentPaths,
         if (draft.inReplyTo != null) 'inReplyTo': draft.inReplyTo,
         if (draft.references.isNotEmpty) 'references': draft.references,
       },

@@ -7,6 +7,9 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 abstract class OutboxRepository {
   /// Persists [draft] for later sending and returns the new outbox row id.
   /// Always returns immediately — does not touch the network.
+  ///
+  /// The row keeps its own copy of each attachment file, deleted when the
+  /// row leaves the outbox, so the caller may delete its files right away.
   Future<int> enqueue(String accountId, EmailDraft draft);
 
   /// Drains pending outbox rows for [accountId] by handing each one to the
@@ -48,6 +51,10 @@ abstract class OutboxRepository {
 
   /// Permanently removes a queued message.
   Future<void> discard(int id);
+
+  /// Removes attachment copies left behind by rows that no longer exist.
+  /// Run once at startup; never throws.
+  Future<void> deleteOrphanedAttachments();
 
   /// Takes the queued message [id] out of the outbox so the user can edit it
   /// — e.g. to fix a mistyped address after a permanent rejection.

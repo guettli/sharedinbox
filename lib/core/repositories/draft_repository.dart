@@ -5,6 +5,12 @@ abstract class DraftRepository {
   /// Inserts or updates a draft.  Pass [id] to update; omit to create new.
   /// Marks the row as dirty so the next sync cycle pushes it to the server.
   ///
+  /// [attachments] replace the draft's files. The implementation keeps its
+  /// own copy of each, so the draft survives the originals being removed;
+  /// the returned [SavedDraft.attachments] carry the paths of those copies,
+  /// which callers should use from then on. A file that no longer exists is
+  /// kept as given, so whoever opens the draft can say it is gone.
+  ///
   /// Implementations override [writeDraft]; this only bundles the fields.
   Future<SavedDraft> saveDraft({
     int? id,
@@ -15,6 +21,7 @@ abstract class DraftRepository {
     String bccText = '',
     required String subjectText,
     required String bodyText,
+    List<DraftAttachment> attachments = const [],
   }) =>
       writeDraft(
         DraftInput(
@@ -26,6 +33,7 @@ abstract class DraftRepository {
           bccText: bccText,
           subjectText: subjectText,
           bodyText: bodyText,
+          attachments: attachments,
         ),
       );
 
@@ -54,10 +62,15 @@ abstract class DraftRepository {
   /// [email] is not a draft's server copy.
   Future<SavedDraft?> findDraftForEmail(Email email);
 
-  /// Permanently removes the draft with [id]. If the row had been synced to
-  /// the server, writes a tombstone so the next sync cycle deletes the
-  /// server-side copy too.
+  /// Permanently removes the draft with [id] and its attachment files. If
+  /// the row had been synced to the server, writes a tombstone so the next
+  /// sync cycle deletes the server-side copy too.
   Future<void> deleteDraft(int id);
+
+  /// Removes attachment files left behind by drafts that no longer exist
+  /// (e.g. the app stopped between deleting a draft and its files). Run once
+  /// at startup; never throws.
+  Future<void> deleteOrphanedAttachments();
 
   /// Two-way sync between the local drafts table and the server-side Drafts
   /// folder for [accountId]:
@@ -66,6 +79,9 @@ abstract class DraftRepository {
   /// 2. Push dirty rows (replace server-side copy for edits; append for new).
   /// 3. Pull server-side drafts not already tracked locally.
   /// 4. Remove local rows whose server counterpart has disappeared.
+  ///
+  /// Attachments travel both ways: a pushed copy carries the draft's files,
+  /// and a pulled draft's attachment parts are stored as its files.
   ///
   /// No-op for accounts whose protocol the implementation cannot reach
   /// (e.g. JMAP without a configured `jmapUrl`).

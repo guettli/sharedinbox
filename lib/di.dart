@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
@@ -146,6 +147,22 @@ final draftRepositoryProvider = Provider<DraftRepository>((ref) {
     appLogger: ref.watch(appLoggerProvider),
   );
 });
+
+/// A file the user picked to attach: its path and the name to send it as.
+typedef PickedAttachmentFile = ({String path, String name});
+
+/// Opens the platform file picker for Compose's "Add attachment"; empty when
+/// the user cancels. A provider so widget tests can pick without a platform.
+final pickAttachmentFilesProvider =
+    Provider<Future<List<PickedAttachmentFile>> Function()>(
+  (ref) => () async {
+    final result = await FilePicker.pickFiles();
+    return [
+      for (final f in result?.files ?? const <PlatformFile>[])
+        if (f.path case final path?) (path: path, name: f.name),
+    ];
+  },
+);
 
 /// App version (from `package_info_plus`) used to stamp the outgoing
 /// `User-Agent` header. Overridden once at startup in `main()._bootApp` with

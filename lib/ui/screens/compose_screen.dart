@@ -1,21 +1,21 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
     show SendNowOutcome;
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
+import 'package:sharedinbox/core/utils/attachment_files.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/recipient_check.dart';
@@ -37,8 +37,6 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillSubject,
     this.prefillBody,
     this.draftId,
-    this.attachmentPaths = const [],
-    this.tempAttachmentPaths = const [],
     this.inReplyTo,
     this.references = const [],
   });
@@ -54,10 +52,6 @@ class ComposeScreen extends ConsumerStatefulWidget {
         prefillSubject: extra?['prefillSubject'] as String?,
         prefillBody: extra?['prefillBody'] as String?,
         draftId: extra?['draftId'] as int?,
-        attachmentPaths:
-            (extra?['attachmentPaths'] as List<String>?) ?? const [],
-        tempAttachmentPaths:
-            (extra?['tempAttachmentPaths'] as List<String>?) ?? const [],
         inReplyTo: extra?['inReplyTo'] as String?,
         references: (extra?['references'] as List<String>?) ?? const [],
       );
@@ -70,18 +64,10 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? prefillSubject;
   final String? prefillBody;
 
-  /// The saved draft to resume. Compose only ever restores a draft the user
-  /// explicitly picked — without this it always starts blank (#1047).
+  /// The saved draft to resume, attachments included. Compose only ever
+  /// restores a draft the user explicitly picked — without this it always
+  /// starts blank (#1047).
   final int? draftId;
-
-  /// Files to attach from the start: those of a queued message taken back
-  /// for editing. Missing ones are skipped with a notice.
-  final List<String> attachmentPaths;
-
-  /// The subset of [attachmentPaths] the app created (shrunk copies). This
-  /// screen owns them again, as if shrunk here: deleted when removed or when
-  /// Compose closes without sending. The others are the user's files.
-  final List<String> tempAttachmentPaths;
 
   /// Threading headers of a queued message taken back for editing. When
   /// [inReplyTo] is set, Send uses these as they were queued instead of
@@ -116,18 +102,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   List<Account> _accounts = [];
   bool _sending = false;
 
-  /// Set once Send queued the message: the outbox now refers to the
-  /// attachment files, so [dispose] must not delete the shrunk temp copies.
-  bool _queued = false;
-
-  /// Set right before Compose closes itself (Discard draft), so the
-  /// lose-the-attachments question is not asked.
-  bool _leaving = false;
-
-  /// True until [ComposeScreen.attachmentPaths] are checked and attached;
+  /// True until the restored draft's attachments are checked and attached;
   /// Send waits, so the message never goes out without them.
-  late bool _loadingAttachments = widget.attachmentPaths.isNotEmpty;
+  late bool _loadingAttachments = widget.draftId != null;
   final List<_AttachmentInfo> _attachments = [];
+
+  /// Shrunk temp copies replaced by the draft's own copies. Deleted in
+  /// [dispose] rather than at once: a Send in progress may still be reading
+  /// one of them.
+  final List<String> _replacedTemps = [];
   bool _opening = false;
   // Last shrink settings the user accepted, so re-attaching / adjusting further
   // images in this compose session starts from the same choices.
@@ -179,12 +162,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _accountId = widget.accountId;
     unawaited(_loadAccounts());
     if (widget.draftId != null) unawaited(_restoreDraft(widget.draftId!));
-    if (widget.attachmentPaths.isNotEmpty) {
-      unawaited(_loadInitialAttachments(widget.attachmentPaths));
-    }
 
     for (final c in [_to, _cc, _bcc, _subject, _body]) {
-      c.addListener(_onTextChanged);
+      c.addListener(_markDraftDirty);
     }
   }
 
@@ -300,54 +280,45 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
-  /// Adds the files of [paths] that still exist; tells the user about the
-  /// others, so a message is not sent without them unnoticed.
-  Future<void> _loadInitialAttachments(List<String> paths) async {
+  /// Splits [attachments] into those whose file still exists and the names
+  /// of those that are gone.
+  Future<({List<_AttachmentInfo> found, List<String> missing})>
+      _checkAttachments(List<DraftAttachment> attachments) async {
     final found = <_AttachmentInfo>[];
     final missing = <String>[];
-    final temp = widget.tempAttachmentPaths.toSet();
-    for (final path in paths) {
+    for (final a in attachments) {
       try {
-        final stat = await File(path).stat();
+        final stat = await File(a.path).stat();
         if (stat.type == FileSystemEntityType.notFound) {
-          missing.add(p.basename(path));
+          missing.add(a.filename);
           continue;
         }
-        final name = p.basename(path);
         found.add(
           _AttachmentInfo(
-            path: path,
-            filename: name,
+            path: a.path,
+            filename: a.filename,
             size: stat.size,
-            contentType: _guessMimeType(name),
-            isTemp: temp.contains(path),
+            contentType: a.contentType,
           ),
         );
       } catch (_) {
         // Unreadable counts as gone; never leave Send disabled over it.
-        missing.add(p.basename(path));
+        missing.add(a.filename);
       }
     }
-    if (!mounted) return;
-    setState(() {
-      _attachments.addAll(found);
-      _loadingAttachments = false;
-    });
-    if (missing.isNotEmpty) {
-      context.showAppSnackBar(
-        'Attachment no longer available: ${missing.join(', ')}',
-        level: AppLogLevel.warn,
-        event: 'compose.attachment.missing',
-        duration: const Duration(seconds: 8),
-      );
-    }
+    return (found: found, missing: missing);
   }
 
   Future<void> _restoreDraft(int id) async {
     final draft = await _draftRepo.getDraft(id);
-    if (draft == null || !mounted) return;
+    final checked =
+        draft == null ? null : await _checkAttachments(draft.attachments);
+    if (!mounted) return;
     // The user already started typing — never splice the draft into it.
-    if (_draftDirty) return;
+    if (draft == null || checked == null || _draftDirty) {
+      setState(() => _loadingAttachments = false);
+      return;
+    }
     // Programmatic fill — don't count it as the user dirtying the draft.
     _suppressAutoSave = true;
     setState(() {
@@ -364,33 +335,67 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (draft.accountId != null) _accountId = draft.accountId;
       _sigAccountId = _accountId;
       _sigBlock = '';
+      _attachments
+        ..clear()
+        ..addAll(checked.found);
+      _loadingAttachments = false;
     });
     _suppressAutoSave = false;
+    if (checked.missing.isNotEmpty) {
+      context.showAppSnackBar(
+        'Attachment no longer available: ${checked.missing.join(', ')}',
+        level: AppLogLevel.warn,
+        event: 'compose.attachment.missing',
+        duration: const Duration(seconds: 8),
+      );
+    }
   }
 
-  void _onTextChanged() {
+  /// Schedules an auto-save: the text or the attachments changed.
+  void _markDraftDirty() {
     if (_suppressAutoSave) return;
     _draftDirty = true;
     _saveTimer?.cancel();
     _saveTimer = Timer(_saveDelay, _autoSave);
   }
 
-  void _autoSave() => _autoSaveInFlight = _saveDraftNow();
+  /// Starts a save once the previous one finished, so each one starts from
+  /// the draft's own attachment copies the previous one handed back.
+  void _autoSave() {
+    final previous = _autoSaveInFlight;
+    _autoSaveInFlight = () async {
+      await _settle(previous);
+      await _saveDraftNow();
+    }();
+  }
 
   /// Waits for an in-flight auto-save so the row it creates is the one that
   /// gets deleted. A failed save is irrelevant here — the caller is about to
   /// drop the draft — so its error must not fail the send or discard.
-  Future<void> _settleAutoSave() async {
+  Future<void> _settleAutoSave() => _settle(_autoSaveInFlight);
+
+  static Future<void> _settle(Future<void>? save) async {
     try {
-      await _autoSaveInFlight;
+      await save;
     } on Object catch (_) {
-      // Ignored: see above.
+      // Ignored: see [_settleAutoSave].
     }
   }
+
+  List<DraftAttachment> _draftAttachments(List<_AttachmentInfo> list) => [
+        for (final a in list)
+          DraftAttachment(
+            path: a.path,
+            filename: a.filename,
+            contentType: a.contentType,
+            size: a.size,
+          ),
+      ];
 
   Future<void> _saveDraftNow() async {
     if (!_draftDirty || !mounted) return;
     _draftDirty = false;
+    final submitted = List.of(_attachments);
     final saved = await _draftRepo.saveDraft(
       id: _draftId,
       accountId: _accountId,
@@ -400,11 +405,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       bccText: _bcc.text,
       subjectText: _subject.text,
       bodyText: _body.text,
+      attachments: _draftAttachments(submitted),
     );
+    // Also after dispose: its final flush updates this row instead of
+    // creating a second one.
+    _draftId = saved.id;
     if (!mounted) return;
     setState(() {
-      _draftId = saved.id;
       _draftSaved = true;
+      _adoptStoredAttachments(submitted, saved.attachments);
     });
     // Hide the indicator after 2 seconds.
     Future.delayed(const Duration(seconds: 2), () {
@@ -412,56 +421,103 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     });
   }
 
+  /// Points the attachments at the draft's own copies [stored] of
+  /// [submitted], so later saves need not copy them again and a shrunk image
+  /// outlives its temp file. Skipped when the list changed during the save;
+  /// the save that change scheduled adopts its own result.
+  void _adoptStoredAttachments(
+    List<_AttachmentInfo> submitted,
+    List<DraftAttachment> stored,
+  ) {
+    if (stored.length != submitted.length ||
+        _attachments.length != submitted.length) {
+      return;
+    }
+    for (var i = 0; i < submitted.length; i++) {
+      if (!identical(_attachments[i], submitted[i])) return;
+    }
+    for (var i = 0; i < submitted.length; i++) {
+      final before = submitted[i];
+      final after = stored[i];
+      if (after.path == before.path) continue;
+      _attachments[i] = _AttachmentInfo(
+        path: after.path,
+        filename: after.filename,
+        size: after.size,
+        contentType: after.contentType,
+      );
+      if (before.isTemp) _replacedTemps.add(before.path);
+    }
+  }
+
   @override
   void dispose() {
     _saveTimer?.cancel();
     for (final c in [_to, _cc, _bcc, _subject, _body]) {
-      c.removeListener(_onTextChanged);
+      c.removeListener(_markDraftDirty);
       c.dispose();
     }
     _toFocus.dispose();
     _ccFocus.dispose();
     _bccFocus.dispose();
-    // Drop any temp files created for shrunk attachments — unless the
-    // message was queued: the outbox sends (and may retry) from these files.
-    if (!_queued) {
-      for (final a in _attachments) {
-        if (a.isTemp) unawaited(_deleteTempFile(a.path));
+    // Flush any pending save. It cannot be awaited here, but it still runs
+    // (after the save in flight, if any). The shrunk temp files go only
+    // after that: the draft copies them, and a queued message has its own
+    // copies already.
+    final pending = _autoSaveInFlight;
+    final dirty = _draftDirty;
+    final temps = [
+      for (final a in _attachments)
+        if (a.isTemp) a.path,
+      ..._replacedTemps,
+    ];
+    final input = (
+      accountId: _accountId,
+      replyToEmailId: _replyToEmailId,
+      toText: _to.text,
+      ccText: _cc.text,
+      bccText: _bcc.text,
+      subjectText: _subject.text,
+      bodyText: _body.text,
+      attachments: _draftAttachments(_attachments),
+    );
+    unawaited(() async {
+      await _settle(pending);
+      try {
+        if (dirty) {
+          await _draftRepo.saveDraft(
+            id: _draftId,
+            accountId: input.accountId,
+            replyToEmailId: input.replyToEmailId,
+            toText: input.toText,
+            ccText: input.ccText,
+            bccText: input.bccText,
+            subjectText: input.subjectText,
+            bodyText: input.bodyText,
+            attachments: input.attachments,
+          );
+        }
+      } finally {
+        for (final path in temps) {
+          await _deleteTempFile(path);
+        }
       }
-    }
-    // Flush any pending save synchronously — we can't await in dispose, but
-    // scheduling a microtask still runs before the isolate exits.
-    if (_draftDirty) {
-      unawaited(
-        _draftRepo.saveDraft(
-          id: _draftId,
-          accountId: _accountId,
-          replyToEmailId: _replyToEmailId,
-          toText: _to.text,
-          ccText: _cc.text,
-          bccText: _bcc.text,
-          subjectText: _subject.text,
-          bodyText: _body.text,
-        ),
-      );
-    }
+    }());
     super.dispose();
   }
 
   Future<void> _pickAttachments() async {
-    final result = await FilePicker.pickFiles();
-    if (result == null) return;
-    final files = result.files.where((f) => f.path != null).toList();
-    if (!mounted) return;
+    final files = await ref.read(pickAttachmentFilesProvider)();
+    if (files.isEmpty || !mounted) return;
     final service = ref.read(imageShrinkServiceProvider);
     for (final file in files) {
-      final path = file.path!;
-      final stat = await File(path).stat();
+      final picked =
+          await describeAttachmentFile(file.path, filename: file.name);
       var info = _AttachmentInfo(
-        path: path,
-        filename: file.name,
-        size: stat.size,
-        contentType: _guessMimeType(file.name),
+        path: picked.path,
+        filename: picked.filename,
+        size: picked.size,
+        contentType: picked.contentType,
       );
       // After attaching an image, offer to shrink it before it goes out.
       if (service.isShrinkable(info.contentType)) {
@@ -470,6 +526,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       }
       if (!mounted) return;
       setState(() => _attachments.add(info));
+      _markDraftDirty();
     }
   }
 
@@ -528,6 +585,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (shrunk == null || !mounted) return;
     setState(() => _attachments[index] = shrunk);
     if (current.isTemp) unawaited(_deleteTempFile(current.path));
+    _markDraftDirty();
   }
 
   Future<void> _deleteTempFile(String path) async {
@@ -542,6 +600,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final removed = _attachments[index];
     setState(() => _attachments.removeAt(index));
     if (removed.isTemp) unawaited(_deleteTempFile(removed.path));
+    _markDraftDirty();
   }
 
   Future<void> _openAttachment(int index) async {
@@ -572,10 +631,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } finally {
       if (mounted) setState(() => _opening = false);
     }
-  }
-
-  String _guessMimeType(String filename) {
-    return lookupMimeType(filename) ?? 'application/octet-stream';
   }
 
   /// `In-Reply-To` / `References` for a reply, from the original message's
@@ -671,11 +726,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         bcc: recipientAddresses(_bcc.text),
         subject: _subject.text,
         body: _body.text,
+        // The outbox copies these, so they may go once compose closes.
         attachmentFilePaths: List.unmodifiable(
           _attachments.map((a) => a.path).toList(),
-        ),
-        tempAttachmentPaths: List.unmodifiable(
-          _attachments.where((a) => a.isTemp).map((a) => a.path).toList(),
         ),
         inReplyTo: threading?.inReplyTo,
         references: threading?.references ?? const [],
@@ -686,7 +739,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           .read(emailRepositoryProvider)
           .enqueueSend(_accountId!, draft);
       queued = true;
-      _queued = true;
       // Delete the draft once it has been queued — the queued copy is the
       // canonical record from here on. As in [_discard], first stop the
       // pending auto-save and the [dispose] flush: typing and pressing Send
@@ -811,72 +863,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         'Draft discarded',
         duration: const Duration(seconds: 3),
       );
-      _leaving = true;
       context.pop();
-    }
-  }
-
-  /// Leaving keeps the text as a draft, but drafts cannot hold attachments
-  /// yet (#955) — so with attachments that would silently lose them. Ask.
-  bool get _wouldLoseAttachments =>
-      (_attachments.isNotEmpty || _loadingAttachments) && !_queued && !_leaving;
-
-  Future<void> _confirmLeave() async {
-    final choice = await showDialog<_LeaveChoice>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Discard attachments?'),
-        content: const Text(
-          'The text is kept as a draft, but drafts cannot keep attachments '
-          'yet. Leaving now loses them.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.stay),
-            child: const Text('Stay'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.discard),
-            child: const Text('Discard'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.send),
-            child: const Text('Send'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    switch (choice) {
-      case _LeaveChoice.discard:
-        setState(() => _leaving = true);
-        Navigator.of(context).pop();
-      case _LeaveChoice.send:
-        if (!_sending && !_loadingAttachments) await _send();
-      case _LeaveChoice.stay:
-      case null:
-        break;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return PopScope<Object?>(
-      canPop: !_wouldLoseAttachments,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        // Send or Discard draft closing the screen while canPop was stale.
-        if (!_wouldLoseAttachments) {
-          Navigator.of(context).pop();
-          return;
-        }
-        unawaited(_confirmLeave());
-      },
-      child: _buildScaffold(context),
-    );
-  }
-
-  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Compose'),
@@ -965,7 +957,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     unawaited(_applySignatureForAccount(v));
                     // Save the new account like an edit, so a saved draft
                     // moves even when nothing is typed afterwards.
-                    if (_draftId != null) _onTextChanged();
+                    if (_draftId != null) _markDraftDirty();
                   },
                 ),
               ),
@@ -1172,8 +1164,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 }
-
-enum _LeaveChoice { stay, discard, send }
 
 class _AttachmentInfo {
   final String path;

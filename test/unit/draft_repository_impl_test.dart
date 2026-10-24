@@ -1,11 +1,16 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
+import 'package:sharedinbox/data/storage/attachment_store.dart';
 
 import 'db_test_helper.dart';
 import 'fake_imap.dart';
@@ -977,6 +982,213 @@ void main() {
 
       expect(client.selected, ['Entw&APw-rfe']);
       expect(client.appendedTo, ['Entw&APw-rfe']);
+    });
+  });
+
+  group('draft attachments (#955)', () {
+    late Directory tmp;
+    late Directory storeRoot;
+    late AttachmentStore store;
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('draft_attachments_test');
+      storeRoot = Directory(p.join(tmp.path, 'draft_attachments'));
+      store = AttachmentStore(() async => storeRoot);
+    });
+    tearDown(() => tmp.delete(recursive: true));
+
+    /// A file outside the store, as the file picker or a shrink returns it.
+    Future<DraftAttachment> pickedFile(String name, String content) async {
+      final file = File(p.join(tmp.path, 'picked', name));
+      await file.create(recursive: true);
+      await file.writeAsString(content);
+      return DraftAttachment(
+        path: file.path,
+        filename: name,
+        contentType: 'application/pdf',
+        size: content.length,
+      );
+    }
+
+    Future<SavedDraft> save(
+      DraftRepositoryImpl repo,
+      List<DraftAttachment> attachments, {
+      int? id,
+      String accountId = 'acc-1',
+    }) =>
+        repo.saveDraft(
+          id: id,
+          accountId: accountId,
+          toText: 'alice@example.com',
+          ccText: '',
+          subjectText: 'Hi',
+          bodyText: 'Draft',
+          attachments: attachments,
+        );
+
+    test('saveDraft copies the files into the draft folder', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final picked = await pickedFile('plan.pdf', 'pdf bytes');
+
+      final saved = await save(repo, [picked]);
+
+      final stored = saved.attachments.single;
+      expect(
+        p.isWithin(p.join(storeRoot.path, '${saved.id}'), stored.path),
+        isTrue,
+      );
+      expect(p.basename(stored.path), 'plan.pdf');
+      expect(stored.filename, 'plan.pdf');
+      expect(stored.contentType, 'application/pdf');
+      expect(await File(stored.path).readAsString(), 'pdf bytes');
+      // The draft no longer depends on the picked file.
+      await File(picked.path).delete();
+      final restored = await repo.getDraft(saved.id);
+      expect(restored!.attachments, [stored]);
+      expect(await File(stored.path).exists(), isTrue);
+    });
+
+    test('a resave keeps owned copies and deletes removed ones', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [
+        await pickedFile('a.pdf', 'a'),
+        await pickedFile('b.pdf', 'b'),
+      ]);
+      final [a, b] = saved.attachments;
+
+      // Compose hands the stored paths back; dropping b deletes its copy.
+      final again = await save(repo, [a], id: saved.id);
+
+      expect(again.attachments, [a]);
+      expect(await File(a.path).exists(), isTrue);
+      expect(await File(b.path).exists(), isFalse);
+
+      // Two files of the same name each keep it.
+      final twice = await save(
+        repo,
+        [a, await pickedFile('a.pdf', 'other a')],
+        id: saved.id,
+      );
+      expect(
+        twice.attachments.map((x) => p.basename(x.path)),
+        ['a.pdf', 'a.pdf'],
+      );
+      expect(await File(twice.attachments.last.path).readAsString(), 'other a');
+
+      // Removing all of them removes the folder.
+      await save(repo, [], id: saved.id);
+      expect(
+        await Directory(p.join(storeRoot.path, '${saved.id}')).exists(),
+        isFalse,
+      );
+    });
+
+    test('a file already gone is kept as given, so compose can say so',
+        () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      const gone = DraftAttachment(
+        path: '/nonexistent/gone.png',
+        filename: 'gone.png',
+        contentType: 'image/png',
+        size: 3,
+      );
+
+      final saved = await save(repo, [gone]);
+
+      expect(saved.attachments, [gone]);
+      expect((await repo.getDraft(saved.id))!.attachments, [gone]);
+    });
+
+    test('deleteDraft deletes the draft folder', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [await pickedFile('a.pdf', 'a')]);
+      final folder = Directory(p.join(storeRoot.path, '${saved.id}'));
+      expect(await folder.exists(), isTrue);
+
+      await repo.deleteDraft(saved.id);
+
+      expect(await folder.exists(), isFalse);
+    });
+
+    test('deleteOrphanedAttachments removes folders of deleted drafts only',
+        () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final kept = await save(repo, [await pickedFile('a.pdf', 'a')]);
+      final orphan = Directory(p.join(storeRoot.path, '999', '0'));
+      await orphan.create(recursive: true);
+      await File(p.join(orphan.path, 'x.pdf')).writeAsString('x');
+
+      await repo.deleteOrphanedAttachments();
+
+      expect(await Directory(p.join(storeRoot.path, '999')).exists(), isFalse);
+      expect(await File(kept.attachments.single.path).exists(), isTrue);
+    });
+
+    test('a malformed attachments_json reads as no attachments', () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, []);
+      await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+          .write(const DraftsCompanion(attachmentsJson: Value('{oops')));
+
+      expect((await repo.getDraft(saved.id))!.attachments, isEmpty);
+      expect(decodeDraftAttachments('[{"filename": "no path"}]'), isEmpty);
+    });
+
+    test('the IMAP push carries the attachment; changing it is an edit',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [42];
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [await pickedFile('plan.pdf', 'pdf!')]);
+
+      await repo.syncDrafts('acc-1');
+
+      // Parsed back from the wire form, as the server stores it.
+      final pushed = imap.MimeMessage.parseFromText(
+        client.appendedMessages.single.renderMessage(),
+      );
+      final infos = pushed.findContentInfo();
+      expect(infos.map((i) => i.fileName), ['plan.pdf']);
+      final part = pushed.getPart(infos.single.fetchId)!;
+      expect(String.fromCharCodes(part.decodeContentBinary()!), 'pdf!');
+      expect((await repo.getDraft(saved.id))!.dirty, isFalse);
+
+      // Removing the attachment alone marks the draft for another push.
+      await save(repo, [], id: saved.id);
+      expect((await repo.getDraft(saved.id))!.dirty, isTrue);
     });
   });
 }

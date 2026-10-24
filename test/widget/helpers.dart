@@ -161,6 +161,9 @@ class FakeDraftRepository extends DraftRepository {
       subjectText: input.subjectText,
       bodyText: input.bodyText,
       updatedAt: DateTime.now(),
+      // Kept in place: the real repository's copies are covered by its own
+      // tests.
+      attachments: input.attachments,
     );
     _drafts[draftId] = draft;
     savedIds.add(draftId);
@@ -197,6 +200,9 @@ class FakeDraftRepository extends DraftRepository {
 
   @override
   Future<void> deleteDraft(int id) async => _drafts.remove(id);
+
+  @override
+  Future<void> deleteOrphanedAttachments() async {}
 
   @override
   Future<void> syncDrafts(String accountId) async {
@@ -365,6 +371,9 @@ class FakeOutboxRepository implements OutboxRepository {
 
   @override
   Future<void> discard(int id) async {}
+
+  @override
+  Future<void> deleteOrphanedAttachments() async {}
 
   /// Jobs [takeForEdit] hands off, keyed by row id. A row without one is
   /// treated as gone (null), like the real repository.
