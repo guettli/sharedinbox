@@ -337,6 +337,9 @@ class Drafts extends Table {
   TextColumn get jmapServerId => text().nullable()();
   // Added in schema v42: local edits not yet pushed to the server.
   BoolColumn get dirty => boolean().withDefault(const Constant(true))();
+  // Added in schema v66: JSON list of the draft's attachment files (#955),
+  // see `encodeDraftAttachments`.
+  TextColumn get attachmentsJson => text().withDefault(const Constant('[]'))();
 }
 
 /// Tombstones for drafts that were deleted locally but still need to be
@@ -1613,6 +1616,10 @@ class AppDatabase extends _$AppDatabase {
     if (from < 65 && await _tableExists(this, 'drafts')) {
       // Bcc recipients of a saved draft (#1126).
       await _addColumnIfMissing(m, drafts, drafts.bccText);
+    }
+    if (from < 66 && await _tableExists(this, 'drafts')) {
+      // Attachments kept with a saved draft (#955).
+      await _addColumnIfMissing(m, drafts, drafts.attachmentsJson);
     }
   }
 

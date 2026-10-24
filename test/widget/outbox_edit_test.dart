@@ -47,7 +47,6 @@ const _rowId = 5;
 /// The finding this covers: a permanent rejection of a mistyped address.
 _LiveOutbox _failedOutbox({
   required List<String> attachments,
-  List<String> tempAttachments = const [],
   String status = 'failed',
 }) {
   final outbox = _LiveOutbox();
@@ -76,7 +75,6 @@ _LiveOutbox _failedOutbox({
       subject: 'Lunch?',
       body: 'Tomorrow at noon?',
       attachmentFilePaths: attachments,
-      tempAttachmentPaths: tempAttachments,
       inReplyTo: 'parent@example.com',
       references: const ['parent@example.com'],
     ),
@@ -130,9 +128,10 @@ Future<void> _pumpQueue(
 
 /// Lets Compose's real file-system checks on its attachments complete: each
 /// `stat` finishes on the real event loop, and the next one only starts once
-/// the fake-async test zone has run the previous one's continuation.
+/// the fake-async test zone has run the previous one's continuation. Edit
+/// stats each file twice: once to save the draft, once to restore it.
 Future<void> _settleFileIo(WidgetTester tester) async {
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < 12; i++) {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
@@ -177,12 +176,10 @@ void main() {
     addTearDown(() => dir.delete(recursive: true));
     final kept = File('${dir.path}/plan.pdf');
     await tester.runAsync(() => kept.writeAsString('pdf'));
-    // A shrunk copy the app made when the message was first composed.
-    final shrunk = File('${dir.path}/shrunk_1_photo.jpg');
-    await tester.runAsync(() => shrunk.writeAsString('jpg'));
+    final photo = File('${dir.path}/photo.jpg');
+    await tester.runAsync(() => photo.writeAsString('jpg'));
     final outbox = _failedOutbox(
-      attachments: [kept.path, shrunk.path, '${dir.path}/gone.png'],
-      tempAttachments: [shrunk.path],
+      attachments: [kept.path, photo.path, '${dir.path}/gone.png'],
     );
     final drafts = FakeDraftRepository();
     await _pumpQueue(tester, outbox: outbox, drafts: drafts);
@@ -193,7 +190,7 @@ void main() {
 
     _expectComposeFilled();
     expect(find.text('plan.pdf'), findsOneWidget);
-    expect(find.text('shrunk_1_photo.jpg'), findsOneWidget);
+    expect(find.text('photo.jpg'), findsOneWidget);
     expect(
       find.text('Attachment no longer available: gone.png'),
       findsOneWidget,
@@ -206,27 +203,22 @@ void main() {
     expect(draft.bccText, 'erin@example.com');
     expect(draft.subjectText, 'Lunch?');
     expect(draft.bodyText, 'Tomorrow at noon?');
+    // The draft holds the attachments (#955), so leaving loses nothing.
+    expect(
+      draft.attachments.map((a) => a.filename),
+      ['plan.pdf', 'photo.jpg', 'gone.png'],
+    );
+    expect(draft.attachments.first.contentType, 'application/pdf');
     expect(outbox.messages, isEmpty);
 
-    // Leaving would lose the attachments (drafts cannot hold them): ask.
     await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    expect(find.text('Discard attachments?'), findsOneWidget);
-    await tester.tap(find.text('Stay'));
-    await tester.pumpAndSettle();
-    expect(find.text('Compose'), findsOneWidget);
-
-    await tester.tap(find.byType(BackButton));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(TextButton, 'Discard'));
     await tester.pumpAndSettle();
     await _settleFileIo(tester);
 
-    // Back on the queue, the row is gone.
+    // Straight back on the queue, the row is gone.
+    expect(find.text('Discard attachments?'), findsNothing);
     expect(find.text('No messages waiting to be sent.'), findsOneWidget);
-    // The user's file stays; the app's own shrunk copy is cleaned up.
     expect(await tester.runAsync(kept.exists), isTrue);
-    expect(await tester.runAsync(shrunk.exists), isFalse);
   });
 
   testWidgets('a pending row offers no Edit', (tester) async {

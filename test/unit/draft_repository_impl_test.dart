@@ -1,11 +1,17 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
+import 'package:sharedinbox/data/storage/attachment_store.dart';
 
 import 'db_test_helper.dart';
 import 'fake_imap.dart';
@@ -113,8 +119,24 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient
   @override
   Future<imap.Mailbox> uidExpunge(imap.MessageSequence sequence) async {
     expunged.add(sequence);
+    if (failExpunge) throw imap.ImapException(this, 'NO expunge refused');
     return fakeMailbox('x');
   }
+
+  /// Makes every `UID EXPUNGE` fail.
+  bool failExpunge = false;
+
+  /// What `UID FETCH` returns for the pull.
+  List<imap.MimeMessage> fetched = [];
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async =>
+      imap.FetchImapResult(fetched, null);
 
   @override
   Future<imap.SearchImapResult> uidSearchMessages({
@@ -806,8 +828,11 @@ void main() {
 
       // The second push replaces the copy the first one made.
       row = await repo.getDraft(id);
-      expect(sets, hasLength(2));
-      expect(sets[1]['destroy'], ['M1']);
+      // Create first, then destroy the replaced copy in a call of its own:
+      // a refused create must not take the old copy with it.
+      expect(sets, hasLength(3));
+      expect(sets[1]['destroy'], isNull);
+      expect(sets[2]['destroy'], ['M1']);
       expect(row?.jmapServerId, 'M2');
       expect(row?.dirty, isFalse);
     });
@@ -977,6 +1002,608 @@ void main() {
 
       expect(client.selected, ['Entw&APw-rfe']);
       expect(client.appendedTo, ['Entw&APw-rfe']);
+    });
+  });
+
+  group('draft attachments (#955)', () {
+    late Directory tmp;
+    late Directory storeRoot;
+    late AttachmentStore store;
+
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('draft_attachments_test');
+      storeRoot = Directory(p.join(tmp.path, 'draft_attachments'));
+      store = AttachmentStore(() async => storeRoot);
+    });
+    tearDown(() => tmp.delete(recursive: true));
+
+    /// A file outside the store, as the file picker or a shrink returns it.
+    Future<DraftAttachment> pickedFile(String name, String content) async {
+      final file = File(p.join(tmp.path, 'picked', name));
+      await file.create(recursive: true);
+      await file.writeAsString(content);
+      return DraftAttachment(
+        path: file.path,
+        filename: name,
+        contentType: 'application/pdf',
+        size: content.length,
+      );
+    }
+
+    Future<SavedDraft> save(
+      DraftRepositoryImpl repo,
+      List<DraftAttachment> attachments, {
+      int? id,
+      String accountId = 'acc-1',
+    }) =>
+        repo.saveDraft(
+          id: id,
+          accountId: accountId,
+          toText: 'alice@example.com',
+          ccText: '',
+          subjectText: 'Hi',
+          bodyText: 'Draft',
+          attachments: attachments,
+        );
+
+    test('saveDraft copies the files into the draft folder', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final picked = await pickedFile('plan.pdf', 'pdf bytes');
+
+      final saved = await save(repo, [picked]);
+
+      final stored = saved.attachments.single;
+      expect(
+        p.isWithin(p.join(storeRoot.path, '${saved.id}'), stored.path),
+        isTrue,
+      );
+      expect(p.basename(stored.path), 'plan.pdf');
+      expect(stored.filename, 'plan.pdf');
+      expect(stored.contentType, 'application/pdf');
+      expect(await File(stored.path).readAsString(), 'pdf bytes');
+      // The draft no longer depends on the picked file.
+      await File(picked.path).delete();
+      final restored = await repo.getDraft(saved.id);
+      expect(restored!.attachments, [stored]);
+      expect(await File(stored.path).exists(), isTrue);
+    });
+
+    test('a resave keeps owned copies and deletes removed ones', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [
+        await pickedFile('a.pdf', 'a'),
+        await pickedFile('b.pdf', 'b'),
+      ]);
+      final [a, b] = saved.attachments;
+
+      // Compose hands the stored paths back; dropping b deletes its copy.
+      final again = await save(repo, [a], id: saved.id);
+
+      expect(again.attachments, [a]);
+      expect(await File(a.path).exists(), isTrue);
+      expect(await File(b.path).exists(), isFalse);
+
+      // Two files of the same name each keep it.
+      final twice = await save(
+        repo,
+        [a, await pickedFile('a.pdf', 'other a')],
+        id: saved.id,
+      );
+      expect(
+        twice.attachments.map((x) => p.basename(x.path)),
+        ['a.pdf', 'a.pdf'],
+      );
+      expect(await File(twice.attachments.last.path).readAsString(), 'other a');
+
+      // Removing all of them removes the folder.
+      await save(repo, [], id: saved.id);
+      expect(
+        await Directory(p.join(storeRoot.path, '${saved.id}')).exists(),
+        isFalse,
+      );
+    });
+
+    test('a file already gone is kept as given, so compose can say so',
+        () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      const gone = DraftAttachment(
+        path: '/nonexistent/gone.png',
+        filename: 'gone.png',
+        contentType: 'image/png',
+        size: 3,
+      );
+
+      final saved = await save(repo, [gone]);
+
+      expect(saved.attachments, [gone]);
+      expect((await repo.getDraft(saved.id))!.attachments, [gone]);
+    });
+
+    test('deleteDraft deletes the draft folder', () async {
+      final repo = DraftRepositoryImpl(
+        openTestDatabase(),
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [await pickedFile('a.pdf', 'a')]);
+      final folder = Directory(p.join(storeRoot.path, '${saved.id}'));
+      expect(await folder.exists(), isTrue);
+
+      await repo.deleteDraft(saved.id);
+
+      expect(await folder.exists(), isFalse);
+    });
+
+    test('deleteOrphanedAttachments removes folders of deleted drafts only',
+        () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final kept = await save(repo, [await pickedFile('a.pdf', 'a')]);
+      final orphan = Directory(p.join(storeRoot.path, '999', '0'));
+      await orphan.create(recursive: true);
+      await File(p.join(orphan.path, 'x.pdf')).writeAsString('x');
+
+      await repo.deleteOrphanedAttachments();
+
+      expect(await Directory(p.join(storeRoot.path, '999')).exists(), isFalse);
+      expect(await File(kept.attachments.single.path).exists(), isTrue);
+    });
+
+    test('a malformed attachments_json reads as no attachments', () async {
+      final db = openTestDatabase();
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: store,
+      );
+      final saved = await save(repo, []);
+      await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+          .write(const DraftsCompanion(attachmentsJson: Value('{oops')));
+
+      expect((await repo.getDraft(saved.id))!.attachments, isEmpty);
+      expect(decodeDraftAttachments('[{"filename": "no path"}]'), isEmpty);
+    });
+
+    test('the IMAP push carries the attachment; changing it is an edit',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [42];
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+        attachmentStore: store,
+      );
+      final saved = await save(repo, [await pickedFile('plan.pdf', 'pdf!')]);
+
+      await repo.syncDrafts('acc-1');
+
+      // Parsed back from the wire form, as the server stores it.
+      final pushed = imap.MimeMessage.parseFromText(
+        client.appendedMessages.single.renderMessage(),
+      );
+      final infos = pushed.findContentInfo();
+      expect(infos.map((i) => i.fileName), ['plan.pdf']);
+      final part = pushed.getPart(infos.single.fetchId)!;
+      expect(String.fromCharCodes(part.decodeContentBinary()!), 'pdf!');
+      expect((await repo.getDraft(saved.id))!.dirty, isFalse);
+
+      // Removing the attachment alone marks the draft for another push.
+      await save(repo, [], id: saved.id);
+      expect((await repo.getDraft(saved.id))!.dirty, isTrue);
+    });
+
+    test('a failed copy of a new draft leaves no row behind', () async {
+      final db = openTestDatabase();
+      // A store whose root is a file: creating the draft folder fails.
+      final blocker = File(p.join(tmp.path, 'not-a-dir'))
+        ..writeAsStringSync('');
+      final repo = DraftRepositoryImpl(
+        db,
+        _StubAccounts(),
+        attachmentStore: AttachmentStore(() async => Directory(blocker.path)),
+      );
+      final picked = await pickedFile('a.pdf', 'a');
+
+      await expectLater(
+        save(repo, [picked]),
+        throwsA(isA<FileSystemException>()),
+      );
+      // Compose still has no id, so its next save inserts again: there must
+      // be nothing for that to duplicate.
+      expect(await db.select(db.drafts).get(), isEmpty);
+    });
+
+    /// A JMAP server holding one draft `S1` with attachment blob `b1`, whose
+    /// download fails while [failDownload] returns true.
+    http.Client serverWithAttachedDraft(bool Function() failDownload) =>
+        jmapFakeServer(
+          accountId: 'u1',
+          downloadUrl:
+              'https://jmap.example.com/download/{accountId}/{blobId}/{name}',
+          handleRaw: (req) {
+            if (!req.url.path.startsWith('/download/')) return null;
+            return failDownload()
+                ? http.Response('busy', 503)
+                : http.Response.bytes([0, 1, 2, 255], 200);
+          },
+          handle: (call) async {
+            switch (call.method) {
+              case 'Mailbox/get':
+                return [
+                  'Mailbox/get',
+                  {
+                    'list': [
+                      {'id': 'mb-drafts', 'role': 'drafts'},
+                    ],
+                  },
+                  call.callId,
+                ];
+              case 'Email/query':
+                return [
+                  'Email/query',
+                  {
+                    'ids': ['S1'],
+                  },
+                  call.callId,
+                ];
+              case 'Email/get':
+                return [
+                  'Email/get',
+                  {
+                    'list': [
+                      {
+                        'id': 'S1',
+                        'subject': 'From webmail',
+                        'textBody': <dynamic>[],
+                        'bodyValues': <String, dynamic>{},
+                        'attachments': [
+                          {
+                            'blobId': 'b1',
+                            'name': 'r.bin',
+                            'type': 'application/octet-stream',
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  call.callId,
+                ];
+            }
+            return null;
+          },
+        );
+
+    test('a pulled draft whose attachment fails is not stored, and retried',
+        () async {
+      final db = openTestDatabase();
+      var fail = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _JmapAccounts(),
+        httpClient: serverWithAttachedDraft(() => fail),
+        attachmentStore: store,
+      );
+
+      await repo.syncDrafts('acc-1');
+      // Stored without it, the next edit would remove it from the server.
+      expect(await db.select(db.drafts).get(), isEmpty);
+      expect(await storeRoot.exists(), isFalse);
+
+      fail = false;
+      await repo.syncDrafts('acc-1');
+
+      final row = (await db.select(db.drafts).get()).single;
+      expect(row.jmapServerId, 'S1');
+      final attachment = decodeDraftAttachments(row.attachmentsJson).single;
+      expect(attachment.filename, 'r.bin');
+      expect(await File(attachment.path).readAsBytes(), [0, 1, 2, 255]);
+    });
+
+    test(
+        'a draft the JMAP server refuses keeps its old copy and does not '
+        'hold back the others', () async {
+      final db = openTestDatabase();
+      final sets = <Map<String, dynamic>>[];
+      final onServer = <String>['OLD'];
+      final server = jmapFakeServer(
+        accountId: 'u1',
+        handle: (call) async {
+          switch (call.method) {
+            case 'Mailbox/get':
+              return [
+                'Mailbox/get',
+                {
+                  'list': [
+                    {'id': 'mb-drafts', 'role': 'drafts'},
+                  ],
+                },
+                call.callId,
+              ];
+            case 'Email/set':
+              sets.add(call.args);
+              final create = (call.args['create'] as Map?)?['draft'] as Map?;
+              if (create == null) {
+                final destroy = (call.args['destroy'] as List?) ?? const [];
+                onServer.removeWhere(destroy.contains);
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              }
+              if (create['subject'] == 'big') {
+                return [
+                  'Email/set',
+                  {
+                    'notCreated': {
+                      'draft': {'type': 'tooLarge'},
+                    },
+                  },
+                  call.callId,
+                ];
+              }
+              onServer.add('NEW');
+              return [
+                'Email/set',
+                {
+                  'created': {
+                    'draft': {'id': 'NEW'},
+                  },
+                },
+                call.callId,
+              ];
+            case 'Email/query':
+              return [
+                'Email/query',
+                {'ids': List.of(onServer)},
+                call.callId,
+              ];
+          }
+          return null;
+        },
+      );
+      final repo = DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
+      final big = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'big',
+        bodyText: 'x',
+      );
+      // Its earlier version is on the server as OLD.
+      await (db.update(db.drafts)..where((t) => t.id.equals(big.id)))
+          .write(const DraftsCompanion(jmapServerId: Value('OLD')));
+      final small = await repo.saveDraft(
+        accountId: 'acc-1',
+        toText: 'a@example.com',
+        ccText: '',
+        subjectText: 'small',
+        bodyText: 'y',
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      expect(sets.where((x) => x.containsKey('destroy')), isEmpty);
+      expect(onServer, ['OLD', 'NEW']);
+      final bigRow = (await repo.getDraft(big.id))!;
+      expect(bigRow.dirty, isTrue);
+      expect(bigRow.jmapServerId, 'OLD');
+      final smallRow = (await repo.getDraft(small.id))!;
+      expect(smallRow.dirty, isFalse);
+      expect(smallRow.jmapServerId, 'NEW');
+    });
+
+    for (final failure in ['notDestroyed', 'method error']) {
+      test(
+          'a replaced JMAP copy that cannot be destroyed ($failure) is '
+          'tombstoned, not imported back', () async {
+        // Tombstones are only kept for an account that exists.
+        final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+        final onServer = <String>['OLD'];
+        var destroyCalls = 0;
+        final server = jmapFakeServer(
+          accountId: 'u1',
+          handle: (call) async {
+            switch (call.method) {
+              case 'Mailbox/get':
+                return [
+                  'Mailbox/get',
+                  {
+                    'list': [
+                      {'id': 'mb-drafts', 'role': 'drafts'},
+                    ],
+                  },
+                  call.callId,
+                ];
+              case 'Email/set':
+                if (call.args.containsKey('create')) {
+                  onServer.add('NEW');
+                  return [
+                    'Email/set',
+                    {
+                      'created': {
+                        'draft': {'id': 'NEW'},
+                      },
+                    },
+                    call.callId,
+                  ];
+                }
+                final destroy = (call.args['destroy'] as List).cast<String>();
+                if (destroyCalls++ == 0) {
+                  return failure == 'notDestroyed'
+                      ? [
+                          'Email/set',
+                          {
+                            'notDestroyed': {
+                              for (final id in destroy)
+                                id: {'type': 'serverFail'},
+                            },
+                          },
+                          call.callId,
+                        ]
+                      : [
+                          'error',
+                          {'type': 'serverFail'},
+                          call.callId,
+                        ];
+                }
+                onServer.removeWhere(destroy.contains);
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              case 'Email/query':
+                return [
+                  'Email/query',
+                  {'ids': List.of(onServer)},
+                  call.callId,
+                ];
+              case 'Email/get':
+                // Only reached when the pull wants to import OLD.
+                return [
+                  'Email/get',
+                  {
+                    'list': [
+                      {'id': 'OLD', 'subject': 'stale'},
+                    ],
+                  },
+                  call.callId,
+                ];
+            }
+            return null;
+          },
+        );
+        final repo =
+            DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
+        final saved = await repo.saveDraft(
+          accountId: 'acc-1',
+          toText: 'a@example.com',
+          ccText: '',
+          subjectText: 'edited',
+          bodyText: 'x',
+        );
+        await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+            .write(const DraftsCompanion(jmapServerId: Value('OLD')));
+
+        await repo.syncDrafts('acc-1');
+
+        expect(await db.select(db.drafts).get(), hasLength(1));
+        expect(
+          (await db.select(db.draftTombstones).get()).map((t) => t.serverId),
+          ['OLD'],
+        );
+        expect((await repo.getDraft(saved.id))!.jmapServerId, 'NEW');
+
+        // The next sync removes it through the tombstone.
+        await repo.syncDrafts('acc-1');
+
+        expect(onServer, ['NEW']);
+        expect(await db.select(db.draftTombstones).get(), isEmpty);
+        expect(await db.select(db.drafts).get(), hasLength(1));
+      });
+    }
+
+    test('a replaced IMAP copy that cannot be expunged is tombstoned',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [41, 42]
+        ..failExpunge = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+      final saved = await save(repo, []);
+      await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+          .write(const DraftsCompanion(imapServerId: Value('41')));
+
+      await repo.syncDrafts('acc-1');
+
+      // UID 41 is still on the server, but queued for removal: not pulled.
+      expect(await db.select(db.drafts).get(), hasLength(1));
+      expect(
+        (await db.select(db.draftTombstones).get()).map((t) => t.serverId),
+        ['41'],
+      );
+      expect((await repo.getDraft(saved.id))!.imapServerId, '42');
+    });
+
+    test('a pulled draft with a forwarded mail attached keeps it as one file',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      const crlf = '\r\n';
+      final raw = [
+        'From: bob@example.com',
+        'Subject: Fwd draft',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="outer"',
+        '',
+        '--outer',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'see below',
+        '--outer',
+        'Content-Type: message/rfc822',
+        'Content-Disposition: attachment; filename="fwd.eml"',
+        '',
+        'Subject: inner',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="inner"',
+        '',
+        '--inner',
+        'Content-Type: text/plain',
+        '',
+        'inner body',
+        '--inner',
+        'Content-Type: application/pdf',
+        'Content-Disposition: attachment; filename="inner.pdf"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'cGRm',
+        '--inner--',
+        '--outer--',
+        '',
+      ].join(crlf);
+      final msg = imap.MimeMessage.parseFromText(raw)..uid = 7;
+      final client = _DraftsSpyImapClient()
+        ..serverUids = [7]
+        ..fetched = [msg];
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+        attachmentStore: store,
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      final row = (await db.select(db.drafts).get()).single;
+      final attachments = decodeDraftAttachments(row.attachmentsJson);
+      expect(attachments.map((a) => a.filename), ['fwd.eml']);
+      final content = await File(attachments.single.path).readAsString();
+      expect(content, contains('inner body'));
     });
   });
 }

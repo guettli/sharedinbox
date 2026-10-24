@@ -254,6 +254,10 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // (#353). Reading `reconnectFlushProvider` installs the subscription.
     unawaited(ref.read(connectivityServiceProvider).initialize());
     ref.read(reconnectFlushProvider);
+    // Attachment copies of drafts and queued messages that no longer exist
+    // (the app stopped between deleting a row and its files, #955).
+    unawaited(ref.read(draftRepositoryProvider).deleteOrphanedAttachments());
+    unawaited(ref.read(outboxRepositoryProvider).deleteOrphanedAttachments());
     // WorkManager (which prefetches bodies on Android) does not exist on
     // desktop; prefetch in-process while the app runs instead.
     if (needsInProcessBodyPrefetch) {

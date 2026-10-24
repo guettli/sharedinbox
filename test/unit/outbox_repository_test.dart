@@ -1,14 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
+import 'package:sharedinbox/data/storage/attachment_store.dart';
 
 import 'db_test_helper.dart';
 
@@ -643,60 +646,125 @@ void main() {
     });
   });
 
-  group('temp attachments', () {
+  group('attachment copies (#955)', () {
     late AppDatabase db;
     late OutboxRepositoryImpl repo;
-    late List<String> deleted;
+    late Directory tmp;
+    late Directory storeRoot;
+    late File own;
+    late File shrunk;
 
     setUp(() async {
       db = openTestDatabase();
       await _seedAccount(db);
-      deleted = [];
-      repo = OutboxRepositoryImpl(db, deleteFile: (p) async => deleted.add(p));
+      tmp = await Directory.systemTemp.createTemp('outbox_attachments_test');
+      storeRoot = Directory(p.join(tmp.path, 'outbox_attachments'));
+      repo = OutboxRepositoryImpl(
+        db,
+        attachmentStore: AttachmentStore(() async => storeRoot),
+      );
+      own = File(p.join(tmp.path, 'home', 'own.pdf'));
+      await own.create(recursive: true);
+      await own.writeAsString('pdf');
+      shrunk = File(p.join(tmp.path, 'cache', 'photo.jpg'));
+      await shrunk.create(recursive: true);
+      await shrunk.writeAsString('jpg');
     });
+    tearDown(() => tmp.delete(recursive: true));
 
-    Future<int> enqueueWithShrunk() => repo.enqueue(
+    Future<int> enqueue(List<String> paths) => repo.enqueue(
           _accountId,
-          const EmailDraft(
-            from: EmailAddress(email: 'alice@example.com'),
-            to: [EmailAddress(email: 'bob@example.com')],
-            cc: [],
+          EmailDraft(
+            from: const EmailAddress(email: 'alice@example.com'),
+            to: const [EmailAddress(email: 'bob@example.com')],
+            cc: const [],
             subject: 's',
             body: 'b',
-            attachmentFilePaths: ['/home/u/own.pdf', '/tmp/shrunk_1_x.jpg'],
-            tempAttachmentPaths: ['/tmp/shrunk_1_x.jpg'],
+            attachmentFilePaths: paths,
           ),
         );
 
-    test('are deleted after a successful send, the user files are not',
+    Directory folderOf(int id) => Directory(p.join(storeRoot.path, '$id'));
+
+    test('enqueue sends from its own copies, so the caller may delete them',
         () async {
-      await enqueueWithShrunk();
-      await repo.flush(_accountId, (_) async {});
-      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+      final id = await enqueue([own.path, shrunk.path]);
+      // What compose does when it closes, and a sent draft's folder.
+      await shrunk.delete();
+
+      final sent = <List<String>>[];
+      await repo.flush(_accountId, (job) async {
+        sent.add(job.draft.attachmentFilePaths);
+        for (final path in job.draft.attachmentFilePaths) {
+          expect(await File(path).exists(), isTrue, reason: path);
+        }
+      });
+
+      final paths = sent.single;
+      expect(paths.map(p.basename), ['own.pdf', 'photo.jpg']);
+      expect(paths.every((x) => p.isWithin(folderOf(id).path, x)), isTrue);
+      // Sent: the copies go with the row; the user's file stays.
+      expect(await folderOf(id).exists(), isFalse);
+      expect(await own.exists(), isTrue);
     });
 
-    test('are kept while the message is still queued', () async {
-      await enqueueWithShrunk();
+    test('a file already gone keeps its path, so the send fails loudly',
+        () async {
+      final gone = p.join(tmp.path, 'gone.png');
+      await enqueue([gone]);
+      final row = (await db.select(db.outbox).get()).single;
+      expect(jsonDecode(row.attachmentsJson), [gone]);
+    });
+
+    test('the copies stay while the message is still queued', () async {
+      final id = await enqueue([own.path]);
       await repo.flush(_accountId, (_) async => throw Exception('offline'));
       await repo.flush(
         _accountId,
         (_) async => throw PermanentSendException('5.1.2'),
         now: DateTime.now().add(const Duration(days: 1)),
       );
-      expect(deleted, isEmpty);
+      expect(await folderOf(id).exists(), isTrue);
     });
 
-    test('are deleted on discard', () async {
-      final id = await enqueueWithShrunk();
+    test('discard deletes the copies', () async {
+      final id = await enqueue([own.path]);
       await repo.discard(id);
-      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+      expect(await folderOf(id).exists(), isFalse);
+      expect(await own.exists(), isTrue);
     });
 
-    test('are handed over, not deleted, by takeForEdit', () async {
-      final id = await enqueueWithShrunk();
-      final draft = await repo.takeForEdit(id, (job) async => job.draft);
-      expect(draft!.tempAttachmentPaths, ['/tmp/shrunk_1_x.jpg']);
-      expect(deleted, isEmpty);
+    test('takeForEdit hands the copies over, then deletes them', () async {
+      final id = await enqueue([own.path]);
+      String? content;
+      await repo.takeForEdit(id, (job) async {
+        // The hand-off (saving a draft) copies them while they exist.
+        content =
+            await File(job.draft.attachmentFilePaths.single).readAsString();
+      });
+      expect(content, 'pdf');
+      expect(await folderOf(id).exists(), isFalse);
+    });
+
+    test('a failed takeForEdit keeps the copies with the queued row', () async {
+      final id = await enqueue([own.path]);
+      await expectLater(
+        repo.takeForEdit<void>(id, (_) => throw StateError('disk full')),
+        throwsStateError,
+      );
+      expect(await folderOf(id).exists(), isTrue);
+    });
+
+    test('deleteOrphanedAttachments removes folders of gone rows only',
+        () async {
+      final id = await enqueue([own.path]);
+      final orphan = Directory(p.join(storeRoot.path, '${id + 100}'));
+      await orphan.create(recursive: true);
+
+      await repo.deleteOrphanedAttachments();
+
+      expect(await orphan.exists(), isFalse);
+      expect(await folderOf(id).exists(), isTrue);
     });
   });
 

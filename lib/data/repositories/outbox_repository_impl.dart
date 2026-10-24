@@ -4,14 +4,18 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:path/path.dart' as p;
 
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/utils/attachment_files.dart';
 import 'package:sharedinbox/core/utils/mail_header_encode.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/reply_headers.dart';
+import 'package:sharedinbox/data/storage/attachment_store.dart';
 
 /// Backoff schedule (in seconds). Capped at the last entry — once `attempts`
 /// exceeds the table length we wait this long between every further retry.
@@ -23,13 +27,16 @@ class OutboxRepositoryImpl implements OutboxRepository {
   OutboxRepositoryImpl(
     this._db, {
     String appVersion = 'dev',
-    Future<void> Function(String path)? deleteFile,
+    AttachmentStore? attachmentStore,
   })  : _appVersion = appVersion,
-        _deleteFile = deleteFile ?? _deleteFileBestEffort;
+        _files =
+            attachmentStore ?? AttachmentStore.appSupport('outbox_attachments');
 
-  /// Removes an app-created temp attachment once its message left the
-  /// outbox. Injectable so tests can observe it.
-  final Future<void> Function(String path) _deleteFile;
+  /// The queued messages' own copies of their attachment files, one folder
+  /// per row: whoever queued a message may delete its files right after
+  /// (compose deletes its shrunk copies, a sent draft its folder), while the
+  /// outbox still sends and retries from them.
+  final AttachmentStore _files;
 
   final AppDatabase _db;
 
@@ -66,8 +73,6 @@ class OutboxRepositoryImpl implements OutboxRepository {
       'cc': draft.cc.map((a) => a.toJson()).toList(),
       if (draft.bcc.isNotEmpty)
         'bcc': draft.bcc.map((a) => a.toJson()).toList(),
-      if (draft.tempAttachmentPaths.isNotEmpty)
-        'tempAttachments': draft.tempAttachmentPaths,
       'subject': draft.subject,
       'body': draft.body,
       if (draft.messageId != null) 'messageId': draft.messageId,
@@ -76,16 +81,50 @@ class OutboxRepositoryImpl implements OutboxRepository {
       if (draft.inReplyTo != null) 'inReplyTo': draft.inReplyTo,
       if (draft.references.isNotEmpty) 'references': draft.references,
     });
-    final attachmentsJson = jsonEncode(draft.attachmentFilePaths);
-    return _db.into(_db.outbox).insert(
-          OutboxCompanion.insert(
-            accountId: accountId,
-            mimeBase64: mimeBase64,
-            envelopeJson: envelope,
-            attachmentsJson: Value(attachmentsJson),
-            createdAt: DateTime.now(),
+    final paths = draft.attachmentFilePaths;
+    // One transaction: a row is never seen (and sent) before it refers to
+    // its own copies. The row is written before its folder, as the store
+    // requires.
+    return _db.transaction(() async {
+      final id = await _db.into(_db.outbox).insert(
+            OutboxCompanion.insert(
+              accountId: accountId,
+              mimeBase64: mimeBase64,
+              envelopeJson: envelope,
+              attachmentsJson: Value(jsonEncode(paths)),
+              createdAt: DateTime.now(),
+            ),
+          );
+      // A file that is already gone keeps its path: the send then fails
+      // with "Attachment file no longer exists" instead of going out
+      // without it.
+      var anyFile = false;
+      for (final path in paths) {
+        if (await File(path).exists()) anyFile = true;
+      }
+      if (!anyFile) return id;
+      try {
+        final kept = await _files.keep(id, [
+          for (final path in paths)
+            DraftAttachment(
+              path: path,
+              filename: p.basename(path),
+              contentType: guessAttachmentType(path),
+              size: 0,
+            ),
+        ]);
+        await (_db.update(_db.outbox)..where((t) => t.id.equals(id))).write(
+          OutboxCompanion(
+            attachmentsJson: Value(jsonEncode([for (final a in kept) a.path])),
           ),
         );
+      } catch (_) {
+        // The row is rolled back; do not leave its copies behind.
+        await _files.delete(id);
+        rethrow;
+      }
+      return id;
+    });
   }
 
   @override
@@ -163,7 +202,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
     try {
       await sender(job);
       await (_db.delete(_db.outbox)..where((t) => t.id.equals(row.id))).go();
-      await _deleteTempAttachments(job.draft);
+      await _deleteFilesOf(row);
       _safeNotify(() => observer?.onOk?.call(job));
       return true;
     } on PermanentSendException catch (e) {
@@ -203,15 +242,19 @@ class OutboxRepositoryImpl implements OutboxRepository {
     try {
       // One transaction: if [handOff] (saving the draft) fails, the row stays
       // queued, so the message is never lost in between.
-      return await _db.transaction(() async {
+      final taken = await _db.transaction(() async {
         final row = await (_db.select(_db.outbox)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
         if (row == null) return null;
         final result = await handOff(_jobFromRow(row));
         await (_db.delete(_db.outbox)..where((t) => t.id.equals(id))).go();
-        return result;
+        return (row: row, result: result);
       });
+      if (taken == null) return null;
+      // Only once the row is gone for good: [handOff] copied the files.
+      await _deleteFilesOf(taken.row);
+      return taken.result;
     } finally {
       _claimed.remove(id);
     }
@@ -268,17 +311,26 @@ class OutboxRepositoryImpl implements OutboxRepository {
     final row = await (_db.select(_db.outbox)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     await (_db.delete(_db.outbox)..where((t) => t.id.equals(id))).go();
-    if (row != null) await _deleteTempAttachments(_jobFromRow(row).draft);
+    if (row != null) await _deleteFilesOf(row);
   }
 
-  /// Deletes the app-created temp copies of [draft]'s attachments: once its
-  /// message is sent or discarded nothing refers to them any more. Never
-  /// fails the caller — a leftover temp file is harmless.
-  Future<void> _deleteTempAttachments(model.EmailDraft draft) async {
-    for (final path in draft.tempAttachmentPaths) {
-      try {
-        await _deleteFile(path);
-      } catch (_) {}
+  /// Deletes the attachment copies of [row] once it left the outbox. Never
+  /// fails the caller; a leftover folder goes with the next
+  /// [deleteOrphanedAttachments].
+  Future<void> _deleteFilesOf(OutboxRow row) async {
+    if (row.attachmentsJson == '[]') return;
+    await _files.delete(row.id);
+  }
+
+  @override
+  Future<void> deleteOrphanedAttachments() async {
+    try {
+      await _files.deleteOrphans(() async {
+        final rows = await _db.select(_db.outbox).get();
+        return {for (final r in rows) r.id};
+      });
+    } catch (_) {
+      // Retried at the next start.
     }
   }
 }
@@ -305,18 +357,11 @@ model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
     subject: env['subject'] as String? ?? '',
     body: env['body'] as String? ?? '',
     attachmentFilePaths: atts.cast<String>(),
-    tempAttachmentPaths:
-        (env['tempAttachments'] as List<dynamic>? ?? const []).cast<String>(),
     messageId: env['messageId'] as String?,
     inReplyTo: env['inReplyTo'] as String?,
     references:
         (env['references'] as List<dynamic>? ?? const []).cast<String>(),
   );
-}
-
-Future<void> _deleteFileBestEffort(String path) async {
-  final file = File(path);
-  if (await file.exists()) await file.delete();
 }
 
 OutboxJob _jobFromRow(OutboxRow row) => OutboxJob(

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -17,6 +19,161 @@ import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'helpers.dart';
 
 void main() {
+  group('attachments are kept with the draft (#955)', () {
+    late Directory dir;
+    late File notes;
+
+    setUp(() {
+      dir = Directory.systemTemp.createTempSync('compose_attachments');
+      notes = File('${dir.path}/notes.txt')..writeAsStringSync('notes');
+    });
+    tearDown(() => dir.deleteSync(recursive: true));
+
+    /// Lets Compose's real file-system calls (stat) complete.
+    Future<void> settleFileIo(WidgetTester tester) async {
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+    }
+
+    Future<GoRouter> pumpHome(
+      WidgetTester tester,
+      FakeDraftRepository drafts,
+      FakeEmailRepository email,
+    ) async {
+      final router = _homeAndCompose();
+      await tester.pumpWidget(
+        _wrap(
+          router: router,
+          overrides: [
+            ..._composeOverrides(drafts: drafts, email: email),
+            pickAttachmentFilesProvider.overrideWithValue(
+              () async => [(path: notes.path, name: 'notes.txt')],
+            ),
+            // SnackBars are mirrored into the app log; the real file-system
+            // calls below would otherwise let it open the real database.
+            appLogRepositoryProvider.overrideWithValue(
+              const NoOpAppLogRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      return router;
+    }
+
+    testWidgets('attach, leave, reopen: the attachment is still there', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final drafts = FakeDraftRepository();
+      final email = FakeEmailRepository();
+      final router = await pumpHome(tester, drafts, email);
+      unawaited(router.push('/compose'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Add attachment'));
+      await settleFileIo(tester);
+      expect(find.text('notes.txt'), findsOneWidget);
+
+      // Attaching alone is an edit: leaving saves the draft, no question.
+      await tester.tap(find.byType(BackButton));
+      await settleFileIo(tester);
+      expect(find.text('Discard attachments?'), findsNothing);
+      expect(find.text('home'), findsOneWidget);
+      final saved = (await drafts.getDraft(drafts.savedIds.single))!;
+      expect(saved.attachments.map((a) => a.filename), ['notes.txt']);
+      expect(saved.attachments.single.contentType, 'text/plain');
+      expect(saved.attachments.single.size, 5);
+
+      unawaited(router.push('/compose', extra: {'draftId': saved.id}));
+      await settleFileIo(tester);
+      expect(find.text('Attachments'), findsOneWidget);
+      expect(find.text('notes.txt'), findsOneWidget);
+
+      // And it goes out with the message.
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'To'),
+        'bob@example.com',
+      );
+      await tester.tap(find.byIcon(Icons.send));
+      await settleFileIo(tester);
+      expect(email.sentEmailDraft?.attachmentFilePaths, [notes.path]);
+    });
+
+    testWidgets('removing the attachment is saved too', (tester) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final drafts = FakeDraftRepository();
+      final saved = await drafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        subjectText: 'With file',
+        bodyText: 'Body',
+        attachments: [
+          DraftAttachment(
+            path: notes.path,
+            filename: 'notes.txt',
+            contentType: 'text/plain',
+            size: 5,
+          ),
+        ],
+      );
+      final router = await pumpHome(tester, drafts, FakeEmailRepository());
+      unawaited(router.push('/compose', extra: {'draftId': saved.id}));
+      await settleFileIo(tester);
+
+      await tester.tap(find.byTooltip('Remove'));
+      await tester.pump(const Duration(seconds: 3));
+      await settleFileIo(tester);
+      // Past the "Saved" badge's timer.
+      await tester.pump(const Duration(seconds: 3));
+
+      expect((await drafts.getDraft(saved.id))!.attachments, isEmpty);
+      // The user's own file is never deleted.
+      expect(notes.existsSync(), isTrue);
+    });
+
+    testWidgets('a draft attachment whose file is gone is reported', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final drafts = FakeDraftRepository();
+      final saved = await drafts.saveDraft(
+        toText: 'carol@example.com',
+        ccText: '',
+        subjectText: 'With file',
+        bodyText: 'Body',
+        attachments: [
+          DraftAttachment(
+            path: '${dir.path}/gone.png',
+            filename: 'gone.png',
+            contentType: 'image/png',
+            size: 3,
+          ),
+        ],
+      );
+      final router = await pumpHome(tester, drafts, FakeEmailRepository());
+      unawaited(router.push('/compose', extra: {'draftId': saved.id}));
+      await settleFileIo(tester);
+
+      expect(find.text('Attachments'), findsNothing);
+      expect(
+        find.text('Attachment no longer available: gone.png'),
+        findsOneWidget,
+      );
+    });
+  });
+
   group('ComposeScreen', () {
     testWidgets('renders To, Cc, Subject and Body fields', (tester) async {
       await tester.pumpWidget(

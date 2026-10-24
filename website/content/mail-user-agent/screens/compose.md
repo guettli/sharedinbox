@@ -15,7 +15,10 @@ original.
 
 - Pick which account to send from (when more than one is configured).
 - Fill in *To*, *Cc*, *Subject* and body.
-- Attach files.
+- Attach files. They are kept with the auto-saved draft (the app keeps its
+  own copy), so leaving Compose and reopening the draft brings them back.
+  The draft's copy in the server's *Drafts* folder carries them too, and a
+  draft started in another mail client comes back with its attachments.
 - Tap **Send** — the message is handed to the send queue and delivered as soon
   as the network allows. Failures are surfaced in the Sent Queue.
 

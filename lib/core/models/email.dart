@@ -408,13 +408,9 @@ class EmailDraft {
   final String subject;
   final String body;
 
-  /// Local file-system paths of files to attach when sending.
+  /// Local file-system paths of files to attach when sending. Each file's
+  /// base name is the attachment's name.
   final List<String> attachmentFilePaths;
-
-  /// The subset of [attachmentFilePaths] the app created itself (shrunk
-  /// image copies in the temp directory). The outbox deletes them once the
-  /// message is sent or discarded; the user's own files are never deleted.
-  final List<String> tempAttachmentPaths;
 
   /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
   /// message. When null, the mail library generates one at send time. Set
@@ -449,7 +445,6 @@ class EmailDraft {
     required this.subject,
     required this.body,
     this.attachmentFilePaths = const [],
-    this.tempAttachmentPaths = const [],
     this.messageId,
     this.inReplyTo,
     this.references = const [],
@@ -463,7 +458,6 @@ class EmailDraft {
         subject: subject,
         body: body,
         attachmentFilePaths: attachmentFilePaths,
-        tempAttachmentPaths: tempAttachmentPaths,
         messageId: messageId ?? this.messageId,
         inReplyTo: inReplyTo,
         references: references,

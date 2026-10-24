@@ -5,12 +5,17 @@
 //
 // Run via: stalwart-dev/test.sh
 
+import 'dart:io';
+
 import 'package:enough_mail/enough_mail.dart';
+import 'package:path/path.dart' as p;
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/draft.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
+import 'package:sharedinbox/data/storage/attachment_store.dart';
 import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
@@ -213,6 +218,54 @@ Future<void> _appendServerDraftJmap(
   }
 }
 
+/// Bytes that survive only a binary-clean round trip: every byte value, so
+/// a lossy transfer encoding or a text decode would show.
+final _attachmentBytes = List<int>.generate(600, (i) => i % 256);
+
+/// A scratch directory for one test: the picked file and each device's
+/// draft attachment folder live under it.
+Future<Directory> _scratch() async {
+  final dir = await Directory.systemTemp.createTemp('draft_sync_attach');
+  addTearDown(() => dir.delete(recursive: true));
+  return dir;
+}
+
+/// A file as the picker returns it, outside any draft folder.
+Future<DraftAttachment> _pickedFile(Directory scratch) async {
+  final file = File(p.join(scratch.path, 'picked', 'report.bin'));
+  await file.create(recursive: true);
+  await file.writeAsBytes(_attachmentBytes);
+  return DraftAttachment(
+    path: file.path,
+    filename: 'report.bin',
+    contentType: 'application/octet-stream',
+    size: _attachmentBytes.length,
+  );
+}
+
+/// One device's draft attachment folder under [scratch].
+AttachmentStore _deviceStore(Directory scratch, String device) =>
+    AttachmentStore(() async => Directory(p.join(scratch.path, device)));
+
+/// Asserts that the only local draft of [accountId] in [db] came back from
+/// the server with the attachment, byte for byte.
+Future<void> _expectPulledAttachment(
+  AppDatabase db,
+  String accountId,
+  String subject,
+) async {
+  final rows = await (db.select(db.drafts)
+        ..where((t) => t.accountId.equals(accountId)))
+      .get();
+  final row = rows.singleWhere((r) => r.subjectText == subject);
+  final attachments = decodeDraftAttachments(row.attachmentsJson);
+  expect(attachments.map((a) => a.filename), ['report.bin']);
+  expect(attachments.single.contentType, 'application/octet-stream');
+  expect(attachments.single.size, _attachmentBytes.length);
+  expect(await File(attachments.single.path).readAsBytes(), _attachmentBytes);
+  expect(row.dirty, isFalse);
+}
+
 void main() {
   late StalwartEnv env;
   late StalwartTestUser user;
@@ -238,13 +291,14 @@ void main() {
       AppDatabase db,
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
-    }) makeRepo() {
+    }) makeRepo({AttachmentStore? store}) {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final drafts = DraftRepositoryImpl(
         db,
         accounts,
         imapConnect: testImapConnect,
+        attachmentStore: store,
       );
       return (db: db, accounts: accounts, drafts: drafts);
     }
@@ -376,6 +430,43 @@ void main() {
         expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
       },
     );
+
+    test(
+      'a draft attachment goes up with the server copy and comes back '
+      'losslessly on another device (#955)',
+      () async {
+        final scratch = await _scratch();
+        final phone = makeRepo(store: _deviceStore(scratch, 'phone'));
+        await phone.accounts.addAccount(imapAccount, user.password);
+        final subject = 'imap-attach-${DateTime.now().millisecondsSinceEpoch}';
+        await phone.drafts.saveDraft(
+          accountId: imapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: subject,
+          bodyText: 'see attachment',
+          attachments: [await _pickedFile(scratch)],
+        );
+        await phone.drafts.syncDrafts(imapAccount.id);
+
+        // The server copy is multipart with the attachment part.
+        final server = (await _fetchServerDraftsImap(env, user)).single;
+        expect(server.envelope?.subject, subject);
+        final infos = server.findContentInfo();
+        expect(infos.map((i) => i.fileName), ['report.bin']);
+        expect(
+          server.getPart(infos.single.fetchId)!.decodeContentBinary(),
+          _attachmentBytes,
+        );
+        expect(server.decodeTextPlainPart(), contains('see attachment'));
+
+        // Another device pulls it, attachment included.
+        final laptop = makeRepo(store: _deviceStore(scratch, 'laptop'));
+        await laptop.accounts.addAccount(imapAccount, user.password);
+        await laptop.drafts.syncDrafts(imapAccount.id);
+        await _expectPulledAttachment(laptop.db, imapAccount.id, subject);
+      },
+    );
   });
 
   group('JMAP', () {
@@ -384,11 +475,16 @@ void main() {
       AccountRepositoryImpl accounts,
       DraftRepositoryImpl drafts,
       LocalhostMappingClient http,
-    }) makeRepo() {
+    }) makeRepo({AttachmentStore? store}) {
       final db = openTestDatabase();
       final accounts = AccountRepositoryImpl(db, MapSecureStorage());
       final http = LocalhostMappingClient();
-      final drafts = DraftRepositoryImpl(db, accounts, httpClient: http);
+      final drafts = DraftRepositoryImpl(
+        db,
+        accounts,
+        httpClient: http,
+        attachmentStore: store,
+      );
       return (db: db, accounts: accounts, drafts: drafts, http: http);
     }
 
@@ -548,6 +644,67 @@ void main() {
         final mailboxId2 = (await _findDraftsMailboxIdJmap(jmap2))!;
         expect(await _fetchServerDraftsJmap(jmap2, mailboxId2), isEmpty);
         expect(await r.db.select(r.db.draftTombstones).get(), isEmpty);
+      },
+    );
+
+    test(
+      'a draft attachment goes up with the JMAP copy and comes back '
+      'losslessly on another device (#955)',
+      () async {
+        final scratch = await _scratch();
+        final phone = makeRepo(store: _deviceStore(scratch, 'phone'));
+        await phone.accounts.addAccount(jmapAccount, user.password);
+        final subject = 'jmap-attach-${DateTime.now().millisecondsSinceEpoch}';
+        await phone.drafts.saveDraft(
+          accountId: jmapAccount.id,
+          toText: user.email,
+          ccText: '',
+          subjectText: subject,
+          bodyText: 'see attachment',
+          attachments: [await _pickedFile(scratch)],
+        );
+        await phone.drafts.syncDrafts(jmapAccount.id);
+
+        // The server copy carries the attachment.
+        final jmap = await openJmap(phone.http);
+        final mailboxId = (await _findDraftsMailboxIdJmap(jmap))!;
+        final resp = await jmap.call([
+          [
+            'Email/query',
+            {
+              'accountId': jmap.accountId,
+              'filter': {'inMailbox': mailboxId},
+            },
+            'q',
+          ],
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              '#ids': {'resultOf': 'q', 'name': 'Email/query', 'path': '/ids'},
+              'properties': ['subject', 'attachments'],
+            },
+            'g',
+          ],
+        ]);
+        final list = ((resp[1] as List<dynamic>)[1]
+            as Map<String, dynamic>)['list'] as List<dynamic>;
+        final email = list
+            .cast<Map<String, dynamic>>()
+            .singleWhere((m) => m['subject'] == subject);
+        final attachment =
+            (email['attachments'] as List<dynamic>).single as Map;
+        expect(attachment['name'], 'report.bin');
+        expect(
+          await jmap.downloadBlob(attachment['blobId'] as String),
+          _attachmentBytes,
+        );
+
+        // Another device pulls it, attachment included.
+        final laptop = makeRepo(store: _deviceStore(scratch, 'laptop'));
+        await laptop.accounts.addAccount(jmapAccount, user.password);
+        await laptop.drafts.syncDrafts(jmapAccount.id);
+        await _expectPulledAttachment(laptop.db, jmapAccount.id, subject);
       },
     );
   });
