@@ -710,11 +710,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (mounted) {
         switch (result.outcome) {
           case SendNowOutcome.sent:
+            final warning = result.warning;
             messenger.show(
-              'Message sent',
+              warning == null ? 'Message sent' : 'Message sent. $warning',
+              level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
               event: 'compose.sent',
               accountId: _accountId,
-              duration: const Duration(seconds: 3),
+              duration: Duration(seconds: warning == null ? 3 : 8),
             );
           case SendNowOutcome.transientFailed:
             messenger.show(

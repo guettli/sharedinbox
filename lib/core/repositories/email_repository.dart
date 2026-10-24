@@ -325,8 +325,13 @@ enum SendNowOutcome {
 /// The result of an [EmailRepository.sendNow] call: the [outcome] plus, on
 /// failure, a human-readable [message] explaining why, suitable for a SnackBar.
 class SendNowResult {
-  const SendNowResult(this.outcome, {this.message});
+  const SendNowResult(this.outcome, {this.message, this.warning});
 
   final SendNowOutcome outcome;
   final String? message;
+
+  /// For [SendNowOutcome.sent]: what went wrong although the message went out,
+  /// e.g. "Not delivered to carol@example.com: 5.1.2 Mailbox does not exist."
+  /// when the server refused some recipients after accepting the submission.
+  final String? warning;
 }

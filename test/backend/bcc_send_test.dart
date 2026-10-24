@@ -18,13 +18,12 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
 import 'localhost_mapping_client.dart';
+import 'send_repos.dart';
 import 'stalwart_harness.dart';
 
 final _alice = StalwartTestUser(email: 'alice@example.com', password: 'secret');
@@ -91,25 +90,8 @@ void main() {
 
   /// Sends To alice, Bcc bob and bobN from [account] and checks every copy.
   Future<void> sendAndCheck(Account account, String subject) async {
-    final db = openTestDatabase();
-    final accounts = AccountRepositoryImpl(db, MapSecureStorage());
-    final http = LocalhostMappingClient();
-    final emails = EmailRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: testImapConnect,
-      smtpConnect: testSmtpConnect,
-      httpClient: http,
-      getCacheDir: () async => cacheDir,
-    );
-    await accounts.addAccount(account, user.password);
-    // The send files its Sent copy into the folder the mailbox sync found.
-    await MailboxRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: testImapConnect,
-      httpClient: http,
-    ).syncMailboxes(account.id);
+    final (:db, :emails) =
+        await openSendRepos(account, user.password, cacheDir);
 
     await emails.sendEmail(
       account.id,
