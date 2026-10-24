@@ -41,7 +41,7 @@ start the service in the background. It keeps running until you stop it.
 ```bash
 task explore-linux
 # = dagger call --progress=plain -m ci --source=. explore-linux up \
-#     --ports 8765:8765 --ports 21430:1430 --ports 21025:1025 --ports 28080:8080
+#     --ports 8765:8765 --ports 21430:11430 --ports 21025:11025 --ports 28080:18080
 ```
 
 The first run compiles the debug build, which takes a few minutes. After that
@@ -61,7 +61,9 @@ until curl -sf localhost:8765/health; do sleep 3; done
 | 28080 | Stalwart JMAP |
 
 The host ports are offset so they do not collide with `task stalwart` or a
-probe container. `dagger up` binds them on **all interfaces**, and the API has
+probe container. They go straight to Stalwart, not through the fault proxy the
+app uses (see **Break the network** below), so seeding and inspection keep
+working while the app is offline. `dagger up` binds them on **all interfaces**, and the API has
 no authentication. Use only the test accounts below, never real credentials.
 
 To test a code change, stop the `dagger call … up` process and start it again.
@@ -97,6 +99,8 @@ c drag x=200 y=150 to_x=900 to_y=150 # swipe: opens a list row's action menu
 c drag x=200 y=150 to_x=500 to_y=150 hold=1   # keep it open, then /shot
 c scroll x=640 y=400 clicks=20       # mouse wheel; drag does not scroll lists
 c restart wipe=1                     # fresh install: no data, empty keyring
+c net                                # the app's network: mode, open connections
+c net mode=down proto=imap           # break it (see Break the network)
 ```
 
 How to read the output:
@@ -205,6 +209,43 @@ python3 stalwart-dev/jmap_probe.py http://127.0.0.1:28080 bob@example.com secret
 ```
 
 IMAP is available too, at `localhost:21430` (plaintext).
+
+**Break the network.** The app reaches Stalwart through a fault-injecting
+proxy (`scripts/fault_proxy.py`, run by the driving API) on its localhost
+ports: `imap` 1430, `smtp` 1025, `jmap` 8080, `sieve` 4190. `c net` shows
+each one's mode and its open and total connections; `c net mode=… [proto=…]`
+changes it (`proto` defaults to all):
+
+| Mode | Effect on the app |
+|---|---|
+| `up` | normal |
+| `down` | new connections are refused, open ones closed (FIN): server gone |
+| `reset` | open connections get an RST, once; then `up` again |
+| `blackhole` | connections are accepted and kept, but no bytes move either way: a dead link, which only a timeout notices. Queued bytes flow again after `up` |
+| `slow` | `delay_ms` per chunk (default 500) and/or `rate` bytes/s per direction |
+
+Each change lands in `c log`, as an `[explore]` line between the app's own
+output, so you can see what the app logged right after it. The mode survives
+`c restart`. Your own host ports (21430, 21025, 28080) are never affected.
+
+Offline outbox, for an IMAP/SMTP account set up as above:
+
+```bash
+c net mode=down                      # app offline; the host ports still work
+# compose and send a mail to alice@example.com in the app, then:
+c texts                              # is it in the outbox / marked pending?
+c log lines=30                       # what the send attempt logged
+c net mode=up
+c net                                # smtp total goes up once it retries
+python3 stalwart-dev/jmap_probe.py http://127.0.0.1:28080 alice@example.com secret \
+  --call Email/query '{}'            # delivered, exactly once?
+```
+
+More to try: `c net mode=blackhole proto=imap` while the app idles in the
+inbox, seed a mail via 21025, and see whether IDLE ever notices (then `up`);
+`mode=reset` to check that IDLE reconnects by itself; `mode=slow rate=2000`
+while opening a large mail, for progress and timeout messages; `mode=down`
+while a flag change or move is pending, then `up`, and compare with the server.
 
 ## A session
 
