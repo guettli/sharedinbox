@@ -61,6 +61,28 @@ def _is_retryable(exc):
     return resp.status_code >= 500 or resp.status_code in (408, 429)
 
 
+def _is_edit_deleted(exc):
+    """Whether Play rejected the request because the edit itself is gone.
+
+    Play can delete an open edit underneath us (seen on 2026-10-24: a 400
+    FAILED_PRECONDITION "This Edit has been deleted." mid-upload, reproduced on
+    re-run). Unlike other 4xx, the request is fine -- only the edit is stale --
+    so opening a fresh edit and uploading again can succeed.
+    """
+    resp = getattr(getattr(exc, "__cause__", None), "response", None)
+    if resp is None:
+        resp = getattr(exc, "response", None)
+    if resp is None or resp.status_code != 400:
+        return False
+    return "This Edit has been deleted" in (resp.text or "")
+
+
+def _open_edit(session):
+    edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
+    _raise_for_status(edit_resp, "creating the Play edit")
+    return edit_resp.json()["id"]
+
+
 def _upload_aab_resumable(session, package, edit_id, aab_path):
     """Upload AAB using the Google resumable upload protocol."""
     file_size = os.path.getsize(aab_path)
@@ -141,9 +163,7 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
-    _raise_for_status(edit_resp, "creating the Play edit")
-    edit_id = edit_resp.json()["id"]
+    edit_id = _open_edit(session)
 
     last_exc = None
     bundle = None
@@ -155,6 +175,13 @@ def main():
             break
         except Exception as exc:
             last_exc = exc
+            if _is_edit_deleted(exc) and attempt < _MAX_UPLOAD_ATTEMPTS - 1:
+                print(
+                    f"Upload attempt {attempt + 1} failed because Play deleted "
+                    f"edit {edit_id}; opening a new edit and retrying…"
+                )
+                edit_id = _open_edit(session)
+                continue
             if not _is_retryable(exc):
                 print(
                     f"Upload attempt {attempt + 1} failed and is NOT retryable "

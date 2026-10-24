@@ -139,12 +139,13 @@ class TestMainHappyPath(unittest.TestCase):
 
 
 class TestUploadRetry(unittest.TestCase):
-    def _run_main(self, upload_side_effects, sleep_mock=None):
+    def _run_main(self, upload_side_effects, edit_ids=("edit-1",)):
         import tempfile
 
         mock_session = MagicMock()
         post_responses = [
-            MagicMock(**{"json.return_value": {"id": "edit-1"}}),
+            MagicMock(**{"json.return_value": {"id": edit_id}}) for edit_id in edit_ids
+        ] + [
             MagicMock(**{"content": b"", "json.return_value": {}}),
             MagicMock(),
         ]
@@ -170,14 +171,14 @@ class TestUploadRetry(unittest.TestCase):
             patch("deploy_playstore._upload_deobfuscation_file", return_value={}),
             patch("deploy_playstore.time.sleep"),
         ]
-        for p in patches:
-            p.start()
+        mocks = [p.start() for p in patches]
         try:
             deploy_playstore.main()
         finally:
             for p in patches:
                 p.stop()
             os.unlink(mapping_path)
+        return mock_session, mocks[4]
 
     def test_succeeds_on_first_attempt(self):
         # side_effect list with a single result means the mock returns after
@@ -220,6 +221,23 @@ class TestUploadRetry(unittest.TestCase):
     def test_server_error_is_retried(self):
         """A 5xx is the server failing, not the request -- worth another go."""
         self._run_main([self._wrapped_http_error(503), {"versionCode": 11}])
+
+    def test_deleted_edit_is_retried_on_a_fresh_edit(self):
+        """Play can delete the open edit mid-upload (400 FAILED_PRECONDITION
+        "This Edit has been deleted."). Re-uploading into the same edit cannot
+        work, but a new edit can -- so open one and upload there."""
+        deleted = self._wrapped_http_error(
+            400, '{"error": {"code": 400, "message": "This Edit has been deleted.",'
+            ' "status": "FAILED_PRECONDITION"}}'
+        )
+        session, upload_mock = self._run_main(
+            [deleted, {"versionCode": 13}], edit_ids=("edit-1", "edit-2")
+        )
+        self.assertEqual(
+            [c[0][2] for c in upload_mock.call_args_list], ["edit-1", "edit-2"]
+        )
+        commit_url = session.post.call_args_list[-1][0][0]
+        self.assertIn("/edits/edit-2:commit", commit_url)
 
     def test_429_is_retried(self):
         """429 is an explicit 'try again', despite being a 4xx."""
