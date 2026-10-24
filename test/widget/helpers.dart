@@ -41,6 +41,7 @@ import 'package:sharedinbox/core/services/db_encryption_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
+import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/data/db/database.dart'
     show AppDatabase, SyncHealthRow;
 import 'package:sharedinbox/di.dart';
@@ -644,7 +645,8 @@ class FakeEmailRepository implements EmailRepository {
     EmailAttachment attachment,
   ) async {
     final dir = Directory.systemTemp.createTempSync('fake_attachment');
-    final file = File('${dir.path}/${attachment.filename}')
+    // Sanitised like the real repository, so crafted names stay in [dir].
+    final file = File('${dir.path}/${safeFileName(attachment.filename)}')
       ..writeAsBytesSync(attachmentBytes);
     return file.path;
   }

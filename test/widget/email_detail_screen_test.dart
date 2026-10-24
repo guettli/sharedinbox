@@ -18,6 +18,7 @@ import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/utils/save_file_as.dart';
 
 import 'helpers.dart';
 
@@ -397,6 +398,130 @@ void main() {
         expect(find.byTooltip('Download and open'), findsOneWidget);
       },
     );
+
+    group('Save as… for attachments', () {
+      // Widget tests default to TargetPlatform.android; desktop-only actions
+      // need the override, reset inside the body (see the #292 group below).
+      Future<void> onPlatform(
+        TargetPlatform platform,
+        Future<void> Function() body,
+      ) async {
+        debugDefaultTargetPlatformOverride = platform;
+        try {
+          await body();
+        } finally {
+          debugDefaultTargetPlatformOverride = null;
+        }
+      }
+
+      const body = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'Please pay.',
+        attachments: [
+          EmailAttachment(
+            // A crafted name must not reach the save dialog as a path.
+            filename: '../../invoice.pdf',
+            contentType: 'application/pdf',
+            size: 64,
+          ),
+        ],
+      );
+      final pdfBytes = Uint8List.fromList(utf8.encode('%PDF-1.4 test'));
+
+      Future<void> pumpDetail(
+        WidgetTester tester,
+        SaveLocationPicker picker,
+      ) async {
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                body: body,
+                email: testEmail(hasAttachment: true),
+                emails: FakeEmailRepository(
+                  emailDetail: testEmail(hasAttachment: true),
+                  emailBody: body,
+                  attachmentBytes: pdfBytes,
+                ),
+              ),
+              saveLocationPickerProvider.overrideWithValue(picker),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> tapSaveAs(WidgetTester tester) async {
+        await tester.tap(find.byTooltip('Save as…'));
+        // File.copy is real I/O, and each of its steps completes on the real
+        // event loop: alternate real waits with pumps until a snackbar shows.
+        for (var i = 0; i < 50; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+          if (find.textContaining('Sav').evaluate().isNotEmpty) break;
+        }
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('desktop: copies the attachment to the chosen path', (
+        tester,
+      ) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          final dir = Directory.systemTemp.createTempSync('save_as');
+          addTearDown(() => dir.deleteSync(recursive: true));
+          final target = '${dir.path}/invoice.pdf';
+          final suggested = <String>[];
+          await pumpDetail(tester, (name) async {
+            suggested.add(name);
+            return target;
+          });
+
+          expect(find.byTooltip('Download and open'), findsOneWidget);
+          await tapSaveAs(tester);
+
+          expect(suggested, ['invoice.pdf']);
+          expect(File(target).readAsBytesSync(), pdfBytes);
+          expect(find.text('Saved to $target'), findsOneWidget);
+        });
+      });
+
+      testWidgets('desktop: cancelling the dialog saves nothing', (
+        tester,
+      ) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          await pumpDetail(tester, (_) async => null);
+          await tapSaveAs(tester);
+          expect(find.textContaining('Saved to'), findsNothing);
+          expect(find.textContaining('Saving file failed'), findsNothing);
+        });
+      });
+
+      testWidgets('desktop: a failed copy shows a readable error', (
+        tester,
+      ) async {
+        await onPlatform(TargetPlatform.linux, () async {
+          await pumpDetail(
+            tester,
+            (_) async => '/nonexistent-dir-for-test/invoice.pdf',
+          );
+          await tapSaveAs(tester);
+          expect(find.textContaining('Saving file failed: '), findsOneWidget);
+          expect(find.textContaining('Saved to'), findsNothing);
+        });
+      });
+
+      testWidgets('mobile keeps only download-and-open', (tester) async {
+        await onPlatform(TargetPlatform.android, () async {
+          await pumpDetail(tester, (_) async => fail('no dialog on mobile'));
+          expect(find.byTooltip('Download and open'), findsOneWidget);
+          expect(find.byTooltip('Save as…'), findsNothing);
+        });
+      });
+    });
 
     testWidgets(
       'shows a partial-decode notice with a raw-source link and keeps the '
