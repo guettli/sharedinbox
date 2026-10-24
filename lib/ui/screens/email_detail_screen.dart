@@ -30,6 +30,7 @@ import 'package:sharedinbox/ui/screens/email_action_helpers.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
+import 'package:sharedinbox/ui/utils/save_file_as.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -1041,10 +1042,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             height: AppIconSize.lg,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
-        : IconButton(
-            icon: const Icon(Icons.download),
-            tooltip: 'Download and open',
-            onPressed: () => _downloadAndOpen(att),
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Desktop: save to a chosen folder — also the only way to get
+              // at a file no installed app can open.
+              if (supportsSaveAs)
+                IconButton(
+                  icon: const Icon(Icons.save_alt),
+                  tooltip: 'Save as…',
+                  onPressed: () => _saveAttachmentAs(att),
+                ),
+              IconButton(
+                icon: const Icon(Icons.download),
+                tooltip: 'Download and open',
+                onPressed: () => _downloadAndOpen(att),
+              ),
+            ],
           );
 
     if (!isDisplayableImage(att.contentType)) {
@@ -1214,6 +1228,25 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         fullscreenDialog: true,
         builder: (_) => ImageViewerScreen(path: path, filename: att.filename),
       ),
+    );
+  }
+
+  Future<void> _saveAttachmentAs(EmailAttachment att) async {
+    await saveFileAs(
+      context,
+      picker: ref.read(saveLocationPickerProvider),
+      filename: att.filename,
+      emailId: widget.emailId,
+      source: () async {
+        if (mounted) setState(() => _downloading.add(att.filename));
+        try {
+          return await ref
+              .read(emailRepositoryProvider)
+              .downloadAttachment(widget.emailId, att);
+        } finally {
+          if (mounted) setState(() => _downloading.remove(att.filename));
+        }
+      },
     );
   }
 

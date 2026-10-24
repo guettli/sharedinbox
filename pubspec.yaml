@@ -54,6 +54,9 @@ dependencies:
 
   # File picking (compose attachments) and opening downloaded attachments
   file_picker: ^12.0.0-beta.5
+  # Already pulled in by file_picker (Linux portal); direct for its exception
+  # types, so a missing file chooser gets a readable message.
+  dbus: ^0.7.14
   open_filex: ^4.6.0
   mime: ^2.0.0
 
