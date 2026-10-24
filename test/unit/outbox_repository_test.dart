@@ -642,6 +642,200 @@ void main() {
       expect(rows.map((r) => r.subject), ['First', 'Second']);
     });
   });
+
+  group('temp attachments', () {
+    late AppDatabase db;
+    late OutboxRepositoryImpl repo;
+    late List<String> deleted;
+
+    setUp(() async {
+      db = openTestDatabase();
+      await _seedAccount(db);
+      deleted = [];
+      repo = OutboxRepositoryImpl(db, deleteFile: (p) async => deleted.add(p));
+    });
+
+    Future<int> enqueueWithShrunk() => repo.enqueue(
+          _accountId,
+          const EmailDraft(
+            from: EmailAddress(email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 's',
+            body: 'b',
+            attachmentFilePaths: ['/home/u/own.pdf', '/tmp/shrunk_1_x.jpg'],
+            tempAttachmentPaths: ['/tmp/shrunk_1_x.jpg'],
+          ),
+        );
+
+    test('are deleted after a successful send, the user files are not',
+        () async {
+      await enqueueWithShrunk();
+      await repo.flush(_accountId, (_) async {});
+      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+    });
+
+    test('are kept while the message is still queued', () async {
+      await enqueueWithShrunk();
+      await repo.flush(_accountId, (_) async => throw Exception('offline'));
+      await repo.flush(
+        _accountId,
+        (_) async => throw PermanentSendException('5.1.2'),
+        now: DateTime.now().add(const Duration(days: 1)),
+      );
+      expect(deleted, isEmpty);
+    });
+
+    test('are deleted on discard', () async {
+      final id = await enqueueWithShrunk();
+      await repo.discard(id);
+      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+    });
+
+    test('are handed over, not deleted, by takeForEdit', () async {
+      final id = await enqueueWithShrunk();
+      final draft = await repo.takeForEdit(id, (job) async => job.draft);
+      expect(draft!.tempAttachmentPaths, ['/tmp/shrunk_1_x.jpg']);
+      expect(deleted, isEmpty);
+    });
+  });
+
+  group('takeForEdit', () {
+    late AppDatabase db;
+    late OutboxRepositoryImpl repo;
+
+    setUp(() async {
+      db = openTestDatabase();
+      await _seedAccount(db);
+      repo = OutboxRepositoryImpl(db);
+    });
+
+    Future<int> enqueueFull() => repo.enqueue(
+          _accountId,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(name: 'Carol', email: 'carol@example.com')],
+            cc: [EmailAddress(email: 'dave@example.com')],
+            bcc: [EmailAddress(email: 'erin@example.com')],
+            subject: 'Typo',
+            body: 'Hi Carol',
+            attachmentFilePaths: ['/tmp/a.pdf'],
+            inReplyTo: 'parent@example.com',
+            references: ['root@example.com', 'parent@example.com'],
+          ),
+        );
+
+    test('hands off the whole message, then removes the row', () async {
+      final id = await enqueueFull();
+
+      final result = await repo.takeForEdit(id, (job) async {
+        // Still queued while the hand-off runs.
+        expect(await db.select(db.outbox).get(), hasLength(1));
+        return job.draft;
+      });
+
+      expect(result, isNotNull);
+      final draft = result!;
+      expect(draft.to.single.name, 'Carol');
+      expect(draft.to.single.email, 'carol@example.com');
+      expect(draft.cc.single.email, 'dave@example.com');
+      expect(draft.bcc.single.email, 'erin@example.com');
+      expect(draft.subject, 'Typo');
+      expect(draft.body, 'Hi Carol');
+      expect(draft.attachmentFilePaths, ['/tmp/a.pdf']);
+      expect(draft.inReplyTo, 'parent@example.com');
+      expect(draft.references, ['root@example.com', 'parent@example.com']);
+      expect(await db.select(db.outbox).get(), isEmpty);
+    });
+
+    test('a failed hand-off leaves the message queued', () async {
+      final id = await enqueueFull();
+
+      await expectLater(
+        repo.takeForEdit<void>(id, (_) => throw StateError('disk full')),
+        throwsStateError,
+      );
+
+      expect(await db.select(db.outbox).get(), hasLength(1));
+    });
+
+    test('returns null for a row that is gone', () async {
+      var called = false;
+      final result = await repo.takeForEdit(999, (_) async => called = true);
+      expect(result, isNull);
+      expect(called, isFalse);
+    });
+
+    test('refuses a row the flush is sending right now', () async {
+      final id = await enqueueFull();
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final flush = repo.flush(_accountId, (job) async {
+        entered.complete();
+        await release.future;
+      });
+      await entered.future;
+
+      await expectLater(
+        repo.takeForEdit(id, (job) async => job),
+        throwsA(isA<OutboxRowInFlightException>()),
+      );
+
+      release.complete();
+      expect(await flush, 1);
+      expect(await db.select(db.outbox).get(), isEmpty);
+    });
+
+    test('a row taken while the flush sends an earlier one is not sent',
+        () async {
+      await repo.enqueue(_accountId, _makeDraft(subject: 'first'));
+      final second = await repo.enqueue(
+        _accountId,
+        _makeDraft(subject: 'second'),
+      );
+      final sentSubjects = <String>[];
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final flush = repo.flush(_accountId, (job) async {
+        sentSubjects.add(job.draft.subject);
+        if (!entered.isCompleted) entered.complete();
+        await release.future;
+      });
+      await entered.future;
+
+      // The flush already selected both rows; "second" waits its turn.
+      final taken = await repo.takeForEdit(second, (job) async => job);
+      expect(taken?.draft.subject, 'second');
+
+      release.complete();
+      expect(await flush, 1);
+      expect(sentSubjects, ['first']);
+      expect(await db.select(db.outbox).get(), isEmpty);
+    });
+
+    test('a flush starting during the hand-off does not send the row',
+        () async {
+      final id = await enqueueFull();
+      final inHandOff = Completer<void>();
+      final release = Completer<void>();
+      final take = repo.takeForEdit(id, (job) async {
+        inHandOff.complete();
+        await release.future;
+        return job;
+      });
+      await inHandOff.future;
+
+      var sent = 0;
+      final flush = repo.flush(_accountId, (job) async => sent++);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      release.complete();
+
+      expect(await take, isNotNull);
+      expect(await flush, 0);
+      expect(sent, 0);
+      expect(await db.select(db.outbox).get(), isEmpty);
+    });
+  });
 }
 
 /// Enqueues a reply to `parent@example.com` with the given header ids and

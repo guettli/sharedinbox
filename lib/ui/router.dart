@@ -289,19 +289,9 @@ final router = GoRouter(
         ),
         GoRoute(
           path: '/compose',
-          builder: (ctx, state) {
-            final extra = state.extra as Map<String, dynamic>?;
-            return ComposeScreen(
-              accountId: extra?['accountId'] as String?,
-              replyToEmailId: extra?['replyToEmailId'] as String?,
-              prefillTo: extra?['prefillTo'] as String?,
-              prefillCc: extra?['prefillCc'] as String?,
-              prefillBcc: extra?['prefillBcc'] as String?,
-              prefillSubject: extra?['prefillSubject'] as String?,
-              prefillBody: extra?['prefillBody'] as String?,
-              draftId: extra?['draftId'] as int?,
-            );
-          },
+          builder: (ctx, state) => ComposeScreen.fromExtra(
+            state.extra as Map<String, dynamic>?,
+          ),
         ),
         GoRoute(
           path: '/bug-report',
