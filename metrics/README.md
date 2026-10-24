@@ -23,7 +23,9 @@ this (the Play download size jumped once and we had no record of what it was).
 | `version_name` | `pubspec.yaml` version, e.g. `0.1.1` |
 | `version_code` | Play versionCode if available, else `unknown` (the recorder measures the pre-stamp cached bundle) |
 | `flutter` | Flutter SDK from `.fvmrc` (drives `libflutter.so`) |
-| `install_mb` | **headline**: `install_arm64_bytes` in MB — the number to eyeball |
+| `download_mb` | **the number Play shows the user**, in MB (from `bundletool get-size`); `unknown` if that step was unavailable |
+| `download_bytes` | real Play-delivered download size for arm64-v8a, in bytes |
+| `install_mb` | uncompressed on-device install proxy in MB (from the AAB) — larger than `download_mb` |
 | `install_arm64_bytes` | uncompressed bytes an arm64-v8a device receives: base manifest + dex + arm64 libs + assets + res |
 | `libapp_bytes` | `libapp.so` — your Dart code, AOT-compiled (usually the biggest *variable* item) |
 | `libflutter_bytes` | `libflutter.so` — the Flutter engine (changes with the Flutter version) |
@@ -34,12 +36,16 @@ this (the Play download size jumped once and we had no record of what it was).
 | `aab_file_bytes` | the raw `.aab` **upload** size |
 | `debug_symbols_bytes` | native debug symbols in the AAB (`debugSymbolLevel=FULL`). **Play strips these before download** — they inflate `aab_file_bytes` but are *not* delivered. Here only so the upload size is never mistaken for the install size. |
 
-**`install_mb` is an on-device install-size proxy, not the Play download
-number.** It TRENDS with what the user downloads but reads larger: Play serves
-the entries compressed and drops unused densities/languages. Matching Play
-exactly is a non-goal — a consistent, diffable trend is. Only the device's own
-ABI ships from an AAB, so this is the arm64 figure; other ABIs and
-`BUNDLE-METADATA/` are deliberately excluded.
+**Two sizes, on purpose.** `download_mb` is the real Play figure the user sees
+on the store/update screen — computed with `bundletool get-size total` (the
+Dagger `AndroidDownloadSizeCsv` function) on the signed-equivalent bundle, so it
+matches Play. `install_mb` is the uncompressed on-device install proxy derived
+from the AAB zip; it trends with the download but reads larger (Play serves the
+entries compressed and drops unused densities/languages). Only the device's own
+ABI ships from an AAB, so both are the arm64 figures; other ABIs and
+`BUNDLE-METADATA/` are deliberately excluded. Rows recorded before download
+tracking existed show `download_mb = unknown` (the file auto-migrated to the new
+columns without losing them).
 
 ## Inspect / regenerate a row by hand
 
