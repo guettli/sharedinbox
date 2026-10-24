@@ -26,8 +26,9 @@ enum JmapPushStatus {
   /// but this constant is the recognised prefix for parsers.
   sseStatusPrefix('sse_status_'),
 
-  /// The SSE stream closed cleanly (`onDone`) after being connected — usually
-  /// the built-in 25-min cap, sometimes the server proactively closing.
+  /// The SSE stream closed cleanly (`onDone`) after being connected — the
+  /// server (or a proxy in between) closed it. A silent stream ending on the
+  /// client's inactivity timeout is reported as [errored] instead.
   closed('closed'),
 
   /// The SSE stream errored after being connected. Distinct from

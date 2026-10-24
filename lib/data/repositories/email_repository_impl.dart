@@ -4078,14 +4078,23 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Sending it verbatim — with the literal `{…}` placeholders still in the
   /// query string — makes servers reject the request with HTTP 400, which
   /// silently drops the account back to the 30 s poll. We subscribe to all
-  /// types, keep the stream open (we enforce our own 25-min cap below), and
-  /// ask for a 30 s keep-alive ping to survive NAT/proxy idle timeouts.
+  /// types, keep the stream open, and ask for a 30 s keep-alive ping to
+  /// survive NAT/proxy idle timeouts (and so that silence means a dead
+  /// connection — see [_sseSilenceTimeout]).
   static String _expandEventSourceUrl(String template) {
     return template
         .replaceAll('{types}', '*')
         .replaceAll('{closeafter}', 'no')
         .replaceAll('{ping}', '30');
   }
+
+  /// How long the SSE stream may stay silent before it counts as dead. It is
+  /// an inactivity timeout (reset by every chunk, pings included), not a cap
+  /// on the stream's lifetime. A blackholed connection (open, but no bytes
+  /// flow) never reports its loss, so this is what ends it; it used to be 25
+  /// minutes, during which the account saw no push. Ten missed 30 s pings
+  /// leaves room for a server that stretches the interval we ask for.
+  static const _sseSilenceTimeout = Duration(minutes: 5);
 
   /// Strips any embedded `user:pass@` userinfo from [url] so it is safe to
   /// persist in the app log. JMAP SSE auth travels in the `Authorization`
@@ -4265,7 +4274,7 @@ class EmailRepositoryImpl implements EmailRepository {
         var buffer = '';
         innerSub = response.stream
             .transform(utf8.decoder)
-            .timeout(const Duration(minutes: 25))
+            .timeout(_sseSilenceTimeout)
             .listen(
           (chunk) {
             buffer += chunk;
@@ -4289,8 +4298,7 @@ class EmailRepositoryImpl implements EmailRepository {
               _logPushStatus(
                 accountId,
                 JmapPushStatus.closed.wireName,
-                'JMAP push stream ended (server closed connection '
-                'or 25-min cap reached)',
+                'JMAP push stream ended (server closed connection)',
               ),
             );
             unawaited(controller.close());
