@@ -48,11 +48,20 @@ GET /, returns this text. See EXPLORATORY-TESTING.md for the workflow.
                           desktop lists scroll by wheel, not by /drag
     POST /restart         [wipe=1] — restart the app; wipe=1 also removes its
                           data and the keyring, like a fresh install
+    GET  /net             the app's network to Stalwart: mode and open
+                          connections per protocol (imap, smtp, jmap, sieve)
+    POST /net             mode, [proto], [delay_ms], [rate] — break it:
+                          mode is up, down (refused, open ones closed), reset
+                          (RST to open ones, then up), blackhole (connected,
+                          no bytes move) or slow (delay_ms per chunk, default
+                          500; rate in bytes/s per connection); proto defaults
+                          to all. Logged to /log. The tester's host ports
+                          bypass it (see scripts/fault_proxy.py)
 
 A lookup waits up to `timeout` seconds (default 20) for its node. Only one
 request at a time talks to the accessibility bus, so a long wait blocks the
 other GUI calls (refused as "busy" after 30 s); /health, /log and /shot always
-answer, and /restart does not wait for the bus. Driver
+answer, and /restart and /net do not wait for the bus. Driver
 errors come back as HTTP 409 with the message, which for "not found" includes
 the accessibility tree (truncated at 400 nodes); anything unexpected is a 500
 with the traceback.
@@ -72,6 +81,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fault_proxy  # noqa: E402
 import gui_driver as g  # noqa: E402
 
 APP = os.environ.get("EXPLORE_APP", "/app/sharedinbox")
@@ -197,6 +207,45 @@ def _content(node) -> str:
     except NotImplementedError:
         return ""
     return text.getText(0, -1).strip()
+
+
+def _log_line(line: str) -> None:
+    """Append to the app log, so the line shows in /log next to what it caused."""
+    print(line, flush=True)
+    with LOG.open("a") as f:
+        f.write(f"[explore] {time.strftime('%H:%M:%S')} {line}\n")
+
+
+def _stalwart_routes() -> dict:
+    """The app's localhost ports, each to its port on the Stalwart binding.
+
+    Only on 127.0.0.1: the container's exposed ports are the tester's bypass
+    (explore_entrypoint.sh), so faults never reach seeding and inspection.
+    """
+    host = os.environ.get("STALWART_IMAP_HOST")
+    if not host:
+        return {}
+    env = os.environ.get
+    targets = {
+        "imap": (host, int(env("STALWART_IMAP_PORT", "1430"))),
+        "smtp": (env("STALWART_SMTP_HOST", host), int(env("STALWART_SMTP_PORT", "1025"))),
+        "jmap": (host, 8080),
+        "sieve": (host, int(env("STALWART_SIEVE_PORT", "4190"))),
+    }
+    local = {"imap": 1430, "smtp": 1025, "jmap": 8080, "sieve": 4190}
+    return {proto: (("127.0.0.1", local[proto]), target)
+            for proto, target in targets.items()}
+
+
+_net = fault_proxy.Proxy(_stalwart_routes(), log=_log_line)
+
+
+def net(params: dict) -> str:
+    if "mode" in params:
+        return _net.set(params["mode"], params.get("proto") or "all",
+                        delay_ms=_int(params, "delay_ms", 0),
+                        rate=_int(params, "rate", 0))
+    return _net.status() if _net.listeners else "no Stalwart binding, nothing proxied\n"
 
 
 def health(_: dict) -> str:
@@ -374,13 +423,14 @@ def restart(params: dict) -> str:
 
 # Requests are served on their own threads, but only one at a time may talk to
 # the accessibility bus. A slow lookup then blocks the other GUI routes, but not
-# the ones below: /health, /log and /shot show what the app is doing, and
+# the ones below: /health, /log and /shot show what the app is doing, /net
+# breaks or heals its network at any moment, and
 # /restart (which does not touch the bus) kills it, which also ends a stuck
 # walk. A lookup itself is bounded by its timeout, checked per node.
 _GUI_LOCK = threading.Lock()
 # Restarts must not overlap either: two would start two apps, one orphaned.
 _RESTART_LOCK = threading.Lock()
-LOCK_FREE = {"/health", "/log", "/shot"}
+LOCK_FREE = {"/health", "/log", "/shot", "/net"}
 # A GUI call that cannot get the bus within this long is refused rather than
 # queued: run later, it would act on whatever screen is up by then.
 GUI_LOCK_WAIT = 30.0
@@ -390,7 +440,7 @@ ROUTES = {
     "/click": click, "/click-unnamed": click_unnamed, "/focus": focus,
     "/fill": fill, "/type": type_, "/key": key, "/tap": tap,
     "/press": press, "/drag": drag, "/scroll": scroll,
-    "/restart": restart,
+    "/restart": restart, "/net": net,
 }
 
 
@@ -445,7 +495,8 @@ class Handler(BaseHTTPRequestHandler):
                 finally:
                     _GUI_LOCK.release()
             self._send(200, body.encode())
-        except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError) as exc:
+        except (g.GuiError, KeyError, ValueError, subprocess.CalledProcessError,
+                fault_proxy.NetError) as exc:
             self._send(409, f"{type(exc).__name__}: {exc}\n".encode())
         except Exception:  # noqa: BLE001 — e.g. GLib.GError when a node vanishes mid-walk
             self._send(500, traceback.format_exc().encode())
@@ -458,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    # Before the app, so its first connection already goes through the proxy.
+    _net.start()
     start_keyring()
     start_app()
     print(f"explore server on :{PORT}, app {APP}", flush=True)

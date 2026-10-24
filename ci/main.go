@@ -1686,9 +1686,12 @@ func guiRuntime() *dagger.Container {
 //	task explore-linux
 //
 // Port 8765 is scripts/explore_server.py, an HTTP API that drives the app
-// through its accessibility tree; 1430/1025/8080 reach Stalwart's IMAP, SMTP
-// and JMAP, to seed and inspect the mailbox the app syncs. The task maps them
-// to offset host ports so they do not collide with `task stalwart`.
+// through its accessibility tree; 11430/11025/18080 reach Stalwart's IMAP,
+// SMTP and JMAP directly, to seed and inspect the mailbox the app syncs. The
+// app itself goes through scripts/fault_proxy.py on localhost:1430/1025/8080/
+// 4190, which POST /net can break; the exposed ports bypass it, so seeding
+// keeps working while the app is offline. The task maps them to offset host
+// ports so they do not collide with `task stalwart`.
 //
 // A debug build on purpose: framework assertions stay on, so a misuse that a
 // release build silently tolerates shows up in /log.
@@ -1698,7 +1701,8 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 		Directory("build/linux/x64/debug/bundle")
 	scripts := m.Source.Filter(dagger.DirectoryFilterOpts{
 		Include: []string{"scripts/gui_driver.py", "scripts/gui_session.sh",
-			"scripts/explore_entrypoint.sh", "scripts/explore_server.py"},
+			"scripts/explore_entrypoint.sh", "scripts/explore_server.py",
+			"scripts/fault_proxy.py"},
 	})
 	ctr := guiRuntime().
 		// A Secret Service, so flutter_secure_storage can save an account
@@ -1714,9 +1718,10 @@ func (m *Ci) ExploreLinux() *dagger.Service {
 		WithUser("tester").
 		WithEnvVariable("HOME", "/home/tester").
 		WithExposedPort(8765). // explore_server.py
-		WithExposedPort(1430). // IMAP, forwarded to Stalwart
-		WithExposedPort(1025). // SMTP
-		WithExposedPort(8080)  // JMAP
+		// Straight to Stalwart, bypassing the app's fault proxy.
+		WithExposedPort(11430). // IMAP
+		WithExposedPort(11025). // SMTP
+		WithExposedPort(18080)  // JMAP
 	// JMAP session URLs must name localhost: the app reaches Stalwart through
 	// the localhost forward and refuses a plain-http apiUrl to any other host.
 	return withStalwartService(ctr, m.stalwart("localhost")).AsService(dagger.ContainerAsServiceOpts{

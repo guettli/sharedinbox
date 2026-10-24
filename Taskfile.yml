@@ -179,8 +179,9 @@ tasks:
     desc: Run a debug Linux build on a virtual desktop with an HTTP driving API, for exploratory testing (see EXPLORATORY-TESTING.md)
     cmds:
       # Host ports are offset so they do not collide with `task stalwart`.
+      # They reach Stalwart directly, bypassing the app's fault proxy (POST /net).
       - echo "Driving API on localhost:8765; Stalwart IMAP=21430 SMTP=21025 JMAP=28080"
-      - dagger call --progress=plain -q -m ci --source=. explore-linux up --ports 8765:8765 --ports 21430:1430 --ports 21025:1025 --ports 28080:8080
+      - dagger call --progress=plain -q -m ci --source=. explore-linux up --ports 8765:8765 --ports 21430:11430 --ports 21025:11025 --ports 28080:18080
 
   deploy-linux:
     desc: Build and deploy Linux release via Dagger
