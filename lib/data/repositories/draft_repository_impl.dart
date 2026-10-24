@@ -48,6 +48,9 @@ class DraftRepositoryImpl extends DraftRepository {
   /// The drafts' own copies of their attachment files, one folder per draft.
   final AttachmentStore _files;
 
+  /// Server drafts whose pull already failed and was logged in this run.
+  final Set<String> _reportedPullSkips = {};
+
   /// The last [writeDraft] per draft id; the next one waits for it. Two saves
   /// of one draft (an auto-save and the flush when compose closes) would
   /// otherwise each copy the files and delete the other's copies.
@@ -92,18 +95,7 @@ class DraftRepositoryImpl extends DraftRepository {
     if (old == null) {
       // Deleted meanwhile (sent, discarded, or gone from the server): there
       // is no row to update, and files without a row would be orphans.
-      return SavedDraft(
-        id: id,
-        accountId: accountId,
-        replyToEmailId: replyToEmailId,
-        toText: toText,
-        ccText: ccText,
-        bccText: bccText,
-        subjectText: subjectText,
-        bodyText: bodyText,
-        updatedAt: now,
-        attachments: attachments,
-      );
+      return _savedFrom(id, input, now, attachments);
     }
     final stored = attachments.isEmpty && old.attachmentsJson == '[]'
         ? attachments
@@ -139,18 +131,7 @@ class DraftRepositoryImpl extends DraftRepository {
     final row = await (_db.select(_db.drafts)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     if (row != null) return _toModel(row);
-    return SavedDraft(
-      id: id,
-      accountId: accountId,
-      replyToEmailId: replyToEmailId,
-      toText: toText,
-      ccText: ccText,
-      bccText: bccText,
-      subjectText: subjectText,
-      bodyText: bodyText,
-      updatedAt: now,
-      attachments: stored,
-    );
+    return _savedFrom(id, input, now, stored);
   }
 
   Future<SavedDraft> _insertDraft(DraftInput input) async {
@@ -200,19 +181,28 @@ class DraftRepositoryImpl extends DraftRepository {
         }
       });
     });
-    return SavedDraft(
-      id: newId,
-      accountId: accountId,
-      replyToEmailId: replyToEmailId,
-      toText: toText,
-      ccText: ccText,
-      bccText: bccText,
-      subjectText: subjectText,
-      bodyText: bodyText,
-      updatedAt: now,
-      attachments: stored,
-    );
+    return _savedFrom(newId, input, now, stored);
   }
+
+  /// What [writeDraft] returns when it does not read the row back.
+  SavedDraft _savedFrom(
+    int id,
+    DraftInput input,
+    DateTime updatedAt,
+    List<DraftAttachment> attachments,
+  ) =>
+      SavedDraft(
+        id: id,
+        accountId: input.accountId,
+        replyToEmailId: input.replyToEmailId,
+        toText: input.toText,
+        ccText: input.ccText,
+        bccText: input.bccText,
+        subjectText: input.subjectText,
+        bodyText: input.bodyText,
+        updatedAt: updatedAt,
+        attachments: attachments,
+      );
 
   @override
   Future<List<SavedDraft>> listNewMessageDrafts({String? accountId}) async {
@@ -362,16 +352,24 @@ class DraftRepositoryImpl extends DraftRepository {
   ///
   /// Edits are detected by content rather than `updatedAt`, which is stored
   /// with one-second precision.
+  ///
+  /// [keptOldServerId] is the copy this push replaced but could not remove.
+  /// The row forgets that id, so it is queued for removal: left alone, the
+  /// next pull would import it as a second, stale local draft.
   Future<void> _recordPush(
     Draft row,
     String accountId,
     String? newServerId, {
     required bool jmap,
+    String? keptOldServerId,
   }) {
     final serverId = jmap
         ? DraftsCompanion(jmapServerId: Value(newServerId))
         : DraftsCompanion(imapServerId: Value(newServerId));
     return _db.transaction(() async {
+      if (keptOldServerId != null && keptOldServerId != newServerId) {
+        await _tombstone(accountId, keptOldServerId);
+      }
       final unchanged = await (_db.update(_db.drafts)
             ..where(
               (t) =>
@@ -638,6 +636,7 @@ class DraftRepositoryImpl extends DraftRepository {
     }
     final mime = builder.buildMimeMessage();
     if (appendLimit != null) {
+      // Rendered once here; the append then sends what was measured.
       final size = utf8.encode(mime.renderMessage()).length;
       if (size > appendLimit) {
         throw _DraftTooLargeException(size, appendLimit);
@@ -657,6 +656,7 @@ class DraftRepositoryImpl extends DraftRepository {
     // After appending the new copy, expunge the old one so server-side
     // edits replace the previous version instead of accumulating.
     final oldUid = row.imapServerId;
+    String? keptOldUid;
     if (oldUid != null && oldUid.isNotEmpty && oldUid != newUid) {
       final oldUidInt = int.tryParse(oldUid);
       if (oldUidInt != null) {
@@ -665,12 +665,19 @@ class DraftRepositoryImpl extends DraftRepository {
           await client.uidMarkDeleted(seq);
           await client.uidExpunge(seq);
         } catch (_) {
-          // Old copy already gone — fine.
+          // Gone already, or the server refused: the tombstone retries.
+          keptOldUid = oldUid;
         }
       }
     }
 
-    await _recordPush(row, account.id, newUid, jmap: false);
+    await _recordPush(
+      row,
+      account.id,
+      newUid,
+      jmap: false,
+      keptOldServerId: keptOldUid,
+    );
   }
 
   /// The server's `APPENDLIMIT` (RFC 7889), if it advertises one.
@@ -771,6 +778,7 @@ class DraftRepositoryImpl extends DraftRepository {
       final env = msg.envelope;
       await _importPulledDraft(
         accountId,
+        uid,
         () async => _attachmentPartsImap(msg),
         DraftsCompanion.insert(
           accountId: Value(accountId),
@@ -791,7 +799,9 @@ class DraftRepositoryImpl extends DraftRepository {
   /// Throws when one cannot be decoded.
   List<_PulledAttachment> _attachmentPartsImap(imap.MimeMessage msg) {
     final result = <_PulledAttachment>[];
-    for (final info in msg.findContentInfo()) {
+    // Not `complete`: the parts inside an attached message (a forwarded
+    // mail) belong to that one attachment, which is stored whole.
+    for (final info in msg.findContentInfo(complete: false)) {
       // An empty fetch id is a message that is itself the attachment.
       final part = info.fetchId.isEmpty ? msg : msg.getPart(info.fetchId);
       final bytes = part?.decodeContentBinary();
@@ -819,6 +829,7 @@ class DraftRepositoryImpl extends DraftRepository {
   /// and the next sync tries again.
   Future<void> _importPulledDraft(
     String accountId,
+    String serverId,
     Future<List<_PulledAttachment>> Function() readAttachments,
     DraftsCompanion row,
   ) async {
@@ -853,6 +864,8 @@ class DraftRepositoryImpl extends DraftRepository {
         }
       });
     } catch (e, stack) {
+      // Retried every sync; a draft that keeps failing is logged once.
+      if (!_reportedPullSkips.add('$accountId:$serverId')) return;
       unawaited(
         _appLogger?.warn(
           'draft.pull.skipped',
@@ -895,7 +908,7 @@ class DraftRepositoryImpl extends DraftRepository {
         .get();
     if (tombstones.isEmpty) return;
 
-    await jmap.call([
+    final resp = await jmap.call([
       [
         'Email/set',
         {
@@ -905,8 +918,17 @@ class DraftRepositoryImpl extends DraftRepository {
         '0',
       ],
     ]);
+    // A copy the server could not destroy stays queued; one it no longer
+    // has (notFound) is done.
+    final notDestroyed =
+        _responseArgs(resp, 0, 'Email/set')['notDestroyed'] as Map? ?? {};
+    final stillThere = {
+      for (final MapEntry(:key, :value) in notDestroyed.entries)
+        if (value is! Map || value['type'] != 'notFound') key,
+    };
 
     for (final tombstone in tombstones) {
+      if (stillThere.contains(tombstone.serverId)) continue;
       await (_db.delete(_db.draftTombstones)
             ..where((t) => t.id.equals(tombstone.id)))
           .go();
@@ -965,8 +987,9 @@ class DraftRepositoryImpl extends DraftRepository {
     for (final a in await _existingAttachments(account.id, row)) {
       final file = File(a.path);
       final limit = jmap.maxSizeUpload;
-      if (limit != null && await file.length() > limit) {
-        throw _DraftTooLargeException(await file.length(), limit);
+      if (limit != null) {
+        final size = await file.length();
+        if (size > limit) throw _DraftTooLargeException(size, limit);
       }
       // Read into memory whole: there is no size ceiling (#955).
       final blobId = await jmap.uploadBlob(
@@ -1009,9 +1032,10 @@ class DraftRepositoryImpl extends DraftRepository {
 
     // Only now that the new copy exists: remove the one it replaces.
     final oldId = row.jmapServerId;
+    String? keptOldId;
     if (oldId != null && oldId.isNotEmpty && oldId != newId) {
       try {
-        await jmap.call([
+        final destroyResp = await jmap.call([
           [
             'Email/set',
             {
@@ -1021,11 +1045,16 @@ class DraftRepositoryImpl extends DraftRepository {
             '0',
           ],
         ]);
+        final destroyed =
+            _responseArgs(destroyResp, 0, 'Email/set')['destroyed'] as List?;
+        if (!(destroyed?.contains(oldId) ?? false)) keptOldId = oldId;
       } catch (e, stack) {
+        keptOldId = oldId;
         unawaited(
           _appLogger?.warn(
             'draft.push.old_copy_kept',
-            'Could not remove the replaced server copy of a draft',
+            'Could not remove the replaced server copy of a draft; it is '
+                'queued for removal',
             accountId: account.id,
             error: e,
             stack: stack,
@@ -1034,7 +1063,13 @@ class DraftRepositoryImpl extends DraftRepository {
       }
     }
 
-    await _recordPush(row, account.id, newId, jmap: true);
+    await _recordPush(
+      row,
+      account.id,
+      newId,
+      jmap: true,
+      keptOldServerId: keptOldId,
+    );
   }
 
   Future<void> _pullDraftsJmap(
@@ -1130,6 +1165,7 @@ class DraftRepositoryImpl extends DraftRepository {
 
       await _importPulledDraft(
         accountId,
+        id,
         () => _attachmentPartsJmap(jmap, m),
         DraftsCompanion.insert(
           accountId: Value(accountId),

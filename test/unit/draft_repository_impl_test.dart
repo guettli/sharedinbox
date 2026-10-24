@@ -119,8 +119,24 @@ class _DraftsSpyImapClient extends SelectingFakeImapClient
   @override
   Future<imap.Mailbox> uidExpunge(imap.MessageSequence sequence) async {
     expunged.add(sequence);
+    if (failExpunge) throw imap.ImapException(this, 'NO expunge refused');
     return fakeMailbox('x');
   }
+
+  /// Makes every `UID EXPUNGE` fail.
+  bool failExpunge = false;
+
+  /// What `UID FETCH` returns for the pull.
+  List<imap.MimeMessage> fetched = [];
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async =>
+      imap.FetchImapResult(fetched, null);
 
   @override
   Future<imap.SearchImapResult> uidSearchMessages({
@@ -1394,6 +1410,200 @@ void main() {
       final smallRow = (await repo.getDraft(small.id))!;
       expect(smallRow.dirty, isFalse);
       expect(smallRow.jmapServerId, 'NEW');
+    });
+
+    for (final failure in ['notDestroyed', 'method error']) {
+      test(
+          'a replaced JMAP copy that cannot be destroyed ($failure) is '
+          'tombstoned, not imported back', () async {
+        // Tombstones are only kept for an account that exists.
+        final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+        final onServer = <String>['OLD'];
+        var destroyCalls = 0;
+        final server = jmapFakeServer(
+          accountId: 'u1',
+          handle: (call) async {
+            switch (call.method) {
+              case 'Mailbox/get':
+                return [
+                  'Mailbox/get',
+                  {
+                    'list': [
+                      {'id': 'mb-drafts', 'role': 'drafts'},
+                    ],
+                  },
+                  call.callId,
+                ];
+              case 'Email/set':
+                if (call.args.containsKey('create')) {
+                  onServer.add('NEW');
+                  return [
+                    'Email/set',
+                    {
+                      'created': {
+                        'draft': {'id': 'NEW'},
+                      },
+                    },
+                    call.callId,
+                  ];
+                }
+                final destroy = (call.args['destroy'] as List).cast<String>();
+                if (destroyCalls++ == 0) {
+                  return failure == 'notDestroyed'
+                      ? [
+                          'Email/set',
+                          {
+                            'notDestroyed': {
+                              for (final id in destroy)
+                                id: {'type': 'serverFail'},
+                            },
+                          },
+                          call.callId,
+                        ]
+                      : [
+                          'error',
+                          {'type': 'serverFail'},
+                          call.callId,
+                        ];
+                }
+                onServer.removeWhere(destroy.contains);
+                return [
+                  'Email/set',
+                  {'destroyed': destroy},
+                  call.callId,
+                ];
+              case 'Email/query':
+                return [
+                  'Email/query',
+                  {'ids': List.of(onServer)},
+                  call.callId,
+                ];
+              case 'Email/get':
+                // Only reached when the pull wants to import OLD.
+                return [
+                  'Email/get',
+                  {
+                    'list': [
+                      {'id': 'OLD', 'subject': 'stale'},
+                    ],
+                  },
+                  call.callId,
+                ];
+            }
+            return null;
+          },
+        );
+        final repo =
+            DraftRepositoryImpl(db, _JmapAccounts(), httpClient: server);
+        final saved = await repo.saveDraft(
+          accountId: 'acc-1',
+          toText: 'a@example.com',
+          ccText: '',
+          subjectText: 'edited',
+          bodyText: 'x',
+        );
+        await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+            .write(const DraftsCompanion(jmapServerId: Value('OLD')));
+
+        await repo.syncDrafts('acc-1');
+
+        expect(await db.select(db.drafts).get(), hasLength(1));
+        expect(
+          (await db.select(db.draftTombstones).get()).map((t) => t.serverId),
+          ['OLD'],
+        );
+        expect((await repo.getDraft(saved.id))!.jmapServerId, 'NEW');
+
+        // The next sync removes it through the tombstone.
+        await repo.syncDrafts('acc-1');
+
+        expect(onServer, ['NEW']);
+        expect(await db.select(db.draftTombstones).get(), isEmpty);
+        expect(await db.select(db.drafts).get(), hasLength(1));
+      });
+    }
+
+    test('a replaced IMAP copy that cannot be expunged is tombstoned',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      final client = _DraftsSpyImapClient()
+        ..appendUids.add(42)
+        ..serverUids = [41, 42]
+        ..failExpunge = true;
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+      );
+      final saved = await save(repo, []);
+      await (db.update(db.drafts)..where((t) => t.id.equals(saved.id)))
+          .write(const DraftsCompanion(imapServerId: Value('41')));
+
+      await repo.syncDrafts('acc-1');
+
+      // UID 41 is still on the server, but queued for removal: not pulled.
+      expect(await db.select(db.drafts).get(), hasLength(1));
+      expect(
+        (await db.select(db.draftTombstones).get()).map((t) => t.serverId),
+        ['41'],
+      );
+      expect((await repo.getDraft(saved.id))!.imapServerId, '42');
+    });
+
+    test('a pulled draft with a forwarded mail attached keeps it as one file',
+        () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc-1']);
+      const crlf = '\r\n';
+      final raw = [
+        'From: bob@example.com',
+        'Subject: Fwd draft',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="outer"',
+        '',
+        '--outer',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'see below',
+        '--outer',
+        'Content-Type: message/rfc822',
+        'Content-Disposition: attachment; filename="fwd.eml"',
+        '',
+        'Subject: inner',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="inner"',
+        '',
+        '--inner',
+        'Content-Type: text/plain',
+        '',
+        'inner body',
+        '--inner',
+        'Content-Type: application/pdf',
+        'Content-Disposition: attachment; filename="inner.pdf"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'cGRm',
+        '--inner--',
+        '--outer--',
+        '',
+      ].join(crlf);
+      final msg = imap.MimeMessage.parseFromText(raw)..uid = 7;
+      final client = _DraftsSpyImapClient()
+        ..serverUids = [7]
+        ..fetched = [msg];
+      final repo = DraftRepositoryImpl(
+        db,
+        _ImapAccounts(),
+        imapConnect: (_, __, ___) async => client,
+        attachmentStore: store,
+      );
+
+      await repo.syncDrafts('acc-1');
+
+      final row = (await db.select(db.drafts).get()).single;
+      final attachments = decodeDraftAttachments(row.attachmentsJson);
+      expect(attachments.map((a) => a.filename), ['fwd.eml']);
+      final content = await File(attachments.single.path).readAsString();
+      expect(content, contains('inner body'));
     });
   });
 }
