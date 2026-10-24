@@ -61,7 +61,10 @@ TypedRecipient _parseEntry(String entry) {
     final nameHasBracket =
         !quoted && (name.contains('<') || name.contains('>'));
     if (quoted) {
-      name = name.substring(1, name.length - 1).replaceAll(r'\"', '"');
+      // Undo the quoted-string escapes: `\"` → `"`, `\\` → `\`.
+      name = name
+          .substring(1, name.length - 1)
+          .replaceAllMapped(_quotedPair, (m) => m[1]!);
     } else if (name.startsWith('"')) {
       name = name.substring(1).trim(); // an unbalanced opening quote
     }
@@ -106,9 +109,12 @@ String formatRecipients(List<EmailAddress> addresses) => [
         if (a.name == null || a.name!.trim().isEmpty)
           a.email
         else if (_needsQuoting.hasMatch(a.name!))
-          '"${a.name!.replaceAll('"', r'\"')}" <${a.email}>'
+          '"${a.name!.replaceAll(r'\', r'\\').replaceAll('"', r'\"')}" '
+              '<${a.email}>'
         else
           '${a.name} <${a.email}>',
     ].join(', ');
 
-final _needsQuoting = RegExp('[,;"<>]');
+final _needsQuoting = RegExp(r'[,;"<>\\]');
+
+final _quotedPair = RegExp(r'\\(.)');

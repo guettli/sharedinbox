@@ -58,12 +58,14 @@ void main() {
       EmailAddress(name: 'Carol', email: 'carol@example.com'),
       EmailAddress(name: 'Doe, John', email: 'john@example.com'),
       EmailAddress(name: 'A; "B"', email: 'ab@example.com'),
+      EmailAddress(name: r'a,b\', email: 'c@example.com'),
     ];
     final field = formatRecipients(addresses);
     expect(
       field,
       'bob@example.org, Carol <carol@example.com>, '
-      '"Doe, John" <john@example.com>, "A; \\"B\\"" <ab@example.com>',
+      '"Doe, John" <john@example.com>, "A; \\"B\\"" <ab@example.com>, '
+      r'"a,b\\" <c@example.com>',
     );
     final parsed = recipientAddresses(field);
     expect(parsed.map((a) => a.email), addresses.map((a) => a.email));

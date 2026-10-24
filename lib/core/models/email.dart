@@ -411,6 +411,11 @@ class EmailDraft {
   /// Local file-system paths of files to attach when sending.
   final List<String> attachmentFilePaths;
 
+  /// The subset of [attachmentFilePaths] the app created itself (shrunk
+  /// image copies in the temp directory). The outbox deletes them once the
+  /// message is sent or discarded; the user's own files are never deleted.
+  final List<String> tempAttachmentPaths;
+
   /// RFC 5322 `Message-ID` (with `<...>` brackets) to stamp on the outgoing
   /// message. When null, the mail library generates one at send time. Set
   /// explicitly for queued sends so a self-send's local inbox note (created
@@ -444,6 +449,7 @@ class EmailDraft {
     required this.subject,
     required this.body,
     this.attachmentFilePaths = const [],
+    this.tempAttachmentPaths = const [],
     this.messageId,
     this.inReplyTo,
     this.references = const [],
@@ -457,6 +463,7 @@ class EmailDraft {
         subject: subject,
         body: body,
         attachmentFilePaths: attachmentFilePaths,
+        tempAttachmentPaths: tempAttachmentPaths,
         messageId: messageId ?? this.messageId,
         inReplyTo: inReplyTo,
         references: references,

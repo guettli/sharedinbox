@@ -45,7 +45,11 @@ class _LiveOutbox extends FakeOutboxRepository {
 const _rowId = 5;
 
 /// The finding this covers: a permanent rejection of a mistyped address.
-_LiveOutbox _failedOutbox({required List<String> attachments}) {
+_LiveOutbox _failedOutbox({
+  required List<String> attachments,
+  List<String> tempAttachments = const [],
+  String status = 'failed',
+}) {
   final outbox = _LiveOutbox();
   outbox.messages.add(
     OutboxMessage(
@@ -57,7 +61,7 @@ _LiveOutbox _failedOutbox({required List<String> attachments}) {
       bcc: const ['erin@example.com'],
       createdAt: DateTime.utc(2026, 10, 24, 9),
       attempts: 1,
-      status: 'failed',
+      status: status,
       lastError: 'SMTP rejected: 5.1.2 Mailbox does not exist.',
     ),
   );
@@ -72,6 +76,7 @@ _LiveOutbox _failedOutbox({required List<String> attachments}) {
       subject: 'Lunch?',
       body: 'Tomorrow at noon?',
       attachmentFilePaths: attachments,
+      tempAttachmentPaths: tempAttachments,
       inReplyTo: 'parent@example.com',
       references: const ['parent@example.com'],
     ),
@@ -172,8 +177,12 @@ void main() {
     addTearDown(() => dir.delete(recursive: true));
     final kept = File('${dir.path}/plan.pdf');
     await tester.runAsync(() => kept.writeAsString('pdf'));
+    // A shrunk copy the app made when the message was first composed.
+    final shrunk = File('${dir.path}/shrunk_1_photo.jpg');
+    await tester.runAsync(() => shrunk.writeAsString('jpg'));
     final outbox = _failedOutbox(
-      attachments: [kept.path, '${dir.path}/gone.png'],
+      attachments: [kept.path, shrunk.path, '${dir.path}/gone.png'],
+      tempAttachments: [shrunk.path],
     );
     final drafts = FakeDraftRepository();
     await _pumpQueue(tester, outbox: outbox, drafts: drafts);
@@ -184,12 +193,11 @@ void main() {
 
     _expectComposeFilled();
     expect(find.text('plan.pdf'), findsOneWidget);
+    expect(find.text('shrunk_1_photo.jpg'), findsOneWidget);
     expect(
       find.text('Attachment no longer available: gone.png'),
       findsOneWidget,
     );
-    // The file belongs to the user; leaving Compose must not delete it.
-    expect(await tester.runAsync(kept.exists), isTrue);
 
     final draft = (await drafts.getDraft(drafts.savedIds.single))!;
     expect(draft.accountId, kTestAccount.id);
@@ -200,12 +208,35 @@ void main() {
     expect(draft.bodyText, 'Tomorrow at noon?');
     expect(outbox.messages, isEmpty);
 
-    // Back on the queue, the row is gone.
-    final router = GoRouter.of(tester.element(find.text('Compose')));
-    router.pop();
+    // Leaving would lose the attachments (drafts cannot hold them): ask.
+    await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
+    expect(find.text('Discard attachments?'), findsOneWidget);
+    await tester.tap(find.text('Stay'));
+    await tester.pumpAndSettle();
+    expect(find.text('Compose'), findsOneWidget);
+
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Discard'));
+    await tester.pumpAndSettle();
+    await _settleFileIo(tester);
+
+    // Back on the queue, the row is gone.
     expect(find.text('No messages waiting to be sent.'), findsOneWidget);
+    // The user's file stays; the app's own shrunk copy is cleaned up.
     expect(await tester.runAsync(kept.exists), isTrue);
+    expect(await tester.runAsync(shrunk.exists), isFalse);
+  });
+
+  testWidgets('a pending row offers no Edit', (tester) async {
+    final outbox = _failedOutbox(attachments: const [], status: 'pending');
+    await _pumpQueue(tester, outbox: outbox, drafts: FakeDraftRepository());
+
+    expect(find.byTooltip('Edit'), findsNothing);
+    await tester.tap(find.textContaining('5.1.2 Mailbox does not exist'));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextButton, 'Edit'), findsNothing);
   });
 
   testWidgets('the error details dialog offers Edit too', (tester) async {

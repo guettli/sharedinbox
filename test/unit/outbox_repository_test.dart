@@ -643,6 +643,63 @@ void main() {
     });
   });
 
+  group('temp attachments', () {
+    late AppDatabase db;
+    late OutboxRepositoryImpl repo;
+    late List<String> deleted;
+
+    setUp(() async {
+      db = openTestDatabase();
+      await _seedAccount(db);
+      deleted = [];
+      repo = OutboxRepositoryImpl(db, deleteFile: (p) async => deleted.add(p));
+    });
+
+    Future<int> enqueueWithShrunk() => repo.enqueue(
+          _accountId,
+          const EmailDraft(
+            from: EmailAddress(email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 's',
+            body: 'b',
+            attachmentFilePaths: ['/home/u/own.pdf', '/tmp/shrunk_1_x.jpg'],
+            tempAttachmentPaths: ['/tmp/shrunk_1_x.jpg'],
+          ),
+        );
+
+    test('are deleted after a successful send, the user files are not',
+        () async {
+      await enqueueWithShrunk();
+      await repo.flush(_accountId, (_) async {});
+      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+    });
+
+    test('are kept while the message is still queued', () async {
+      await enqueueWithShrunk();
+      await repo.flush(_accountId, (_) async => throw Exception('offline'));
+      await repo.flush(
+        _accountId,
+        (_) async => throw PermanentSendException('5.1.2'),
+        now: DateTime.now().add(const Duration(days: 1)),
+      );
+      expect(deleted, isEmpty);
+    });
+
+    test('are deleted on discard', () async {
+      final id = await enqueueWithShrunk();
+      await repo.discard(id);
+      expect(deleted, ['/tmp/shrunk_1_x.jpg']);
+    });
+
+    test('are handed over, not deleted, by takeForEdit', () async {
+      final id = await enqueueWithShrunk();
+      final draft = await repo.takeForEdit(id, (job) async => job.draft);
+      expect(draft!.tempAttachmentPaths, ['/tmp/shrunk_1_x.jpg']);
+      expect(deleted, isEmpty);
+    });
+  });
+
   group('takeForEdit', () {
     late AppDatabase db;
     late OutboxRepositoryImpl repo;

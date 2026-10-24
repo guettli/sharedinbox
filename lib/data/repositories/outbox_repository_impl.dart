@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -19,8 +20,16 @@ import 'package:sharedinbox/data/imap/reply_headers.dart';
 const _backoffSeconds = [30, 120, 600, 3600];
 
 class OutboxRepositoryImpl implements OutboxRepository {
-  OutboxRepositoryImpl(this._db, {String appVersion = 'dev'})
-      : _appVersion = appVersion;
+  OutboxRepositoryImpl(
+    this._db, {
+    String appVersion = 'dev',
+    Future<void> Function(String path)? deleteFile,
+  })  : _appVersion = appVersion,
+        _deleteFile = deleteFile ?? _deleteFileBestEffort;
+
+  /// Removes an app-created temp attachment once its message left the
+  /// outbox. Injectable so tests can observe it.
+  final Future<void> Function(String path) _deleteFile;
 
   final AppDatabase _db;
 
@@ -39,6 +48,11 @@ class OutboxRepositoryImpl implements OutboxRepository {
   /// synchronous, so the two never both get the same row — an edited message
   /// is never also sent, and a message being sent is never also turned into
   /// a draft (which would send it twice).
+  ///
+  /// In memory, so it only covers flushes of this one instance: the outbox
+  /// is flushed only by the main isolate (the sync loop and Send/Retry via
+  /// `sendNow`, all through the app-wide provider); the WorkManager isolate
+  /// in `background_sync.dart` never flushes it.
   final Set<int> _claimed = {};
 
   @override
@@ -52,6 +66,8 @@ class OutboxRepositoryImpl implements OutboxRepository {
       'cc': draft.cc.map((a) => a.toJson()).toList(),
       if (draft.bcc.isNotEmpty)
         'bcc': draft.bcc.map((a) => a.toJson()).toList(),
+      if (draft.tempAttachmentPaths.isNotEmpty)
+        'tempAttachments': draft.tempAttachmentPaths,
       'subject': draft.subject,
       'body': draft.body,
       if (draft.messageId != null) 'messageId': draft.messageId,
@@ -147,6 +163,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
     try {
       await sender(job);
       await (_db.delete(_db.outbox)..where((t) => t.id.equals(row.id))).go();
+      await _deleteTempAttachments(job.draft);
       _safeNotify(() => observer?.onOk?.call(job));
       return true;
     } on PermanentSendException catch (e) {
@@ -248,7 +265,21 @@ class OutboxRepositoryImpl implements OutboxRepository {
 
   @override
   Future<void> discard(int id) async {
+    final row = await (_db.select(_db.outbox)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
     await (_db.delete(_db.outbox)..where((t) => t.id.equals(id))).go();
+    if (row != null) await _deleteTempAttachments(_jobFromRow(row).draft);
+  }
+
+  /// Deletes the app-created temp copies of [draft]'s attachments: once its
+  /// message is sent or discarded nothing refers to them any more. Never
+  /// fails the caller — a leftover temp file is harmless.
+  Future<void> _deleteTempAttachments(model.EmailDraft draft) async {
+    for (final path in draft.tempAttachmentPaths) {
+      try {
+        await _deleteFile(path);
+      } catch (_) {}
+    }
   }
 }
 
@@ -274,11 +305,18 @@ model.EmailDraft _decodeEnvelope(String envelopeJson, String attachmentsJson) {
     subject: env['subject'] as String? ?? '',
     body: env['body'] as String? ?? '',
     attachmentFilePaths: atts.cast<String>(),
+    tempAttachmentPaths:
+        (env['tempAttachments'] as List<dynamic>? ?? const []).cast<String>(),
     messageId: env['messageId'] as String?,
     inReplyTo: env['inReplyTo'] as String?,
     references:
         (env['references'] as List<dynamic>? ?? const []).cast<String>(),
   );
+}
+
+Future<void> _deleteFileBestEffort(String path) async {
+  final file = File(path);
+  if (await file.exists()) await file.delete();
 }
 
 OutboxJob _jobFromRow(OutboxRow row) => OutboxJob(

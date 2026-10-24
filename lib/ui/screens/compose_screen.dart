@@ -38,6 +38,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.prefillBody,
     this.draftId,
     this.attachmentPaths = const [],
+    this.tempAttachmentPaths = const [],
     this.inReplyTo,
     this.references = const [],
   });
@@ -55,6 +56,8 @@ class ComposeScreen extends ConsumerStatefulWidget {
         draftId: extra?['draftId'] as int?,
         attachmentPaths:
             (extra?['attachmentPaths'] as List<String>?) ?? const [],
+        tempAttachmentPaths:
+            (extra?['tempAttachmentPaths'] as List<String>?) ?? const [],
         inReplyTo: extra?['inReplyTo'] as String?,
         references: (extra?['references'] as List<String>?) ?? const [],
       );
@@ -72,9 +75,13 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final int? draftId;
 
   /// Files to attach from the start: those of a queued message taken back
-  /// for editing. Not ours to delete — they are the user's files, or a
-  /// shrunk copy the outbox kept. Missing ones are skipped with a notice.
+  /// for editing. Missing ones are skipped with a notice.
   final List<String> attachmentPaths;
+
+  /// The subset of [attachmentPaths] the app created (shrunk copies). This
+  /// screen owns them again, as if shrunk here: deleted when removed or when
+  /// Compose closes without sending. The others are the user's files.
+  final List<String> tempAttachmentPaths;
 
   /// Threading headers of a queued message taken back for editing. When
   /// [inReplyTo] is set, Send uses these as they were queued instead of
@@ -112,6 +119,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// Set once Send queued the message: the outbox now refers to the
   /// attachment files, so [dispose] must not delete the shrunk temp copies.
   bool _queued = false;
+
+  /// Set right before Compose closes itself (Discard draft), so the
+  /// lose-the-attachments question is not asked.
+  bool _leaving = false;
+
+  /// True until [ComposeScreen.attachmentPaths] are checked and attached;
+  /// Send waits, so the message never goes out without them.
+  late bool _loadingAttachments = widget.attachmentPaths.isNotEmpty;
   final List<_AttachmentInfo> _attachments = [];
   bool _opening = false;
   // Last shrink settings the user accepted, so re-attaching / adjusting further
@@ -290,6 +305,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   Future<void> _loadInitialAttachments(List<String> paths) async {
     final found = <_AttachmentInfo>[];
     final missing = <String>[];
+    final temp = widget.tempAttachmentPaths.toSet();
     for (final path in paths) {
       try {
         final stat = await File(path).stat();
@@ -304,14 +320,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             filename: name,
             size: stat.size,
             contentType: _guessMimeType(name),
+            isTemp: temp.contains(path),
           ),
         );
-      } on FileSystemException {
+      } catch (_) {
+        // Unreadable counts as gone; never leave Send disabled over it.
         missing.add(p.basename(path));
       }
     }
     if (!mounted) return;
-    setState(() => _attachments.addAll(found));
+    setState(() {
+      _attachments.addAll(found);
+      _loadingAttachments = false;
+    });
     if (missing.isNotEmpty) {
       context.showAppSnackBar(
         'Attachment no longer available: ${missing.join(', ')}',
@@ -653,6 +674,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         attachmentFilePaths: List.unmodifiable(
           _attachments.map((a) => a.path).toList(),
         ),
+        tempAttachmentPaths: List.unmodifiable(
+          _attachments.where((a) => a.isTemp).map((a) => a.path).toList(),
+        ),
         inReplyTo: threading?.inReplyTo,
         references: threading?.references ?? const [],
       );
@@ -785,12 +809,72 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         'Draft discarded',
         duration: const Duration(seconds: 3),
       );
+      _leaving = true;
       context.pop();
+    }
+  }
+
+  /// Leaving keeps the text as a draft, but drafts cannot hold attachments
+  /// yet (#955) — so with attachments that would silently lose them. Ask.
+  bool get _wouldLoseAttachments =>
+      (_attachments.isNotEmpty || _loadingAttachments) && !_queued && !_leaving;
+
+  Future<void> _confirmLeave() async {
+    final choice = await showDialog<_LeaveChoice>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard attachments?'),
+        content: const Text(
+          'The text is kept as a draft, but drafts cannot keep attachments '
+          'yet. Leaving now loses them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.stay),
+            child: const Text('Stay'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.discard),
+            child: const Text('Discard'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_LeaveChoice.send),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    switch (choice) {
+      case _LeaveChoice.discard:
+        setState(() => _leaving = true);
+        Navigator.of(context).pop();
+      case _LeaveChoice.send:
+        if (!_sending && !_loadingAttachments) await _send();
+      case _LeaveChoice.stay:
+      case null:
+        break;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    return PopScope<Object?>(
+      canPop: !_wouldLoseAttachments,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        // Send or Discard draft closing the screen while canPop was stale.
+        if (!_wouldLoseAttachments) {
+          Navigator.of(context).pop();
+          return;
+        }
+        unawaited(_confirmLeave());
+      },
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Compose'),
@@ -823,7 +907,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.send),
-            onPressed: _sending ? null : _send,
+            onPressed: _sending || _loadingAttachments ? null : _send,
           ),
         ],
       ),
@@ -1086,6 +1170,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 }
+
+enum _LeaveChoice { stay, discard, send }
 
 class _AttachmentInfo {
   final String path;

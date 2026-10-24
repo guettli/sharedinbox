@@ -118,6 +118,8 @@ Future<void> editQueuedMessage(
         'draftId': taken.draftId,
         if (draft.attachmentFilePaths.isNotEmpty)
           'attachmentPaths': draft.attachmentFilePaths,
+        if (draft.tempAttachmentPaths.isNotEmpty)
+          'tempAttachmentPaths': draft.tempAttachmentPaths,
         if (draft.inReplyTo != null) 'inReplyTo': draft.inReplyTo,
         if (draft.references.isNotEmpty) 'references': draft.references,
       },
@@ -157,8 +159,8 @@ String pendingOutboxStatus(OutboxMessage message, {DateTime? now}) {
 /// Lists messages queued in the offline send queue for [accountId].
 /// Each row offers Retry (resets the backoff and kicks the account sync loop
 /// so the next attempt runs immediately, then reports the outcome via a
-/// SnackBar), Edit (takes it back into Compose, see [editQueuedMessage]) and
-/// Discard (drops the message from the queue).
+/// SnackBar), Edit (failed rows only: takes it back into Compose, see
+/// [editQueuedMessage]) and Discard (drops the message from the queue).
 class OutboxScreen extends ConsumerWidget {
   const OutboxScreen({super.key, required this.accountId});
 
@@ -324,7 +326,9 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
             onErrorTap: () => showOutboxErrorDetails(
               context,
               message,
-              onEdit: () => unawaited(widget.onEdit(message)),
+              onEdit: message.isFailed
+                  ? () => unawaited(widget.onEdit(message))
+                  : null,
             ),
           ),
         ],
@@ -332,7 +336,9 @@ class _OutboxQueueTileState extends State<OutboxQueueTile> {
       trailing: QueueRowActions(
         retrying: _retrying,
         onRetry: _retrying ? null : _handleRetry,
-        showEdit: true,
+        // Only failed rows: a pending one is still being retried, and taking
+        // it back after a partly delivered attempt could send it twice.
+        showEdit: message.isFailed,
         // Not while Retry is sending it: that send is already under way.
         onEdit: _retrying ? null : () => unawaited(widget.onEdit(message)),
         onDiscard: () => unawaited(widget.repo.discard(message.id)),
