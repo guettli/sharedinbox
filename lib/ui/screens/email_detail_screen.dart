@@ -1757,6 +1757,24 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         : 'Fwd: ${header.subject ?? ''}';
     final quoted = await _quotedBody(header, body);
     if (!context.mounted) return;
+    final attachments = body?.attachments ?? const <EmailAttachment>[];
+    final downloaded = attachments.isEmpty
+        ? (paths: const <String>[], failed: const <String>[])
+        : await _runDimmed(
+            'Downloading attachments…',
+            () => _downloadForForward(header, attachments),
+          );
+    if (!context.mounted) return;
+    if (downloaded.failed.isNotEmpty) {
+      context.showAppSnackBar(
+        'Could not attach: ${downloaded.failed.join(', ')}',
+        level: AppLogLevel.warn,
+        event: 'email.forward.attachments_missing',
+        emailId: widget.emailId,
+        data: {'failed': downloaded.failed.length},
+        duration: const Duration(seconds: 8),
+      );
+    }
     unawaited(
       context.push(
         '/compose',
@@ -1764,9 +1782,58 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           'accountId': header.accountId,
           'prefillSubject': subject,
           'prefillBody': quoted,
+          if (downloaded.paths.isNotEmpty)
+            'prefillAttachmentPaths': downloaded.paths,
         },
       ),
     );
+  }
+
+  /// Downloads [attachments] one after the other (each IMAP download opens
+  /// its own connection) for a forward. Returns the local paths, without
+  /// duplicates (the cache keys files by name, so same-named parts share
+  /// one), and the names of those that failed. Parts without a file name
+  /// cannot be cached and are skipped.
+  Future<({List<String> paths, List<String> failed})> _downloadForForward(
+    Email header,
+    List<EmailAttachment> attachments,
+  ) async {
+    final repo = ref.read(emailRepositoryProvider);
+    final logger = ref.read(appLoggerProvider);
+    final paths = <String>[];
+    final failed = <String>[];
+    for (final att in attachments) {
+      if (att.filename.isEmpty) {
+        unawaited(
+          logger.warn(
+            'email.forward.attachment_skipped',
+            'Attachment without a file name not forwarded',
+            accountId: header.accountId,
+            emailId: widget.emailId,
+            data: {'partId': att.fetchPartId, 'contentType': att.contentType},
+          ),
+        );
+        continue;
+      }
+      try {
+        final path = await repo.downloadAttachment(widget.emailId, att);
+        if (!paths.contains(path)) paths.add(path);
+      } catch (e, stack) {
+        failed.add(att.filename);
+        unawaited(
+          logger.error(
+            'email.forward.attachment_failed',
+            'Could not download an attachment to forward',
+            accountId: header.accountId,
+            emailId: widget.emailId,
+            data: {'filename': att.filename},
+            error: e,
+            stack: stack,
+          ),
+        );
+      }
+    }
+    return (paths: paths, failed: failed);
   }
 
   Future<void> _moveTo(BuildContext context, Email header) async {

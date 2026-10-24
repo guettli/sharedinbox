@@ -172,6 +172,88 @@ void main() {
         findsOneWidget,
       );
     });
+
+    group('prefilled attachments (#933)', () {
+      Future<GoRouter> pumpPrefilled(
+        WidgetTester tester,
+        FakeDraftRepository drafts,
+        FakeEmailRepository email,
+        List<String> paths,
+      ) async {
+        tester.view.physicalSize = const Size(800, 3000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final router = await pumpHome(tester, drafts, email);
+        unawaited(
+          router.push('/compose', extra: {'prefillAttachmentPaths': paths}),
+        );
+        await settleFileIo(tester);
+        return router;
+      }
+
+      testWidgets('are shown and sent; a missing one is skipped', (
+        tester,
+      ) async {
+        final email = FakeEmailRepository();
+        await pumpPrefilled(
+          tester,
+          FakeDraftRepository(),
+          email,
+          [notes.path, '${dir.path}/gone.pdf'],
+        );
+        expect(find.text('Attachments'), findsOneWidget);
+        expect(find.text('notes.txt'), findsOneWidget);
+        expect(find.text('gone.pdf'), findsNothing);
+        expect(
+          find.text('Attachment no longer available: gone.pdf'),
+          findsOneWidget,
+        );
+
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'To'),
+          'bob@example.com',
+        );
+        await tester.tap(find.byIcon(Icons.send));
+        await settleFileIo(tester);
+        expect(email.sentEmailDraft?.attachmentFilePaths, [notes.path]);
+      });
+
+      testWidgets('are saved with the draft once it is edited', (
+        tester,
+      ) async {
+        final drafts = FakeDraftRepository();
+        await pumpPrefilled(
+          tester,
+          drafts,
+          FakeEmailRepository(),
+          [notes.path],
+        );
+        await tester.enterText(
+          find.widgetWithText(TextFormField, 'Subject'),
+          'Fwd: notes',
+        );
+        await tester.tap(find.byType(BackButton));
+        await settleFileIo(tester);
+        final saved = (await drafts.getDraft(drafts.savedIds.single))!;
+        expect(saved.attachments.map((a) => a.filename), ['notes.txt']);
+      });
+
+      testWidgets('removing one leaves the source file', (tester) async {
+        await pumpPrefilled(
+          tester,
+          FakeDraftRepository(),
+          FakeEmailRepository(),
+          [notes.path],
+        );
+        await tester.tap(find.byTooltip('Remove'));
+        await tester.pump();
+        expect(find.text('notes.txt'), findsNothing);
+        await tester.tap(find.byType(BackButton));
+        await settleFileIo(tester);
+        // A forward's cached download or a shared file is not ours to delete.
+        expect(notes.existsSync(), isTrue);
+      });
+    });
   });
 
   group('ComposeScreen', () {
@@ -1505,13 +1587,8 @@ Future<void> _pumpComposeFromHome(
 /// somewhere to land. The scaffolding is shared with the other tests that need
 /// it (`homeAndComposeRouter` in helpers.dart); only the compose builder differs.
 GoRouter _homeAndCompose() => homeAndComposeRouter(
-      compose: (state) {
-        final extra = state.extra as Map<String, dynamic>?;
-        return ComposeScreen(
-          draftId: extra?['draftId'] as int?,
-          replyToEmailId: extra?['replyToEmailId'] as String?,
-        );
-      },
+      compose: (state) =>
+          ComposeScreen.fromExtra(state.extra as Map<String, dynamic>?),
     );
 
 Widget _buildRouter({

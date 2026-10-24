@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/data/intents/mail_intent_handler.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
@@ -14,16 +17,8 @@ import 'helpers.dart';
 /// Minimal mirror of the real route table: an initial location the intent has
 /// to navigate away from, plus `/compose` reading the prefill `extra`.
 GoRouter _composeRouter() => homeAndComposeRouter(
-      compose: (state) {
-        final extra = state.extra as Map<String, dynamic>?;
-        return ComposeScreen(
-          prefillTo: extra?['prefillTo'] as String?,
-          prefillCc: extra?['prefillCc'] as String?,
-          prefillBcc: extra?['prefillBcc'] as String?,
-          prefillSubject: extra?['prefillSubject'] as String?,
-          prefillBody: extra?['prefillBody'] as String?,
-        );
-      },
+      compose: (state) =>
+          ComposeScreen.fromExtra(state.extra as Map<String, dynamic>?),
     );
 
 /// A `/compose` that renders a bare marker instead of the real screen, for the
@@ -225,6 +220,56 @@ void main() {
         expect(find.widgetWithText(TextFormField, 'Lunch?'), findsOneWidget);
       },
     );
+
+    // Runs right after a test with a mocked event channel: this one waits on
+    // real I/O, which would surface an earlier test's unmocked stream cancel.
+    testWidgets('a shared file is attached in compose (#933)', (tester) async {
+      // Tall enough for the Attachments section below the body.
+      tester.view.physicalSize = const Size(800, 3000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final dir = Directory.systemTemp.createTempSync('shared_file');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final shared = File('${dir.path}/report.pdf')..writeAsBytesSync([1, 2]);
+      _useMockIntentChannels(
+        tester,
+        onMethodCall: (call) async => call.method == 'getInitialIntent'
+            ? <String, Object?>{
+                'attachmentPaths': <String>[shared.path],
+              }
+            : null,
+        // Compose's real file I/O lets the event channel's listen through.
+        streamHandler: MockStreamHandler.inline(onListen: (_, __) {}),
+      );
+      final router = _composeRouter();
+      await _pumpApp(
+        tester,
+        router,
+        overrides: [
+          ...baseOverrides(accounts: [kTestAccount]),
+          // Compose stats the file for real; keep the app log off the
+          // real database.
+          appLogRepositoryProvider.overrideWithValue(
+            const NoOpAppLogRepository(),
+          ),
+        ],
+      );
+      await tester.pumpAndSettle();
+      final handler = MailIntentHandler(router: router);
+      await handler.initialize();
+      addTearDown(handler.dispose);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.text('Compose'), findsOneWidget);
+      expect(find.text('Attachments'), findsOneWidget);
+      expect(find.text('report.pdf'), findsOneWidget);
+    });
 
     testWidgets(
       'no-op when getInitialIntent returns null (normal launch)',
