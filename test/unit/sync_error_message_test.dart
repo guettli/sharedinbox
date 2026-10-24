@@ -14,6 +14,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:enough_mail/enough_mail.dart' show ImapClient, ImapException;
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
     show syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
@@ -38,6 +39,22 @@ void main() {
         message.toLowerCase(),
         contains('did not answer in time'),
         reason: 'a slow server must be reported as slow',
+      );
+    });
+
+    // enough_mail reports its own response timeout as ImapException('timeout'),
+    // e.g. LOGIN or SELECT on a blackholed connection. It is the same
+    // transient "server did not answer" case, not a raw error to show.
+    test("maps enough_mail's ImapException('timeout') like a timeout", () {
+      final client = ImapClient();
+      expect(
+        syncErrorMessage(ImapException(client, 'timeout')),
+        syncErrorMessage(TimeoutException('too slow')),
+      );
+      expect(
+        syncErrorMessage(ImapException(client, 'NO [AUTHENTICATIONFAILED]')),
+        'NO [AUTHENTICATIONFAILED]',
+        reason: 'a NO/BAD reply stays as the server sent it',
       );
     });
 

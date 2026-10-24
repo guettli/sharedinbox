@@ -8,9 +8,11 @@ import 'package:sharedinbox/core/models/email.dart'
     show ImapMailboxState, SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import 'package:test/test.dart';
 
@@ -204,76 +206,72 @@ void main() {
   // Found with the explore fault proxy (#1197): with the app resting in IDLE,
   // the proxy going `down` or `reset` closes the socket. enough_mail then
   // fires ImapConnectionLostEvent but never answers the pending IDLE, so a
-  // DONE or LOGOUT on that connection never completes. The IDLE wait ignored
-  // the event and sat on the dead socket — no reconnect, no new mail — and a
-  // kick ("Sync all") then hung for good in LOGOUT. The loss must end IDLE as
-  // a logged transient failure, after which the loop reconnects.
-  test('a lost IMAP IDLE connection ends IDLE and the loop reconnects',
-      () async {
-    final syncLog = FakeSyncLogRepository();
-    final (:manager, :clients, mailboxes: _) = _startImapLoop(
-      FakeEmailRepository(),
-      (n) => n == 0 ? _BreakingIdleClient(reportLoss: true) : _FakeIdleClient(),
-      syncLog: syncLog,
-    );
-
-    await _until(() => syncLog.logs.contains(false), 'the loss was logged');
-    manager.syncNow('1'); // "Sync all" cuts the backoff short.
-    await _untilIdling(clients, sessions: 2);
-
-    expect(syncLog.logs, [true, false, true]);
-    expect(
-      clients.first.logoutCalled,
-      isFalse,
-      reason: 'no LOGOUT on a dead connection: it would never be answered',
-    );
-  });
-
-  // Fault proxy `blackhole`: the connection stays open but nothing is ever
-  // answered again, and no loss is reported. A kick then sends DONE, which
-  // used to wait forever.
-  test('a kick on a blackholed IMAP IDLE connection cannot hang the loop',
-      () async {
-    final syncLog = FakeSyncLogRepository();
-    final (:manager, :clients, mailboxes: _) = _startImapLoop(
-      FakeEmailRepository(),
-      (n) =>
-          n == 0 ? _BreakingIdleClient(reportLoss: false) : _FakeIdleClient(),
-      syncLog: syncLog,
+  // LOGOUT queued behind it is never even sent. The IDLE wait ignored the
+  // event and sat on the dead socket — no reconnect, no new mail — and a kick
+  // ("Sync all") then hung for good in that LOGOUT. With `blackhole` the
+  // connection stays open and silent and nothing is reported at all. Each
+  // case must end IDLE as a logged *transient* failure (warn level, not the
+  // error-level flood of #355), after which the loop reconnects.
+  final faults = <String,
+      ({_Fault fault, bool kick, ImapIdleTimings timings, String message})>{
+    'down/reset (loss reported)': (
+      fault: _Fault.down,
+      kick: false,
+      timings: const ImapIdleTimings(),
+      message: 'Could not reach the mail server',
+    ),
+    'blackhole, then a kick (enough_mail times DONE out)': (
+      fault: _Fault.blackhole,
+      kick: true,
+      timings: const ImapIdleTimings(),
+      message: 'did not answer in time',
+    ),
+    'blackhole, then a kick (DONE never answered at all)': (
+      fault: _Fault.hang,
+      kick: true,
       timings: const ImapIdleTimings(commandTimeout: _shortTimeout),
-    );
+      message: 'did not answer in time',
+    ),
+    'blackhole, found by the periodic IDLE refresh': (
+      fault: _Fault.blackhole,
+      kick: false,
+      timings: const ImapIdleTimings(refreshInterval: _shortTimeout),
+      message: 'did not answer in time',
+    ),
+  };
+  for (final MapEntry(key: name, value: c) in faults.entries) {
+    test('a broken IMAP IDLE connection is replaced: $name', () async {
+      final syncLog = _RecordingSyncLog();
+      final appLog = _LevelRecordingAppLog();
+      final (:manager, :clients, mailboxes: _) = _startImapLoop(
+        FakeEmailRepository(),
+        (n) => n == 0 ? _BreakingIdleClient(c.fault) : _FakeIdleClient(),
+        syncLog: syncLog,
+        appLogger: AppLogger(appLog),
+        timings: c.timings,
+      );
 
-    await _untilIdling(clients);
-    manager.syncNow('1');
-    await _until(() => syncLog.logs.contains(false), 'the hung DONE failed');
-    manager.syncNow('1');
-    await _untilIdling(clients, sessions: 2);
+      await _untilIdling(clients);
+      if (c.kick) manager.syncNow('1');
+      await _until(
+        () => syncLog.calls.any((call) => call[#success] == false),
+        'the broken connection was logged as a failed cycle',
+      );
+      manager.syncNow('1'); // "Sync all" cuts the backoff short.
+      await _untilIdling(clients, sessions: 2);
 
-    expect(syncLog.logs, [true, false, true]);
-    expect(clients.first.idleDoneCalled, isTrue);
-  });
-
-  // Without a kick or new mail, a blackholed connection is only noticed by the
-  // periodic IDLE refresh (DONE, NOOP, IDLE).
-  test('the periodic IDLE refresh detects a blackholed connection', () async {
-    final syncLog = FakeSyncLogRepository();
-    final (:manager, :clients, mailboxes: _) = _startImapLoop(
-      FakeEmailRepository(),
-      (n) =>
-          n == 0 ? _BreakingIdleClient(reportLoss: false) : _FakeIdleClient(),
-      syncLog: syncLog,
-      timings: const ImapIdleTimings(
-        commandTimeout: _shortTimeout,
-        refreshInterval: _shortTimeout,
-      ),
-    );
-
-    await _until(() => syncLog.logs.contains(false), 'the refresh failed');
-    manager.syncNow('1');
-    await _untilIdling(clients, sessions: 2);
-
-    expect(syncLog.logs, [true, false, true]);
-  });
+      final outcomes = [for (final call in syncLog.calls) call[#success]];
+      expect(outcomes, [true, false, true]);
+      expect(syncLog.firstFailure[#errorMessage], contains(c.message));
+      expect(appLog.levels, isNot(contains(AppLogLevel.error)));
+      expect(appLog.levels, contains(AppLogLevel.warn));
+      expect(
+        clients.first.logoutCalled,
+        isFalse,
+        reason: 'no LOGOUT on a broken connection: it is never answered',
+      );
+    });
+  }
 
   // On a healthy connection the refresh re-issues IDLE in place: no new
   // connection and no extra sync cycle.
@@ -697,6 +695,7 @@ const _shortTimeout = Duration(milliseconds: 50);
   EmailRepository emails,
   _FakeIdleClient Function(int n) newClient, {
   SyncLogRepository? syncLog,
+  AppLogger? appLogger,
   ImapIdleTimings timings = const ImapIdleTimings(),
 }) {
   final mailboxes = _CountingMailboxRepository();
@@ -711,6 +710,7 @@ const _shortTimeout = Duration(milliseconds: 50);
       clients.add(client);
       return client;
     },
+    appLogger: appLogger,
     imapIdleTimings: timings,
   );
   addTearDown(m.dispose);
@@ -944,23 +944,36 @@ class _FakeIdleClient extends SelectingFakeImapClient {
   Future<dynamic> logout() async => logoutCalled = true;
 }
 
-/// An IDLE client whose connection breaks once IDLE has started, like the
-/// explore fault proxy (#1197): `down`/`reset` close the socket, so
-/// enough_mail reports [imap.ImapConnectionLostEvent] ([reportLoss]);
-/// `blackhole` keeps it open and silent, so nothing is reported. Either way,
-/// as with the real client, nothing sent afterwards is ever answered: DONE,
-/// NOOP and LOGOUT hang.
-class _BreakingIdleClient extends _FakeIdleClient {
-  _BreakingIdleClient({required this.reportLoss});
+/// How [_BreakingIdleClient]'s connection breaks, after the explore fault
+/// proxy's modes (#1197).
+enum _Fault {
+  /// `down`/`reset`: the socket closes, enough_mail fires
+  /// [imap.ImapConnectionLostEvent] and rejects DONE as "not connected".
+  down,
 
-  final bool reportLoss;
+  /// `blackhole`: nothing is reported; enough_mail's own response timeout
+  /// fails DONE/NOOP with `ImapException('timeout')`.
+  blackhole,
+
+  /// Like [blackhole], but DONE/NOOP never complete at all — only the
+  /// loop's own bound can end them.
+  hang,
+}
+
+/// An IDLE client whose connection breaks per [fault] once IDLE has started.
+/// As with the real client, a LOGOUT afterwards is never answered (it queues
+/// behind the unanswered IDLE).
+class _BreakingIdleClient extends _FakeIdleClient {
+  _BreakingIdleClient(this.fault);
+
+  final _Fault fault;
   bool _broken = false;
 
   @override
   Future<void> idleStart() async {
     await super.idleStart();
     _broken = true;
-    if (reportLoss) {
+    if (fault == _Fault.down) {
       Timer(
         const Duration(milliseconds: 10),
         () => eventBus.fire(imap.ImapConnectionLostEvent(this)),
@@ -969,18 +982,47 @@ class _BreakingIdleClient extends _FakeIdleClient {
   }
 
   @override
-  Future<dynamic> idleDone() =>
-      _broken ? _hang(() => idleDoneCalled = true) : super.idleDone();
+  Future<dynamic> idleDone() {
+    if (!_broken) return super.idleDone();
+    idleDoneCalled = true;
+    return _fail();
+  }
 
   @override
-  Future<imap.Mailbox?> noop() => _broken ? _hang(() => noops++) : super.noop();
+  Future<imap.Mailbox?> noop() {
+    if (!_broken) return super.noop();
+    noops++;
+    return _fail();
+  }
 
   @override
-  Future<dynamic> logout() =>
-      _broken ? _hang(() => logoutCalled = true) : super.logout();
+  Future<dynamic> logout() {
+    if (!_broken) return super.logout();
+    logoutCalled = true;
+    return Completer<dynamic>().future;
+  }
 
-  Future<T> _hang<T>(void Function() record) {
-    record();
-    return Completer<T>().future;
+  Future<T> _fail<T>() => switch (fault) {
+        _Fault.down => Future.error(imap.ImapException(this, 'not connected')),
+        _Fault.blackhole => Future.delayed(
+            const Duration(milliseconds: 10),
+            () => throw imap.ImapException(this, 'timeout'),
+          ),
+        _Fault.hang => Completer<T>().future,
+      };
+}
+
+/// Records the level of every app-log entry. Implemented via [noSuchMethod]
+/// so it needs no copy of the long [AppLogRepository.insert] signature
+/// (jscpd duplication gate).
+class _LevelRecordingAppLog implements AppLogRepository {
+  final levels = <AppLogLevel>[];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #insert) {
+      levels.add(invocation.namedArguments[#level] as AppLogLevel);
+    }
+    return Future<int?>.value();
   }
 }

@@ -28,8 +28,18 @@ const _connectRetryDelays = [
 /// True when [e] is a transient socket/DNS failure worth retrying at the
 /// connect layer. TLS and auth errors are permanent for the current config and
 /// must not be retried — they flow on to [rethrowAsTlsHint] / login instead.
+/// Neither is a missing greeting ([_GreetingTimeoutException]): the server
+/// accepted the connection and then stayed silent for the whole bound, which
+/// a retry a second later will not change — it only multiplies the wait.
 bool _isTransientConnectError(Object e) =>
-    e is SocketException || e is TimeoutException;
+    e is SocketException ||
+    (e is TimeoutException && e is! _GreetingTimeoutException);
+
+/// No server greeting within [_imapGreetingTimeout].
+class _GreetingTimeoutException extends TimeoutException {
+  _GreetingTimeoutException(String host)
+      : super('No IMAP greeting from $host', _imapGreetingTimeout);
+}
 
 /// Runs [connect] (a raw `connectToServer` call), retrying a bounded number of
 /// times when the failure is a transient socket/DNS error. The last failure is
@@ -105,13 +115,12 @@ Future<void> upgradeImapToStartTls(
   await client.capability();
 }
 
-/// Bounds on the two steps of [connectImap] that enough_mail leaves
-/// unbounded: its own connect timeout covers only the TCP/TLS connect, not the
-/// server greeting after it, and LOGIN has no response timeout. A connection
-/// that is accepted but then blackholed (no bytes flow — e.g. a captive portal
-/// or a stale NAT path) used to hang the sync loop there forever.
+/// Bound on the server greeting. enough_mail's own connect timeout covers
+/// only the TCP/TLS connect, and its `defaultResponseTimeout` (set below)
+/// only tagged command responses, so a connection that is accepted but then
+/// blackholed (no bytes flow — e.g. a captive portal or a stale NAT path)
+/// used to hang the sync loop waiting for the greeting forever.
 const _imapGreetingTimeout = Duration(seconds: 45);
-const _imapLoginTimeout = Duration(seconds: 30);
 
 /// One connect attempt of [connectImap], bounded by [_imapGreetingTimeout].
 Future<void> _connectBounded(ImapClient client, Account account) => client
@@ -123,11 +132,10 @@ Future<void> _connectBounded(ImapClient client, Account account) => client
         .timeout(
       _imapGreetingTimeout,
       onTimeout: () {
+        // Not retried (see [_isTransientConnectError]), so this cannot
+        // close a later attempt's socket.
         unawaited(client.disconnect());
-        throw TimeoutException(
-          'No IMAP greeting from ${account.imapHost}',
-          _imapGreetingTimeout,
-        );
+        throw _GreetingTimeoutException(account.imapHost);
       },
     );
 
@@ -159,8 +167,7 @@ Future<ImapClient> connectImap(
   if (imapNeedsStartTls(account)) {
     await upgradeImapToStartTls(client, account.imapHost, account.imapPort);
   }
-  // enough_mail sends LOGIN without a response timeout.
-  await client.login(username, password).timeout(_imapLoginTimeout);
+  await client.login(username, password);
   return client;
 }
 

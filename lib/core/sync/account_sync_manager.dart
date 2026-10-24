@@ -25,7 +25,14 @@ import 'package:sharedinbox/data/imap/tls_error.dart' show isTlsConfigError;
 /// True when [e] means the server never answered in time, as opposed to never
 /// being reached at all. Kept separate from [_isUnreachableError] because the
 /// two have different causes and different fixes — see [syncErrorMessage].
-bool _isTimeoutError(Object e) => e is TimeoutException;
+///
+/// enough_mail reports its own response timeout (`defaultResponseTimeout`,
+/// set in `connectImap`) not as a [TimeoutException] but as an
+/// [imap.ImapException] whose message is exactly `timeout` — e.g. a LOGIN or
+/// SELECT on a connection that went silent.
+bool _isTimeoutError(Object e) =>
+    e is TimeoutException ||
+    (e is imap.ImapException && e.message == 'timeout');
 
 /// True when [e] is a routine "device is offline / cannot reach the host"
 /// failure: DNS, connect, TLS.
@@ -795,7 +802,6 @@ class _AccountSync with _KickableWait {
   final void Function()? _onSyncStart;
   final void Function()? _onSyncEnd;
 
-  imap.ImapClient? _idleClient;
   bool _running = false;
 
   /// Consecutive cycles started because the IDLE SELECT found INBOX changed
@@ -828,8 +834,9 @@ class _AccountSync with _KickableWait {
     if (_stopSignal != null && !_stopSignal!.isCompleted) {
       _stopSignal!.complete();
     }
-    _idleClient?.logout().ignore();
-    _idleClient = null;
+    // No LOGOUT here: completing the signal wakes [_idle], whose finally
+    // block closes the connection (sending a second LOGOUT from here used to
+    // race it).
   }
 
   Future<void> _loop() async {
@@ -1093,7 +1100,6 @@ class _AccountSync with _KickableWait {
     final username =
         account.username.isNotEmpty ? account.username : account.email;
     final client = await _imapConnect(account, username, password);
-    _idleClient = client;
 
     // Completes when the socket closes or fails (TCP FIN/RST, e.g. Wi-Fi
     // lost or a NAT dropping the mapping): enough_mail then fires
@@ -1133,21 +1139,34 @@ class _AccountSync with _KickableWait {
       if (target != null && !target.isCompleted) target.complete();
     });
 
-    // Every command on this connection is bounded and gives up as soon as the
-    // connection is lost, so neither a closed nor a blackholed connection
-    // (open, but no bytes flow) can stall the loop. Either failure surfaces
-    // as a SocketException: the loop logs it like any other transient
-    // network failure and reconnects after its usual backoff.
-    Future<T> bounded<T>(Future<T> command, String name) => Future.any<T>([
+    // Every command awaited on this connection gives up as soon as the
+    // connection is lost and is bounded by [commandTimeout] (IDLE itself
+    // returns at once; the wait for changes below is bounded by the refresh
+    // timer instead), so neither a closed nor a blackholed connection (open,
+    // but no bytes flow) can stall the loop. enough_mail's own failures for
+    // such a connection — its 20 s response timeout or "not connected" — are
+    // mapped to the transient TimeoutException / SocketException, so the loop
+    // logs them at warn level like any other network hiccup (#355) and
+    // reconnects after its usual backoff. A NO/BAD reply stays as it is.
+    Future<T> bounded<T>(Future<T> command, String name) async {
+      try {
+        return await Future.any<T>([
           command,
           lost.future.then<T>((_) => throw _idleConnectionLost()),
-        ]).timeout(
+        ]).timeout(_idleTimings.commandTimeout);
+      } on TimeoutException {
+        throw TimeoutException(
+          'IMAP IDLE connection: no answer to $name',
           _idleTimings.commandTimeout,
-          onTimeout: () => throw SocketException(
-            'IMAP IDLE connection: no answer to $name within '
-            '${_idleTimings.commandTimeout.inSeconds}s',
-          ),
         );
+      } on imap.ImapException catch (e) {
+        if (e.message == 'timeout') {
+          throw TimeoutException('IMAP IDLE connection: no answer to $name');
+        }
+        if (!client.isConnected) throw _idleConnectionLost();
+        rethrow;
+      }
+    }
 
     var failed = false;
     try {
@@ -1217,7 +1236,6 @@ class _AccountSync with _KickableWait {
       rethrow;
     } finally {
       unawaited(sub.cancel());
-      _idleClient = null;
       _stopSignal = null;
       await _closeIdleClient(client, logout: !failed);
     }

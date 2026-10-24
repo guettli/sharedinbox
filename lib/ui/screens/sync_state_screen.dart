@@ -407,7 +407,7 @@ _PushStatusRender? _renderPushStatus(BuildContext context, AppLogEntry? entry) {
     'unsupported' => 'server does not advertise an eventSourceUrl',
     'connect_failed' => 'JMAP session could not be reached',
     'sse_failed' => 'SSE request failed (network or TLS)',
-    'closed' => 'push stream ended (server closed or 25-min cap)',
+    'closed' => 'push stream ended (server closed it)',
     'errored' => 'push stream errored',
     _ => status.startsWith(JmapPushStatus.sseStatusPrefix.wireName)
         ? 'SSE endpoint returned HTTP ${status.substring(
