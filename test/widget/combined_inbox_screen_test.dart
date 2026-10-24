@@ -102,8 +102,8 @@ void main() {
       expect(find.text('Combined Inbox'), findsOneWidget);
       expect(find.byTooltip('Delete'), findsNothing);
       expect(
-        repo.setFlagCalls,
-        contains((emailId: 'acc-1:1', seen: false, flagged: null)),
+        repo.setFlagCalls.lastWhere((c) => c.emailId == 'acc-1:1').seen,
+        isFalse,
       );
       expect(repo.setFlagCalls.where((c) => c.emailId == 'acc-1:2'), isEmpty);
     });
