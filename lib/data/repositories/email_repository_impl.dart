@@ -6308,6 +6308,10 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one,
   /// running [beforeMove] on it first (snooze flag edits ride along).
   /// Shared by `move` and `snooze`.
+  /// When the message is no longer in [mailboxPath] but already sits in
+  /// [destMailboxPath] (an earlier attempt moved it, but the remap missed it,
+  /// e.g. a lagging search index), the move is treated as applied: [beforeMove]
+  /// runs there and the row is re-keyed (#1201).
   /// Throws [_ImapMessageGoneException] when the message is in neither
   /// mailbox (deleted or moved elsewhere by another client), so the flush
   /// drops the change and logs it as already gone. Throws [StateError] when
@@ -6337,8 +6341,27 @@ class EmailRepositoryImpl implements EmailRepository {
       throwOnFailure: true,
     );
     if (resolvedUid == null) {
-      // Not in the destination (checked by [_remapEmailAfterImapMove]) and the
-      // source search succeeded without a match: another client already
+      // [_remapEmailAfterImapMove] missed it in the destination after the first
+      // attempt, but a server whose index lags (e.g. Exchange) may list it
+      // there by now: then the move already happened, so finish it.
+      final destUid = await _searchUidByMessageId(
+        client,
+        destMailboxPath,
+        mid,
+        throwOnFailure: true,
+      );
+      if (destUid != null) {
+        await client.selectUnicodeMailboxByPath(destMailboxPath);
+        await beforeMove
+            ?.call(imap.MessageSequence.fromId(destUid, isUid: true));
+        await _rekeyEmailAfterImapMove(
+          oldId: row.resourceId,
+          destMailboxPath: destMailboxPath,
+          newUid: destUid,
+        );
+        return;
+      }
+      // In neither mailbox and both searches succeeded: another client already
       // deleted or moved it. Retrying can never succeed, so the flush drops
       // the change as "already gone". A failed search throws instead (see
       // `throwOnFailure`), so it is retried rather than mistaken for "gone".
@@ -6414,8 +6437,27 @@ class EmailRepositoryImpl implements EmailRepository {
       return false;
     }
 
+    await _rekeyEmailAfterImapMove(
+      oldId: oldId,
+      destMailboxPath: destMailboxPath,
+      newUid: newUid,
+    );
+    return true;
+  }
+
+  /// Re-keys the local row [oldId] to [newUid] in [destMailboxPath] after an
+  /// IMAP MOVE and rebuilds the thread aggregates in both mailboxes.
+  /// No-op when the row is gone or already carries that identity.
+  Future<void> _rekeyEmailAfterImapMove({
+    required String oldId,
+    required String destMailboxPath,
+    required int newUid,
+  }) async {
+    final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
+        .getSingleOrNull();
+    if (row == null) return;
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
-    if (newId == oldId) return true;
+    if (newId == oldId) return;
 
     await _rekeyEmailRow(
       oldId: oldId,
@@ -6428,7 +6470,6 @@ class EmailRepositoryImpl implements EmailRepository {
     final threadId = row.threadId ?? newId;
     await _updateThread(row.accountId, row.mailboxPath, threadId);
     await _updateThread(row.accountId, destMailboxPath, threadId);
-    return true;
   }
 
   /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
@@ -6468,15 +6509,25 @@ class EmailRepositoryImpl implements EmailRepository {
     if (messageId == null || messageId.isEmpty) return null;
     try {
       await client.selectUnicodeMailboxByPath(mailboxPath);
-      // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is safe
-      // for typical Message-ID syntax (no embedded quotes or backslashes).
-      final escaped = messageId.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
-      final result = await client.uidSearchMessages(
-        searchCriteria: 'HEADER Message-ID "$escaped"',
-      );
-      final uids = result.matchingSequence?.toList() ?? const <int>[];
-      if (uids.isEmpty) return null;
-      return uids.reduce((a, b) => a > b ? a : b);
+      // Some servers (e.g. Exchange) only match the exact header token, so a
+      // bare id is retried in its angle-bracketed form (and vice versa).
+      final bare = messageId.startsWith('<') && messageId.endsWith('>')
+          ? messageId.substring(1, messageId.length - 1)
+          : messageId;
+      for (final candidate in {messageId, bare, '<$bare>'}) {
+        // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is
+        // safe for typical Message-ID syntax (no embedded quotes or
+        // backslashes).
+        final escaped =
+            candidate.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+        final result = await client.uidSearchMessages(
+          searchCriteria: 'HEADER Message-ID "$escaped"',
+        );
+        final uids = result.matchingSequence?.toList() ?? const <int>[];
+        if (uids.isEmpty) continue;
+        return uids.reduce((a, b) => a > b ? a : b);
+      }
+      return null;
     } catch (e) {
       // A dead connection is not "no match": let it reach the caller so a
       // batch (e.g. the pending-change flush) stops instead of carrying on.
