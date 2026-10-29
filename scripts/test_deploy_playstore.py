@@ -226,6 +226,120 @@ class TestUploadRetry(unittest.TestCase):
         self._run_main([self._wrapped_http_error(429), {"versionCode": 12}])
 
 
+class TestEditDeletedRestart(unittest.TestCase):
+    """Opening a Play edit deletes any other open edit for the app, so another
+    Play API client (the Firebase Tests APK fetch) can kill ours mid-upload:
+    400 "This Edit has been deleted." (#907, #1203). Re-sending into the dead
+    edit is futile, but nothing was committed, so the publish restarts in a
+    fresh edit."""
+
+    _DELETED_BODY = (
+        '{"error": {"code": 400, "message": "This Edit has been deleted.", '
+        '"status": "FAILED_PRECONDITION"}}'
+    )
+
+    def _deleted(self, what="uploading the AAB"):
+        """The 400 exactly as _raise_for_status raises it: the HTTPError as
+        cause, and Play's response body in the message."""
+        import requests
+
+        resp = MagicMock(status_code=400, text=self._DELETED_BODY)
+        cause = requests.HTTPError("400 Client Error", response=resp)
+        try:
+            raise RuntimeError(
+                f"{what} failed: {cause}\nPlay API response body: {self._DELETED_BODY}"
+            ) from cause
+        except RuntimeError as exc:
+            return exc
+
+    def _run_main(self, edit_ids, upload_side_effects, deobf_side_effects=None):
+        import tempfile
+
+        mock_session = MagicMock()
+
+        def _post(url, *args, **kwargs):
+            if url.endswith("/edits"):
+                return MagicMock(**{"json.return_value": {"id": edit_ids.pop(0)}})
+            return MagicMock(**{"content": b"", "json.return_value": {}})
+
+        mock_session.post.side_effect = _post
+        mock_session.put.return_value = MagicMock()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"mapping-content")
+            mapping_path = f.name
+
+        env = {
+            "PLAY_STORE_CONFIG_JSON": '{"type":"service_account"}',
+            "MAPPING_TXT_PATH": mapping_path,
+        }
+        real_exists = os.path.exists
+        upload_mock = MagicMock(side_effect=upload_side_effects)
+        deobf_mock = MagicMock(side_effect=deobf_side_effects, return_value={})
+        patches = [
+            patch.dict(os.environ, env, clear=True),
+            patch("deploy_playstore.os.path.exists",
+                  side_effect=lambda p: True if p == deploy_playstore.AAB_PATH else real_exists(p)),
+            patch("deploy_playstore.service_account.Credentials.from_service_account_info"),
+            patch("deploy_playstore.AuthorizedSession", return_value=mock_session),
+            patch("deploy_playstore._upload_aab_resumable", upload_mock),
+            patch("deploy_playstore._upload_deobfuscation_file", deobf_mock),
+            patch("deploy_playstore.time.sleep"),
+        ]
+        for p in patches:
+            p.start()
+        try:
+            deploy_playstore.main()
+        finally:
+            for p in patches:
+                p.stop()
+            os.unlink(mapping_path)
+        return mock_session, upload_mock, deobf_mock
+
+    def test_is_edit_deleted_walks_the_cause_chain(self):
+        inner = self._deleted()
+        try:
+            raise RuntimeError("AAB upload failed after 1 of 3 attempt(s)") from inner
+        except RuntimeError as outer:
+            self.assertTrue(deploy_playstore._is_edit_deleted(outer))
+        self.assertFalse(
+            deploy_playstore._is_edit_deleted(TestUploadRetry._wrapped_http_error(400))
+        )
+
+    def test_aab_upload_restarts_in_a_fresh_edit(self):
+        session, upload_mock, _ = self._run_main(
+            ["edit-1", "edit-2"], [self._deleted(), {"versionCode": 13}]
+        )
+        self.assertEqual(
+            [c[0][2] for c in upload_mock.call_args_list], ["edit-1", "edit-2"]
+        )
+        post_urls = [c[0][0] for c in session.post.call_args_list]
+        commit_urls = [u for u in post_urls if u.endswith(":commit")]
+        self.assertEqual(len(commit_urls), 1)
+        self.assertIn("/edits/edit-2:commit", commit_urls[0])
+        put_urls = [c[0][0] for c in session.put.call_args_list]
+        self.assertTrue(all("/edits/edit-2/" in u for u in put_urls), put_urls)
+
+    def test_deobfuscation_upload_restarts_without_retrying_the_dead_edit(self):
+        _, upload_mock, deobf_mock = self._run_main(
+            ["edit-1", "edit-2"],
+            [{"versionCode": 13}, {"versionCode": 13}],
+            deobf_side_effects=[self._deleted("uploading the deobfuscation mapping"), {}],
+        )
+        self.assertEqual(upload_mock.call_count, 2)
+        self.assertEqual(
+            [c[0][2] for c in deobf_mock.call_args_list], ["edit-1", "edit-2"]
+        )
+
+    def test_gives_up_after_max_edit_attempts(self):
+        n = deploy_playstore._MAX_EDIT_ATTEMPTS
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run_main(
+                [f"edit-{i}" for i in range(n)], [self._deleted() for _ in range(n)]
+            )
+        self.assertIn("This Edit has been deleted", str(ctx.exception))
+
+
 class TestRaiseForStatus(unittest.TestCase):
     """The Play API explains its rejections in the response body; requests'
     raise_for_status() throws that away. These pin it being surfaced."""

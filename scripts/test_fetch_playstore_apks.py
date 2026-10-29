@@ -570,6 +570,41 @@ class TestMainWritesPendingMarkerWhenPlayNotReady(unittest.TestCase):
             )
 
 
+class TestMainPinnedVersionCode(unittest.TestCase):
+    """Opening a Play edit deletes any other open edit, including the one a
+    concurrent Deploy is uploading into (#907, #1203). With
+    PLAY_APKS_VERSION_CODE set, main() must use it and never resolve the
+    versionCode (which is the only call that opens an edit)."""
+
+    def _run(self, dest_dir, env):
+        resolve = MagicMock(return_value=999)
+        patches = _patches(
+            dest_dir,
+            version_code=999,
+            list_apks=TimeoutError("still generating"),
+            env=env,
+        )
+        patches.append(patch("fetch_playstore_apks._resolve_version_code", resolve))
+        _with_patches(patches, fetch_playstore_apks.main)
+        return resolve
+
+    def test_pinned_version_code_skips_resolution(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            resolve = self._run(dest_dir, {"PLAY_APKS_VERSION_CODE": " 1790309773\n"})
+            resolve.assert_not_called()
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "1790309773"
+            )
+
+    def test_empty_pin_resolves_as_before(self):
+        with tempfile.TemporaryDirectory() as dest_dir:
+            resolve = self._run(dest_dir, {"PLAY_APKS_VERSION_CODE": ""})
+            resolve.assert_called_once()
+            self.assertEqual(
+                (Path(dest_dir) / "versionCode").read_text().strip(), "999"
+            )
+
+
 class TestMainSkipSurvivesMissingDestDir(unittest.TestCase):
     """Regression for #422: the poll can run for well over an hour, and by the
     time it times out ``dest_dir`` may have been reclaimed underneath the long
