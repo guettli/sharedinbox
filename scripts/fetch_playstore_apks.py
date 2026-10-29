@@ -54,6 +54,12 @@ _BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3/application
 _POLL_TIMEOUT_SECONDS = int(os.environ.get("PLAY_APKS_POLL_TIMEOUT_SECONDS", "300"))
 _POLL_INTERVAL_SECONDS = int(os.environ.get("PLAY_APKS_POLL_INTERVAL_SECONDS", "60"))
 
+# Optional env var carrying an already-resolved alpha versionCode. When set,
+# main() skips _resolve_version_code() and so never opens a Play edit (see
+# main() for why that matters). scripts/run_firebase_test.sh sets it, via
+# ci/main.go FetchPlayStoreApks, on every attempt after the first.
+_VERSION_CODE_ENV = "PLAY_APKS_VERSION_CODE"
+
 # Play only generates downloadable split APKs for a release it is actually
 # serving. A "draft" release (uploaded but never rolled out) never gets a
 # generatedApks listing, so resolving to its versionCode makes every fetch poll
@@ -401,8 +407,18 @@ def main():
     )
     session = AuthorizedSession(creds)
 
-    version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
-    print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
+    # Resolving the versionCode opens a Play edit, and opening an edit DELETES
+    # any other open edit for the app -- including the one a concurrent Deploy
+    # is uploading its AAB into (#907, #1203). The wrapper polls once a minute
+    # for up to 90 minutes, so it resolves once and pins the result here for
+    # every later attempt, which then never touches the edits API.
+    pinned = os.environ.get(_VERSION_CODE_ENV, "").strip()
+    if pinned:
+        version_code = int(pinned)
+        print(f"Using pinned {TRACK} versionCode: {version_code}", file=sys.stderr)
+    else:
+        version_code = _resolve_version_code(session, PACKAGE_NAME, TRACK)
+        print(f"Resolved {TRACK} versionCode: {version_code}", file=sys.stderr)
 
     try:
         listing = _poll_generated_apks(session, PACKAGE_NAME, version_code)
