@@ -20,6 +20,16 @@ _MAX_UPLOAD_ATTEMPTS = 3
 # without a matching mapping file breaks Play Console's stack-trace
 # deobfuscation, so the script refuses to deploy when it is missing.
 _MAPPING_PATH_ENV = "MAPPING_TXT_PATH"
+# The Play API allows ONE open edit per app: opening an edit silently deletes
+# any other, and the victim only learns of it on its next request -- a 400
+# FAILED_PRECONDITION "This Edit has been deleted." (#907). Any other Play API
+# user (the Firebase Tests APK fetch, a manual run) can therefore kill our edit
+# mid-upload. Nothing in a deleted edit was committed, so the whole publish is
+# safe to redo in a fresh edit; it is only the request into the dead edit that
+# is futile. How many edits to try, and how long to wait between them.
+_MAX_EDIT_ATTEMPTS = 3
+_EDIT_RESTART_DELAY_SECONDS = 30
+_EDIT_DELETED_MESSAGE = "This Edit has been deleted"
 
 
 def _raise_for_status(resp, what):
@@ -59,6 +69,17 @@ def _is_retryable(exc):
     if resp is None:
         return True  # connection reset, timeout, DNS -- worth another go
     return resp.status_code >= 500 or resp.status_code in (408, 429)
+
+
+def _is_edit_deleted(exc):
+    """Whether ``exc`` (or anything in its cause chain) is Play reporting that
+    our edit was deleted underneath us. _raise_for_status puts the response
+    body into the message, so the marker text is findable there."""
+    while exc is not None:
+        if _EDIT_DELETED_MESSAGE in str(exc):
+            return True
+        exc = exc.__cause__
+    return False
 
 
 def _upload_aab_resumable(session, package, edit_id, aab_path):
@@ -125,22 +146,9 @@ def _upload_deobfuscation_file(session, package, edit_id, version_code, mapping_
     return resp.json() if resp.content else {}
 
 
-def main():
-    config_json = os.environ.get("PLAY_STORE_CONFIG_JSON")
-    if not config_json:
-        print("Error: PLAY_STORE_CONFIG_JSON environment variable not set", file=sys.stderr)
-        sys.exit(1)
-
-    if not os.path.exists(AAB_PATH):
-        print(f"Error: AAB not found at {AAB_PATH}", file=sys.stderr)
-        sys.exit(1)
-
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(config_json),
-        scopes=["https://www.googleapis.com/auth/androidpublisher"],
-    )
-    session = AuthorizedSession(creds)
-
+def _publish(session, mapping_path):
+    """Publish the AAB and its mapping file through ONE Play edit, from opening
+    it to committing it."""
     edit_resp = session.post(f"{_BASE}/{PACKAGE_NAME}/edits", json={}, timeout=30)
     _raise_for_status(edit_resp, "creating the Play edit")
     edit_id = edit_resp.json()["id"]
@@ -154,6 +162,8 @@ def main():
             bundle = _upload_aab_resumable(session, PACKAGE_NAME, edit_id, AAB_PATH)
             break
         except Exception as exc:
+            if _is_edit_deleted(exc):
+                raise  # futile in this edit; main() restarts in a fresh one
             last_exc = exc
             if not _is_retryable(exc):
                 print(
@@ -181,21 +191,6 @@ def main():
     version_code = bundle["versionCode"]
     print(f"Uploaded AAB, version code: {version_code}")
 
-    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
-    if not mapping_path:
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
-            "its R8 mapping file so Play Console can deobfuscate crash traces.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    if not os.path.exists(mapping_path):
-        print(
-            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
-            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     mapping_size = os.path.getsize(mapping_path)
     last_exc = None
     uploaded = False
@@ -207,6 +202,8 @@ def main():
             uploaded = True
             break
         except Exception as exc:
+            if _is_edit_deleted(exc):
+                raise  # futile in this edit; main() restarts in a fresh one
             last_exc = exc
             if attempt < _MAX_UPLOAD_ATTEMPTS - 1:
                 delay = 10 * (2 ** attempt)
@@ -237,6 +234,55 @@ def main():
     _raise_for_status(commit_resp, "committing the Play edit")
     print(f"Deployed version {version_code} to tracks: {', '.join(TRACKS)}")
 
+
+def main():
+    config_json = os.environ.get("PLAY_STORE_CONFIG_JSON")
+    if not config_json:
+        print("Error: PLAY_STORE_CONFIG_JSON environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    if not os.path.exists(AAB_PATH):
+        print(f"Error: AAB not found at {AAB_PATH}", file=sys.stderr)
+        sys.exit(1)
+
+    # Check the mapping file before opening an edit: a missing one is a hard
+    # failure, and there is no point uploading an AAB we will not publish.
+    mapping_path = os.environ.get(_MAPPING_PATH_ENV)
+    if not mapping_path:
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} is not set. Every release must upload "
+            "its R8 mapping file so Play Console can deobfuscate crash traces.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if not os.path.exists(mapping_path):
+        print(
+            f"ERROR: {_MAPPING_PATH_ENV} points to {mapping_path} but the file "
+            "does not exist. Rebuild the release AAB to regenerate mapping.txt.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    creds = service_account.Credentials.from_service_account_info(
+        json.loads(config_json),
+        scopes=["https://www.googleapis.com/auth/androidpublisher"],
+    )
+    session = AuthorizedSession(creds)
+
+    for edit_attempt in range(_MAX_EDIT_ATTEMPTS):
+        try:
+            _publish(session, mapping_path)
+            return
+        except Exception as exc:
+            if not _is_edit_deleted(exc) or edit_attempt == _MAX_EDIT_ATTEMPTS - 1:
+                raise
+            print(
+                f"Play deleted our edit (another Play API client opened one; "
+                f"see #907). Restarting the publish in a fresh edit in "
+                f"{_EDIT_RESTART_DELAY_SECONDS}s (edit attempt {edit_attempt + 2} "
+                f"of {_MAX_EDIT_ATTEMPTS})…"
+            )
+            time.sleep(_EDIT_RESTART_DELAY_SECONDS)
 
 if __name__ == "__main__":
     main()
