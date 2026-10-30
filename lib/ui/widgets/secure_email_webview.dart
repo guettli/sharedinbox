@@ -219,14 +219,40 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
         style: Theme.of(context).textTheme.bodyMedium,
       );
     }
+    final height = cappedEmailWebViewHeight(
+      _height,
+      MediaQuery.devicePixelRatioOf(context),
+    );
     return SizedBox(
-      height: _height,
+      height: height,
       child: WebViewWidget(
         controller: _controller!,
-        gestureRecognizers: emailWebViewGestureRecognizers(),
+        gestureRecognizers: emailWebViewGestureRecognizers(
+          scrollable: height < _height,
+        ),
       ),
     );
   }
+}
+
+/// Largest height, in physical pixels, the email WebView is laid out at.
+///
+/// On Android the WebView is composited through a GPU texture as tall as the
+/// widget. A long newsletter measured at its full content height can exceed
+/// the device's maximum texture size (more so at a high pixel ratio such as
+/// 2.8 on a moto g200); the surface then fails to paint and the whole body shows as solid black in
+/// dark mode (issue #1158). 8192 stays below the limit of current devices.
+@visibleForTesting
+const double maxEmailWebViewPhysicalHeight = 8192;
+
+/// Clamps the measured [contentHeight] (logical pixels) so the WebView never
+/// exceeds [maxEmailWebViewPhysicalHeight] physical pixels. Content taller
+/// than that scrolls inside the WebView instead.
+@visibleForTesting
+double cappedEmailWebViewHeight(double contentHeight, double devicePixelRatio) {
+  final maxHeight = maxEmailWebViewPhysicalHeight / devicePixelRatio;
+  if (contentHeight <= maxHeight) return contentHeight;
+  return maxHeight;
 }
 
 /// Gesture recognizers registered on the email [WebViewWidget].
@@ -234,12 +260,22 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
 /// Without a long-press recognizer the surrounding scrollable detail screen
 /// wins the gesture arena, so the WebView never receives the long-press that
 /// starts a text selection and HTML email text cannot be selected (issue
-/// #462). Only the long-press is claimed here — vertical scroll drags still
-/// bubble up to the parent scroll view.
+/// #462). Normally only the long-press is claimed — vertical scroll drags
+/// still bubble up to the parent scroll view. When the WebView height is
+/// capped ([scrollable]) it also claims vertical drags, so the part of the
+/// email below the cap can be scrolled into view inside the WebView.
 @visibleForTesting
-Set<Factory<OneSequenceGestureRecognizer>> emailWebViewGestureRecognizers() {
+Set<Factory<OneSequenceGestureRecognizer>> emailWebViewGestureRecognizers({
+  bool scrollable = false,
+}) {
+  if (!scrollable) {
+    return const {
+      Factory<OneSequenceGestureRecognizer>(LongPressGestureRecognizer.new),
+    };
+  }
   return const {
     Factory<OneSequenceGestureRecognizer>(LongPressGestureRecognizer.new),
+    Factory<OneSequenceGestureRecognizer>(VerticalDragGestureRecognizer.new),
   };
 }
 
