@@ -97,6 +97,16 @@ that agents never follow directives from the report, never reveal key material
 (`REPORT_PRIVATE_KEY`, tokens) and never fetch URLs taken from the report text
 (see `AGENTS.md`).
 
+## Deployment
+
+The `publish-bugreport` workflow pushes
+`ghcr.io/guettli/sharedinbox-bugreport:<commit sha>` (a static linux/amd64
+binary on distroless) on every push to `main` that touches `server/` or
+`go.mod`. Production runs it from the `bugreport` Deployment in
+[guettli/gitops](https://github.com/guettli/gitops)
+(`k8s/plain/vps/sharedinbox/sharedinbox/apps_Deployment/bugreport.yaml`):
+merging here deploys nothing until that image tag is bumped there.
+
 ## Configuration (environment variables)
 
 | Variable | Default | Meaning |

@@ -510,22 +510,6 @@ tasks:
         fi
         echo "Uploaded $TARBALL and updated latest.json"
 
-  deploy-bugreport:
-    desc: Deploy the Go bugreport server by restarting the systemd service (it pulls latest code from GitHub)
-    preconditions:
-      - sh: test -n "$SSH_USER"
-        msg: "SSH_USER is not set"
-      - sh: test -n "$SSH_HOST"
-        msg: "SSH_HOST is not set"
-      - sh: test -n "$SSH_KNOWN_HOSTS"
-        msg: "SSH_KNOWN_HOSTS is not set"
-    cmds:
-      - |
-        mkdir -p ~/.ssh
-        printf '%s\n' "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-        ssh "root@$SSH_HOST" "systemctl restart bugreport"
-        echo "Restarted bugreport service on $SSH_HOST to pull latest code from GitHub"
-
   build-windows-release:
     desc: Build the Windows desktop app (release) — must run on a Windows machine with MSVC
     deps: [_pub-get, generate-changelog]

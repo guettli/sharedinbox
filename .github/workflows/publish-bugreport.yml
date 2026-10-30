@@ -1,0 +1,69 @@
+name: Publish Bugreport Image
+
+# Builds server/bugreport into a small single-platform image and pushes it to
+# ghcr.io/guettli/sharedinbox-bugreport:<commit sha>. guettli/gitops deploys
+# that tag. Before this, the pod ran `go run <module>@<sha>` on the 316MB
+# multi-platform `golang` image, which the node's registry mirror cannot sync
+# within containerd's pull deadline -- every roll risked an ImagePullBackOff
+# outage of sharedinbox.de/api/v1/* (guettli/gitops#734).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # server/**, not server/bugreport/**: the binary also compiles in
+      # server/internal/ (pprofserver).
+      - 'server/**'
+      - 'go.mod'
+      - '.github/workflows/publish-bugreport.yml'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: Build & Push sharedinbox-bugreport
+    # Hosted runner, like publish-ci-runner: this needs only Go and Docker,
+    # not the in-cluster Dagger engine. The repo is public, so minutes are free.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.server_url == 'https://github.com'
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE: ghcr.io/guettli/sharedinbox-bugreport
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false # no cache in a job which can push images
+
+      - name: Test
+        run: go test ./server/bugreport/
+
+      - name: Build binary
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -o dist/bugreport ./server/bugreport
+          cp server/bugreport/Dockerfile dist/
+
+      - name: Log in to GitHub Container Registry
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build & push image
+        # linux/amd64 only: the pod is pinned to the amd64 vps node, and a
+        # single manifest (no attestations) keeps the registry mirror's sync trivial.
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$IMAGE:$GITHUB_SHA" \
+            dist
+          docker push "$IMAGE:$GITHUB_SHA"
