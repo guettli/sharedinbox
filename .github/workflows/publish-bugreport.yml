@@ -11,7 +11,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'server/bugreport/**'
+      # server/**, not server/bugreport/**: the binary also compiles in
+      # server/internal/ (pprofserver).
+      - 'server/**'
       - 'go.mod'
       - '.github/workflows/publish-bugreport.yml'
   workflow_dispatch:
@@ -55,10 +57,11 @@ jobs:
 
       - name: Build & push image
         # linux/amd64 only: the pod is pinned to the amd64 vps node, and a
-        # single manifest keeps the registry mirror's sync trivial.
+        # single manifest (no attestations) keeps the registry mirror's sync trivial.
         run: |
           docker build \
             --platform linux/amd64 \
+            --provenance=false --sbom=false \
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -t "$IMAGE:$GITHUB_SHA" \
