@@ -19,11 +19,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/guettli/sharedinbox/server/internal/pprofserver"
@@ -693,6 +695,36 @@ func runDecrypt(args []string) error {
 	return err
 }
 
+// shutdownTimeout bounds how long in-flight requests may finish after SIGTERM.
+// It must stay below the pod's terminationGracePeriodSeconds (30s) minus its
+// preStop sleep (5s) in guettli/gitops, or the kubelet SIGKILLs mid-request.
+// It covers a report waiting on GitHub (15s client timeout), not a slow upload
+// that is still being read when SIGTERM lands (ReadTimeout 15s + GitHub 15s).
+const shutdownTimeout = 20 * time.Second
+
+// serve runs server on ln until ctx is cancelled, then stops accepting
+// connections and waits up to timeout for in-flight requests to finish.
+// Without this the process died on SIGTERM at once, cutting off e.g. an
+// encrypted report that was still waiting on the GitHub API.
+func serve(ctx context.Context, server *http.Server, ln net.Listener, timeout time.Duration) error {
+	errc := make(chan error, 1)
+	go func() { errc <- server.Serve(ln) }()
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+
+	log.Printf("Shutting down, waiting up to %s for in-flight requests...", timeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	// `decrypt` subcommand: offline tool for the maintainer / an AgentLoop
 	// worker to read an encrypted report. No args → run the HTTP server.
@@ -771,7 +803,28 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
 		log.Fatalf("Server failed to start: %v", err)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+	// Unregister after the first signal so a second one kills the process
+	// instead of being swallowed while requests drain.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	err = serve(ctx, server, ln, shutdownTimeout)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		// Requests outlived the drain; they are cut off now. Not a server
+		// failure, so exit 0 rather than marking the pod as failed.
+		log.Printf("Server stopped: %v", err)
+	case err != nil:
+		log.Fatalf("Server failed: %v", err)
+	default:
+		log.Printf("Server stopped")
 	}
 }
