@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -108,8 +109,8 @@ func TestServeReturnsErrorWhenShutdownTimesOut(t *testing.T) {
 	cancel()
 	select {
 	case err := <-served:
-		if err == nil {
-			t.Fatal("serve returned nil, want a shutdown timeout error")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("serve returned %v, want context.DeadlineExceeded", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after the shutdown timeout")

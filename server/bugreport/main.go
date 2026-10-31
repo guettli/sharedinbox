@@ -698,6 +698,8 @@ func runDecrypt(args []string) error {
 // shutdownTimeout bounds how long in-flight requests may finish after SIGTERM.
 // It must stay below the pod's terminationGracePeriodSeconds (30s) minus its
 // preStop sleep (5s) in guettli/gitops, or the kubelet SIGKILLs mid-request.
+// It covers a report waiting on GitHub (15s client timeout), not a slow upload
+// that is still being read when SIGTERM lands (ReadTimeout 15s + GitHub 15s).
 const shutdownTimeout = 20 * time.Second
 
 // serve runs server on ln until ctx is cancelled, then stops accepting
@@ -808,8 +810,21 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
-	if err := serve(ctx, server, ln, shutdownTimeout); err != nil {
+	// Unregister after the first signal so a second one kills the process
+	// instead of being swallowed while requests drain.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	err = serve(ctx, server, ln, shutdownTimeout)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		// Requests outlived the drain; they are cut off now. Not a server
+		// failure, so exit 0 rather than marking the pod as failed.
+		log.Printf("Server stopped: %v", err)
+	case err != nil:
 		log.Fatalf("Server failed: %v", err)
+	default:
+		log.Printf("Server stopped")
 	}
-	log.Printf("Server stopped")
 }
