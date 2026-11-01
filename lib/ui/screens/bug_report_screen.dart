@@ -325,11 +325,13 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
       } else {
         String errorMsg =
             'Failed to submit report. Server returned status: ${response.statusCode}';
+        String? detail;
         try {
           final resData = jsonDecode(response.body) as Map<String, dynamic>;
           if (resData['error'] != null) {
             errorMsg = resData['error'] as String;
           }
+          detail = resData['detail'] as String?;
         } catch (_) {}
         context.showAppSnackBar(
           errorMsg,
@@ -338,6 +340,7 @@ class _BugReportScreenState extends ConsumerState<BugReportScreen> {
           data: {
             'statusCode': response.statusCode,
             'errorMsg': errorMsg,
+            if (detail != null) 'detail': detail,
           },
           backgroundColor: Colors.red,
         );
