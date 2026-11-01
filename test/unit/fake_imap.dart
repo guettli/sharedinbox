@@ -65,6 +65,7 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     this.copyUidSourceToTarget = const {},
     this.searchResults = const {},
     this.searchResultsByMailbox,
+    this.onSearch,
     this.onUidMove,
     this.messageFlags,
   });
@@ -100,6 +101,11 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
   /// When non-null, replaces [searchResults]: the UIDs any search returns in
   /// the currently selected mailbox (keyed by path).
   final Map<String, List<int>>? searchResultsByMailbox;
+
+  /// When non-null, replaces both maps above: the UIDs a search returns given
+  /// the selected mailbox and the criteria, e.g. to model a server whose
+  /// index only catches up on a later search.
+  final List<int> Function(String? mailbox, String criteria)? onSearch;
 
   /// Called at the start of every `uidMove`, e.g. to race an Undo against an
   /// in-flight flush.
@@ -199,9 +205,10 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     Duration? responseTimeout,
   }) async {
     lastSearchCriteria = searchCriteria;
-    final hits = searchResultsByMailbox != null
-        ? searchResultsByMailbox![selectedMailbox] ?? const <int>[]
-        : searchResults[searchCriteria] ?? const <int>[];
+    final hits = onSearch?.call(selectedMailbox, searchCriteria) ??
+        (searchResultsByMailbox != null
+            ? searchResultsByMailbox![selectedMailbox] ?? const <int>[]
+            : searchResults[searchCriteria] ?? const <int>[]);
     final result = imap.SearchImapResult()
       ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
     return result;

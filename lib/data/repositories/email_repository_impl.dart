@@ -6280,8 +6280,13 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one,
   /// running [beforeMove] on it first (snooze flag edits ride along).
   /// Shared by `move` and `snooze`.
-  /// Throws [StateError] when the message cannot be found, so the change is
-  /// retried and the failure lands in the App Log instead of vanishing.
+  /// When the message is no longer in [mailboxPath] but already sits in
+  /// [destMailboxPath] (an earlier attempt moved it, but the remap missed
+  /// it), the move is treated as applied and the row re-keyed there. When it
+  /// is in neither mailbox (deleted or moved elsewhere by another client), the
+  /// change is dropped with an App Log warning and the next sync reconciles
+  /// the row (#1201). Throws [StateError] when the message is still in
+  /// [mailboxPath] at [staleUid], so the change is retried.
   /// Without any Message-ID to verify against, keeps the old behaviour and
   /// treats the MOVE as applied.
   Future<void> _retryImapMoveByMessageId(
@@ -6300,13 +6305,39 @@ class EmailRepositoryImpl implements EmailRepository {
     if (mid == null || mid.isEmpty) return;
 
     final resolvedUid = await _searchUidByMessageId(client, mailboxPath, mid);
-    if (resolvedUid == null || resolvedUid == staleUid) {
+    if (resolvedUid == staleUid) {
       // Wording must not match [isImapMailboxNotFound], which would treat
       // the change as applied.
       throw StateError(
         'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
-        'effect: message $mid is in neither mailbox',
+        'effect: message $mid is still in $mailboxPath',
       );
+    }
+    if (resolvedUid == null) {
+      final destUid = await _searchUidByMessageId(client, destMailboxPath, mid);
+      if (destUid != null) {
+        // Already moved: finish any flag edit there and follow the message.
+        await beforeMove
+            ?.call(imap.MessageSequence.fromId(destUid, isUid: true));
+        await _rekeyEmailAfterImapMove(
+          oldId: row.resourceId,
+          destMailboxPath: destMailboxPath,
+          newUid: destUid,
+        );
+        return;
+      }
+      unawaited(
+        _appLogger?.warn(
+          'email.move_target_missing',
+          'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath: '
+              'message $mid is in neither mailbox; dropping the change, the '
+              'next sync reconciles it',
+          accountId: row.accountId,
+          emailId: row.resourceId,
+          mailboxPath: mailboxPath,
+        ),
+      );
+      return;
     }
     await client.selectUnicodeMailboxByPath(mailboxPath);
     final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
@@ -6367,8 +6398,27 @@ class EmailRepositoryImpl implements EmailRepository {
       return false;
     }
 
+    await _rekeyEmailAfterImapMove(
+      oldId: oldId,
+      destMailboxPath: destMailboxPath,
+      newUid: newUid,
+    );
+    return true;
+  }
+
+  /// Re-keys the local row [oldId] to [newUid] in [destMailboxPath] after an
+  /// IMAP MOVE and rebuilds the thread aggregates in both mailboxes.
+  /// No-op when the row is gone or already carries that identity.
+  Future<void> _rekeyEmailAfterImapMove({
+    required String oldId,
+    required String destMailboxPath,
+    required int newUid,
+  }) async {
+    final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
+        .getSingleOrNull();
+    if (row == null) return;
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
-    if (newId == oldId) return true;
+    if (newId == oldId) return;
 
     await _rekeyEmailRow(
       oldId: oldId,
@@ -6381,7 +6431,6 @@ class EmailRepositoryImpl implements EmailRepository {
     final threadId = row.threadId ?? newId;
     await _updateThread(row.accountId, row.mailboxPath, threadId);
     await _updateThread(row.accountId, destMailboxPath, threadId);
-    return true;
   }
 
   /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
@@ -6416,15 +6465,25 @@ class EmailRepositoryImpl implements EmailRepository {
     if (messageId == null || messageId.isEmpty) return null;
     try {
       await client.selectUnicodeMailboxByPath(mailboxPath);
-      // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is safe
-      // for typical Message-ID syntax (no embedded quotes or backslashes).
-      final escaped = messageId.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
-      final result = await client.uidSearchMessages(
-        searchCriteria: 'HEADER Message-ID "$escaped"',
-      );
-      final uids = result.matchingSequence?.toList() ?? const <int>[];
-      if (uids.isEmpty) return null;
-      return uids.reduce((a, b) => a > b ? a : b);
+      // Some servers (e.g. Exchange) only match the exact header token, so a
+      // bare id is retried in its angle-bracketed form (and vice versa).
+      final bare = messageId.startsWith('<') && messageId.endsWith('>')
+          ? messageId.substring(1, messageId.length - 1)
+          : messageId;
+      for (final candidate in {messageId, bare, '<$bare>'}) {
+        // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is
+        // safe for typical Message-ID syntax (no embedded quotes or
+        // backslashes).
+        final escaped =
+            candidate.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+        final result = await client.uidSearchMessages(
+          searchCriteria: 'HEADER Message-ID "$escaped"',
+        );
+        final uids = result.matchingSequence?.toList() ?? const <int>[];
+        if (uids.isEmpty) continue;
+        return uids.reduce((a, b) => a > b ? a : b);
+      }
+      return null;
     } catch (e) {
       log('_searchUidByMessageId failed for $messageId in $mailboxPath: $e');
       return null;

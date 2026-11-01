@@ -4168,7 +4168,65 @@ void main() {
         expect(await r.emails.getEmail('acc-1:INBOX:7'), isNotNull);
       });
 
-      test('move that cannot be located is kept for a retry, not dropped',
+      test(
+          'move already applied on the server is re-keyed to the destination '
+          '(#1201)', () async {
+        // An earlier attempt moved the message, but neither COPYUID nor the
+        // first Message-ID search found it in the destination (e.g. Exchange
+        // indexing lag). The retry must not report it as lost.
+        var destSearches = 0;
+        final spy = SnoozeSpyImapClient(
+          onSearch: (mailbox, _) {
+            if (mailbox != 'Deleted Items') return const [];
+            destSearches++;
+            return destSearches > 2 ? const [77] : const [];
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Deleted Items');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['INBOX:5->Deleted Items']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail(oldId), isNull);
+        final moved = await r.emails.getEmail('acc-1:Deleted Items:77');
+        expect(moved, isNotNull);
+        expect(moved!.mailboxPath, 'Deleted Items');
+      });
+
+      test('move found only by the angle-bracketed Message-ID is re-keyed',
+          () async {
+        final spy = SnoozeSpyImapClient(
+          onSearch: (mailbox, criteria) =>
+              mailbox == 'Trash' && criteria.contains('"<msg-1@example.com>"')
+                  ? const [42]
+                  : const [],
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: oldId,
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 5,
+                receivedAt: DateTime(2024),
+                messageId: const Value('msg-1@example.com'),
+              ),
+            );
+        await queueMove(r.db, uid: 5, src: 'INBOX', dest: 'Trash');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.moves, ['INBOX:5->Trash']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail('acc-1:Trash:42'), isNotNull);
+      });
+
+      test('move whose message is in neither mailbox is dropped (#1201)',
           () async {
         final spy = SnoozeSpyImapClient(
           searchResultsByMailbox: const {},
@@ -4180,9 +4238,30 @@ void main() {
 
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
+        expect(spy.moves, ['Trash:5->INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // The next sync reconciles the row.
+        expect(await r.emails.getEmail(oldId), isNotNull);
+      });
+
+      test('move whose message stays at the same UID is kept for a retry',
+          () async {
+        final spy = SnoozeSpyImapClient(
+          searchResultsByMailbox: const {
+            'Trash': [5],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await seedInboxEmail(r.db);
+        await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
         final change = (await r.db.select(r.db.pendingChanges).get()).single;
         expect(change.attempts, 1);
         expect(change.lastError, contains(messageId));
+        expect(change.lastError, contains('still in Trash'));
       });
     });
 
@@ -4783,6 +4862,42 @@ void main() {
         'move Archive:5->Snoozed',
         'store add 300 snz:20300101T000000.000',
         'move Archive:300->Snoozed',
+      ]);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final snoozed = await r.emails.getEmail('acc-1:Snoozed:9');
+      expect(snoozed!.snoozedUntil, DateTime(2030));
+    });
+
+    test('IMAP snooze already applied on the server is re-keyed (#1201)',
+        () async {
+      var destSearches = 0;
+      final spy = SnoozeSpyImapClient(
+        onSearch: (mailbox, _) {
+          if (mailbox != 'Snoozed') return const [];
+          destSearches++;
+          return destSearches > 2 ? const [9] : const [];
+        },
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Archive:5',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<m1@example.com>'),
+            ),
+          );
+
+      await r.emails.snoozeEmail('acc-1:Archive:5', DateTime(2030));
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.calls, [
+        'store add 5 snz:20300101T000000.000',
+        'move Archive:5->Snoozed',
+        'store add 9 snz:20300101T000000.000',
       ]);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
       final snoozed = await r.emails.getEmail('acc-1:Snoozed:9');
