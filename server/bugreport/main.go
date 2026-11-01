@@ -245,6 +245,22 @@ type githubIssueCreator struct {
 	client  *http.Client
 }
 
+// githubErrorMessage extracts the "message" field of a GitHub error response,
+// falling back to the (truncated) raw body when it is not one.
+func githubErrorMessage(body []byte) string {
+	var parsed struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+		return parsed.Message
+	}
+	const maxLen = 500
+	if len(body) > maxLen {
+		return string(body[:maxLen]) + "…"
+	}
+	return string(body)
+}
+
 func (g *githubIssueCreator) CreateIssue(ctx context.Context, title, body string) (string, int, error) {
 	payload, _ := json.Marshal(map[string]any{
 		"title":  title,
@@ -268,7 +284,7 @@ func (g *githubIssueCreator) CreateIssue(ctx context.Context, title, body string
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusCreated {
-		return "", 0, fmt.Errorf("github returned %d: %s", resp.StatusCode, string(respBody))
+		return "", 0, fmt.Errorf("github returned %d: %s", resp.StatusCode, githubErrorMessage(respBody))
 	}
 	var parsed struct {
 		HTMLURL string `json:"html_url"`
@@ -421,7 +437,14 @@ func encryptedReportHandler(storageDir, publicBaseURL string, issuer issueCreato
 		issueURL, number, err := issuer.CreateIssue(r.Context(), title, body)
 		if err != nil {
 			log.Printf("Failed to create GitHub issue: %v", err)
-			writeJSONError(w, http.StatusBadGateway, "Failed to create the GitHub issue.")
+			// detail carries GitHub's own reason (e.g. "github returned 401:
+			// Bad credentials") so the app's log names the cause, not just a 502.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error":  "Failed to create the GitHub issue.",
+				"detail": err.Error(),
+			})
 			return
 		}
 
