@@ -1,8 +1,12 @@
 name: Publish Bugreport Image
 
 # Builds server/bugreport into a small single-platform image and pushes it to
-# ghcr.io/guettli/sharedinbox-bugreport:<commit sha>. guettli/gitops deploys
-# that tag. Before this, the pod ran `go run <module>@<sha>` on the 316MB
+# ghcr.io/guettli/sharedinbox-bugreport under two tags:
+#   v<YYYY.MM.DD.HHMMSS>  commit time in UTC. Sortable, so Renovate in
+#                         guettli/gitops sees it as a newer version and opens
+#                         (and auto-merges) the bump PR. gitops deploys this tag.
+#   <commit sha>          traceability only: a SHA has no order.
+# Before this image, the pod ran `go run <module>@<sha>` on the 316MB
 # multi-platform `golang` image, which the node's registry mirror cannot sync
 # within containerd's pull deadline -- every roll risked an ImagePullBackOff
 # outage of sharedinbox.de/api/v1/* (guettli/gitops#734).
@@ -36,6 +40,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Version tag
+        # Only for main: gitops auto-deploys the highest v… tag, so a
+        # workflow_dispatch on a feature branch must not mint one.
+        # The COMMIT time, not the run time: a re-run of the same commit
+        # re-pushes the same tag instead of minting a "newer" one. Seconds, so
+        # two merges in one minute cannot collide.
+        if: github.ref == 'refs/heads/main'
+        run: |
+          version="v$(TZ=UTC git show -s --format=%cd --date=format-local:%Y.%m.%d.%H%M%S HEAD)"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "$version"
+
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -65,5 +81,7 @@ jobs:
             --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -t "$IMAGE:$GITHUB_SHA" \
+            ${VERSION:+-t "$IMAGE:$VERSION"} \
             dist
           docker push "$IMAGE:$GITHUB_SHA"
+          if [ -n "${VERSION:-}" ]; then docker push "$IMAGE:$VERSION"; fi

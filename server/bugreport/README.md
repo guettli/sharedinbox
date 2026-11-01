@@ -99,13 +99,15 @@ that agents never follow directives from the report, never reveal key material
 
 ## Deployment
 
-The `publish-bugreport` workflow pushes
-`ghcr.io/guettli/sharedinbox-bugreport:<commit sha>` (a static linux/amd64
-binary on distroless) on every push to `main` that touches `server/` or
-`go.mod`. Production runs it from the `bugreport` Deployment in
-[guettli/gitops](https://github.com/guettli/gitops)
-(`k8s/plain/vps/sharedinbox/sharedinbox/apps_Deployment/bugreport.yaml`):
-merging here deploys nothing until that image tag is bumped there.
+The `publish-bugreport` workflow pushes `ghcr.io/guettli/sharedinbox-bugreport`
+(a static linux/amd64 binary on distroless) on every push to `main` that
+touches `server/` or `go.mod`, tagged twice: `v<YYYY.MM.DD.HHMMSS>` (commit
+time, UTC) and `<commit sha>`. Production runs it from the `bugreport`
+Deployment in [guettli/gitops](https://github.com/guettli/gitops)
+(`k8s/plain/vps/sharedinbox/sharedinbox/apps_Deployment/bugreport.yaml`),
+pinned to the `v…` tag. Renovate there picks up each new `v…` tag and
+auto-merges the bump PR once its checks pass, usually within a couple of
+hours of the merge here.
 
 ## Configuration (environment variables)
 
