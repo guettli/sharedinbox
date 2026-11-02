@@ -16,7 +16,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' show ImapClient, ImapException;
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
-    show syncErrorMessage, syncErrorKey;
+    show syncErrorDetail, syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
 
 void main() {
@@ -179,6 +179,25 @@ void main() {
           reason: 'a transient error must map to a short class, not its text',
         );
       }
+    });
+  });
+
+  group('syncErrorDetail', () {
+    test('keeps the raw exception the friendly hint hides', () {
+      const error = SocketException(
+        "Failed host lookup: 'imap.gmail.com'",
+        osError: OSError('No address associated with hostname', 7),
+      );
+      final trace = StackTrace.fromString('#0 connect (x.dart:1)');
+      final detail = syncErrorDetail(error, trace);
+      expect(detail, startsWith('SocketException: Failed host lookup'));
+      expect(detail, contains('errno = 7'));
+      expect(detail, endsWith('#0 connect (x.dart:1)'));
+    });
+
+    test('does not repeat an error already shown verbatim', () {
+      final trace = StackTrace.fromString('#0 sync (x.dart:1)');
+      expect(syncErrorDetail(StateError('boom'), trace), '#0 sync (x.dart:1)');
     });
   });
 }
