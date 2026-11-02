@@ -108,6 +108,21 @@ String syncErrorMessage(Object e) {
   return e.toString();
 }
 
+/// Text stored in the Sync Entry's stack-trace field for [cause].
+///
+/// [syncErrorMessage] hides the raw exception behind a friendly hint, which
+/// also hid the one fact needed to debug it: whether "could not reach the mail
+/// server" was a DNS failure (errno 7), an unreachable network (errno 101) or
+/// a refused connection. The raw exception is kept here, above the trace, the
+/// way an uncaught error prints, so the Sync Entry (and a bug report built
+/// from it) shows it while the banner stays short.
+@visibleForTesting
+String syncErrorDetail(Object cause, StackTrace stackTrace) {
+  final raw = cause.toString();
+  if (syncErrorMessage(cause) == raw) return stackTrace.toString();
+  return '$raw\n\n$stackTrace';
+}
+
 /// Time bounds of the IMAP IDLE wait (see `_AccountSync._idle`). Only tests
 /// pass anything but the defaults.
 class ImapIdleTimings {
@@ -908,7 +923,7 @@ class _AccountSync with _KickableWait {
             accountId: account.id,
             success: false,
             errorMessage: failure.errorMessage,
-            stackTrace: failure.stackTrace.toString(),
+            stackTrace: syncErrorDetail(failure.cause, failure.stackTrace),
             isPermanent: isPermanent,
             protocol: 'imap',
             emailsFetched: stats?.emailsFetched ?? 0,
@@ -1435,7 +1450,7 @@ class _JmapAccountSync with _KickableWait {
             accountId: account.id,
             success: false,
             errorMessage: failure.errorMessage,
-            stackTrace: failure.stackTrace.toString(),
+            stackTrace: syncErrorDetail(failure.cause, failure.stackTrace),
             isPermanent: isPermanent,
             protocol: 'jmap',
             emailsFetched: stats?.emailsFetched ?? 0,
