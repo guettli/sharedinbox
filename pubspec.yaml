@@ -75,6 +75,9 @@ dependencies:
 
   # HTML rendering for email bodies
   webview_flutter: ^4.0.0
+  # Direct deps for AndroidWebViewWidgetCreationParams (Hybrid Composition, #1212).
+  webview_flutter_android: ^4.13.0
+  webview_flutter_platform_interface: ^2.15.1
   url_launcher: ^6.3.2
   flutter_markdown_plus: ^1.0.7
 
