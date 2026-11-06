@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show Factory;
+import 'package:flutter/foundation.dart'
+    show Factory, TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,9 @@ import 'package:sharedinbox/core/utils/mailto_parser.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart'
+    show PlatformWebViewController;
 
 /// Synthetic origin the email document is loaded with.
 ///
@@ -221,12 +225,43 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
     }
     return SizedBox(
       height: _height,
-      child: WebViewWidget(
-        controller: _controller!,
-        gestureRecognizers: emailWebViewGestureRecognizers(),
+      child: WebViewWidget.fromPlatformCreationParams(
+        params: emailWebViewWidgetCreationParams(
+          _controller!.platform,
+          platform: defaultTargetPlatform,
+        ),
       ),
     );
   }
+}
+
+/// Creation params for the email [WebViewWidget].
+///
+/// The WebView is sized to the full document height (see `_measureHeight`)
+/// so the surrounding detail screen scrolls the whole mail. On Android the
+/// default Texture Layer mode renders the WebView into a single GPU texture of
+/// that size; a long newsletter at a high pixel ratio exceeds the GPU's maximum
+/// texture size (e.g. ~10k logical px * 2.8 > 16384 px) and the body renders as
+/// a blank, dark area (issue #1212). Hybrid Composition embeds the native
+/// WebView in the view hierarchy instead, where Chromium only draws the visible
+/// tiles, so tall mails render at any height.
+@visibleForTesting
+PlatformWebViewWidgetCreationParams emailWebViewWidgetCreationParams(
+  PlatformWebViewController controller, {
+  required TargetPlatform platform,
+}) {
+  final gestureRecognizers = emailWebViewGestureRecognizers();
+  if (platform == TargetPlatform.android) {
+    return AndroidWebViewWidgetCreationParams(
+      controller: controller,
+      gestureRecognizers: gestureRecognizers,
+      displayWithHybridComposition: true,
+    );
+  }
+  return PlatformWebViewWidgetCreationParams(
+    controller: controller,
+    gestureRecognizers: gestureRecognizers,
+  );
 }
 
 /// Gesture recognizers registered on the email [WebViewWidget].

@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
 
 void _expectLightMode(String html) {
   expect(html, contains('color-scheme" content="light"'));
@@ -27,7 +29,39 @@ Widget _wrap(Widget child) => ProviderScope(
       ),
     );
 
+class _FakePlatformWebViewController extends PlatformWebViewController {
+  _FakePlatformWebViewController()
+      : super.implementation(const PlatformWebViewControllerCreationParams());
+}
+
 void main() {
+  group('emailWebViewWidgetCreationParams', () {
+    test('uses Hybrid Composition on Android so tall mails are not blank', () {
+      // Texture Layer mode renders the full-height WebView into one GPU
+      // texture; a long newsletter exceeds the max texture size and the body
+      // shows as a blank dark area (issue #1212).
+      final controller = _FakePlatformWebViewController();
+      final params = emailWebViewWidgetCreationParams(
+        controller,
+        platform: TargetPlatform.android,
+      );
+      expect(params, isA<AndroidWebViewWidgetCreationParams>());
+      params as AndroidWebViewWidgetCreationParams;
+      expect(params.displayWithHybridComposition, isTrue);
+      expect(params.controller, same(controller));
+      expect(params.gestureRecognizers, emailWebViewGestureRecognizers());
+    });
+
+    test('uses plain params on other platforms', () {
+      final params = emailWebViewWidgetCreationParams(
+        _FakePlatformWebViewController(),
+        platform: TargetPlatform.iOS,
+      );
+      expect(params, isNot(isA<AndroidWebViewWidgetCreationParams>()));
+      expect(params.gestureRecognizers, emailWebViewGestureRecognizers());
+    });
+  });
+
   group('buildEmailHtml', () {
     test(
       'forces light color-scheme to prevent black-on-black in dark mode',
