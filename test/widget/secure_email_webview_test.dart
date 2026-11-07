@@ -35,6 +35,16 @@ class _FakePlatformWebViewController extends PlatformWebViewController {
 }
 
 void main() {
+  group('clampEmailHeight', () {
+    test('keeps normal heights', () {
+      expect(clampEmailHeight(9876), 9876);
+    });
+
+    test('caps absurd heights from hostile mail', () {
+      expect(clampEmailHeight(4e8), maxEmailWebViewHeight);
+    });
+  });
+
   group('emailWebViewWidgetCreationParams', () {
     test('uses Hybrid Composition on Android so tall mails are not blank', () {
       // Texture Layer mode renders the full-height WebView into one GPU

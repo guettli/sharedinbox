@@ -149,7 +149,7 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
       );
       final h = double.tryParse(result.toString());
       if (h != null && h > 0 && mounted) {
-        setState(() => _height = h);
+        setState(() => _height = clampEmailHeight(h));
       }
     } catch (_) {
       // WebView not ready yet; height stays at default
@@ -235,16 +235,38 @@ class _SecureEmailWebViewState extends ConsumerState<SecureEmailWebView> {
   }
 }
 
+/// Upper bound for the email WebView height in logical pixels.
+///
+/// The WebView is sized to the document's `scrollHeight`, which a hostile or
+/// broken mail can make arbitrarily large (e.g. `<div style="height:1e9px">`).
+/// Even with Hybrid Composition the native view's physical height must fit an
+/// Android `MeasureSpec`, and huge extents make the surrounding ListView
+/// unusable. Real newsletters stay far below this; anything taller is cut off
+/// and remains readable in full via the plain-text "Select text" view.
+@visibleForTesting
+const double maxEmailWebViewHeight = 50000;
+
+/// Clamps a measured document height to `1..maxEmailWebViewHeight`.
+@visibleForTesting
+double clampEmailHeight(double h) =>
+    h.clamp(1, maxEmailWebViewHeight).toDouble();
+
 /// Creation params for the email [WebViewWidget].
 ///
 /// The WebView is sized to the full document height (see `_measureHeight`)
-/// so the surrounding detail screen scrolls the whole mail. On Android the
-/// default Texture Layer mode renders the WebView into a single GPU texture of
-/// that size; a long newsletter at a high pixel ratio exceeds the GPU's maximum
-/// texture size (e.g. ~10k logical px * 2.8 > 16384 px) and the body renders as
-/// a blank, dark area (issue #1212). Hybrid Composition embeds the native
-/// WebView in the view hierarchy instead, where Chromium only draws the visible
-/// tiles, so tall mails render at any height.
+/// so the surrounding detail screen scrolls the whole mail. Android's default
+/// platform-view modes (Texture Layer, or its Virtual Display fallback) render
+/// the WebView into a buffer of that full size; a long newsletter at a high
+/// pixel ratio exceeds the GPU's maximum texture size (e.g. ~10k logical px *
+/// 2.8 > 16384 px) and the body renders as a blank, dark area (issue #1212).
+/// Hybrid Composition embeds the native WebView in the view hierarchy instead,
+/// where Chromium only draws the visible tiles, so tall mails render (up to
+/// [maxEmailWebViewHeight]).
+///
+/// Trade-off: on Android 9 and older Hybrid Composition copies Flutter frames
+/// through memory while the WebView is on screen, so scrolling a mail can be
+/// less smooth there. Rendering the body at all outweighs that. Host tests
+/// cover only these params; the rendering itself needs a device check.
 @visibleForTesting
 PlatformWebViewWidgetCreationParams emailWebViewWidgetCreationParams(
   PlatformWebViewController controller, {
