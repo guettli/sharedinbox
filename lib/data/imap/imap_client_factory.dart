@@ -122,14 +122,54 @@ Future<void> upgradeImapToStartTls(
 /// used to hang the sync loop waiting for the greeting forever.
 const _imapGreetingTimeout = Duration(seconds: 45);
 
-/// One connect attempt of [connectImap], bounded by [_imapGreetingTimeout].
-Future<void> _connectBounded(ImapClient client, Account account) => client
-        .connectToServer(
-      account.imapHost,
-      account.imapPort,
-      isSecure: account.imapSsl,
-    )
-        .timeout(
+/// [ImapClient] that fails a pending [connectToServer] as soon as the socket
+/// dies before the server greeting.
+///
+/// enough_mail completes its greeting future only from the first received
+/// bytes: a socket error or close in between (Android's `Software caused
+/// connection abort`, errno 103, when the network drops mid-handshake) only
+/// reaches [onConnectionError], so the connect sat out the whole
+/// [_imapGreetingTimeout] and was then reported as "the server did not answer
+/// in time" — and, being a greeting timeout, was not retried either.
+class _GreetingAwareImapClient extends ImapClient {
+  _GreetingAwareImapClient({
+    super.defaultResponseTimeout,
+    super.isLogEnabled,
+  });
+
+  Completer<void>? _lostBeforeGreeting;
+
+  @override
+  void onConnectionError(dynamic error) {
+    super.onConnectionError(error);
+    final lost = _lostBeforeGreeting;
+    if (lost == null || lost.isCompleted) return;
+    lost.completeError(
+      error is SocketException
+          ? error
+          : SocketException('Connection closed before the IMAP greeting '
+              '($error)'),
+    );
+  }
+}
+
+/// One connect attempt of [connectImap], bounded by [_imapGreetingTimeout]
+/// and failing fast when the connection is lost before the greeting.
+Future<void> _connectBounded(
+  _GreetingAwareImapClient client,
+  Account account,
+) async {
+  final lost = Completer<void>();
+  client._lostBeforeGreeting = lost;
+  try {
+    await Future.any([
+      client.connectToServer(
+        account.imapHost,
+        account.imapPort,
+        isSecure: account.imapSsl,
+      ),
+      lost.future,
+    ]).timeout(
       _imapGreetingTimeout,
       onTimeout: () {
         // Not retried (see [_isTransientConnectError]), so this cannot
@@ -138,6 +178,10 @@ Future<void> _connectBounded(ImapClient client, Account account) => client
         throw _GreetingTimeoutException(account.imapHost);
       },
     );
+  } finally {
+    client._lostBeforeGreeting = null;
+  }
+}
 
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
@@ -155,7 +199,7 @@ Future<ImapClient> connectImap(
   String password,
 ) async {
   final verboseSink = Zone.current[verboseLogKey];
-  final client = ImapClient(
+  final client = _GreetingAwareImapClient(
     defaultResponseTimeout: const Duration(seconds: 20),
     isLogEnabled: verboseSink != null,
   );
