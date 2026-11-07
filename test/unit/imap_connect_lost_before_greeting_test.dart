@@ -70,9 +70,9 @@ void main() {
         if (line.contains('LOGIN')) {
           socket.write('$tag OK LOGIN completed\r\n');
         } else if (line.contains('LOGOUT')) {
-          socket
-            ..write('* BYE\r\n$tag OK LOGOUT completed\r\n')
-            ..destroy();
+          // No server-side close: destroy() may drop the queued reply, and
+          // the client closes the connection itself after LOGOUT.
+          socket.write('* BYE\r\n$tag OK LOGOUT completed\r\n');
         }
       });
     });
