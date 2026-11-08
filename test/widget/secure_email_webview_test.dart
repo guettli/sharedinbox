@@ -107,6 +107,30 @@ void main() {
       addTearDown(recognizer.dispose);
       expect(recognizer, isA<LongPressGestureRecognizer>());
     });
+
+    test('also claims vertical drags when the WebView height is capped', () {
+      final recognizers = emailWebViewGestureRecognizers(scrollable: true);
+      final built = recognizers.map((f) => f.constructor()).toList();
+      for (final r in built) {
+        addTearDown(r.dispose);
+      }
+      expect(built.whereType<LongPressGestureRecognizer>(), hasLength(1));
+      expect(built.whereType<VerticalDragGestureRecognizer>(), hasLength(1));
+    });
+  });
+
+  group('cappedEmailWebViewHeight', () {
+    test('keeps short content at its measured height', () {
+      expect(cappedEmailWebViewHeight(1200, 2.8), 1200);
+    });
+
+    // A long newsletter on a moto g200 (ratio 2.8) exceeded the GPU texture
+    // limit and rendered as a solid black body (issue #1158).
+    test('caps long content below the physical texture limit', () {
+      final height = cappedEmailWebViewHeight(6600, 2.8);
+      expect(height * 2.8, lessThanOrEqualTo(maxEmailWebViewPhysicalHeight));
+      expect(height, maxEmailWebViewPhysicalHeight / 2.8);
+    });
   });
 
   group('buildLinkDialogSpans', () {
