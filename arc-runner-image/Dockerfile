@@ -1,5 +1,5 @@
 # Runner image for the GitHub Actions Runner Controller (ARC) scale set
-# "sharedinbox-arc" (deployed from gitops: k8s/helm-values/arc-runner-set.yaml).
+# "sharedinbox-arc" (deployed from gitops: k8s/helm-values/vps/arc-runner-set.yaml).
 #
 # This image is the SINGLE SOURCE OF TRUTH for the CI toolchain. Workflows that
 # run on sharedinbox-arc rely on these baked tools and do NOT reinstall them at
@@ -7,9 +7,19 @@
 # silently patched. See guettli/otelhouse#33.
 #
 # Built and pushed automatically by .github/workflows/publish-ci-runner.yml on
-# every change to this file. The package is private; arc-runners pulls it via
-# the `ghcr-pull` secret (gitops: task k8s-create-arc-secret).
-FROM ghcr.io/actions/actions-runner:latest
+# every change to this file, tagged v<YYYY.MM.DD.HHMMSS>. gitops Renovate
+# auto-merges that tag into the scale set, so a merge here reaches the runners
+# without a hand-made gitops PR.
+#
+# The base is PINNED, never :latest, so that a new actions/runner release is a
+# change to this file: Renovate bumps the tag below (auto-merged as a minor/patch),
+# which rebuilds and republishes the image, which gitops Renovate then rolls out.
+# This matters: GitHub refuses a runner version 30 days after its successor
+# ships, and a refused runner made ARC mark the whole scale set Outdated and
+# delete its listener -- sharedinbox CI queued for three days (2026-11-05..08).
+# With `FROM ...:latest` the image was rebuilt only when someone edited this
+# file, so it aged silently.
+FROM ghcr.io/actions/actions-runner:2.338.2
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
       jq python3 openssh-client ca-certificates curl git \
