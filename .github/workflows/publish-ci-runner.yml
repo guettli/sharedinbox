@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
@@ -50,10 +50,11 @@ jobs:
       # gitops Renovate follows only the v… tags (they sort; SHAs do not) and
       # auto-merges them into k8s/helm-values/vps/arc-runner-set.yaml. Build
       # time, not commit time: a workflow_dispatch rebuild of the same commit
-      # must get a NEW tag. Re-pushing an existing tag is what bit us before --
-      # the zot pull-through cache in front of ghcr kept serving the old
-      # content of a moved tag (`:latest`, 2026-11-05), so no tag is ever moved
-      # and `:latest` is no longer pushed.
+      # must get a NEW tag. Re-pushing a tag is what bit us before -- the zot
+      # pull-through cache in front of ghcr kept serving the old content of a
+      # moved tag (`:latest`, 2026-11-05), so a v-tag is never re-pushed and
+      # `:latest` is no longer pushed. (The short-SHA tag does move on such a
+      # rebuild; nothing deploys it.)
       - name: Compute tags
         run: |
           echo "VERSION=v$(date -u +%Y.%m.%d.%H%M%S)" >> "$GITHUB_ENV"
@@ -83,8 +84,27 @@ jobs:
             python3 -c "import google.auth, requests"
           '
 
-      - name: Push image
+      # The newest v-tag is rolled out unattended, so it must hold what main
+      # holds NOW. Not a branch (workflow_dispatch can run on any ref), and not
+      # an older main commit ("Re-run jobs" on an old run would otherwise stamp
+      # old content with the newest tag and roll the runners back). Compared by
+      # the git trees of the image inputs, not by commit: an unrelated commit
+      # landing on main during the build must not cancel the publish (it would
+      # not trigger this workflow again).
+      - name: Check the image inputs equal the head of main
         if: github.event_name != 'pull_request'
+        id: head
+        run: |
+          git fetch -q --depth=1 origin main
+          inputs() { git rev-parse "${1}:arc-runner-image" "${1}:.github/workflows/publish-ci-runner.yml"; }
+          if [ "$GITHUB_REF" = refs/heads/main ] && [ "$(inputs HEAD)" = "$(inputs FETCH_HEAD)" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Not pushing: the image inputs of $GITHUB_REF@$GITHUB_SHA differ from the head of main."
+          fi
+
+      - name: Push image
+        if: steps.head.outputs.push == 'true'
         run: |
           docker push "$IMAGE:$SHORT_SHA"
           docker push "$IMAGE:$VERSION"
