@@ -23,6 +23,17 @@
       "platformAutomerge": true
     },
     {
+      "description": [
+        "Base of the sharedinbox-arc runner image (arc-runner-image/Dockerfile). Auto-merged like any minor/patch, but merged by Renovate itself rather than by GitHub: only 'Full Project Check' is a required check, and GitHub auto-merge would merge past a red 'Build & Push sharedinbox-ci-runner' smoke test. Renovate's own merge waits for every check.",
+        "Majors auto-merge too: a runner that is not updated is refused by GitHub 30 days after its successor ships, which takes sharedinbox CI down (2026-11-05).",
+        "rebaseWhen conflicted: Renovate runs once a day and main moves most days. Under the default it would spend every run rebasing the PR (whose checks then restart) instead of merging it -- the bump would starve until the 30 days ran out (gitops hit this on its PR #735). A Dockerfile FROM bump cannot semantically conflict with unrelated commits; a textual conflict still triggers a rebase."
+      ],
+      "matchDepNames": ["ghcr.io/actions/actions-runner"],
+      "automerge": true,
+      "platformAutomerge": false,
+      "rebaseWhen": "conflicted"
+    },
+    {
       "matchManagers": ["gomod"],
       "matchFileNames": ["ci/**"],
       "enabled": false
