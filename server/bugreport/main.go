@@ -662,7 +662,8 @@ func runDecrypt(args []string) error {
 	privB64 := strings.TrimSpace(os.Getenv("REPORT_PRIVATE_KEY"))
 	pubB64 := strings.TrimSpace(os.Getenv("REPORT_PUBLIC_KEY"))
 	if privB64 == "" || pubB64 == "" {
-		return errors.New("set REPORT_PRIVATE_KEY and REPORT_PUBLIC_KEY (base64) in the environment")
+		return errors.New("set REPORT_PRIVATE_KEY and REPORT_PUBLIC_KEY (base64) in the environment " +
+			"(on the tc codeN seats: with-report-key bugreport decrypt ...)")
 	}
 	priv, err := base64.StdEncoding.DecodeString(privB64)
 	if err != nil {
