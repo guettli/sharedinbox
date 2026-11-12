@@ -16,6 +16,11 @@
   ],
   "packageRules": [
     {
+      "description": "prek is pinned twice: mise.toml (host git hooks) and Dockerfile.dev (dev container). Bump both in one PR so they cannot drift.",
+      "matchPackageNames": ["prek", "j178/prek"],
+      "groupName": "prek"
+    },
+    {
       "matchUpdateTypes": ["minor", "patch", "pin", "digest", "lockFileMaintenance"],
       "matchDepNames": ["!dagger/dagger"],
       "addLabels": ["automerge"],
