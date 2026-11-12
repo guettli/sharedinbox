@@ -1,0 +1,7 @@
+[tools]
+# prek runs the git pre-commit hooks (.pre-commit-config.yaml). Pinned here so
+# a host with mise (e.g. a tc codeN seat) resolves the `prek` shim; without a
+# version mise refuses ("No version is set for shim: prek") and every commit
+# fails. Keep in step with the prek baked into Dockerfile.dev -- Renovate
+# bumps both together (see the "prek" group in renovate.json).
+prek = "0.5.7"
