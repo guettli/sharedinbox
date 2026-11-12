@@ -871,14 +871,8 @@ class EmailRepositoryImpl implements EmailRepository {
     if (client != null) await _logoutQuietly(client);
   }
 
-  Future<void> _logoutQuietly(imap.ImapClient client) async {
-    try {
-      await client.logout();
-    } catch (e) {
-      // The connection is being discarded either way.
-      log('IMAP: logout failed while closing a body connection: $e');
-    }
-  }
+  Future<void> _logoutQuietly(imap.ImapClient client) =>
+      closeImapClient(client);
 
   /// Closes the pooled body-fetch connection and cancels its idle timer.
   ///
@@ -1450,7 +1444,7 @@ class EmailRepositoryImpl implements EmailRepository {
         );
       }
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -2308,7 +2302,7 @@ class EmailRepositoryImpl implements EmailRepository {
         missingOnServer: missingOnServer,
       );
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -2476,7 +2470,7 @@ class EmailRepositoryImpl implements EmailRepository {
         flagMismatches: flagMismatches,
       );
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -6098,7 +6092,7 @@ class EmailRepositoryImpl implements EmailRepository {
         }
       }
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
     return applied;
   }
@@ -7603,13 +7597,10 @@ class EmailRepositoryImpl implements EmailRepository {
       );
       return (path: sentPath, result: result);
     } finally {
-      // Logout is best-effort — bound it so a wedged server can't strand the
-      // caller after the message is already appended to Sent.
-      try {
-        await imapClient.logout().timeout(const Duration(seconds: 10));
-      } on TimeoutException {
-        // Best-effort: the message is already saved to Sent.
-      }
+      // Best-effort and bounded: the message is already appended to Sent, so
+      // a lost connection or wedged server must not fail (and re-queue) the
+      // send.
+      await closeImapClient(imapClient);
     }
   }
 
@@ -8087,7 +8078,7 @@ class EmailRepositoryImpl implements EmailRepository {
       await _recordAttachmentFile(emailId, attachment.filename, file);
       return file.path;
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -8193,7 +8184,7 @@ class EmailRepositoryImpl implements EmailRepository {
       }
       return msg.renderMessage();
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 

@@ -154,7 +154,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
       return mailboxes.length;
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -725,7 +725,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
       await client.createMailbox(serverPaths.last);
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
     String? id;
     for (var i = 0; i < segments.length; i++) {
@@ -1036,7 +1036,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // IMAP RENAME's second argument is the full destination path.
       await client.renameMailbox(_imapBoxFor(row), newServerPath);
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
     return _applyImapPathRewrite(row, newServerPath, newName);
   }
@@ -1065,7 +1065,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
       await client.deleteMailbox(box);
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -1089,7 +1089,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // IMAP RENAME can both rename and relocate a mailbox.
       await client.renameMailbox(_imapBoxFor(row), newServerPath);
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
     return _applyImapPathRewrite(row, newServerPath, row.name);
   }

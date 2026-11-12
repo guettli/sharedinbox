@@ -10756,6 +10756,11 @@ class _HangingCreateMailboxImapClient extends FakeImapClient {
   Future<imap.Mailbox> createMailbox(String path) =>
       Completer<imap.Mailbox>().future;
 
+  // Hung, but still connected: closeImapClient only sends LOGOUT on a live
+  // connection.
+  @override
+  bool get isConnected => true;
+
   @override
   Future<dynamic> logout() async {
     logoutCalled = true;
@@ -11275,6 +11280,10 @@ class _PoolBodyImapClient extends _PreviewBodyImapClient {
       responseTimeout: responseTimeout,
     );
   }
+
+  // A live connection: closeImapClient only sends LOGOUT on one.
+  @override
+  bool get isConnected => true;
 
   @override
   Future<dynamic> logout() async {

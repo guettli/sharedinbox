@@ -105,7 +105,8 @@ class ConnectionTestServiceImpl implements ConnectionTestService {
     for (final username in candidates) {
       try {
         final client = await _imapConnect(account, username, password);
-        await client.logout();
+        // Login succeeded: a failing LOGOUT must not reject this username.
+        await closeImapClient(client);
         return username;
       } catch (e) {
         lastError = e;

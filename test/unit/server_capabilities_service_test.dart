@@ -44,6 +44,10 @@ class _CapabilityImapClient extends FakeImapClient {
   Future<List<imap.Capability>> capability() async =>
       tokens.map(imap.Capability.new).toList();
 
+  // A live connection: closeImapClient only sends LOGOUT on one.
+  @override
+  bool get isConnected => true;
+
   @override
   Future<dynamic> logout() async {
     loggedOut = true;
@@ -142,6 +146,10 @@ class _ThrowingCapabilityImapClient extends FakeImapClient {
 
   @override
   Future<List<imap.Capability>> capability() async => throw Exception('boom');
+
+  // A live connection: closeImapClient only sends LOGOUT on one.
+  @override
+  bool get isConnected => true;
 
   @override
   Future<dynamic> logout() async {

@@ -196,7 +196,7 @@ Future<void> _checkAccount(
         await _notifyForNewMail(db, account, client, lastUidNext);
       }
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   } catch (_) {}
 }

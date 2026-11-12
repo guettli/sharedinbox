@@ -498,7 +498,7 @@ class DraftRepositoryImpl extends DraftRepository {
       await _pushDirtyImap(client, account, encodedPath);
       await _pullDraftsImap(client, account.id);
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
