@@ -133,6 +133,7 @@ const _imapGreetingTimeout = Duration(seconds: 45);
 /// in time" — and, being a greeting timeout, was not retried either.
 class _GreetingAwareImapClient extends ImapClient {
   _GreetingAwareImapClient({
+    super.defaultWriteTimeout,
     super.defaultResponseTimeout,
     super.isLogEnabled,
   });
@@ -183,6 +184,46 @@ Future<void> _connectBounded(
   }
 }
 
+/// Bound on writing one IMAP command and on waiting for its tagged response.
+const _imapCommandTimeout = Duration(seconds: 20);
+
+/// Ends an IMAP session opened by [connectImap]; never throws.
+///
+/// Use this in `finally` blocks instead of a bare `logout()`: when the
+/// connection was lost mid-command, LOGOUT fails with enough_mail's
+/// "Bad state: Cannot add event after closing", and an exception thrown from
+/// `finally` replaces the real error (the `SocketException`) that ended the
+/// session, so the sync log reported the LOGOUT failure instead.
+///
+/// LOGOUT is only sent when [logout] is true and the connection is still up;
+/// otherwise, or when LOGOUT fails, the socket is just dropped. Each step is
+/// bounded by [timeout], kept short so closing a half-open connection (still
+/// "connected", but no bytes flow) does not hold back the error that ended
+/// the session for long.
+///
+/// After a write timeout enough_mail fails every later write on [client], and
+/// once the server has closed the connection `disconnect()` does nothing;
+/// in both cases the OS reclaims the socket.
+Future<void> closeImapClient(
+  ImapClient client, {
+  bool logout = true,
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  try {
+    if (logout && client.isConnected) {
+      await client.logout().timeout(timeout);
+      return;
+    }
+  } catch (_) {
+    // Fall through and drop the connection.
+  }
+  try {
+    await client.disconnect().timeout(timeout);
+  } catch (_) {
+    // Nothing left to clean up.
+  }
+}
+
 /// Opens an authenticated IMAP client for [account] using [username].
 ///
 /// When [account.imapSsl] is false, STARTTLS is required and the connection
@@ -200,7 +241,11 @@ Future<ImapClient> connectImap(
 ) async {
   final verboseSink = Zone.current[verboseLogKey];
   final client = _GreetingAwareImapClient(
-    defaultResponseTimeout: const Duration(seconds: 20),
+    // Without a write timeout a command written to a dead connection (Android
+    // after a network switch) waits for the kernel to give up on the socket,
+    // about five minutes, before the sync can fail and retry.
+    defaultWriteTimeout: _imapCommandTimeout,
+    defaultResponseTimeout: _imapCommandTimeout,
     isLogEnabled: verboseSink != null,
   );
   try {

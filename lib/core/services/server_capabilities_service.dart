@@ -72,11 +72,8 @@ class ServerCapabilitiesServiceImpl implements ServerCapabilitiesService {
       final names = caps.map((c) => c.name).toSet().toList()..sort();
       return ServerCapabilities(type: AccountType.imap, capabilities: names);
     } finally {
-      try {
-        await client.logout();
-      } catch (_) {
-        // best-effort — the probe already has what it needs.
-      }
+      // Best-effort — the probe already has what it needs.
+      await closeImapClient(client);
     }
   }
 

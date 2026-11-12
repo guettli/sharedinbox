@@ -19,7 +19,7 @@ import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
-    show ImapConnectFn, connectImap, verboseLogKey;
+    show ImapConnectFn, closeImapClient, connectImap, verboseLogKey;
 import 'package:sharedinbox/data/imap/tls_error.dart' show isTlsConfigError;
 
 /// True when [e] means the server never answered in time, as opposed to never
@@ -1237,36 +1237,21 @@ class _AccountSync with _KickableWait {
     } finally {
       unawaited(sub.cancel());
       _stopSignal = null;
-      await _closeIdleClient(client, logout: !failed);
+      // LOGOUT only on a healthy connection: on a lost or unresponsive one it
+      // would never be answered (it queues behind the unanswered IDLE), so
+      // the socket is just dropped. Errors are swallowed — the session is
+      // over either way, and a failure that ended it is already on its way
+      // to the loop's error handling.
+      await closeImapClient(
+        client,
+        logout: !failed,
+        timeout: _idleTimings.commandTimeout,
+      );
     }
   }
 
   static SocketException _idleConnectionLost() =>
       const SocketException('IMAP IDLE connection lost');
-
-  /// Ends the IDLE session. LOGOUT only on a healthy connection: on a lost or
-  /// unresponsive one it would never be answered (it queues behind the
-  /// unanswered IDLE), so the socket is just dropped. Errors are swallowed —
-  /// the session is over either way, and a failure that ended it is already
-  /// on its way to the loop's error handling.
-  Future<void> _closeIdleClient(
-    imap.ImapClient client, {
-    required bool logout,
-  }) async {
-    try {
-      if (logout) {
-        await client.logout().timeout(_idleTimings.commandTimeout);
-        return;
-      }
-    } catch (_) {
-      // Fall through and drop the connection.
-    }
-    try {
-      await client.disconnect().timeout(_idleTimings.commandTimeout);
-    } catch (_) {
-      // Nothing left to clean up.
-    }
-  }
 
   /// Whether the INBOX state the IDLE connection's SELECT reported
   /// ([selected]) differs from what the last sync cycle saw when it selected

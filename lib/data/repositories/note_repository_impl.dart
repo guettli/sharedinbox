@@ -221,7 +221,7 @@ class NoteRepositoryImpl implements NoteRepository {
         ),
       );
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -627,7 +627,7 @@ class NoteRepositoryImpl implements NoteRepository {
         );
       }
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
@@ -807,7 +807,7 @@ class NoteRepositoryImpl implements NoteRepository {
         // Notes folder gone or message already deleted — clean up locally.
       }
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
     await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteRow.id)))
         .go();

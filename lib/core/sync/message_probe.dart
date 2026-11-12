@@ -220,7 +220,7 @@ class MessageProbeImpl implements MessageProbe {
         ),
       );
     } finally {
-      await client.logout();
+      await closeImapClient(client);
     }
   }
 
