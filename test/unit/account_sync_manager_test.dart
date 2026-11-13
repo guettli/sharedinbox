@@ -245,7 +245,7 @@ void main() {
       fault: _Fault.down,
       kick: false,
       timings: const ImapIdleTimings(),
-      message: 'Could not reach the mail server',
+      message: 'Lost the connection to the mail server',
     ),
     'blackhole, then a kick (enough_mail times DONE out)': (
       fault: _Fault.blackhole,
