@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show OSError, SocketException;
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter/services.dart' show MissingPluginException;
@@ -75,6 +76,32 @@ void main() {
       m.dispose();
     },
   );
+
+  // The banner shows a friendly hint for an unreachable server, but the Sync
+  // Entry must keep the raw exception: only its errno tells a DNS failure (7)
+  // from an unreachable network (101) or a refused connection.
+  for (final type in [AccountType.imap, AccountType.jmap]) {
+    test('a ${type.name} Sync Entry keeps the raw network error', () async {
+      final syncLog = FakeSyncLogRepository();
+      final m = AccountSyncManager(
+        _OkAccountRepository(type: type),
+        _UnreachableMailboxRepository(),
+        FakeEmailRepository(),
+        syncLog: syncLog,
+      );
+      addTearDown(m.dispose);
+
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(syncLog.records, isNotEmpty);
+      final entry = syncLog.records.first;
+      expect(entry.success, isFalse);
+      expect(entry.errorMessage, contains('Could not reach the mail server'));
+      expect(entry.stackTrace, startsWith('SocketException: Failed host'));
+      expect(entry.stackTrace, contains('errno = 7'));
+    });
+  }
 
   // A kick (a local change was queued, or Retry was pressed) that lands while
   // a sync cycle is running used to be dropped: kick() only completed an
@@ -663,6 +690,15 @@ class _BlockingMailboxRepository extends FakeMailboxRepositoryWithInbox {
     if (fail) throw Exception('server unavailable');
     return 1;
   }
+}
+
+/// Fails every mailbox sync the way Android reports a DNS failure.
+class _UnreachableMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  @override
+  Future<int> syncMailboxes(String id) async => throw const SocketException(
+        "Failed host lookup: 'imap.example.com'",
+        osError: OSError('No address associated with hostname', 7),
+      );
 }
 
 /// Starts [m], kicks account '1' while its first sync cycle is held in

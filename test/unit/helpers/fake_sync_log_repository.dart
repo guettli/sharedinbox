@@ -1,12 +1,17 @@
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 
-/// [SyncLogRepository] stand-in that records only which account each logged
-/// sync was for and whether it succeeded, shared by the sync-manager and
+/// [SyncLogRepository] stand-in that records which account each logged sync
+/// was for, whether it succeeded and what error text it stored, shared by the sync-manager and
 /// reliability-runner suites instead of each restating the interface (jscpd
 /// duplication gate).
 class FakeSyncLogRepository extends NoOpSyncLogRepository {
   /// Every [log] call, in order.
-  final records = <({String accountId, bool success})>[];
+  final records = <({
+    String accountId,
+    bool success,
+    String? errorMessage,
+    String? stackTrace,
+  })>[];
 
   /// `success` of every [log] call, in order.
   List<bool> get logs => [for (final r in records) r.success];
@@ -31,7 +36,14 @@ class FakeSyncLogRepository extends NoOpSyncLogRepository {
     List<MailboxSyncStats> mailboxStats = const [],
     String? protocolLog,
   }) async {
-    records.add((accountId: accountId, success: success));
+    records.add(
+      (
+        accountId: accountId,
+        success: success,
+        errorMessage: errorMessage,
+        stackTrace: stackTrace,
+      ),
+    );
     return _nextId++;
   }
 }

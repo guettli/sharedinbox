@@ -16,7 +16,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' show ImapClient, ImapException;
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
-    show syncErrorMessage, syncErrorKey;
+    show syncErrorDetail, syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
 
 void main() {
@@ -179,6 +179,48 @@ void main() {
           reason: 'a transient error must map to a short class, not its text',
         );
       }
+    });
+  });
+
+  group('syncErrorDetail', () {
+    test('keeps the raw exception the friendly hint hides', () {
+      const error = SocketException(
+        "Failed host lookup: 'imap.gmail.com'",
+        osError: OSError('No address associated with hostname', 7),
+      );
+      final trace = StackTrace.fromString('#0 connect (x.dart:1)');
+      final detail = syncErrorDetail(error, trace);
+      expect(detail, startsWith('SocketException: Failed host lookup'));
+      expect(detail, contains('errno = 7'));
+      expect(detail, endsWith('#0 connect (x.dart:1)'));
+    });
+
+    test('keeps the raw exception behind the timeout hint', () {
+      final trace = StackTrace.fromString('#0 fetch (x.dart:1)');
+      final detail = syncErrorDetail(
+        TimeoutException('no answer', const Duration(seconds: 20)),
+        trace,
+      );
+      expect(detail, startsWith('TimeoutException after 0:00:20.000000'));
+      expect(detail, endsWith('#0 fetch (x.dart:1)'));
+    });
+
+    test('strips credentials embedded in a URL', () {
+      final detail = syncErrorDetail(
+        HttpException(
+          'Connection closed',
+          uri: Uri.parse('https://alice:s3cret@jmap.example.com/session'),
+        ),
+        StackTrace.empty,
+      );
+      expect(detail, contains('https://jmap.example.com/session'));
+      expect(detail, isNot(contains('s3cret')));
+      expect(detail, isNot(contains('alice')));
+    });
+
+    test('does not repeat an error already shown verbatim', () {
+      final trace = StackTrace.fromString('#0 sync (x.dart:1)');
+      expect(syncErrorDetail(StateError('boom'), trace), '#0 sync (x.dart:1)');
     });
   });
 }
