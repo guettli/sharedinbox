@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -449,5 +450,45 @@ func TestGithubIssueCreator(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, `"encrypted-report"`) {
 		t.Errorf("body missing label: %q", gotBody)
+	}
+}
+
+func TestGithubIssueCreatorErrorMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}`))
+	}))
+	defer srv.Close()
+
+	g := &githubIssueCreator{token: "tok", repo: "o/r", apiBase: srv.URL, client: srv.Client()}
+	_, _, err := g.CreateIssue(context.Background(), "title", "body")
+	if err == nil || err.Error() != "github returned 401: Bad credentials" {
+		t.Errorf("err = %v, want %q", err, "github returned 401: Bad credentials")
+	}
+}
+
+func TestEncryptedReportHandlerIssueFailureReturnsDetail(t *testing.T) {
+	resetRateLimit()
+	issuer := &fakeIssuer{err: errors.New("github returned 401: Bad credentials")}
+	h := encryptedReportHandler(t.TempDir(), "https://sharedinbox.de", issuer)
+
+	body, ct := encryptedReportBody(t,
+		map[string]string{"title": "t", "description": "d", "about_info": "v"},
+		[]byte("ciphertext-bytes"),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/encrypted-reports", body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp["detail"] != "github returned 401: Bad credentials" {
+		t.Errorf("detail = %q", resp["detail"])
 	}
 }
