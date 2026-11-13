@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -4168,21 +4169,31 @@ void main() {
         expect(await r.emails.getEmail('acc-1:INBOX:7'), isNotNull);
       });
 
-      test('move that cannot be located is kept for a retry, not dropped',
+      // The message is in neither mailbox (e.g. purged from Trash by another
+      // client): retrying can never succeed, so the change is dropped — not
+      // silently counted as applied — and the App Log gets a warning.
+      test('move whose message is in neither mailbox is dropped with a warning',
           () async {
+        final recorder = _PushStatusRecorder();
         final spy = SnoozeSpyImapClient(
           searchResultsByMailbox: const {},
         );
-        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        final r = _makeRepos(
+          imapConnect: (_, __, ___) async => spy,
+          appLogger: AppLogger(recorder),
+        );
         await r.accounts.addAccount(_account, 'pw');
         await seedInboxEmail(r.db);
         await queueMove(r.db, uid: 5, src: 'Trash', dest: 'INBOX');
 
-        await r.emails.flushPendingChanges('acc-1', 'pw');
+        final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
 
-        final change = (await r.db.select(r.db.pendingChanges).get()).single;
-        expect(change.attempts, 1);
-        expect(change.lastError, contains(messageId));
+        expect(applied, 0);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        final warning = recorder.entries
+            .singleWhere((e) => e.event == 'pending_change.message_gone');
+        expect(warning.level, AppLogLevel.warn);
+        expect(warning.emailId, oldId);
       });
     });
 
@@ -4743,6 +4754,170 @@ void main() {
         'move Snoozed:205->Archive',
       ]);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    Future<void> insertInboxMove(
+      AppDatabase db,
+      int uid, {
+      String dest = 'Trash',
+    }) async {
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:$uid',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: uid,
+              receivedAt: DateTime(2024),
+              messageId: Value('<m$uid@example.com>'),
+            ),
+          );
+      await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:INBOX:$uid',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': uid,
+                'mailboxPath': 'INBOX',
+                'dest': dest,
+                'messageId': '<m$uid@example.com>',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+    }
+
+    // Another client already deleted the message: the MOVE is an OK no-op and
+    // the Message-ID is in neither mailbox. Retrying can never succeed, so the
+    // change is dropped instead of re-running ~6 commands on every sync.
+    test('IMAP move of a message gone from both mailboxes is dropped',
+        () async {
+      final spy = SnoozeSpyImapClient(searchResultsByMailbox: const {});
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 9080);
+
+      final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(applied, 0);
+      expect(spy.calls, ['move INBOX:9080->Trash']);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('IMAP move whose MOVE had no effect on a present message is retried',
+        () async {
+      final spy = SnoozeSpyImapClient(
+        searchResultsByMailbox: const {
+          'INBOX': [9080],
+        },
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 9080);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      final pending = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(pending.attempts, 1);
+      expect(pending.lastError, contains('still in INBOX'));
+    });
+
+    // The connection dropped mid-flush (e.g. a network switch on mobile).
+    // Every further command would fail only after a response timeout, so the
+    // flush must stop and leave the remaining changes for the next sync.
+    for (final (name, makeError) in <(String, Object Function())>[
+      (
+        'socket error',
+        () => const SocketException('Software caused connection abort'),
+      ),
+      ('closed socket', () => StateError('Cannot add event after closing')),
+      (
+        'response timeout',
+        () => imap.ImapException(imap.ImapClient(), 'timeout'),
+      ),
+    ]) {
+      test('IMAP flush stops at a lost connection ($name)', () async {
+        var moves = 0;
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {1: 11},
+          onUidMove: () async {
+            if (++moves == 2) throw makeError();
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        for (final uid in [1, 2, 3, 4]) {
+          await insertInboxMove(r.db, uid);
+        }
+
+        final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(applied, 1);
+        expect(moves, 2, reason: 'no command after the connection was lost');
+        final pending = await (r.db.select(r.db.pendingChanges)
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get();
+        expect(pending.map((p) => p.resourceId), [
+          'acc-1:INBOX:2',
+          'acc-1:INBOX:3',
+          'acc-1:INBOX:4',
+        ]);
+        expect(pending.map((p) => p.attempts), [1, 0, 0]);
+      });
+    }
+
+    // A connection lost during the source Message-ID search — the one that
+    // decides "gone" — must not read as "no match" (which would drop the
+    // change); the flush stops instead.
+    test('IMAP flush keeps a move whose Message-ID search lost the connection',
+        () async {
+      final spy = _SearchFailsImapClient(
+        StateError('Cannot add event after closing'),
+        failIn: 'INBOX',
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 9080);
+      await insertInboxMove(r.db, 9079);
+
+      final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(applied, 0);
+      expect(spy.calls, ['move INBOX:9080->Trash']);
+      final pending = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(pending.map((p) => p.attempts), [1, 0]);
+    });
+
+    // A source search that fails for another reason (NO/BAD, UNAVAILABLE…)
+    // is not proof the message is gone: the move is retried, and the flush
+    // carries on with the next change on the still-healthy connection.
+    test('IMAP move whose source Message-ID search failed is retried',
+        () async {
+      final spy = _SearchFailsImapClient(
+        imap.ImapException(imap.ImapClient(), 'SEARCH failed [UNAVAILABLE]'),
+        failIn: 'INBOX',
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 9080);
+      await insertInboxMove(r.db, 9079);
+
+      final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(applied, 0);
+      expect(spy.calls, [
+        'move INBOX:9080->Trash',
+        'move INBOX:9079->Trash',
+      ]);
+      final pending = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(pending.map((p) => p.attempts), [1, 1]);
+      expect(pending.first.lastError, contains('search in INBOX failed'));
     });
 
     // Undo re-snoozing a row rebuilt from its snapshot queues the snooze with
@@ -11396,4 +11571,28 @@ class _MovedAwayImapClient extends FakeImapClient {
     Duration? responseTimeout,
   }) async =>
       const imap.FetchImapResult([], null);
+}
+
+/// [SnoozeSpyImapClient] whose `UID SEARCH` finds nothing, except in
+/// [failIn], where it fails with [error].
+class _SearchFailsImapClient extends SnoozeSpyImapClient {
+  _SearchFailsImapClient(this.error, {required this.failIn})
+      : super(searchResultsByMailbox: const {});
+
+  final Object error;
+  final String failIn;
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    if (selectedMailbox == failIn) throw error;
+    return super.uidSearchMessages(
+      searchCriteria: searchCriteria,
+      returnOptions: returnOptions,
+      responseTimeout: responseTimeout,
+    );
+  }
 }

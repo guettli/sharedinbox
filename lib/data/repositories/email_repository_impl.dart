@@ -6067,6 +6067,40 @@ class EmailRepositoryImpl implements EmailRepository {
               .go();
           applied++;
         } catch (e) {
+          if (isImapConnectionLost(e)) {
+            // The connection is dead (e.g. network switch on mobile): every
+            // further command would fail too, each only after a response
+            // timeout. Count this attempt and leave the remaining, unclaimed
+            // changes untouched for the next sync's fresh connection. A
+            // command that merely timed out stops the flush too; if one change
+            // keeps timing out, it blocks the queue only until it is dropped
+            // after [_maxChangeAttempts].
+            await _recordChangeError(row, e);
+            log('IMAP flush for ${account.id} stopped: connection lost ($e)');
+            break;
+          }
+          if (e is _ImapMessageGoneException) {
+            // Retrying cannot bring the message back, but the user's move
+            // (e.g. an Undo's reverse move, #1048) did not happen: drop the
+            // change and say so in the App Log at warn level.
+            await (_db.delete(
+              _db.pendingChanges,
+            )..where((t) => t.id.equals(row.id)))
+                .go();
+            log('IMAP change ${row.id} dropped: $e');
+            unawaited(
+              _appLogger?.warn(
+                'pending_change.message_gone',
+                'Dropped ${_describeChange(row)} — the message is no longer '
+                    'on the server (deleted or moved by another client)',
+                accountId: account.id,
+                emailId: row.resourceId,
+                data: {'changeType': row.changeType},
+                error: e,
+              ),
+            );
+            continue;
+          }
           if (isImapMailboxNotFound(e)) {
             // Email already gone on the server — treat as success so the
             // pending change doesn't accumulate or block future changes.
@@ -6086,9 +6120,9 @@ class EmailRepositoryImpl implements EmailRepository {
                 data: {'changeType': row.changeType},
               ),
             );
-          } else {
-            await _recordChangeError(row, e);
+            continue;
           }
+          await _recordChangeError(row, e);
         }
       }
     } finally {
@@ -6274,8 +6308,11 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Re-resolves the UID in [mailboxPath] by Message-ID and moves that one,
   /// running [beforeMove] on it first (snooze flag edits ride along).
   /// Shared by `move` and `snooze`.
-  /// Throws [StateError] when the message cannot be found, so the change is
-  /// retried and the failure lands in the App Log instead of vanishing.
+  /// Throws [_ImapMessageGoneException] when the message is in neither
+  /// mailbox (deleted or moved elsewhere by another client), so the flush
+  /// drops the change and logs it as already gone. Throws [StateError] when
+  /// the MOVE had no effect although the message is still there, so the
+  /// change is retried and the failure lands in the App Log.
   /// Without any Message-ID to verify against, keeps the old behaviour and
   /// treats the MOVE as applied.
   Future<void> _retryImapMoveByMessageId(
@@ -6293,13 +6330,29 @@ class EmailRepositoryImpl implements EmailRepository {
     final mid = messageId ?? local?.messageId;
     if (mid == null || mid.isEmpty) return;
 
-    final resolvedUid = await _searchUidByMessageId(client, mailboxPath, mid);
-    if (resolvedUid == null || resolvedUid == staleUid) {
+    final resolvedUid = await _searchUidByMessageId(
+      client,
+      mailboxPath,
+      mid,
+      throwOnFailure: true,
+    );
+    if (resolvedUid == null) {
+      // Not in the destination (checked by [_remapEmailAfterImapMove]) and the
+      // source search succeeded without a match: another client already
+      // deleted or moved it. Retrying can never succeed, so the flush drops
+      // the change as "already gone". A failed search throws instead (see
+      // `throwOnFailure`), so it is retried rather than mistaken for "gone".
+      throw _ImapMessageGoneException(
+        'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
+        'effect: message $mid is in neither mailbox',
+      );
+    }
+    if (resolvedUid == staleUid) {
       // Wording must not match [isImapMailboxNotFound], which would treat
       // the change as applied.
       throw StateError(
         'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
-        'effect: message $mid is in neither mailbox',
+        'effect: message $mid is still in $mailboxPath',
       );
     }
     await client.selectUnicodeMailboxByPath(mailboxPath);
@@ -6402,11 +6455,16 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Looks up the UID of a message in [mailboxPath] by its RFC 2822
   /// `Message-ID` header. Used as a fallback when the server doesn't
   /// support UIDPLUS so we can still relink the local row after a move.
+  /// Returns null when nothing matches. Rethrows when the connection is lost
+  /// ([isImapConnectionLost]). Any other failure returns null too, unless
+  /// [throwOnFailure] is set: then it throws a [StateError] so a caller that
+  /// treats "no match" as "the message is gone" can tell the two apart.
   Future<int?> _searchUidByMessageId(
     imap.ImapClient client,
     String mailboxPath,
-    String? messageId,
-  ) async {
+    String? messageId, {
+    bool throwOnFailure = false,
+  }) async {
     if (messageId == null || messageId.isEmpty) return null;
     try {
       await client.selectUnicodeMailboxByPath(mailboxPath);
@@ -6420,8 +6478,14 @@ class EmailRepositoryImpl implements EmailRepository {
       if (uids.isEmpty) return null;
       return uids.reduce((a, b) => a > b ? a : b);
     } catch (e) {
+      // A dead connection is not "no match": let it reach the caller so a
+      // batch (e.g. the pending-change flush) stops instead of carrying on.
+      if (isImapConnectionLost(e)) rethrow;
       log('_searchUidByMessageId failed for $messageId in $mailboxPath: $e');
-      return null;
+      if (!throwOnFailure) return null;
+      // Wording must not match [isImapMailboxNotFound], which would treat
+      // the change as applied.
+      throw StateError('Message-ID search in $mailboxPath failed: $e');
     }
   }
 
@@ -9208,4 +9272,15 @@ class _BulkScope {
 
   /// Accounts already looked up during this operation.
   final accounts = <String, account_model.Account?>{};
+}
+
+/// A queued IMAP move whose message is no longer in its source or destination
+/// mailbox — another client deleted or moved it. The flush drops the change.
+class _ImapMessageGoneException implements Exception {
+  _ImapMessageGoneException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }
