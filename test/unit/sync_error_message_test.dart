@@ -195,6 +195,29 @@ void main() {
       expect(detail, endsWith('#0 connect (x.dart:1)'));
     });
 
+    test('keeps the raw exception behind the timeout hint', () {
+      final trace = StackTrace.fromString('#0 fetch (x.dart:1)');
+      final detail = syncErrorDetail(
+        TimeoutException('no answer', const Duration(seconds: 20)),
+        trace,
+      );
+      expect(detail, startsWith('TimeoutException after 0:00:20.000000'));
+      expect(detail, endsWith('#0 fetch (x.dart:1)'));
+    });
+
+    test('strips credentials embedded in a URL', () {
+      final detail = syncErrorDetail(
+        HttpException(
+          'Connection closed',
+          uri: Uri.parse('https://alice:s3cret@jmap.example.com/session'),
+        ),
+        StackTrace.empty,
+      );
+      expect(detail, contains('https://jmap.example.com/session'));
+      expect(detail, isNot(contains('s3cret')));
+      expect(detail, isNot(contains('alice')));
+    });
+
     test('does not repeat an error already shown verbatim', () {
       final trace = StackTrace.fromString('#0 sync (x.dart:1)');
       expect(syncErrorDetail(StateError('boom'), trace), '#0 sync (x.dart:1)');

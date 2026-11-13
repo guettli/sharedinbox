@@ -46,23 +46,6 @@ bool _isUnreachableError(Object e) =>
 bool _isTransientNetworkError(Object e) =>
     _isUnreachableError(e) || _isTimeoutError(e);
 
-/// Message shown in the Sync Entry's error field. For a transient network
-/// failure the raw exception (e.g. "SocketException: Failed host lookup:
-/// 'imap.gmail.com' ... errno = 7", #609) reads like a bug to users whose
-/// connection is fine, so we show a friendly hint instead. The raw exception
-/// and stack trace are still recorded in the app log for debugging.
-///
-/// A timeout gets its own wording. It used to share the "could not reach the
-/// mail server — temporary network or DNS problem" text, which is actively
-/// misleading: the server had been reached, it just had not finished the
-/// request. That message sent a real investigation at DNS while the actual
-/// cause was a request the client had made too large to answer in time
-/// (issue #967). Report what happened — that the server was slow — so the
-/// next report points at the request, not at the network.
-///
-/// Deliberately short and free of the words "network" and "DNS": it is
-/// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
-/// longer, and the half that would be cut is the actionable half.
 /// A stable key for the *kind* of a sync error, derived from the message
 /// [syncErrorMessage] / [_CycleFailure] produce.
 ///
@@ -95,6 +78,23 @@ String syncErrorKey(String message) {
   return cause == 'other' ? message : cause;
 }
 
+/// Message shown in the Sync Entry's error field. For a transient network
+/// failure the raw exception (e.g. "SocketException: Failed host lookup:
+/// 'imap.gmail.com' ... errno = 7", #609) reads like a bug to users whose
+/// connection is fine, so we show a friendly hint instead. The raw exception
+/// and stack trace are still recorded in the app log for debugging.
+///
+/// A timeout gets its own wording. It used to share the "could not reach the
+/// mail server — temporary network or DNS problem" text, which is actively
+/// misleading: the server had been reached, it just had not finished the
+/// request. That message sent a real investigation at DNS while the actual
+/// cause was a request the client had made too large to answer in time
+/// (issue #967). Report what happened — that the server was slow — so the
+/// next report points at the request, not at the network.
+///
+/// Deliberately short and free of the words "network" and "DNS": it is
+/// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
+/// longer, and the half that would be cut is the actionable half.
 @visibleForTesting
 String syncErrorMessage(Object e) {
   if (_isTimeoutError(e)) {
@@ -117,11 +117,21 @@ String syncErrorMessage(Object e) {
 /// way an uncaught error prints, so the Sync Entry (and a bug report built
 /// from it) shows it while the banner stays short.
 @visibleForTesting
+
+///
+/// The hint replaces exactly the transient network errors, so comparing it
+/// with the raw text also covers any hint added later. Credentials embedded
+/// in a URL (`https://user:pass@host`, e.g. in an `HttpException`) are
+/// stripped: the Sync Entry ends up in bug reports.
 String syncErrorDetail(Object cause, StackTrace stackTrace) {
   final raw = cause.toString();
   if (syncErrorMessage(cause) == raw) return stackTrace.toString();
-  return '$raw\n\n$stackTrace';
+  return '${_stripUrlUserInfo(raw)}\n\n$stackTrace';
 }
+
+/// Removes the `user:pass@` part of every URL in [text].
+String _stripUrlUserInfo(String text) =>
+    text.replaceAll(RegExp(r'(?<=://)[^/\s@]+@'), '');
 
 /// Time bounds of the IMAP IDLE wait (see `_AccountSync._idle`). Only tests
 /// pass anything but the defaults.
