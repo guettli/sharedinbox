@@ -10252,6 +10252,91 @@ void main() {
       expect(thread.isFlagged, isTrue);
     });
 
+    group('a read/star change made while sync reads the server flags', () {
+      // The user marks the mail read while the server's FLAGS answer is on
+      // its way; the change is queued and already pushed (no longer in
+      // pendingChanges) by the time the answer lands. That answer predates
+      // the change and must not write "unread" back.
+      Future<
+          ({
+            _RacingFlagsImapClient client,
+            ({
+              AccountRepositoryImpl accounts,
+              EmailRepositoryImpl emails,
+              AppDatabase db
+            }) r
+          })> arrange() async {
+        final client = _RacingFlagsImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Lunch tomorrow?',
+              from: 'alice@example.com',
+              text: 'Noon?',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        );
+        final r = _makeRepos(
+          imapConnect: (Account _, String __, String ___) async => client,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.emails.syncEmails('acc-1', 'INBOX');
+        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+        client.beforeFlagsAnswer = () async {
+          await r.emails.setFlag('acc-1:INBOX:42', seen: true);
+          // Flushed: the STORE reached the server after it built the answer.
+          await r.db.delete(r.db.pendingChanges).go();
+        };
+        return (client: client, r: r);
+      }
+
+      Future<void> expectStillRead(AppDatabase db) async {
+        final email = await db.select(db.emails).getSingle();
+        expect(email.isSeen, isTrue);
+        final thread = await db.select(db.threads).getSingle();
+        expect(thread.hasUnread, isFalse);
+      }
+
+      test('CONDSTORE refresh keeps it', () async {
+        final (:client, :r) = await arrange();
+        // Something else changed on the server; 42 is still unseen there.
+        client.modSeq = 2;
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        await expectStillRead(r.db);
+      });
+
+      test('periodic flag reconcile keeps it', () async {
+        final (:client, :r) = await arrange();
+        await (r.db.delete(r.db.syncStates)
+              ..where(
+                (t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX'),
+              ))
+            .go();
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        await expectStillRead(r.db);
+      });
+
+      test('the next sync still applies a later server change', () async {
+        final (:client, :r) = await arrange();
+        client.modSeq = 2;
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        // Marked unread on another device afterwards.
+        client
+          ..flags[42] = []
+          ..modSeq = 3;
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+      });
+    });
+
     test(
         'syncEmails dates mail by INTERNALDATE, not the fetch time, '
         'when it has no Date header', () async {
@@ -11870,6 +11955,35 @@ class _CondstoreImapClient extends _PreviewSyncImapClient {
       ],
       null,
     );
+  }
+}
+
+/// [_CondstoreImapClient] that runs [beforeFlagsAnswer] once, inside the next
+/// `FLAGS` fetch, after the answer's state is fixed and before it is
+/// returned: a local change landing while the server's reply is in flight.
+class _RacingFlagsImapClient extends _CondstoreImapClient {
+  _RacingFlagsImapClient({required super.messages});
+
+  Future<void> Function()? beforeFlagsAnswer;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final result = await super.uidFetchMessages(
+      sequence,
+      fetchContentDefinition,
+      changedSinceModSequence: changedSinceModSequence,
+      responseTimeout: responseTimeout,
+    );
+    final hook = beforeFlagsAnswer;
+    if (hook == null || fetchContentDefinition != 'FLAGS') return result;
+    beforeFlagsAnswer = null;
+    await hook();
+    return result;
   }
 }
 

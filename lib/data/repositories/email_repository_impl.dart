@@ -1475,6 +1475,49 @@ class EmailRepositoryImpl implements EmailRepository {
     return ids.toSet();
   }
 
+  /// Bumped, synchronously, whenever a local edit of an email starts
+  /// ([_setFlag], [_enqueueChange]); [_localEditSeqById] remembers the value
+  /// per email while a server flag read is running. Together with
+  /// [_ServerFlagRead] this closes the window a `pendingChanges` lookup alone
+  /// leaves open: an edit queued *and already flushed* while the server's
+  /// answer was on its way is no longer in `pendingChanges`, yet that answer
+  /// predates it and would write the old read/star state back.
+  int _localEditSeq = 0;
+  final Map<String, int> _localEditSeqById = {};
+  int _activeServerFlagReads = 0;
+
+  void _noteLocalEdit(String emailId) {
+    _localEditSeq++;
+    // With no read running, any later read starts at or above this value.
+    if (_activeServerFlagReads == 0) return;
+    _localEditSeqById[emailId] = _localEditSeq;
+  }
+
+  /// Call right before asking the server for flags, and
+  /// [_endServerFlagRead] when done with its answer (use try/finally).
+  Future<_ServerFlagRead> _startServerFlagRead(String accountId) async {
+    _activeServerFlagReads++;
+    // Taken before the await: an edit landing during the lookup is caught by
+    // the sequence instead.
+    final seq = _localEditSeq;
+    try {
+      return _ServerFlagRead(
+        seq,
+        _localEditSeqById,
+        await _inFlightFlagResourceIds(accountId),
+      );
+    } catch (_) {
+      _endServerFlagRead();
+      rethrow;
+    }
+  }
+
+  void _endServerFlagRead() {
+    _activeServerFlagReads--;
+    // No read can still need the per-email sequence; keep the map small.
+    if (_activeServerFlagReads == 0) _localEditSeqById.clear();
+  }
+
   /// Fetches FLAGS for all messages modified since [sinceModSeq] and updates
   /// the local DB. Only messages whose modseq is > [sinceModSeq] are returned
   /// by the server (RFC 7162 §3.2). Skips rows with an unflushed optimistic
@@ -1487,42 +1530,49 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     int sinceModSeq,
   ) async {
-    final result = await client.uidFetchMessages(
-      imap.MessageSequence.fromAll(),
-      'FLAGS',
-      changedSinceModSequence: sinceModSeq,
-    );
-    final inFlightSet = await _inFlightFlagResourceIds(account.id);
-    // One transaction, and only rows whose flags really changed: a modseq
-    // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
-    // thousands of messages after a long time offline.
-    await _db.transaction(() async {
-      final affectedThreads = <String>{};
-      for (final msg in result.messages) {
-        final uid = msg.uid;
-        if (uid == null) continue;
-        final emailId = '${account.id}:$mailboxPath:$uid';
-        if (inFlightSet.contains(emailId)) continue;
-        final row = await (_db.select(_db.emails)
-              ..where((t) => t.id.equals(emailId)))
-            .getSingleOrNull();
-        if (row == null) continue;
-        final seen = msg.flags?.contains(r'\Seen') ?? false;
-        final flagged = msg.flags?.contains(r'\Flagged') ?? false;
-        if (row.isSeen == seen && row.isFlagged == flagged) continue;
-        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-            .write(
-          EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
-        );
-        affectedThreads.add(row.threadId ?? row.id);
-      }
-      // The message list reads unread/starred state from the thread row, so
-      // a mail read, unread, starred or unstarred on another device kept its
-      // old look here although its own row was already up to date.
-      for (final tid in affectedThreads) {
-        await _updateThread(account.id, mailboxPath, tid);
-      }
-    });
+    final flagRead = await _startServerFlagRead(account.id);
+    try {
+      final result = await client.uidFetchMessages(
+        imap.MessageSequence.fromAll(),
+        'FLAGS',
+        changedSinceModSequence: sinceModSeq,
+      );
+      // One transaction, and only rows whose flags really changed: a modseq
+      // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
+      // thousands of messages after a long time offline.
+      await _db.transaction(() async {
+        // Read inside the transaction: a local edit's queue insert and
+        // optimistic write wait for it, so none can slip in between.
+        final queuedNow = await _inFlightFlagResourceIds(account.id);
+        final affectedThreads = <String>{};
+        for (final msg in result.messages) {
+          final uid = msg.uid;
+          if (uid == null) continue;
+          final emailId = '${account.id}:$mailboxPath:$uid';
+          final row = await (_db.select(_db.emails)
+                ..where((t) => t.id.equals(emailId)))
+              .getSingleOrNull();
+          if (row == null) continue;
+          final seen = msg.flags?.contains(r'\Seen') ?? false;
+          final flagged = msg.flags?.contains(r'\Flagged') ?? false;
+          if (row.isSeen == seen && row.isFlagged == flagged) continue;
+          if (flagRead.protects(emailId, queuedNow)) continue;
+          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+              .write(
+            EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
+          );
+          affectedThreads.add(row.threadId ?? row.id);
+        }
+        // The message list reads unread/starred state from the thread row, so
+        // a mail read, unread, starred or unstarred on another device kept its
+        // old look here although its own row was already up to date.
+        for (final tid in affectedThreads) {
+          await _updateThread(account.id, mailboxPath, tid);
+        }
+      });
+    } finally {
+      _endServerFlagRead();
+    }
   }
 
   static const _imapFlagReconcileInterval = Duration(minutes: 15);
@@ -1550,48 +1600,56 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
-    final fetch = await client.uidFetchMessages(
-      imap.MessageSequence.fromAll(),
-      'FLAGS',
-    );
     final byUid = <int, ({bool seen, bool flagged})>{};
-    for (final msg in fetch.messages) {
-      final uid = msg.uid;
-      if (uid == null) continue;
-      byUid[uid] = (
-        seen: msg.flags?.contains(r'\Seen') ?? false,
-        flagged: msg.flags?.contains(r'\Flagged') ?? false,
-      );
-    }
-
-    final localRows = await (_db.select(_db.emails)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.mailboxPath.equals(mailboxPath),
-          ))
-        .get();
-
-    final inFlightSet = await _inFlightFlagResourceIds(accountId);
-
+    final List<Email> localRows;
     final affectedThreads = <String>{};
     var corrected = 0;
-    for (final row in localRows) {
-      if (inFlightSet.contains(row.id)) continue;
-      final serverFlags = byUid[row.uid];
-      if (serverFlags == null) continue; // handled by _reconcileDeletedImap
-      if (serverFlags.seen == row.isSeen &&
-          serverFlags.flagged == row.isFlagged) {
-        continue;
-      }
-      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-        EmailsCompanion(
-          isSeen: Value(serverFlags.seen),
-          isFlagged: Value(serverFlags.flagged),
-        ),
+    final flagRead = await _startServerFlagRead(accountId);
+    try {
+      final fetch = await client.uidFetchMessages(
+        imap.MessageSequence.fromAll(),
+        'FLAGS',
       );
-      affectedThreads.add(row.threadId ?? row.id);
-      corrected++;
+      for (final msg in fetch.messages) {
+        final uid = msg.uid;
+        if (uid == null) continue;
+        byUid[uid] = (
+          seen: msg.flags?.contains(r'\Seen') ?? false,
+          flagged: msg.flags?.contains(r'\Flagged') ?? false,
+        );
+      }
+
+      localRows = await (_db.select(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(mailboxPath),
+            ))
+          .get();
+
+      final queuedNow = await _inFlightFlagResourceIds(accountId);
+
+      for (final row in localRows) {
+        final serverFlags = byUid[row.uid];
+        if (serverFlags == null) continue; // handled by _reconcileDeletedImap
+        if (serverFlags.seen == row.isSeen &&
+            serverFlags.flagged == row.isFlagged) {
+          continue;
+        }
+        // Checked right before the write: a FETCH of a whole mailbox takes
+        // a while, and a read/star change made meanwhile is newer than it.
+        if (flagRead.protects(row.id, queuedNow)) continue;
+        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+          EmailsCompanion(
+            isSeen: Value(serverFlags.seen),
+            isFlagged: Value(serverFlags.flagged),
+          ),
+        );
+        affectedThreads.add(row.threadId ?? row.id);
+        corrected++;
+      }
+    } finally {
+      _endServerFlagRead();
     }
 
     for (final tid in affectedThreads) {
@@ -3084,25 +3142,33 @@ class EmailRepositoryImpl implements EmailRepository {
         i,
         math.min(i + _jmapGetBatchSize, ids.length),
       );
-      final responses = await jmap.call([
-        [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            'ids': batch,
-            'properties': _emailProperties,
-            ..._emailGetBodyOptions,
-          },
-          '0',
-        ],
-      ]);
-      final result = _responseArgs(responses, 0, 'Email/get');
-      final list = result['list'] as List<dynamic>;
-      bytes += await _upsertJmapEmails(
-        accountId,
-        list,
-        currentMailboxJmapId: mailboxJmapId,
-      );
+      final flagRead = await _startServerFlagRead(accountId);
+      final Map<String, dynamic> result;
+      final List<dynamic> list;
+      try {
+        final responses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': batch,
+              'properties': _emailProperties,
+              ..._emailGetBodyOptions,
+            },
+            '0',
+          ],
+        ]);
+        result = _responseArgs(responses, 0, 'Email/get');
+        list = result['list'] as List<dynamic>;
+        bytes += await _upsertJmapEmails(
+          accountId,
+          list,
+          currentMailboxJmapId: mailboxJmapId,
+          flagRead: flagRead,
+        );
+      } finally {
+        _endServerFlagRead();
+      }
       fetched += list.length;
 
       if (!deleteMissing) continue;
@@ -3615,41 +3681,51 @@ class EmailRepositoryImpl implements EmailRepository {
         offset,
         math.min(offset + _jmapPageSize, toCheck.length),
       );
-      final responses = await jmap.call([
-        [
-          'Email/get',
-          {
-            'accountId': jmap.accountId,
-            'ids': batch,
-            // `size` backfills rows cached before schema v64.
-            'properties': ['id', 'keywords', 'size'],
-          },
-          '0',
-        ],
-      ]);
-      final getResult = _responseArgs(responses, 0, 'Email/get');
-      final list = getResult['list'] as List<dynamic>;
-      for (final e in list) {
-        final m = e as Map<String, dynamic>;
-        final jmapId = m['id'] as String;
-        final row = localByJmapId[jmapId];
-        if (row == null) continue;
-        final size = m['size'];
-        if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
-        final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
-        final serverSeen = keywords.containsKey(r'$seen');
-        final serverFlagged = keywords.containsKey(r'$flagged');
-        if (serverSeen == row.isSeen && serverFlagged == row.isFlagged) {
-          continue;
+      final flagRead = await _startServerFlagRead(accountId);
+      try {
+        final responses = await jmap.call([
+          [
+            'Email/get',
+            {
+              'accountId': jmap.accountId,
+              'ids': batch,
+              // `size` backfills rows cached before schema v64.
+              'properties': ['id', 'keywords', 'size'],
+            },
+            '0',
+          ],
+        ]);
+        final getResult = _responseArgs(responses, 0, 'Email/get');
+        final list = getResult['list'] as List<dynamic>;
+        final queuedNow = await _inFlightFlagResourceIds(accountId);
+        for (final e in list) {
+          final m = e as Map<String, dynamic>;
+          final jmapId = m['id'] as String;
+          final row = localByJmapId[jmapId];
+          if (row == null) continue;
+          final size = m['size'];
+          if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
+          final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
+          final serverSeen = keywords.containsKey(r'$seen');
+          final serverFlagged = keywords.containsKey(r'$flagged');
+          if (serverSeen == row.isSeen && serverFlagged == row.isFlagged) {
+            continue;
+          }
+          // `row` was read before the first batch; a change made since is
+          // newer than this answer.
+          if (flagRead.protects(row.id, queuedNow)) continue;
+          await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
+              .write(
+            EmailsCompanion(
+              isSeen: Value(serverSeen),
+              isFlagged: Value(serverFlagged),
+            ),
+          );
+          affectedThreads.add(row.threadId ?? row.id);
+          corrected++;
         }
-        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-          EmailsCompanion(
-            isSeen: Value(serverSeen),
-            isFlagged: Value(serverFlagged),
-          ),
-        );
-        affectedThreads.add(row.threadId ?? row.id);
-        corrected++;
+      } finally {
+        _endServerFlagRead();
       }
     }
 
@@ -3683,8 +3759,10 @@ class EmailRepositoryImpl implements EmailRepository {
     String accountId,
     List<dynamic> emails, {
     String? currentMailboxJmapId,
+    required _ServerFlagRead flagRead,
   }) async {
     var bytes = 0;
+    final queuedNow = await _inFlightFlagResourceIds(accountId);
     final affectedByMailbox = <String, Set<String>>{};
     // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
     // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
@@ -3793,6 +3871,11 @@ class EmailRepositoryImpl implements EmailRepository {
           ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
           : m['subject'] as String?;
 
+      // An existing row the user just changed keeps its read/star state:
+      // this answer may predate the change (or the change is still queued).
+      final keepLocalFlags =
+          existingRow != null && flagRead.protects(dbId, queuedNow);
+
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
               id: dbId,
@@ -3811,8 +3894,13 @@ class EmailRepositoryImpl implements EmailRepository {
                   ? Value(m['size'] as int)
                   : const Value.absent(),
               preview: Value(m['preview'] as String?),
-              isSeen: Value(keywords.containsKey(r'$seen')),
-              isFlagged: Value(keywords.containsKey(r'$flagged')),
+              // Absent leaves the stored value alone on conflict.
+              isSeen: keepLocalFlags
+                  ? const Value.absent()
+                  : Value(keywords.containsKey(r'$seen')),
+              isFlagged: keepLocalFlags
+                  ? const Value.absent()
+                  : Value(keywords.containsKey(r'$flagged')),
               // Server-defined (RFC 8621); IMAP instead counts
               // Content-Disposition: attachment parts.
               hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
@@ -4396,6 +4484,7 @@ class EmailRepositoryImpl implements EmailRepository {
     bool? flagged,
     String? source,
   }) {
+    _noteLocalEdit(emailId);
     final previous = _flagChains[emailId];
     final run = previous == null
         ? _setFlagNow(emailId, seen: seen, flagged: flagged, source: source)
@@ -4955,6 +5044,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String changeType,
     String payload,
   ) async {
+    _noteLocalEdit(resourceId);
     // Local self-sent "virtual" messages have no server counterpart yet, so an
     // outbound mutation would be rejected (`notFound`) and evicted. The state
     // is instead applied locally and carried over to the real message when it
@@ -9617,6 +9707,28 @@ Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
 final _bulkScopeKey = Object();
 
 /// State shared by every mutation running inside one bulk operation.
+/// A server flag read in progress (see
+/// [EmailRepositoryImpl._startServerFlagRead]). The server's answer reflects
+/// its state at some point after [_seq] was taken, so it must not overwrite a
+/// row that had an edit queued when the read started, has one queued now, or
+/// was edited locally since.
+class _ServerFlagRead {
+  _ServerFlagRead(this._seq, this._editSeqById, this._queuedAtStart);
+
+  final int _seq;
+  final Map<String, int> _editSeqById;
+  final Set<String> _queuedAtStart;
+
+  /// Whether the server's flags for [emailId] may be stale against a local
+  /// edit. [queuedNow] is the `pendingChanges` set read after the answer
+  /// arrived. Checked synchronously right before each write, so an edit
+  /// started up to that moment is respected.
+  bool protects(String emailId, Set<String> queuedNow) =>
+      _queuedAtStart.contains(emailId) ||
+      queuedNow.contains(emailId) ||
+      (_editSeqById[emailId] ?? 0) > _seq;
+}
+
 class _BulkScope {
   /// App Log writes deferred until the bulk transaction has committed.
   final logs = <Future<Object?>? Function()>[];
