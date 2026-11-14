@@ -76,6 +76,9 @@ const _jmapPair = Account(
 http.Client _mockJmapEmails({
   required List<Map<String, dynamic>> apiResponses,
   List<Map<String, dynamic>>? requests,
+  // Runs before API call [callIndex] is answered, e.g. a local edit landing
+  // while that response is in flight.
+  Future<void> Function(int callIndex)? beforeResponse,
 }) {
   var callIndex = 0;
   return MockClient((req) async {
@@ -99,6 +102,7 @@ http.Client _mockJmapEmails({
     }
     requests?.add(jsonDecode(req.body) as Map<String, dynamic>);
     final resp = apiResponses[callIndex % apiResponses.length];
+    await beforeResponse?.call(callIndex);
     callIndex++;
     return http.Response(jsonEncode(resp), 200);
   });
@@ -6675,6 +6679,79 @@ void main() {
       expect(emailState.state, 'est2');
     });
 
+    group('a read change made while Email/get is in flight', () {
+      Future<void> run({required bool flushed}) async {
+        late ({
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+          AppDatabase db
+        }) r;
+        r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                updated: ['e1'],
+              ),
+              // Built before the user's change: still unread, new subject.
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'Renamed'),
+                ],
+              ),
+            ],
+            beforeResponse: (i) async {
+              if (i != 1) return;
+              await r.emails.setFlag('jmap-1:e1', seen: true);
+              if (flushed) await r.db.delete(r.db.pendingChanges).go();
+            },
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('First'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        for (final (type, state) in [
+          ('Email', 'est1'),
+          ('JMAP:Reconcile:mbx1', DateTime.now().toIso8601String()),
+        ]) {
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: type,
+                  state: state,
+                  syncedAt: DateTime.now(),
+                ),
+              );
+        }
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final email = (await r.emails.getEmail('jmap-1:e1'))!;
+        expect(email.isSeen, isTrue);
+        // The rest of the server's answer still applies.
+        expect(email.subject, 'Renamed');
+      }
+
+      test(
+        'keeps it while the change is still queued',
+        () => run(flushed: false),
+      );
+      test(
+        'keeps it when the change was already pushed',
+        () => run(flushed: true),
+      );
+    });
+
     test('incremental sync with no changes updates state only', () async {
       final r = _makeRepos(
         httpClient: _mockJmapEmails(
@@ -10252,6 +10329,91 @@ void main() {
       expect(thread.isFlagged, isTrue);
     });
 
+    group('a read/star change made while sync reads the server flags', () {
+      // The user marks the mail read while the server's FLAGS answer is on
+      // its way; the change is queued and already pushed (no longer in
+      // pendingChanges) by the time the answer lands. That answer predates
+      // the change and must not write "unread" back.
+      Future<
+          ({
+            _RacingFlagsImapClient client,
+            ({
+              AccountRepositoryImpl accounts,
+              EmailRepositoryImpl emails,
+              AppDatabase db
+            }) r
+          })> arrange() async {
+        final client = _RacingFlagsImapClient(
+          messages: {
+            42: _PreviewTestMessage(
+              subject: 'Lunch tomorrow?',
+              from: 'alice@example.com',
+              text: 'Noon?',
+              messageId: '<m42@example.com>',
+            ),
+          },
+        );
+        final r = _makeRepos(
+          imapConnect: (Account _, String __, String ___) async => client,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.emails.syncEmails('acc-1', 'INBOX');
+        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+        client.beforeFlagsAnswer = () async {
+          await r.emails.setFlag('acc-1:INBOX:42', seen: true);
+          // Flushed: the STORE reached the server after it built the answer.
+          await r.db.delete(r.db.pendingChanges).go();
+        };
+        return (client: client, r: r);
+      }
+
+      Future<void> expectStillRead(AppDatabase db) async {
+        final email = await db.select(db.emails).getSingle();
+        expect(email.isSeen, isTrue);
+        final thread = await db.select(db.threads).getSingle();
+        expect(thread.hasUnread, isFalse);
+      }
+
+      test('CONDSTORE refresh keeps it', () async {
+        final (:client, :r) = await arrange();
+        // Something else changed on the server; 42 is still unseen there.
+        client.modSeq = 2;
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        await expectStillRead(r.db);
+      });
+
+      test('periodic flag reconcile keeps it', () async {
+        final (:client, :r) = await arrange();
+        await (r.db.delete(r.db.syncStates)
+              ..where(
+                (t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX'),
+              ))
+            .go();
+
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        await expectStillRead(r.db);
+      });
+
+      test('the next sync still applies a later server change', () async {
+        final (:client, :r) = await arrange();
+        client.modSeq = 2;
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        // Marked unread on another device afterwards.
+        client
+          ..flags[42] = []
+          ..modSeq = 3;
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
+        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+      });
+    });
+
     test(
         'syncEmails dates mail by INTERNALDATE, not the fetch time, '
         'when it has no Date header', () async {
@@ -11870,6 +12032,35 @@ class _CondstoreImapClient extends _PreviewSyncImapClient {
       ],
       null,
     );
+  }
+}
+
+/// [_CondstoreImapClient] that runs [beforeFlagsAnswer] once, inside the next
+/// `FLAGS` fetch, after the answer's state is fixed and before it is
+/// returned: a local change landing while the server's reply is in flight.
+class _RacingFlagsImapClient extends _CondstoreImapClient {
+  _RacingFlagsImapClient({required super.messages});
+
+  Future<void> Function()? beforeFlagsAnswer;
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async {
+    final result = await super.uidFetchMessages(
+      sequence,
+      fetchContentDefinition,
+      changedSinceModSequence: changedSinceModSequence,
+      responseTimeout: responseTimeout,
+    );
+    final hook = beforeFlagsAnswer;
+    if (hook == null || fetchContentDefinition != 'FLAGS') return result;
+    beforeFlagsAnswer = null;
+    await hook();
+    return result;
   }
 }
 
