@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
+import 'package:meta/meta.dart';
 
 import 'package:sharedinbox/core/models/account.dart' as account_model;
 import 'package:sharedinbox/core/models/note.dart';
@@ -31,7 +32,9 @@ class NoteRepositoryImpl implements NoteRepository {
     ImapConnectFn imapConnect = connectImap,
     http.Client? httpClient,
     AppLogger? appLogger,
-  })  : _imapConnect = imapConnect,
+    bool pushPending = true,
+  })  : _pushEnabled = pushPending,
+        _imapConnect = imapConnect,
         _httpClient = httpClient ?? http.Client(),
         _appLogger = appLogger;
 
@@ -40,6 +43,10 @@ class NoteRepositoryImpl implements NoteRepository {
   final ImapConnectFn _imapConnect;
   final http.Client _httpClient;
   final AppLogger? _appLogger;
+
+  /// False in the background (WorkManager) isolate: [_exclusive] serializes
+  /// pushes within one isolate only, so only the app's isolate pushes.
+  final bool _pushEnabled;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
@@ -74,7 +81,10 @@ class NoteRepositoryImpl implements NoteRepository {
     if (ids.isEmpty) return Stream.value(const <EmailNote>[]);
     return (_db.select(_db.emailNotes)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.messageId.isIn(ids),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.messageId.isIn(ids) &
+                t.pendingDelete.equals(false),
           )
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .watch()
@@ -84,17 +94,84 @@ class NoteRepositoryImpl implements NoteRepository {
   // ── Sync (server → local cache) ──────────────────────────────────────────
 
   @override
-  Future<void> syncAllNotes(String accountId) async {
-    final account = await _accounts.getAccount(accountId);
-    if (account == null) return;
-    final password = await _accounts.getPassword(accountId);
+  Future<void> syncAllNotes(String accountId) =>
+      _exclusive(accountId, () async {
+        final account = await _accounts.getAccount(accountId);
+        if (account == null) return;
+        final password = await _accounts.getPassword(accountId);
 
-    switch (account.type) {
-      case account_model.AccountType.imap:
-        await _syncAllNotesImap(account, password);
-      case account_model.AccountType.jmap:
-        await _syncAllNotesJmap(account, password);
+        // Push local adds/deletes first, so the pull below sees them on the
+        // server; it also never prunes or revives a row still pending. A
+        // failed push must not keep the cache from refreshing.
+        try {
+          await _pushPending(account, password);
+        } catch (e) {
+          unawaited(
+            _appLogger?.info(
+              'note.push.deferred',
+              'Pushing local note changes failed; pulling anyway',
+              accountId: accountId,
+              data: {'error': e.toString()},
+            ),
+          );
+        }
+        switch (account.type) {
+          case account_model.AccountType.imap:
+            await _syncAllNotesImap(account, password);
+          case account_model.AccountType.jmap:
+            await _syncAllNotesJmap(account, password);
+        }
+      });
+
+  /// Tail of the running push/sync per account. Pushes and syncs of one
+  /// account run one after another, so a push never races a pull's prune and
+  /// two pushes never upload the same note twice (within this isolate).
+  final Map<String, Future<void>> _accountTails = {};
+
+  Future<void> _exclusive(String accountId, Future<void> Function() body) {
+    final previous = _accountTails[accountId];
+    final run = previous == null ? body() : previous.then((_) => body());
+    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    _accountTails[accountId] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        _accountTails.removeWhere(
+          (k, v) => k == accountId && identical(v, tail),
+        );
+      }),
+    );
+    return run;
+  }
+
+  /// Completes once every push/sync started so far has finished.
+  @visibleForTesting
+  Future<void> waitForIdle() async {
+    while (_accountTails.isNotEmpty) {
+      await Future.wait(_accountTails.values.toList());
     }
+  }
+
+  /// Tries to push right after a local add/delete. Offline (or any failure)
+  /// is fine: the row stays pending and the next sync cycle pushes it.
+  void _kickPush(String accountId) {
+    if (!_pushEnabled) return;
+    unawaited(
+      _exclusive(accountId, () async {
+        final account = await _accounts.getAccount(accountId);
+        if (account == null) return;
+        final password = await _accounts.getPassword(accountId);
+        await _pushPending(account, password);
+      }).catchError((Object e) {
+        unawaited(
+          _appLogger?.info(
+            'note.push.deferred',
+            'Note change saved locally; it is pushed on the next sync',
+            accountId: accountId,
+            data: {'error': e.toString()},
+          ),
+        );
+      }),
+    );
   }
 
   Future<void> _syncAllNotesImap(
@@ -237,6 +314,12 @@ class NoteRepositoryImpl implements NoteRepository {
       accountId,
       'note.sync.folder_missing_wipe',
     );
+    // A note deleted locally has no server copy left to remove.
+    await (_db.delete(_db.emailNotes)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.pendingDelete.equals(true),
+          ))
+        .go();
     final checkpointCleared = await _clearNotesCheckpoint(accountId) > 0;
     if (wiped == 0 && !checkpointCleared) return;
     unawaited(
@@ -535,25 +618,165 @@ class NoteRepositoryImpl implements NoteRepository {
       );
       return;
     }
-    final password = await _accounts.getPassword(accountId);
     final noteId = _generateId();
+    // Offline-first: the note exists as soon as it is stored here; the push
+    // to the server follows (now if online, else on a later sync).
+    await _db.into(_db.emailNotes).insert(
+          EmailNotesCompanion.insert(
+            id: noteId,
+            accountId: accountId,
+            messageId: messageId,
+            noteText: text,
+            serverId: '',
+            createdAt: DateTime.now(),
+            pendingUpload: const Value(true),
+          ),
+        );
     final emailId = await _emailIdForMessage(accountId, messageId);
+    unawaited(
+      _appLogger?.info(
+        'note.added',
+        'Note added',
+        accountId: accountId,
+        emailId: emailId,
+        data: {
+          'noteId': noteId,
+          'messageId': messageId,
+          'transport': account.type.name,
+        },
+      ),
+    );
+    _kickPush(accountId);
+  }
 
+  @override
+  Future<void> deleteNote(String noteId) async {
+    final noteRow = await (_db.select(_db.emailNotes)
+          ..where((t) => t.id.equals(noteId)))
+        .getSingleOrNull();
+    if (noteRow == null) return;
+
+    final emailId =
+        await _emailIdForMessage(noteRow.accountId, noteRow.messageId);
+    final data = {
+      'noteId': noteRow.id,
+      'messageId': noteRow.messageId,
+      'serverId': noteRow.serverId,
+    };
+
+    final account = await _accounts.getAccount(noteRow.accountId);
+    if (account == null) {
+      await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteId)))
+          .go();
+      unawaited(
+        _appLogger?.warn(
+          'note.deleted',
+          'Note deleted locally only (account missing)',
+          accountId: noteRow.accountId,
+          emailId: emailId,
+          data: data,
+        ),
+      );
+      return;
+    }
+
+    // Offline-first: hidden at once; the row stays as a tombstone until the
+    // server copy is gone, so a sync in between cannot bring it back.
+    await (_db.update(_db.emailNotes)..where((t) => t.id.equals(noteId)))
+        .write(const EmailNotesCompanion(pendingDelete: Value(true)));
+    unawaited(
+      _appLogger?.info(
+        'note.deleted',
+        'Note deleted',
+        accountId: account.id,
+        emailId: emailId,
+        data: {...data, 'transport': account.type.name},
+      ),
+    );
+    _kickPush(account.id);
+  }
+
+  // ── Push (local → server) ────────────────────────────────────────────────
+
+  /// Uploads notes added locally and removes the server copies of notes
+  /// deleted locally. Connects only when something is pending. A failure on
+  /// one note is logged and leaves it pending; connection failures throw.
+  /// Callers hold [_exclusive] for the account.
+  Future<void> _pushPending(
+    account_model.Account account,
+    String password,
+  ) async {
+    if (!_pushEnabled) return;
+    final pending = await (_db.select(_db.emailNotes)
+          ..where(
+            (t) =>
+                t.accountId.equals(account.id) &
+                (t.pendingUpload.equals(true) | t.pendingDelete.equals(true)),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
+        .get();
+    if (pending.isEmpty) return;
+    // A note deleted before its upload is not uploaded; the delete step
+    // still looks for a server copy, in case an earlier upload got through
+    // without its answer reaching us.
+    final uploads = [
+      for (final r in pending)
+        if (r.pendingUpload && !r.pendingDelete) r,
+    ];
+    final deletes = [
+      for (final r in pending)
+        if (r.pendingDelete) r,
+    ];
     switch (account.type) {
       case account_model.AccountType.imap:
-        await _addNoteImap(account, password, messageId, noteId, text, emailId);
+        await _pushPendingImap(account, password, uploads, deletes);
       case account_model.AccountType.jmap:
-        await _addNoteJmap(account, password, messageId, noteId, text, emailId);
+        await _pushPendingJmap(account, password, uploads, deletes);
     }
   }
 
-  Future<void> _addNoteImap(
+  /// Marks [row] as on the server under [serverId]. Leaves a tombstone set
+  /// meanwhile in place: the delete step removes the copy just made.
+  Future<void> _markUploaded(EmailNoteRow row, String serverId) async {
+    await (_db.update(_db.emailNotes)..where((t) => t.id.equals(row.id))).write(
+      EmailNotesCompanion(
+        pendingUpload: const Value(false),
+        serverId: Value(serverId),
+      ),
+    );
+    final emailId = await _emailIdForMessage(row.accountId, row.messageId);
+    unawaited(
+      _appLogger?.info(
+        'note.pushed',
+        'Note uploaded to the server',
+        accountId: row.accountId,
+        emailId: emailId,
+        data: {'noteId': row.id, 'serverId': serverId},
+      ),
+    );
+  }
+
+  Future<void> _logPushFailed(EmailNoteRow row, String op, Object e) async {
+    final emailId = await _emailIdForMessage(row.accountId, row.messageId);
+    unawaited(
+      _appLogger?.warn(
+        'note.push.failed',
+        'Could not $op the note on the server; retrying on the next sync',
+        accountId: row.accountId,
+        emailId: emailId,
+        data: {'noteId': row.id, 'error': e.toString()},
+      ),
+    );
+  }
+
+  Future<void> _dropTombstone(EmailNoteRow row) =>
+      (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id))).go();
+
+  Future<void> _pushPendingImap(
     account_model.Account account,
     String password,
-    String messageId,
-    String noteId,
-    String text,
-    String? emailId,
+    List<EmailNoteRow> uploads,
+    List<EmailNoteRow> deletes,
   ) async {
     final client = await _imapConnect(
       account,
@@ -561,98 +784,225 @@ class NoteRepositoryImpl implements NoteRepository {
       password,
     );
     try {
-      try {
-        await client.createMailbox(_notesFolder);
-      } catch (_) {
-        // Already exists.
+      if (uploads.isNotEmpty) {
+        try {
+          await client.createMailbox(_notesFolder);
+        } catch (_) {
+          // Already exists.
+        }
       }
-
-      final builder = imap.MessageBuilder()
-        ..subject = 'Note'
-        ..text = text;
-      builder.addHeader(_headerNoteFor, messageId);
-      builder.addHeader(_headerNoteId, noteId);
-      final mime = builder.buildMimeMessage();
-
-      final appendResult = await client.appendMessage(
-        mime,
-        targetMailboxPath: _notesFolder,
-      );
-      final uidList =
-          appendResult.responseCodeAppendUid?.targetSequence.toList();
-      final serverId = (uidList != null && uidList.isNotEmpty)
-          ? uidList.first.toString()
-          : '';
-
-      await _db.into(_db.emailNotes).insertOnConflictUpdate(
-            EmailNotesCompanion.insert(
-              id: noteId,
-              accountId: account.id,
-              messageId: messageId,
-              noteText: text,
-              serverId: serverId,
-              createdAt: DateTime.now(),
-            ),
-          );
-
-      unawaited(
-        _appLogger?.info(
-          'note.added',
-          'Note added (imap)',
-          accountId: account.id,
-          emailId: emailId,
-          data: {
-            'noteId': noteId,
-            'messageId': messageId,
-            'serverId': serverId,
-            'transport': 'imap',
-          },
-        ),
-      );
-      if (serverId.isEmpty) {
-        // The server didn't return an APPENDUID (no UIDPLUS), so we cached the
-        // note without its server UID. A later full sync repairs it by matching
-        // the note-id header; until then the prune-by-serverId reconciliation
-        // must not treat this row as an orphan (see
-        // [_pruneNotesForAccountByServerId]).
-        unawaited(
-          _appLogger?.warn(
-            'note.add.no_server_id',
-            'Note appended without an APPENDUID (server lacks UIDPLUS); '
-                'serverId left empty until the next full sync',
-            accountId: account.id,
-            emailId: emailId,
-            data: {'noteId': noteId, 'messageId': messageId},
-          ),
-        );
+      try {
+        await client.selectMailboxByPath(_notesFolder);
+      } catch (e) {
+        if (!isImapMailboxNotFound(e)) rethrow;
+        // No Notes folder (and nothing to upload): nothing left to delete.
+        for (final row in deletes) {
+          await _dropTombstone(row);
+        }
+        return;
+      }
+      for (final row in uploads) {
+        try {
+          await _uploadNoteImap(client, row);
+        } catch (e) {
+          // Every further command on this client would fail the same way.
+          if (isImapConnectionLost(e)) rethrow;
+          await _logPushFailed(row, 'upload', e);
+        }
+      }
+      for (final row in deletes) {
+        try {
+          final uids = await _imapUidsOfNote(client, row);
+          if (uids.isNotEmpty) {
+            final seq = imap.MessageSequence.fromIds(uids, isUid: true);
+            await client.uidMarkDeleted(seq);
+            await _expunge(client, seq);
+          }
+          await _dropTombstone(row);
+        } catch (e) {
+          if (isImapConnectionLost(e)) rethrow;
+          await _logPushFailed(row, 'delete', e);
+        }
       }
     } finally {
       await closeImapClient(client);
     }
   }
 
-  Future<void> _addNoteJmap(
+  /// `UID EXPUNGE` needs UIDPLUS. Without it, a plain EXPUNGE: the Notes
+  /// folder holds only notes, and only ours are marked \Deleted.
+  Future<void> _expunge(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+  ) async {
+    try {
+      await client.uidExpunge(seq);
+    } catch (e) {
+      if (isImapConnectionLost(e)) rethrow;
+      await client.expunge();
+    }
+  }
+
+  Future<void> _uploadNoteImap(imap.ImapClient client, EmailNoteRow row) async {
+    // Idempotent: an earlier upload may have landed without its answer
+    // reaching us (connection dropped after APPEND).
+    final existing = await _imapUidsOfNote(client, row);
+    if (existing.isNotEmpty) {
+      await _markUploaded(row, existing.first.toString());
+      return;
+    }
+    final builder = imap.MessageBuilder()
+      ..subject = 'Note'
+      ..text = row.noteText;
+    builder.addHeader(_headerNoteFor, row.messageId);
+    builder.addHeader(_headerNoteId, row.id);
+    final appendResult = await client.appendMessage(
+      builder.buildMimeMessage(),
+      targetMailboxPath: _notesFolder,
+    );
+    final appended =
+        appendResult.responseCodeAppendUid?.targetSequence.toList() ??
+            const <int>[];
+    // Without UIDPLUS there is no APPENDUID; find the copy by its header.
+    final uids =
+        appended.isNotEmpty ? appended : await _imapUidsOfNote(client, row);
+    await _markUploaded(row, uids.isEmpty ? '' : uids.first.toString());
+  }
+
+  /// UIDs in the selected Notes folder holding note [row]: found by its
+  /// note-id header, plus its cached UID when that message really carries
+  /// the note id (a UID from before a UIDVALIDITY change may be another
+  /// note's).
+  Future<List<int>> _imapUidsOfNote(
+    imap.ImapClient client,
+    EmailNoteRow row,
+  ) async {
+    final uids = <int>{};
+    try {
+      final found = (await client.uidSearchMessages(
+            searchCriteria: 'HEADER $_headerNoteId "${row.id}"',
+          ))
+              .matchingSequence
+              ?.toList() ??
+          const <int>[];
+      uids.addAll(found);
+    } catch (e) {
+      // A server refusing HEADER search: fall back to the cached UID.
+      if (isImapConnectionLost(e)) rethrow;
+    }
+    final cached = int.tryParse(row.serverId);
+    if (cached == null || uids.contains(cached)) return uids.toList();
+    final fetch = await client.uidFetchMessages(
+      imap.MessageSequence.fromId(cached, isUid: true),
+      '(UID BODY.PEEK[])',
+    );
+    for (final msg in fetch.messages) {
+      if (msg.uid != cached) continue;
+      if (msg.getHeaderValue(_headerNoteId)?.trim() != row.id) continue;
+      uids.add(cached);
+    }
+    return uids.toList();
+  }
+
+  Future<void> _pushPendingJmap(
     account_model.Account account,
     String password,
-    String messageId,
-    String noteId,
-    String text,
-    String? emailId,
+    List<EmailNoteRow> uploads,
+    List<EmailNoteRow> deletes,
   ) async {
     final jmapUrl = account.jmapUrl;
-    if (jmapUrl == null || jmapUrl.isEmpty) {
-      throw Exception('JMAP account ${account.id} has no jmapUrl');
-    }
-
+    // Like the pull: nothing to talk to. The rows stay pending.
+    if (jmapUrl == null || jmapUrl.isEmpty) return;
     final jmap = await JmapClient.connect(
       httpClient: _httpClient,
       jmapUrl: Uri.parse(jmapUrl),
       username: _effectiveUsername(account),
       password: password,
     );
+    if (uploads.isNotEmpty) {
+      final target = await _findOrCreateNotesMailboxJmap(jmap);
+      for (final row in uploads) {
+        try {
+          await _uploadNoteJmap(jmap, target, row);
+        } catch (e) {
+          await _logPushFailed(row, 'upload', e);
+        }
+      }
+    }
+    if (deletes.isEmpty) return;
+    final mailboxId = await _findNotesMailboxJmap(jmap);
+    for (final row in deletes) {
+      try {
+        await _deleteNoteJmap(jmap, mailboxId, row);
+      } catch (e) {
+        await _logPushFailed(row, 'delete', e);
+      }
+    }
+  }
 
-    final mailboxId = await _findOrCreateNotesMailboxJmap(jmap);
+  /// JMAP ids of note [row]: its cached id (JMAP ids are never reused) plus
+  /// any copy in the Notes mailbox carrying its note-id header.
+  Future<Set<String>> _jmapIdsOfNote(
+    JmapClient jmap,
+    String? mailboxId,
+    EmailNoteRow row,
+  ) async {
+    final ids = <String>{if (row.serverId.isNotEmpty) row.serverId};
+    if (mailboxId == null) return ids;
+    // The header filter is a loose "contains" match (RFC 8621 §4.4.1), so
+    // each hit is checked for the exact note id before it counts. The query
+    // and the check go in one request.
+    final List<dynamic> resp;
+    try {
+      resp = await jmap.call([
+        [
+          'Email/query',
+          {
+            'accountId': jmap.accountId,
+            'filter': {
+              'inMailbox': mailboxId,
+              'header': [_headerNoteId, row.id],
+            },
+          },
+          'q',
+        ],
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            '#ids': {'resultOf': 'q', 'name': 'Email/query', 'path': '/ids'},
+            'properties': ['id', 'header:$_headerNoteId:asText'],
+          },
+          'g',
+        ],
+      ]);
+    } on JmapException {
+      // A server without header filtering: the cached id only.
+      return ids;
+    }
+    final triple = resp.length > 1 ? resp[1] as List<dynamic> : const [];
+    if (triple.isEmpty || triple[0] != 'Email/get') return ids;
+    final list = (triple[1] as Map<String, dynamic>)['list'] as List? ?? [];
+    for (final e in list) {
+      final m = e as Map<String, dynamic>;
+      final noteId = (m['header:$_headerNoteId:asText'] as String?)?.trim();
+      if (noteId != row.id) continue;
+      ids.add(m['id'] as String);
+    }
+    return ids;
+  }
 
+  Future<void> _uploadNoteJmap(
+    JmapClient jmap,
+    String mailboxId,
+    EmailNoteRow row,
+  ) async {
+    // Idempotent: an earlier Email/set may have succeeded unseen.
+    final existing = await _jmapIdsOfNote(jmap, mailboxId, row);
+    if (existing.isNotEmpty) {
+      await _markUploaded(row, existing.first);
+      return;
+    }
     const bodyPartId = '1';
     final setResp = await jmap.call([
       [
@@ -665,12 +1015,12 @@ class NoteRepositoryImpl implements NoteRepository {
               'subject': 'Note',
               'keywords': {r'$seen': true},
               'headers': [
-                {'name': _headerNoteFor, 'value': ' $messageId'},
-                {'name': _headerNoteId, 'value': ' $noteId'},
+                {'name': _headerNoteFor, 'value': ' ${row.messageId}'},
+                {'name': _headerNoteId, 'value': ' ${row.id}'},
               ],
               'bodyValues': {
                 bodyPartId: {
-                  'value': text,
+                  'value': row.noteText,
                   'isEncodingProblem': false,
                   'isTruncated': false,
                 },
@@ -684,165 +1034,46 @@ class NoteRepositoryImpl implements NoteRepository {
         '0',
       ],
     ]);
-
     final result = _responseArgs(setResp, 0, 'Email/set');
     final created = result['created'] as Map<String, dynamic>?;
     final newEmail = created?['new-note'] as Map<String, dynamic>?;
-    final jmapEmailId = newEmail?['id'] as String? ?? '';
-
-    await _db.into(_db.emailNotes).insertOnConflictUpdate(
-          EmailNotesCompanion.insert(
-            id: noteId,
-            accountId: account.id,
-            messageId: messageId,
-            noteText: text,
-            serverId: jmapEmailId,
-            createdAt: DateTime.now(),
-          ),
-        );
-
-    unawaited(
-      _appLogger?.info(
-        'note.added',
-        'Note added (jmap)',
-        accountId: account.id,
-        emailId: emailId,
-        data: {
-          'noteId': noteId,
-          'messageId': messageId,
-          'serverId': jmapEmailId,
-          'transport': 'jmap',
-        },
-      ),
-    );
-    if (jmapEmailId.isEmpty) {
-      unawaited(
-        _appLogger?.warn(
-          'note.add.no_server_id',
-          'JMAP Email/set returned no created id; serverId left empty',
-          accountId: account.id,
-          emailId: emailId,
-          data: {'noteId': noteId, 'messageId': messageId},
-        ),
+    final jmapEmailId = newEmail?['id'] as String?;
+    if (jmapEmailId == null || jmapEmailId.isEmpty) {
+      final notCreated = result['notCreated'] as Map<String, dynamic>?;
+      throw JmapException(
+        'Email/set did not create the note: ${notCreated?['new-note']}',
       );
     }
-  }
-
-  // ── Delete ────────────────────────────────────────────────────────────────
-
-  @override
-  Future<void> deleteNote(String noteId) async {
-    final noteRow = await (_db.select(_db.emailNotes)
-          ..where((t) => t.id.equals(noteId)))
-        .getSingleOrNull();
-    if (noteRow == null) return;
-
-    final emailId =
-        await _emailIdForMessage(noteRow.accountId, noteRow.messageId);
-
-    final account = await _accounts.getAccount(noteRow.accountId);
-    if (account == null) {
-      await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteId)))
-          .go();
-      unawaited(
-        _appLogger?.warn(
-          'note.deleted',
-          'Note deleted locally only (account missing)',
-          accountId: noteRow.accountId,
-          emailId: emailId,
-          data: {
-            'noteId': noteRow.id,
-            'messageId': noteRow.messageId,
-            'serverId': noteRow.serverId,
-          },
-        ),
-      );
-      return;
-    }
-    final password = await _accounts.getPassword(account.id);
-
-    switch (account.type) {
-      case account_model.AccountType.imap:
-        await _deleteNoteImap(account, password, noteRow);
-      case account_model.AccountType.jmap:
-        await _deleteNoteJmap(account, password, noteRow);
-    }
-
-    unawaited(
-      _appLogger?.info(
-        'note.deleted',
-        'Note deleted (${account.type.name})',
-        accountId: account.id,
-        emailId: emailId,
-        data: {
-          'noteId': noteRow.id,
-          'messageId': noteRow.messageId,
-          'serverId': noteRow.serverId,
-          'transport': account.type.name,
-        },
-      ),
-    );
-  }
-
-  Future<void> _deleteNoteImap(
-    account_model.Account account,
-    String password,
-    EmailNoteRow noteRow,
-  ) async {
-    final client = await _imapConnect(
-      account,
-      _effectiveUsername(account),
-      password,
-    );
-    try {
-      try {
-        await client.selectMailboxByPath(_notesFolder);
-        final uid = int.tryParse(noteRow.serverId);
-        if (uid != null) {
-          final seq = imap.MessageSequence.fromId(uid, isUid: true);
-          await client.uidMarkDeleted(seq);
-          await client.uidExpunge(seq);
-        }
-      } catch (_) {
-        // Notes folder gone or message already deleted — clean up locally.
-      }
-    } finally {
-      await closeImapClient(client);
-    }
-    await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteRow.id)))
-        .go();
+    await _markUploaded(row, jmapEmailId);
   }
 
   Future<void> _deleteNoteJmap(
-    account_model.Account account,
-    String password,
-    EmailNoteRow noteRow,
+    JmapClient jmap,
+    String? mailboxId,
+    EmailNoteRow row,
   ) async {
-    final jmapUrl = account.jmapUrl;
-    if (jmapUrl == null || jmapUrl.isEmpty) return;
-
-    final jmap = await JmapClient.connect(
-      httpClient: _httpClient,
-      jmapUrl: Uri.parse(jmapUrl),
-      username: _effectiveUsername(account),
-      password: password,
-    );
-
-    if (noteRow.serverId.isNotEmpty) {
-      await jmap.call([
+    final ids = await _jmapIdsOfNote(jmap, mailboxId, row);
+    if (ids.isNotEmpty) {
+      final resp = await jmap.call([
         [
           'Email/set',
           {
             'accountId': jmap.accountId,
-            'destroy': [noteRow.serverId],
+            'destroy': ids.toList(),
           },
           '0',
         ],
       ]);
+      final result = _responseArgs(resp, 0, 'Email/set');
+      final notDestroyed =
+          (result['notDestroyed'] as Map<String, dynamic>?) ?? const {};
+      for (final entry in notDestroyed.entries) {
+        final type = (entry.value as Map<String, dynamic>?)?['type'];
+        if (type == 'notFound') continue; // already gone
+        throw JmapException('Email/set could not destroy ${entry.key}: $type');
+      }
     }
-
-    await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(noteRow.id)))
-        .go();
+    await _dropTombstone(row);
   }
 
   // ── Upsert helpers ────────────────────────────────────────────────────────
@@ -869,6 +1100,9 @@ class NoteRepositoryImpl implements NoteRepository {
             noteText: msg.decodeTextPlainPart() ?? '',
             serverId: uid.toString(),
             createdAt: msg.decodeDate() ?? DateTime.now(),
+            // On the server, so no longer waiting for upload. A local
+            // tombstone (pendingDelete) is left as is: absent here.
+            pendingUpload: const Value(false),
           ),
         );
     return noteId;
@@ -910,6 +1144,9 @@ class NoteRepositoryImpl implements NoteRepository {
             noteText: noteText,
             serverId: jmapEmailId,
             createdAt: createdAt,
+            // On the server, so no longer waiting for upload. A local
+            // tombstone (pendingDelete) is left as is: absent here.
+            pendingUpload: const Value(false),
           ),
         );
     return noteId;
@@ -938,16 +1175,22 @@ class NoteRepositoryImpl implements NoteRepository {
     );
   }
 
+  /// Drops the cached server notes of [accountId]. Keeps notes still
+  /// waiting for their upload or server delete: those are local changes.
   Future<int> _clearNotesForAccount(String accountId, String event) async {
     final rows = await (_db.select(_db.emailNotes)
-          ..where((t) => t.accountId.equals(accountId)))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.pendingUpload.equals(false) &
+                t.pendingDelete.equals(false),
+          ))
         .get();
     for (final row in rows) {
       await _logNoteRemoved(event, row);
+      await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
+          .go();
     }
-    await (_db.delete(_db.emailNotes)
-          ..where((t) => t.accountId.equals(accountId)))
-        .go();
     return rows.length;
   }
 
@@ -960,6 +1203,8 @@ class NoteRepositoryImpl implements NoteRepository {
         .get();
     var removed = 0;
     for (final row in rows) {
+      // Not on the server yet: absent from its listing by definition.
+      if (row.pendingUpload) continue;
       if (!keptNoteIds.contains(row.id)) {
         await _logNoteRemoved('note.sync.pruned_not_in', row);
         await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
@@ -980,11 +1225,12 @@ class NoteRepositoryImpl implements NoteRepository {
     var removed = 0;
     for (final row in rows) {
       // A locally-added note on a server without UIDPLUS has an empty serverId
-      // until a full sync repairs it (see [_addNoteImap]). It can never be in
+      // until a full sync repairs it (see [_uploadNoteImap]). It can never be in
       // the server UID set, so pruning it here would silently delete the note
       // the user just added. Skip it — the full scan reconciles it by note-id
       // header instead.
       if (row.serverId.isEmpty) continue;
+      if (row.pendingUpload) continue;
       if (!keptServerIds.contains(row.serverId)) {
         await _logNoteRemoved('note.sync.pruned_by_server_id', row);
         await (_db.delete(_db.emailNotes)..where((t) => t.id.equals(row.id)))
@@ -1092,7 +1338,14 @@ class NoteRepositoryImpl implements NoteRepository {
     final result = _responseArgs(resp, 0, 'Mailbox/set');
     final created = result['created'] as Map<String, dynamic>?;
     final newMailbox = created?['new-notes'] as Map<String, dynamic>?;
-    return newMailbox?['id'] as String? ?? _notesFolder;
+    final id = newMailbox?['id'] as String?;
+    if (id == null) {
+      throw JmapException(
+        'Mailbox/set did not create the Notes mailbox: '
+        '${result['notCreated']}',
+      );
+    }
+    return id;
   }
 
   Map<String, dynamic> _responseArgs(
@@ -1122,6 +1375,7 @@ class NoteRepositoryImpl implements NoteRepository {
         noteText: row.noteText,
         serverId: row.serverId,
         createdAt: row.createdAt,
+        pendingUpload: row.pendingUpload,
       );
 
   // Generates a random UUID v4.

@@ -1359,9 +1359,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     List<Email> threadEmails,
   ) {
     final created = DateFormat('MMM d, HH:mm').format(note.createdAt);
-    final subtitle = note.messageId == header.messageId
+    final base = note.messageId == header.messageId
         ? created
         : '$created · ${_relatedMailLabel(note.messageId, threadEmails)}';
+    // Saved locally; it goes to the server on the next successful sync.
+    final subtitle = note.pendingUpload ? '$base · not synced yet' : base;
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,

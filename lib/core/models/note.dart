@@ -6,6 +6,10 @@ class EmailNote {
   final String serverId; // IMAP UID (as string) or JMAP email ID
   final DateTime createdAt;
 
+  /// Saved on this device only so far; the push to the server is pending
+  /// (offline, or the server refused it).
+  final bool pendingUpload;
+
   const EmailNote({
     required this.id,
     required this.accountId,
@@ -13,5 +17,6 @@ class EmailNote {
     required this.noteText,
     required this.serverId,
     required this.createdAt,
+    this.pendingUpload = false,
   });
 }

@@ -477,6 +477,14 @@ class EmailNotes extends Table {
   // IMAP UID (as string) or JMAP email ID of the note message on the server.
   TextColumn get serverId => text()();
   DateTimeColumn get createdAt => dateTime()();
+  // Offline-first (v67): added locally, not yet on the server. The note
+  // repository pushes it; sync never prunes such a row.
+  BoolColumn get pendingUpload =>
+      boolean().withDefault(const Constant(false))();
+  // Offline-first (v67): deleted locally, server copy not removed yet. Hidden
+  // from the UI and search; the row is dropped once the server copy is gone.
+  BoolColumn get pendingDelete =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -1620,6 +1628,11 @@ class AppDatabase extends _$AppDatabase {
     if (from < 66 && await _tableExists(this, 'drafts')) {
       // Attachments kept with a saved draft (#955).
       await _addColumnIfMissing(m, drafts, drafts.attachmentsJson);
+    }
+    if (from >= 39 && from < 67 && await _tableExists(this, 'email_notes')) {
+      // Offline-first notes: local add/delete waits here for the push.
+      await _addColumnIfMissing(m, emailNotes, emailNotes.pendingUpload);
+      await _addColumnIfMissing(m, emailNotes, emailNotes.pendingDelete);
     }
   }
 

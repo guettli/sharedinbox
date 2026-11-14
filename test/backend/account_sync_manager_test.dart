@@ -17,6 +17,7 @@ import 'package:sharedinbox/core/sync/account_sync_manager.dart';
 import '../unit/helpers/fake_email_repository.dart';
 import '../unit/helpers/fake_mailbox_repository.dart';
 import '../unit/helpers/fake_sync_log_repository.dart';
+import '../unit/recording_app_log_repository.dart';
 
 Future<imap.ImapClient> _fakeImapConnect(
   Account account,
@@ -540,26 +541,10 @@ class _LoggedRow {
   final String? dataJson;
 }
 
-class _RecordingAppLogRepo extends NoOpAppLogRepository {
-  final entries = <_LoggedRow>[];
-  int _nextId = 1;
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    entries.add(_LoggedRow(level, event, dataJson));
-    return _nextId++;
-  }
+class _RecordingAppLogRepo extends RecordingAppLogRepository {
+  List<_LoggedRow> get entries => [
+        for (final r in rows) _LoggedRow(r.level, r.event, r.dataJson),
+      ];
 }
 
 class _FakeLogs extends FakeSyncLogRepository {}

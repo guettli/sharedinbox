@@ -12,34 +12,8 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
 
 import '../unit/db_test_helper.dart';
+import '../unit/recording_app_log_repository.dart';
 import 'helpers.dart';
-
-class _RecordingAppLogRepository extends NoOpAppLogRepository {
-  final List<Map<String, Object?>> inserts = [];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    inserts.add({
-      'level': level,
-      'event': event,
-      'message': message,
-      'accountId': accountId,
-      'dataJson': dataJson,
-    });
-    return inserts.length;
-  }
-}
 
 class _FakeSieveRepository extends SieveRepository {
   _FakeSieveRepository({this.error, List<SieveScript>? initialScripts})
@@ -349,7 +323,7 @@ void main() {
     final repo = _FakeSieveRepository(
       initialScripts: [_script('s1', name: 'My filter')],
     )..activateError = Exception('server rejected');
-    final logRepo = _RecordingAppLogRepository();
+    final logRepo = RecordingAppLogRepository();
     await tester.pumpWidget(
       ProviderScope(
         overrides: [

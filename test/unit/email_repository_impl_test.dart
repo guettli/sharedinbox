@@ -37,6 +37,7 @@ import 'fake_imap.dart'
         ScriptedSmtpClient,
         SelectingFakeImapClient,
         SnoozeSpyImapClient;
+import 'recording_app_log_repository.dart';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -363,41 +364,8 @@ FetchPreviewSnippetsFn _snippetsFor(Map<int, _PreviewTestMessage> messages) =>
 /// observe the `push_status` sequence written by `watchJmapPush`. Only the
 /// insert path is exercised — everything else is inherited as a no-op from
 /// [NoOpAppLogRepository].
-class _PushStatusRecorder extends NoOpAppLogRepository {
-  final List<AppLogEntry> entries = [];
-  int _nextId = 1;
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    final id = _nextId++;
-    entries.add(
-      AppLogEntry(
-        id: id,
-        createdAt: createdAt ?? DateTime.now(),
-        level: level,
-        event: event,
-        message: message,
-        dataJson: dataJson,
-        screen: screen,
-        accountId: accountId,
-        mailboxPath: mailboxPath,
-        emailId: emailId,
-        syncLogId: syncLogId,
-      ),
-    );
-    return id;
-  }
+class _PushStatusRecorder extends RecordingAppLogRepository {
+  List<AppLogEntry> get entries => rows;
 }
 
 /// A [imap.MimeMessage] whose plain-text decode throws — mimics a malformed

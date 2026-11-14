@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show SocketException;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -16,6 +17,7 @@ import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'fake_imap.dart';
+import 'recording_app_log_repository.dart';
 
 // ── Test doubles ──────────────────────────────────────────────────────────
 
@@ -41,6 +43,9 @@ class _JmapScript {
   final List<_Turn> _turns;
   int cursor = 0;
 
+  /// Every API request body, in order.
+  final bodies = <Map<String, dynamic>>[];
+
   http.Client build() {
     return MockClient((req) async {
       if (req.url.toString() == _sessionUrl) {
@@ -53,6 +58,7 @@ class _JmapScript {
       }
       final turn = _turns[cursor++];
       final decoded = jsonDecode(req.body) as Map<String, dynamic>;
+      bodies.add(decoded);
       final firstCall =
           ((decoded['methodCalls'] as List).first as List).first as String;
       expect(
@@ -286,34 +292,6 @@ class _NotesFakeImap extends SelectingFakeImapClient {
 ImapConnectFn _fixedImapConnect(imap.ImapClient client) =>
     (account, username, password) async => client;
 
-/// Records every [AppLogger] insert so tests can assert on emitted events.
-class _RecordingLogRepo extends NoOpAppLogRepository {
-  final inserts = <Map<String, Object?>>[];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    inserts.add({
-      'level': level,
-      'event': event,
-      'accountId': accountId,
-      'emailId': emailId,
-      'dataJson': dataJson,
-    });
-    return inserts.length;
-  }
-}
-
 /// Flushes fire-and-forget (`unawaited`) log writes scheduled by the repo.
 Future<void> _pumpLogs() async {
   for (var i = 0; i < 5; i++) {
@@ -323,11 +301,12 @@ Future<void> _pumpLogs() async {
 
 /// Builds a JMAP-backed [NoteRepositoryImpl] wired to a recording logger,
 /// returning both so tests can drive the repo and assert on emitted logs.
-({NoteRepositoryImpl repo, _RecordingLogRepo logRepo}) _jmapRepoWithLogger(
+({NoteRepositoryImpl repo, RecordingAppLogRepository logRepo})
+    _jmapRepoWithLogger(
   AppDatabase db,
   http.Client client,
 ) {
-  final logRepo = _RecordingLogRepo();
+  final logRepo = RecordingAppLogRepository();
   final repo = NoteRepositoryImpl(
     db,
     _StubAccounts(),
@@ -427,6 +406,159 @@ Future<Set<String>> _runIncrementalNotesSync(
   final rows = await db.select(db.emailNotes).get();
   return rows.map((r) => r.id).toSet();
 }
+
+Map<String, dynamic> _emailQueryIds(List<String> ids) => {
+      'sessionState': 'st1',
+      'methodResponses': [
+        [
+          'Email/query',
+          {'accountId': _jmapAccountId, 'ids': ids, 'queryState': 'q'},
+          '0',
+        ],
+      ],
+    };
+
+Map<String, dynamic> _emailSetResponse(Map<String, dynamic> args) => {
+      'sessionState': 'st1',
+      'methodResponses': [
+        [
+          'Email/set',
+          {'accountId': _jmapAccountId, ...args},
+          '0',
+        ],
+      ],
+    };
+
+/// An IMAP Notes folder in memory: APPEND, UID SEARCH (ALL, `UID n:*`,
+/// `HEADER X-SharedInbox-Note-Id "…"`), UID FETCH of the full message, and
+/// STORE \Deleted + UID EXPUNGE. No UIDPLUS, so an APPEND answers no UID.
+class _NotesServerImap extends FakeImapClient {
+  final Map<int, String> raw = {};
+  int nextUid = 1;
+  int appends = 0;
+
+  /// Runs once, inside the next `UID SEARCH ALL` after its answer is fixed:
+  /// a local change landing while the server's listing is in flight.
+  Future<void> Function()? beforeAllAnswer;
+
+  int put(String noteId, String messageId, String text) {
+    final builder = imap.MessageBuilder()
+      ..subject = 'Note'
+      ..text = text;
+    builder.addHeader('X-SharedInbox-Note-For', messageId);
+    builder.addHeader('X-SharedInbox-Note-Id', noteId);
+    final uid = nextUid++;
+    raw[uid] = builder.buildMimeMessage().renderMessage();
+    return uid;
+  }
+
+  imap.MimeMessage _parsed(int uid) =>
+      imap.MimeMessage.parseFromText(raw[uid]!)..uid = uid;
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async => fakeMailbox(path);
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      fakeMailbox(path)..uidValidity = 1;
+
+  @override
+  Future<imap.SearchImapResult> uidSearchMessages({
+    String searchCriteria = 'UNSEEN',
+    List<imap.ReturnOption>? returnOptions,
+    Duration? responseTimeout,
+  }) async {
+    final all = raw.keys.toList()..sort();
+    var hits = all;
+    final header = RegExp(r'^HEADER X-SharedInbox-Note-Id "(.+)"$').firstMatch(
+      searchCriteria,
+    );
+    final range = RegExp(r'^UID (\d+):\*$').firstMatch(searchCriteria);
+    if (header != null) {
+      hits = [
+        for (final uid in all)
+          if (_parsed(uid).getHeaderValue('X-SharedInbox-Note-Id')?.trim() ==
+              header.group(1))
+            uid,
+      ];
+    }
+    if (range != null) {
+      final from = int.parse(range.group(1)!);
+      hits = all.where((u) => u >= from).toList();
+    }
+    final result = imap.SearchImapResult()
+      ..matchingSequence = imap.MessageSequence.fromIds(hits, isUid: true);
+    final hook = beforeAllAnswer;
+    if (searchCriteria == 'ALL' && hook != null) {
+      beforeAllAnswer = null;
+      await hook();
+    }
+    return result;
+  }
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async =>
+      imap.FetchImapResult(
+        [
+          for (final uid in sequence.toList())
+            if (raw.containsKey(uid)) _parsed(uid),
+        ],
+        null,
+      );
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    appends++;
+    final uid = nextUid++;
+    raw[uid] = message.renderMessage();
+    return imap.GenericImapResult();
+  }
+
+  final Set<int> _deleted = {};
+
+  @override
+  Future<imap.StoreImapResult> uidMarkDeleted(
+    imap.MessageSequence sequence, {
+    bool? silent,
+    int? unchangedSinceModSequence,
+  }) async {
+    _deleted.addAll(sequence.toList());
+    return imap.StoreImapResult();
+  }
+
+  @override
+  Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
+    for (final uid in sequence.toList()) {
+      if (_deleted.remove(uid)) raw.remove(uid);
+    }
+    return null;
+  }
+}
+
+/// Connects to [server], or fails like a device without network.
+ImapConnectFn _connectUnless(
+  _NotesServerImap server,
+  bool Function() offline,
+) =>
+    (account, username, password) async {
+      if (offline()) throw const SocketException('Network is unreachable');
+      return server;
+    };
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -923,6 +1055,7 @@ void main() {
 
       final script = _JmapScript([
         _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn('Email/query', _emailQueryIds(const [])),
         _Turn('Email/set', {
           'sessionState': 'st1',
           'methodResponses': [
@@ -943,6 +1076,7 @@ void main() {
       final (:repo, :logRepo) = _jmapRepoWithLogger(db, script.build());
 
       await repo.addNote(_account.id, '<msg-1@ex.com>', 'hello');
+      await repo.waitForIdle();
       await _pumpLogs();
 
       final added = logRepo.inserts.firstWhere(
@@ -956,6 +1090,408 @@ void main() {
         logRepo.inserts.any((m) => m['event'] == 'note.add.no_server_id'),
         isFalse,
         reason: 'a real server id was returned',
+      );
+    });
+  });
+
+  group('NoteRepositoryImpl offline-first (IMAP)', () {
+    late AppDatabase db;
+    late _NotesServerImap server;
+    var offline = false;
+    late NoteRepositoryImpl repo;
+
+    setUp(() async {
+      db = await _freshSeededDb(_seedImapAccount);
+      server = _NotesServerImap();
+      offline = false;
+      repo = NoteRepositoryImpl(
+        db,
+        _StubImapAccounts(),
+        imapConnect: _connectUnless(server, () => offline),
+      );
+    });
+    tearDown(() => db.close());
+
+    Future<List<EmailNoteRow>> rows() => db.select(db.emailNotes).get();
+
+    test('a note added offline is kept and pushed by the next sync', () async {
+      offline = true;
+      await repo.addNote(_imapAccount.id, '<m1@ex.com>', 'call back');
+      await repo.waitForIdle();
+
+      final shown =
+          await repo.observeNotes(_imapAccount.id, '<m1@ex.com>').first;
+      expect(shown.single.noteText, 'call back');
+      expect(shown.single.pendingUpload, isTrue);
+      expect(server.raw, isEmpty);
+
+      offline = false;
+      await repo.syncAllNotes(_imapAccount.id);
+
+      expect(server.raw, hasLength(1));
+      final row = (await rows()).single;
+      expect(row.pendingUpload, isFalse);
+      // No UIDPLUS: the UID was found by the note-id header.
+      expect(row.serverId, server.raw.keys.single.toString());
+      // A second sync neither duplicates nor drops it.
+      await repo.syncAllNotes(_imapAccount.id);
+      expect(server.raw, hasLength(1));
+      expect((await rows()).single.id, row.id);
+    });
+
+    test('online, addNote uploads right away', () async {
+      await repo.addNote(_imapAccount.id, '<m1@ex.com>', 'now');
+      await repo.waitForIdle();
+      expect(server.raw, hasLength(1));
+      expect((await rows()).single.pendingUpload, isFalse);
+    });
+
+    test('a retried upload whose APPEND already landed is not duplicated',
+        () async {
+      offline = true;
+      await repo.addNote(_imapAccount.id, '<m1@ex.com>', 'once');
+      await repo.waitForIdle();
+      final id = (await rows()).single.id;
+      // The APPEND reached the server, but the answer never reached us.
+      server.put(id, '<m1@ex.com>', 'once');
+
+      offline = false;
+      await repo.syncAllNotes(_imapAccount.id);
+
+      expect(server.raw, hasLength(1));
+      expect(server.appends, 0);
+      expect((await rows()).single.pendingUpload, isFalse);
+    });
+
+    test('a note deleted offline stays hidden and is removed by the next sync',
+        () async {
+      final uid = server.put('n1', '<m1@ex.com>', 'old');
+      await repo.syncAllNotes(_imapAccount.id);
+      expect((await rows()).single.serverId, '$uid');
+
+      offline = true;
+      await repo.deleteNote('n1');
+      await repo.waitForIdle();
+      expect(
+        await repo.observeNotes(_imapAccount.id, '<m1@ex.com>').first,
+        isEmpty,
+      );
+      expect(server.raw, hasLength(1));
+
+      offline = false;
+      await repo.syncAllNotes(_imapAccount.id);
+
+      expect(server.raw, isEmpty);
+      expect(await rows(), isEmpty);
+    });
+
+    test('a note added and deleted offline never reaches the server', () async {
+      offline = true;
+      await repo.addNote(_imapAccount.id, '<m1@ex.com>', 'oops');
+      await repo.deleteNote((await rows()).single.id);
+      await repo.waitForIdle();
+
+      offline = false;
+      await repo.syncAllNotes(_imapAccount.id);
+
+      expect(server.appends, 0);
+      expect(await rows(), isEmpty);
+    });
+
+    test('a note added while sync lists the server is not pruned', () async {
+      final uid = server.put('n1', '<m1@ex.com>', 'old');
+      await repo.syncAllNotes(_imapAccount.id);
+      expect((await rows()).single.serverId, '$uid');
+
+      // A full scan prunes every cached note missing from the server's
+      // listing; the add lands right after that listing was made. Its own
+      // push waits for this sync to finish.
+      await db.delete(db.syncStates).go();
+      server.beforeAllAnswer =
+          () => repo.addNote(_imapAccount.id, '<m2@ex.com>', 'new');
+      await repo.syncAllNotes(_imapAccount.id);
+      await repo.waitForIdle();
+
+      expect(server.beforeAllAnswer, isNull, reason: 'race not exercised');
+      final notes =
+          await repo.observeNotes(_imapAccount.id, '<m2@ex.com>').first;
+      expect(notes.single.noteText, 'new');
+    });
+
+    test('a note deleted while sync fetches it does not come back', () async {
+      server.put('n1', '<m1@ex.com>', 'old');
+      await repo.syncAllNotes(_imapAccount.id);
+      // A full scan again: SEARCH ALL, then it fetches and stores the bodies.
+      // The delete lands in between; its own push waits for this sync.
+      await db.delete(db.syncStates).go();
+      var hiddenRightAfterSync = false;
+      server.beforeAllAnswer = () => repo.deleteNote('n1');
+      await repo.syncAllNotes(_imapAccount.id).then((_) async {
+        hiddenRightAfterSync =
+            (await repo.observeNotes(_imapAccount.id, '<m1@ex.com>').first)
+                .isEmpty;
+      });
+
+      expect(server.beforeAllAnswer, isNull, reason: 'race not exercised');
+      expect(hiddenRightAfterSync, isTrue);
+      await repo.waitForIdle();
+      expect(server.raw, isEmpty);
+      expect(await rows(), isEmpty);
+    });
+  });
+
+  group('NoteRepositoryImpl offline-first (JMAP)', () {
+    late AppDatabase db;
+
+    setUp(() async => db = await _freshSeededDb(_seedAccount));
+    tearDown(() => db.close());
+
+    test('a refused upload stays pending and survives the full sync prune',
+        () async {
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-local',
+              accountId: _account.id,
+              messageId: '<m@ex.com>',
+              noteText: 'mine',
+              serverId: '',
+              createdAt: DateTime(2026),
+              pendingUpload: const Value(true),
+            ),
+          );
+      final script = _JmapScript([
+        // Push.
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn('Email/query', _emailQueryIds(const [])),
+        _Turn(
+          'Email/set',
+          _emailSetResponse({
+            'notCreated': {
+              'new-note': {'type': 'overQuota'},
+            },
+          }),
+        ),
+        // Pull: full sync, server has no notes.
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn(
+          'Email/query',
+          _mailboxAndFullQuery(
+            ids: const [],
+            queryState: 'q1',
+            emailState: 'e1',
+            emails: const [],
+          ),
+        ),
+        _Turn('Email/get', _emailGetResponse(state: 'e1', list: const [])),
+      ]);
+      final repo = NoteRepositoryImpl(
+        db,
+        _StubAccounts(),
+        httpClient: script.build(),
+      );
+
+      await repo.syncAllNotes(_account.id);
+
+      final row = (await db.select(db.emailNotes).get()).single;
+      expect(row.id, 'n-local');
+      expect(row.pendingUpload, isTrue);
+    });
+
+    test('a delete destroys only exact note-id matches', () async {
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n1',
+              accountId: _account.id,
+              messageId: '<m@ex.com>',
+              noteText: 'bye',
+              serverId: 'srv-1',
+              createdAt: DateTime(2026),
+              pendingDelete: const Value(true),
+            ),
+          );
+      final script = _JmapScript([
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        // The loose header filter also hits another note's copy.
+        _Turn('Email/query', {
+          'sessionState': 'st1',
+          'methodResponses': [
+            [
+              'Email/query',
+              {
+                'accountId': _jmapAccountId,
+                'ids': ['srv-1', 'srv-9'],
+              },
+              'q',
+            ],
+            [
+              'Email/get',
+              {
+                'accountId': _jmapAccountId,
+                'list': [
+                  {'id': 'srv-1', 'header:X-SharedInbox-Note-Id:asText': ' n1'},
+                  {
+                    'id': 'srv-9',
+                    'header:X-SharedInbox-Note-Id:asText': ' n1-and-more',
+                  },
+                ],
+              },
+              'g',
+            ],
+          ],
+        }),
+        _Turn(
+          'Email/set',
+          _emailSetResponse({
+            'destroyed': ['srv-1'],
+          }),
+        ),
+        // Pull: full sync, nothing left.
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn(
+          'Email/query',
+          _mailboxAndFullQuery(
+            ids: const [],
+            queryState: 'q1',
+            emailState: 'e1',
+            emails: const [],
+          ),
+        ),
+        _Turn('Email/get', _emailGetResponse(state: 'e1', list: const [])),
+      ]);
+      final repo = NoteRepositoryImpl(
+        db,
+        _StubAccounts(),
+        httpClient: script.build(),
+      );
+
+      await repo.syncAllNotes(_account.id);
+
+      final destroy = ((script.bodies[2]['methodCalls'] as List).first
+          as List)[1] as Map<String, dynamic>;
+      expect(destroy['destroy'], ['srv-1']);
+      expect(await db.select(db.emailNotes).get(), isEmpty);
+    });
+
+    test('the background isolate pulls but never pushes', () async {
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-local',
+              accountId: _account.id,
+              messageId: '<m@ex.com>',
+              noteText: 'mine',
+              serverId: '',
+              createdAt: DateTime(2026),
+              pendingUpload: const Value(true),
+            ),
+          );
+      final script = _JmapScript([
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn(
+          'Email/query',
+          _mailboxAndFullQuery(
+            ids: const [],
+            queryState: 'q1',
+            emailState: 'e1',
+            emails: const [],
+          ),
+        ),
+        _Turn('Email/get', _emailGetResponse(state: 'e1', list: const [])),
+      ]);
+      final repo = NoteRepositoryImpl(
+        db,
+        _StubAccounts(),
+        httpClient: script.build(),
+        pushPending: false,
+      );
+
+      await repo.syncAllNotes(_account.id);
+
+      expect(script.cursor, 3, reason: 'only the pull ran');
+      expect(
+        (await db.select(db.emailNotes).get()).single.pendingUpload,
+        isTrue,
+      );
+    });
+
+    test('a deleted note is destroyed and not revived by the pull', () async {
+      await db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n1',
+              accountId: _account.id,
+              messageId: '<m@ex.com>',
+              noteText: 'bye',
+              serverId: 'srv-1',
+              createdAt: DateTime(2026),
+            ),
+          );
+      final requests = <String>[];
+      final script = _JmapScript([
+        // Push: the destroy fails (server busy), so the tombstone stays.
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn('Email/query', _emailQueryIds(const ['srv-1'])),
+        _Turn(
+          'Email/set',
+          _emailSetResponse({
+            'notDestroyed': {
+              'srv-1': {'type': 'serverUnavailable'},
+            },
+          }),
+        ),
+        // Pull: full sync still lists the note.
+        _Turn('Mailbox/get', _mailboxGetResponse()),
+        _Turn(
+          'Email/query',
+          _mailboxAndFullQuery(
+            ids: const ['srv-1'],
+            queryState: 'q1',
+            emailState: 'e1',
+            emails: const [],
+          ),
+        ),
+        _Turn(
+          'Email/get',
+          _emailGetResponse(
+            state: 'e1',
+            list: [
+              _noteEmail(
+                id: 'srv-1',
+                noteId: 'n1',
+                messageId: '<m@ex.com>',
+                body: 'bye',
+              ),
+            ],
+          ),
+        ),
+      ]);
+      final repo = NoteRepositoryImpl(
+        db,
+        _StubAccounts(),
+        // Offline at delete time: the kicked push cannot connect.
+        httpClient: MockClient((req) async {
+          requests.add(req.url.toString());
+          throw const SocketException('Network is unreachable');
+        }),
+      );
+      await repo.deleteNote('n1');
+      await repo.waitForIdle();
+      expect(requests, isNotEmpty);
+      expect(await repo.observeNotes(_account.id, '<m@ex.com>').first, isEmpty);
+
+      final online = NoteRepositoryImpl(
+        db,
+        _StubAccounts(),
+        httpClient: script.build(),
+      );
+      await online.syncAllNotes(_account.id);
+
+      expect(
+        await online.observeNotes(_account.id, '<m@ex.com>').first,
+        isEmpty,
+        reason: 'the pull must not bring a pending delete back',
+      );
+      expect(
+        (await db.select(db.emailNotes).get()).single.pendingDelete,
+        isTrue,
       );
     });
   });

@@ -19,6 +19,7 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'fake_imap.dart' show SnoozeSpyImapClient;
+import 'recording_app_log_repository.dart';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -139,26 +140,12 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
 
 /// In-memory [AppLogRepository] that records inserted entries so tests can
 /// assert what was logged.
-class _RecordingAppLogRepository extends NoOpAppLogRepository {
-  final List<({AppLogLevel level, String event, String? mailboxPath})> entries =
-      [];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    entries.add((level: level, event: event, mailboxPath: mailboxPath));
-    return entries.length;
-  }
+class _RecordingAppLogRepository extends RecordingAppLogRepository {
+  List<({AppLogLevel level, String event, String? mailboxPath})> get entries =>
+      [
+        for (final r in rows)
+          (level: r.level, event: r.event, mailboxPath: r.mailboxPath),
+      ];
 }
 
 /// Fake IMAP client that lists one mailbox but fails every STATUS request,
