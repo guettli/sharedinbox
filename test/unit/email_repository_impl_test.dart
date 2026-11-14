@@ -2972,6 +2972,117 @@ void main() {
       expect(changes, isEmpty);
     });
 
+    // #1186: the detail screen's unawaited auto-mark-read and the user's
+    // "Mark as unread" overlap. Without per-email serialization both calls
+    // read the still-unread row; the unread call sees nothing to change and
+    // returns, then the read call's write lands and the mail ends up read.
+    test('overlapping setFlag calls apply in call order (#1186)', () async {
+      final db = openTestDatabase();
+      final accounts = _GatedAccountRepository(db, MapSecureStorage());
+      final emails = EmailRepositoryImpl(
+        db,
+        accounts,
+        imapConnect: _noImapConnect,
+        smtpConnect: _noSmtpConnect,
+        fetchObjectIds: _noObjectIds,
+        fetchPreviewSnippets: _noPreviewSnippets,
+      );
+      await accounts.addAccount(_account, 'pw');
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      // The auto-mark-read has read the (unread) row and is held between its
+      // read and its write when the user taps "Mark as unread".
+      accounts.gate = Completer<void>();
+      final autoRead = emails.setFlag('acc-1:5', seen: true);
+      await accounts.entered.future;
+      final markUnread = emails.setFlag('acc-1:5', seen: false);
+      await pumpEventQueue();
+      accounts.gate!.complete();
+      await Future.wait([autoRead, markUnread]);
+
+      final email = await emails.getEmail('acc-1:5');
+      expect(email!.isSeen, isFalse);
+      final changes = await (db.select(db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(changes, isNotEmpty);
+      expect(changes.last.payload, contains('"seen":false'));
+    });
+
+    test('a failing setFlag does not block the next one for the same email',
+        () async {
+      final db = openTestDatabase();
+      final accounts = _GatedAccountRepository(db, MapSecureStorage());
+      final emails = EmailRepositoryImpl(
+        db,
+        accounts,
+        imapConnect: _noImapConnect,
+        smtpConnect: _noSmtpConnect,
+        fetchObjectIds: _noObjectIds,
+        fetchPreviewSnippets: _noPreviewSnippets,
+      );
+      await accounts.addAccount(_account, 'pw');
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      accounts.gate = Completer<void>();
+      final failing = emails.setFlag('acc-1:5', seen: true);
+      await accounts.entered.future;
+      final next = emails.setFlag('acc-1:5', flagged: true);
+      accounts.gate!.completeError(StateError('account lookup failed'));
+
+      await expectLater(failing, throwsStateError);
+      await next;
+      final email = await emails.getEmail('acc-1:5');
+      expect(email!.isFlagged, isTrue);
+      expect(email.isSeen, isFalse);
+    });
+
+    // #1186: open (read), "Mark as unread", re-open before anything flushed.
+    // The third change matches the first queued one but not the latest, so it
+    // must be appended, or the server would end up unread.
+    test('read, unread, read again queues all three flag changes', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.setFlag('acc-1:5', seen: true);
+      await r.emails.setFlag('acc-1:5', seen: false);
+      await r.emails.setFlag('acc-1:5', seen: true);
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(changes.map((c) => c.payload.contains('"seen":true')).toList(), [
+        true,
+        false,
+        true,
+      ]);
+    });
+
     // #644: a repeated setFlag with an unchanged value must not pile up
     // duplicate un-attempted rows in pending_changes even if the first hasn't
     // flushed yet.
@@ -12044,4 +12155,23 @@ class _SelectFailsImapClient extends SnoozeSpyImapClient {
     imap.QResyncParameters? qresync,
   }) async =>
       throw error;
+}
+
+/// [AccountRepositoryImpl] whose [getAccount] can be held on [gate], so a
+/// test can pause `setFlag` between its row read and its write (#1186).
+class _GatedAccountRepository extends AccountRepositoryImpl {
+  _GatedAccountRepository(super.db, super.storage);
+
+  Completer<void>? gate;
+  final entered = Completer<void>();
+
+  @override
+  Future<Account?> getAccount(String id) async {
+    final g = gate;
+    if (g != null && !entered.isCompleted) {
+      entered.complete();
+      await g.future;
+    }
+    return super.getAccount(id);
+  }
 }
