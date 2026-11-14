@@ -1327,6 +1327,9 @@ class PagedSearchRepository extends FakeEmailRepository {
       _page(limit);
 }
 
+/// Subject of the [i]-th [bulkSearchHits] entry: "Bulk 000", "Bulk 001", …
+String bulkLabel(int i) => 'Bulk ${i.toString().padLeft(3, '0')}';
+
 /// [count] distinct search hits "Bulk 000", "Bulk 001", …, newest first
 /// (each one minute older than the previous, so merged searches that re-sort
 /// newest first keep this order).
@@ -1334,7 +1337,7 @@ List<Email> bulkSearchHits(int count) => [
       for (var i = 0; i < count; i++)
         testEmail(
           id: 'acc-1:bulk-$i',
-          subject: 'Bulk ${i.toString().padLeft(3, '0')}',
+          subject: bulkLabel(i),
         ).copyWith(
           receivedAt: DateTime(2024, 6).subtract(Duration(minutes: i)),
         ),

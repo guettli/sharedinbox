@@ -2591,6 +2591,46 @@ void main() {
     );
 
     test(
+      'searchEmailsStructured folder filter matches a non-ASCII path exactly',
+      () async {
+        final r = _makeRepos();
+        await r.accounts.addAccount(_account, 'pw');
+        for (final (uid, path) in [
+          (1, 'Geschäft/Übersicht'),
+          // A `_` in the filter value must not act as a LIKE wildcard.
+          (2, 'Geschäft/Xbersicht'),
+          (3, 'a_b'),
+          (4, 'axb'),
+        ]) {
+          await r.db.into(r.db.emails).insert(
+                EmailsCompanion.insert(
+                  id: 'acc-1:$uid',
+                  accountId: 'acc-1',
+                  mailboxPath: path,
+                  uid: uid,
+                  subject: const Value('Hello'),
+                  receivedAt: DateTime(2026),
+                ),
+              );
+        }
+        Future<List<String>> idsIn(String path) async => [
+              for (final e in await r.emails.searchEmailsStructured(
+                'acc-1',
+                FilterGroup.single(
+                  FilterField.folder,
+                  FilterComparison.is_,
+                  path,
+                ),
+              ))
+                e.id,
+            ];
+
+        expect(await idsIn('Geschäft/Übersicht'), ['acc-1:1']);
+        expect(await idsIn('a_b'), ['acc-1:3']);
+      },
+    );
+
+    test(
       'searchEmailsStructured with similarFilterFor finds near-duplicate spam',
       () async {
         final r = _makeRepos();
@@ -11120,17 +11160,18 @@ void main() {
       List<String> newest(int n) => listOrder.take(n).toList();
       List<String> ids(List<Email> emails) => [for (final e in emails) e.id];
 
-      final folderPage = await r.emails.searchEmails('acc-1', 'INBOX', 'bulk');
+      final folderPage =
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 50);
       expect(ids(folderPage), newest(50));
       final folderTwoPages =
-          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 100);
+          await r.emails.searchEmails('acc-1', 'INBOX', 'bulk');
       expect(ids(folderTwoPages), newest(100));
       final folderAll =
           await r.emails.searchEmails('acc-1', 'INBOX', 'bulk', limit: 150);
       expect(ids(folderAll), newest(120));
 
       expect(
-        ids(await r.emails.searchEmailsGlobal('acc-1', 'bulk', limit: 100)),
+        ids(await r.emails.searchEmailsGlobal('acc-1', 'bulk')),
         newest(100),
       );
       expect(

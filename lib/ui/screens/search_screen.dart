@@ -66,10 +66,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   int _searchSeq = 0;
   bool _fieldFocused = false;
 
-  /// How many results the active search requests, and the query that
+  /// How many results the active search should show, and the query that
   /// produced [_results] (called again with a larger limit by "Load more").
   /// A new search starts back at one page.
   int _limit = searchPageSize;
+
+  /// How many rows the last fetch asked [_activeFetch] for. At least [_limit];
+  /// more when a folder filter hides fetched rows and further pages were
+  /// loaded automatically to fill the list (see [_fetchPage]).
+  int _fetchLimit = searchPageSize;
+
+  /// Upper bound on the pages one fill loads automatically beyond the first,
+  /// so a folder that matches almost nothing cannot pull the whole result set
+  /// in one go. Past it, "Load more" takes over.
+  static const _maxAutoFillPages = 10;
   Future<List<Email>> Function(int limit)? _activeFetch;
   bool _loadingMore = false;
 
@@ -78,24 +88,50 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// action removes locally do not hide "Load more".
   bool _lastPageFull = false;
 
+  /// Mail the user acted on from this result set, keyed by [_mailKey], with
+  /// the folder it was in. After a batch action the active search re-runs so
+  /// the list refills with the next matches. Mail that still matches after
+  /// being moved out of that folder (e.g. deleted into Trash, which a search
+  /// without a folder focus also covers) is kept out of the refreshed list.
+  /// Mail still in its folder (starred, or a delete that was undone) shows
+  /// again. Cleared by every new search.
+  final Map<String, String> _dismissedMail = {};
+
+  /// Identity of a mail that survives a move. The local id embeds the folder
+  /// and the IMAP UID, both of which change when a move syncs, so the
+  /// Message-ID is used when there is one.
+  String _mailKey(Email e) => '${e.accountId}\u0000${e.messageId ?? e.id}';
+
+  /// Whether [e] was acted on and has since left the folder it was in.
+  bool _isDismissed(Email e) {
+    final from = _dismissedMail[_mailKey(e)];
+    return from != null && from != e.mailboxPath;
+  }
+
   /// Accounts the user has deactivated on the current result set. Purely a
   /// client-side view filter over [_results] — deactivating an account hides
   /// its mail immediately without re-running the search. Reset whenever a new
   /// result set arrives so a stale set never silently filters a later query.
   final Set<String> _hiddenAccountIds = {};
 
-  /// Folder the current result set is focused on (null = no focus), keyed by
-  /// [_folderKey]. Like [_hiddenAccountIds] this is a pure client-side view
-  /// filter over [_results] — tapping a result's folder name and choosing
-  /// "Only this folder" narrows the visible list without re-running the search
-  /// (#844). Reset with the other view filters whenever a new result set
-  /// arrives.
+  /// Folder the search is focused on (null = no focus), keyed by
+  /// [_folderKey]. Set by tapping a result's folder name and choosing "Only
+  /// this folder" (#844). Unlike [_hiddenAccountIds] it survives re-running
+  /// the search (pressing Search again, the refresh after a batch action):
+  /// it stays until the user clears its chip, clears the search or switches
+  /// between simple and advanced mode. Advanced search adds it to the query
+  /// itself, so each page is drawn from that folder only; simple search
+  /// applies it as a view filter over [_results] and loads further pages
+  /// automatically when it hides too many rows (see [_fetchPage]).
   String? _focusedFolderKey;
 
-  /// Folders excluded from the current result set, keyed by [_folderKey]. Same
-  /// client-side lifecycle as [_focusedFolderKey]; multiple exclusions
-  /// accumulate (#844).
+  /// Folders excluded from the results, keyed by [_folderKey]. A view filter
+  /// over [_results] with the same lifetime as [_focusedFolderKey]; multiple
+  /// exclusions accumulate (#844).
   final Set<String> _excludedFolderKeys = {};
+
+  bool get _folderFiltered =>
+      _focusedFolderKey != null || _excludedFolderKeys.isNotEmpty;
 
   /// Stable per-folder key. NUL-joins `accountId` and `mailboxPath` so a common
   /// folder name (e.g. "INBOX") on two accounts stays distinct, and so
@@ -103,11 +139,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   String _folderKey(String accountId, String mailboxPath) =>
       '$accountId\u0000$mailboxPath';
 
-  /// Clears every client-side view filter (hidden accounts, focused/excluded
-  /// folders). Called wherever a fresh result set is about to replace the old
-  /// one so a stale filter never silently narrows a later query.
+  /// Splits a [_folderKey] back into its account id and mailbox path.
+  (String, String) _splitFolderKey(String key) {
+    final sep = key.indexOf('\u0000');
+    return (key.substring(0, sep), key.substring(sep + 1));
+  }
+
+  /// Clears the hidden accounts. Called wherever a fresh result set is about
+  /// to replace the old one: the account bar is built from the results, so a
+  /// stale hidden account could otherwise filter a later query with no chip
+  /// to undo it. The folder filters always show their chips, so they persist.
   void _resetViewFilters() {
     _hiddenAccountIds.clear();
+  }
+
+  /// Drops the folder focus and exclusions. Only call inside [setState].
+  void _clearFolderFilters() {
     _focusedFolderKey = null;
     _excludedFolderKeys.clear();
   }
@@ -181,18 +228,28 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     if (mounted) setState(() {});
   }
 
+  /// Drops the acted-on mail from the list right away, then re-runs the
+  /// active search so the list refills with the next matching mail.
   void _onAfterBatchAction(List<String> actedThreadIds) {
     if (_results == null || !mounted) return;
     final actedSet = actedThreadIds.toSet();
-    final remaining =
-        _results!.where((e) => !actedSet.contains(e.threadId ?? e.id)).toList();
+    final remaining = <Email>[];
+    for (final e in _results!) {
+      if (actedSet.contains(e.threadId ?? e.id)) {
+        _dismissedMail[_mailKey(e)] = e.mailboxPath;
+        continue;
+      }
+      remaining.add(e);
+    }
     setState(() => _results = remaining);
+    unawaited(_refresh());
   }
 
   void _toggleAdvanced() {
     setState(() {
       _advancedMode = !_advancedMode;
       _clearResults();
+      _clearFolderFilters();
     });
   }
 
@@ -261,12 +318,92 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     final accountId = _effectiveAccountId;
     final filter = _filterGroup;
     await _runSearch(
-      fetch: (limit) => ref
-          .read(emailRepositoryProvider)
-          .searchEmailsStructured(accountId, filter, limit: limit),
+      fetch: (limit) => _fetchStructured(accountId, filter, limit),
       logLabel: 'Structured search failed',
       warnMessage: 'Structured search failed',
     );
+  }
+
+  /// Runs the structured search, narrowed to the focused folder when there
+  /// is one. The focus is read on every call, so changing it and re-running
+  /// the active fetch (see [_onFolderTap]) re-queries that folder. Adding it
+  /// to the query, rather than filtering the fetched page, keeps every page
+  /// full of mail from that folder.
+  Future<List<Email>> _fetchStructured(
+    String? accountId,
+    FilterGroup filter,
+    int limit,
+  ) async {
+    final repo = ref.read(emailRepositoryProvider);
+    final focus = _focusedFolderKey;
+    if (focus == null) {
+      return repo.searchEmailsStructured(accountId, filter, limit: limit);
+    }
+    final (focusAccountId, mailboxPath) = _splitFolderKey(focus);
+    // The search is scoped to another account than the focused folder's.
+    if (accountId != null && accountId != focusAccountId) return const [];
+    return repo.searchEmailsStructured(
+      focusAccountId,
+      FilterGroup(
+        operator: FilterOperator.and_,
+        children: [
+          filter,
+          FilterLeaf(
+            field: FilterField.folder,
+            comparison: FilterComparison.is_,
+            value: mailboxPath,
+          ),
+        ],
+      ),
+      limit: limit,
+    );
+  }
+
+  /// Fetches with [fetch] until [target] rows pass the folder filters,
+  /// leaving out dismissed mail (see [_dismissedMail]). Starts at
+  /// [fetchLimit] rows (at least [target]) and, while the folder
+  /// focus/exclusions hide too many of them and more matches exist, loads
+  /// further pages automatically, up to [_maxAutoFillPages]. Each request
+  /// asks for as many extra rows as there is dismissed mail, so that does not
+  /// shorten the page either. Returns the rows, whether the last fetch filled
+  /// its page, and the limit it used.
+  Future<(List<Email>, bool, int)> _fetchPage(
+    Future<List<Email>> Function(int limit) fetch,
+    int target, {
+    int? fetchLimit,
+  }) async {
+    final dismissedCount = _dismissedMail.length;
+    var limit = fetchLimit == null || fetchLimit < target ? target : fetchLimit;
+    // A focus on a folder outside the account scope can never be filled.
+    final maxRounds = _focusOutsideScope ? 0 : _maxAutoFillPages;
+    for (var round = 0;; round++) {
+      final want = limit + dismissedCount;
+      final rows = await fetch(want);
+      final kept = rows.where((e) => !_isDismissed(e)).toList();
+      final full = rows.length >= want;
+      if (!full ||
+          round >= maxRounds ||
+          kept.where(_passesFolderFilters).length >= target) {
+        return (kept, full, limit);
+      }
+      limit += searchPageSize;
+    }
+  }
+
+  /// Whether the focused folder belongs to an account the search does not
+  /// cover, so no result can pass the focus.
+  bool get _focusOutsideScope {
+    final focus = _focusedFolderKey;
+    final scope = _effectiveAccountId;
+    if (focus == null || scope == null) return false;
+    return _splitFolderKey(focus).$1 != scope;
+  }
+
+  /// Whether [e] survives the folder focus and exclusions.
+  bool _passesFolderFilters(Email e) {
+    final key = _folderKey(e.accountId, e.mailboxPath);
+    if (_excludedFolderKeys.contains(key)) return false;
+    return _focusedFolderKey == null || key == _focusedFolderKey;
   }
 
   /// Runs [fetch] for the first page, shows its results, and marks the screen
@@ -284,13 +421,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       _failed = false;
       _limit = searchPageSize;
       _activeFetch = fetch;
+      _dismissedMail.clear();
     });
     try {
-      final emails = await fetch(_limit);
+      final (emails, full, fetchLimit) = await _fetchPage(fetch, _limit);
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
-          _lastPageFull = emails.length >= _limit;
+          _lastPageFull = full;
+          _fetchLimit = fetchLimit;
           _resetViewFilters();
           _loading = false;
         });
@@ -327,11 +466,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       _limit += searchPageSize;
     });
     try {
-      final emails = await fetch(_limit);
+      final (emails, full, fetchLimit) = await _fetchPage(
+        fetch,
+        _limit,
+        fetchLimit: _fetchLimit + searchPageSize,
+      );
       if (mounted && seq == _searchSeq) {
         setState(() {
           _results = emails;
-          _lastPageFull = emails.length >= _limit;
+          _lastPageFull = full;
+          _fetchLimit = fetchLimit;
           _loadingMore = false;
         });
       }
@@ -354,6 +498,52 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           _limit -= searchPageSize;
         });
         context.showAppSnackBar('Could not load more results.');
+      }
+    }
+  }
+
+  /// Re-runs the active search in place: after a batch action (keeping the
+  /// pages already loaded, so the list refills with the next matches), after
+  /// a folder filter hid rows (auto-loading the next matches) or after the
+  /// folder focus changed in advanced mode ([resetLimit], since that is a
+  /// different query). The current results stay on screen until the new ones
+  /// arrive; a newer search or a reset supersedes it.
+  Future<void> _refresh({bool resetLimit = false}) async {
+    final fetch = _activeFetch;
+    if (fetch == null || _loading) return;
+    final seq = ++_searchSeq;
+    setState(() => _loadingMore = false);
+    // A reset applies only once its results arrive: a failed re-query keeps
+    // the list on screen together with the limits that produced it.
+    final target = resetLimit ? searchPageSize : _limit;
+    try {
+      final (emails, full, fetchLimit) = await _fetchPage(
+        fetch,
+        target,
+        fetchLimit: resetLimit ? searchPageSize : _fetchLimit,
+      );
+      if (mounted && seq == _searchSeq) {
+        setState(() {
+          _results = emails;
+          _lastPageFull = full;
+          _limit = target;
+          _fetchLimit = fetchLimit;
+        });
+      }
+    } catch (e, stack) {
+      log('Refreshing search results failed: $e');
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'search.failed',
+              'Refreshing search results failed',
+              screen: 'SearchScreen',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
+      if (mounted && seq == _searchSeq) {
+        context.showAppSnackBar('Could not refresh the search results.');
       }
     }
   }
@@ -386,7 +576,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     tooltip: 'Clear search',
                     onPressed: () {
                       _ctrl.clear();
-                      setState(_clearResults);
+                      setState(() {
+                        _clearResults();
+                        _clearFolderFilters();
+                      });
                     },
                   ),
                 IconButton(
@@ -513,19 +706,21 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       return const Center(child: Text('Type 3+ characters to search'));
     }
     final r = _results!;
-    if (r.isEmpty) return const Center(child: Text('No results'));
+    // With a folder filter the region still renders, so its chip can clear it.
+    if (r.isEmpty && !_folderFiltered) {
+      return const Center(child: Text('No results'));
+    }
     return _buildResultsRegion(r);
   }
 
   /// Results after removing mail from deactivated accounts (see
   /// [_hiddenAccountIds]) and applying the folder focus/exclusion (#844).
-  List<Email> get _visibleResults => _results!.where((e) {
-        if (_hiddenAccountIds.contains(e.accountId)) return false;
-        final key = _folderKey(e.accountId, e.mailboxPath);
-        if (_excludedFolderKeys.contains(key)) return false;
-        if (_focusedFolderKey != null && key != _focusedFolderKey) return false;
-        return true;
-      }).toList();
+  List<Email> get _visibleResults => _results!
+      .where(
+        (e) =>
+            !_hiddenAccountIds.contains(e.accountId) && _passesFolderFilters(e),
+      )
+      .toList();
 
   /// The account and folder filter bars stacked above the message list.
   /// Deactivating an account or focusing/excluding a folder is a pure
@@ -533,8 +728,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// re-query.
   Widget _buildResultsRegion(List<Email> results) {
     final visible = _visibleResults;
-    final folderFiltered =
-        _focusedFolderKey != null || _excludedFolderKeys.isNotEmpty;
+    final folderFiltered = _folderFiltered;
     return Column(
       children: [
         _buildAccountBar(results),
@@ -568,10 +762,11 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   /// Handles a tap on a result row's folder name: asks whether to focus on or
-  /// exclude that folder, then applies the choice as a client-side view filter
-  /// over the current results (#844). Focusing the already-focused folder
-  /// clears the focus (toggle); excluding a folder drops it from any active
-  /// focus, and vice versa, so the two never contradict each other.
+  /// exclude that folder, then applies the choice (#844). Focusing the
+  /// already-focused folder clears the focus (toggle); excluding a folder
+  /// drops it from any active focus, and vice versa, so the two never
+  /// contradict each other. A focus change re-queries in advanced mode (see
+  /// [_fetchStructured]); everything else is a view filter over [_results].
   Future<void> _onFolderTap(String accountId, String mailboxPath) async {
     final folderName = ref
             .read(mailboxByPathProvider((accountId, mailboxPath)))
@@ -584,6 +779,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     );
     if (choice == null || !mounted) return;
     final key = _folderKey(accountId, mailboxPath);
+    final focusBefore = _focusedFolderKey;
     setState(() {
       switch (choice) {
         case FolderScopeChoice.focus:
@@ -594,6 +790,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           if (_focusedFolderKey == key) _focusedFolderKey = null;
       }
     });
+    _afterFolderFilterChange(focusBefore);
+  }
+
+  /// Keeps the list full after the folder filters changed. In advanced mode
+  /// the folder focus is part of the query, so a changed focus re-runs it
+  /// from the first page. Otherwise the filters only hide fetched rows, so
+  /// when they hide too many and more matches exist, the next pages load
+  /// automatically.
+  void _afterFolderFilterChange(String? focusBefore) {
+    if (_advancedMode && _focusedFolderKey != focusBefore) {
+      unawaited(_refresh(resetLimit: true));
+      return;
+    }
+    final results = _results;
+    if (results == null || !_lastPageFull) return;
+    if (results.where(_passesFolderFilters).length >= _limit) return;
+    unawaited(_refresh());
   }
 
   /// The bar of chips describing the active folder focus/exclusions, each
@@ -629,9 +842,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildFolderChip(String key, {required bool focus}) {
-    final sep = key.indexOf('\u0000');
-    final accountId = key.substring(0, sep);
-    final path = key.substring(sep + 1);
+    final (accountId, path) = _splitFolderKey(key);
     final name = ref
             .watch(mailboxByPathProvider((accountId, path)))
             .value
@@ -639,13 +850,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         path;
     return InputChip(
       label: Text(focus ? 'Only: $name' : 'Excluding: $name'),
-      onDeleted: () => setState(() {
-        if (focus) {
-          _focusedFolderKey = null;
-        } else {
+      onDeleted: () {
+        final focusBefore = _focusedFolderKey;
+        setState(() {
+          if (focus) {
+            _focusedFolderKey = null;
+            return;
+          }
           _excludedFolderKeys.remove(key);
-        }
-      }),
+        });
+        _afterFolderFilterChange(focusBefore);
+      },
       deleteIcon: const Icon(Icons.close, size: 18),
       deleteButtonTooltipMessage: 'Clear folder filter',
     );
@@ -726,7 +941,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
 
-    if (!_loading && _results != null && _results!.isNotEmpty) {
+    if (!_loading &&
+        _results != null &&
+        (_results!.isNotEmpty || _folderFiltered)) {
       return Column(
         children: [
           filterHeader,

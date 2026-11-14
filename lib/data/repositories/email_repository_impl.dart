@@ -8795,7 +8795,13 @@ class EmailRepositoryImpl implements EmailRepository {
       FilterField.subject => _textLike(t.subject, leaf.comparison, val),
       FilterField.size => _sizeCompare(t.sizeBytes, leaf),
       FilterField.header => _headerLike(leaf, t),
-      FilterField.folder => _textLike(t.mailboxPath, leaf.comparison, val),
+      // `is` compares the whole stored path, ignoring ASCII case. Not LIKE:
+      // that lowercased the value first, and as SQLite folds only ASCII case
+      // a non-ASCII path ("Übersicht") never matched; `_`/`%` in a path also
+      // acted as wildcards.
+      FilterField.folder => leaf.comparison == FilterComparison.is_
+          ? t.mailboxPath.collate(Collate.noCase).equals(leaf.value)
+          : const Constant(false),
     };
   }
 

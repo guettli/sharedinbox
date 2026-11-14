@@ -720,7 +720,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
     String? accountId,
     String? mailboxPath,
     String? query, {
-    int? limit = 50,
+    int? limit = 100,
   }) =>
       (super.noSuchMethod(
         Invocation.method(
@@ -739,7 +739,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   _i6.Future<List<_i3.Email>> searchEmailsGlobal(
     String? accountId,
     String? query, {
-    int? limit = 50,
+    int? limit = 100,
   }) =>
       (super.noSuchMethod(
         Invocation.method(
@@ -757,7 +757,7 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
   _i6.Future<List<_i3.Email>> searchEmailsStructured(
     String? accountId,
     _i10.FilterGroup? filter, {
-    int? limit = 50,
+    int? limit = 100,
   }) =>
       (super.noSuchMethod(
         Invocation.method(
