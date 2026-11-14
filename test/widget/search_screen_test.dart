@@ -84,6 +84,59 @@ class _FailingStructuredRepository extends FakeEmailRepository {
       Future.error(StateError('no such column'));
 }
 
+/// Structured search over an in-memory mailbox: honours a `folder is <path>`
+/// condition the screen adds for a folder focus, records each call, and
+/// moves deleted mail to Trash like the real repository does once the move
+/// synced — under a new local id, since that embeds the folder.
+class _FolderAwareStructuredRepository extends FakeEmailRepository {
+  _FolderAwareStructuredRepository(this.mails);
+
+  final List<Email> mails;
+  final List<({String? accountId, FilterGroup filter, int limit})> calls = [];
+
+  @override
+  Future<List<Email>> searchEmailsStructured(
+    String? accountId,
+    FilterGroup filter, {
+    int limit = searchPageSize,
+  }) async {
+    calls.add((accountId: accountId, filter: filter, limit: limit));
+    final folder = filter.children
+        .whereType<FilterLeaf>()
+        .where((l) => l.field == FilterField.folder)
+        .map((l) => l.value)
+        .firstOrNull;
+    return mails
+        .where((e) => folder == null || e.mailboxPath == folder)
+        .take(limit)
+        .toList();
+  }
+
+  @override
+  Future<Email?> getEmail(String id) async =>
+      mails.where((e) => e.id == id).firstOrNull;
+
+  @override
+  Future<String?> deleteEmails(List<String> emailIds) async {
+    for (var i = 0; i < mails.length; i++) {
+      if (!emailIds.contains(mails[i].id)) continue;
+      mails[i] = mails[i].copyWith(
+        id: '${mails[i].id}@Trash',
+        mailboxPath: 'Trash',
+      );
+    }
+    return 'Trash';
+  }
+
+  @override
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+    for (var i = 0; i < mails.length; i++) {
+      if (mails[i].id != emailId) continue;
+      mails[i] = mails[i].copyWith(isFlagged: flagged);
+    }
+  }
+}
+
 /// Pumps [SearchScreen] opened on [filter] (advanced mode) with [emails].
 Future<void> _pumpWithFilter(
   WidgetTester tester,
@@ -356,30 +409,33 @@ void main() {
 
     testWidgets('a full page of results offers "Load more" for the next page',
         (tester) async {
-      final repo = PagedSearchRepository(bulkSearchHits(80));
+      final repo = PagedSearchRepository(
+        bulkSearchHits(searchPageSize + searchPageSize ~/ 2),
+      );
       await pumpSearchScreen(
         tester,
         history: FakeSearchHistoryRepository(),
         emails: repo,
       );
       await _type(tester, 'bulk');
-      expect(repo.limits.last, 50);
+      expect(repo.limits.last, searchPageSize);
 
       await _scrollResultsTo(tester, find.text('Load more'));
-      expect(find.text('Bulk 049'), findsOneWidget);
-      expect(find.text('Bulk 050'), findsNothing);
+      expect(find.text(bulkLabel(searchPageSize - 1)), findsOneWidget);
+      expect(find.text(bulkLabel(searchPageSize)), findsNothing);
 
       await tester.tap(find.text('Load more'));
       await tester.pumpAndSettle();
-      expect(repo.limits.last, 100);
-      await _scrollResultsTo(tester, find.text('Bulk 079'));
-      expect(find.text('Bulk 079'), findsOneWidget);
+      expect(repo.limits.last, 2 * searchPageSize);
+      final last = bulkLabel(searchPageSize + searchPageSize ~/ 2 - 1);
+      await _scrollResultsTo(tester, find.text(last));
+      expect(find.text(last), findsOneWidget);
       expect(find.text('Load more'), findsNothing);
     });
 
     testWidgets('advanced search pages its results with "Load more"',
         (tester) async {
-      final repo = PagedSearchRepository(bulkSearchHits(60));
+      final repo = PagedSearchRepository(bulkSearchHits(searchPageSize + 10));
       await _pumpWithFilter(
         tester,
         FilterGroup(
@@ -394,14 +450,15 @@ void main() {
         ),
         repo,
       );
-      expect(repo.limits.last, 50);
+      expect(repo.limits.last, searchPageSize);
 
       await _scrollResultsTo(tester, find.text('Load more'));
       await tester.tap(find.text('Load more'));
       await tester.pumpAndSettle();
-      expect(repo.limits.last, 100);
-      await _scrollResultsTo(tester, find.text('Bulk 059'));
-      expect(find.text('Bulk 059'), findsOneWidget);
+      expect(repo.limits.last, 2 * searchPageSize);
+      final last = bulkLabel(searchPageSize + 9);
+      await _scrollResultsTo(tester, find.text(last));
+      expect(find.text(last), findsOneWidget);
     });
 
     testWidgets('tapping clear button resets results to placeholder', (
@@ -776,6 +833,73 @@ void main() {
       expect(find.text('Inbox mail'), findsOneWidget);
       expect(find.text('Archive mail'), findsOneWidget);
       expect(find.text('Only: Archive'), findsNothing);
+    });
+
+    testWidgets('the folder focus survives running the search again', (
+      tester,
+    ) async {
+      await pumpTwoFolderSearch(tester);
+      await tester.tap(find.text('Archive'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Only this folder'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'mails');
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Only: Archive'), findsOneWidget);
+      expect(find.text('Archive mail'), findsOneWidget);
+      expect(find.text('Inbox mail'), findsNothing);
+    });
+
+    testWidgets('"Only this folder" auto-loads the folder\'s later matches', (
+      tester,
+    ) async {
+      // One Archive hit on the first page, then a full page of INBOX hits,
+      // then more Archive hits only a second page reaches.
+      final hits = bulkSearchHits(searchPageSize + 6);
+      final mails = [
+        for (var i = 0; i < hits.length; i++)
+          hits[i].copyWith(
+            mailboxPath: i == 0 || i > searchPageSize ? 'a' : 'INBOX',
+          ),
+      ];
+      final repo = PagedSearchRepository(mails);
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/search',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([inboxBox, archiveBox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(repo),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _type(tester, 'bulk');
+      expect(repo.limits.last, searchPageSize);
+
+      await tester.tap(find.text('Archive').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Only this folder'));
+      await tester.pumpAndSettle();
+
+      // The filter hid all but one row, so the next page loaded by itself
+      // and every Archive hit is listed without pressing "Load more".
+      expect(repo.limits.last, 2 * searchPageSize);
+      final last = bulkLabel(searchPageSize + 5);
+      await _scrollResultsTo(tester, find.text(last));
+      expect(find.text(last), findsOneWidget);
+      expect(find.text(bulkLabel(1)), findsNothing);
+      expect(find.text('Load more'), findsNothing);
     });
   });
 
@@ -1461,6 +1585,206 @@ void main() {
       expect(find.text('Recent searches'), findsNothing);
       expect(find.text('Type 3+ characters to search'), findsOneWidget);
       expect(await history.getRecentSearches(), isEmpty);
+    });
+  });
+
+  group('SearchScreen advanced search folder focus', () {
+    const inboxBox = Mailbox(
+      id: 'acc-1:INBOX',
+      accountId: 'acc-1',
+      path: 'INBOX',
+      name: 'INBOX',
+      displayPath: 'INBOX',
+      unreadCount: 0,
+      totalCount: 1,
+    );
+    const archiveBox = Mailbox(
+      id: 'acc-1:a',
+      accountId: 'acc-1',
+      path: 'a',
+      name: 'Archive',
+      displayPath: 'Archive',
+      unreadCount: 0,
+      totalCount: 1,
+    );
+    final filter = FilterGroup.single(
+      FilterField.subject,
+      FilterComparison.contains,
+      'mail',
+    );
+
+    Email mailIn(String path, int n) => testEmail(
+          id: 'acc-1:$path:$n',
+          subject: '$path mail $n',
+        ).copyWith(
+          messageId: '<$path-$n@example.com>',
+          mailboxPath: path,
+          receivedAt: DateTime(2024, 6).subtract(Duration(minutes: n)),
+        );
+
+    Future<void> pump(
+      WidgetTester tester,
+      _FolderAwareStructuredRepository repo,
+    ) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([inboxBox, archiveBox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(repo),
+            searchHistoryRepositoryProvider.overrideWithValue(
+              FakeSearchHistoryRepository(),
+            ),
+          ],
+          child: MaterialApp(home: SearchScreen(initialFilter: filter)),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> focusArchive(WidgetTester tester) async {
+      await tester.tap(find.text('Archive').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Only this folder'));
+      await tester.pumpAndSettle();
+    }
+
+    FilterLeaf? folderLeaf(FilterGroup f) => f.children
+        .whereType<FilterLeaf>()
+        .where((l) => l.field == FilterField.folder)
+        .firstOrNull;
+
+    testWidgets('"Only this folder" re-queries that folder', (tester) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      await pump(tester, repo);
+      expect(folderLeaf(repo.calls.last.filter), isNull);
+
+      await focusArchive(tester);
+
+      final call = repo.calls.last;
+      expect(call.accountId, 'acc-1');
+      expect(folderLeaf(call.filter)?.value, 'a');
+      expect(find.text('Only: Archive'), findsOneWidget);
+      expect(find.text('a mail 1'), findsOneWidget);
+      expect(find.text('INBOX mail 0'), findsNothing);
+    });
+
+    testWidgets('pressing Search again keeps the folder focus', (
+      tester,
+    ) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      await pump(tester, repo);
+      await focusArchive(tester);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Search'));
+      await tester.pumpAndSettle();
+
+      expect(folderLeaf(repo.calls.last.filter)?.value, 'a');
+      expect(find.text('Only: Archive'), findsOneWidget);
+      expect(find.text('a mail 1'), findsOneWidget);
+      expect(find.text('INBOX mail 0'), findsNothing);
+    });
+
+    testWidgets('clearing the focus chip re-queries every folder', (
+      tester,
+    ) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      await pump(tester, repo);
+      await focusArchive(tester);
+
+      final chip = find.ancestor(
+        of: find.text('Only: Archive'),
+        matching: find.byType(InputChip),
+      );
+      await tester.tap(
+        find.descendant(of: chip, matching: find.byIcon(Icons.close)),
+      );
+      await tester.pumpAndSettle();
+
+      expect(folderLeaf(repo.calls.last.filter), isNull);
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      expect(find.text('a mail 1'), findsOneWidget);
+    });
+
+    testWidgets('after a delete the search re-runs and shows the next mail', (
+      tester,
+    ) async {
+      // One page more than fits, all in the focused folder.
+      final repo = _FolderAwareStructuredRepository([
+        for (var i = 0; i <= searchPageSize; i++) mailIn('a', i),
+      ]);
+      await pump(tester, repo);
+      await focusArchive(tester);
+      const last = 'a mail $searchPageSize';
+      // The first page stops one short of the last match.
+      expect(repo.calls.last.limit, searchPageSize);
+
+      await tester.longPress(find.text('a mail 0'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+
+      // Re-queried the same folder; the deleted mail is gone (now in Trash)
+      // and the next match moved up into the page.
+      expect(folderLeaf(repo.calls.last.filter)?.value, 'a');
+      expect(find.text('a mail 0'), findsNothing);
+      await _scrollResultsTo(tester, find.text(last));
+      expect(find.text(last), findsOneWidget);
+    });
+
+    testWidgets('mail deleted without a folder focus stays out of the list', (
+      tester,
+    ) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('INBOX', 1),
+      ]);
+      await pump(tester, repo);
+      final callsBefore = repo.calls.length;
+
+      await tester.longPress(find.text('INBOX mail 0'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete));
+      await tester.pumpAndSettle();
+
+      // The refresh ran; the deleted mail still matches (in Trash) but is
+      // kept out because the user just acted on it.
+      expect(repo.calls.length, greaterThan(callsBefore));
+      expect(find.text('INBOX mail 0'), findsNothing);
+      expect(find.text('INBOX mail 1'), findsOneWidget);
+    });
+
+    testWidgets('starred mail stays in the list after the refresh', (
+      tester,
+    ) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('INBOX', 1),
+      ]);
+      await pump(tester, repo);
+
+      await tester.longPress(find.text('INBOX mail 0'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Star'));
+      await tester.pumpAndSettle();
+
+      // Starring does not move the mail out of its folder, so the refreshed
+      // search shows it again.
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      expect(find.text('INBOX mail 1'), findsOneWidget);
     });
   });
 }

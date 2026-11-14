@@ -348,7 +348,9 @@ void main() {
     testWidgets(
         'a full page of search results offers "Load more" for the next page',
         (tester) async {
-      final repo = PagedSearchRepository(bulkSearchHits(120));
+      final repo = PagedSearchRepository(
+        bulkSearchHits(2 * searchPageSize + 20),
+      );
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
@@ -370,7 +372,7 @@ void main() {
       await tester.enterText(find.byType(TextField), 'bulk');
       await tester.testTextInput.receiveAction(TextInputAction.search);
       await tester.pumpAndSettle();
-      expect(repo.limits.last, 50);
+      expect(repo.limits.last, searchPageSize);
 
       final list = find.descendant(
         of: find.byType(EmailThreadList),
@@ -381,18 +383,18 @@ void main() {
         500,
         scrollable: list.first,
       );
-      expect(find.text('Bulk 049'), findsOneWidget);
-      expect(find.text('Bulk 050'), findsNothing);
+      expect(find.text(bulkLabel(searchPageSize - 1)), findsOneWidget);
+      expect(find.text(bulkLabel(searchPageSize)), findsNothing);
 
       await tester.tap(find.text('Load more'));
       await tester.pumpAndSettle();
-      expect(repo.limits.last, 100);
+      expect(repo.limits.last, 2 * searchPageSize);
       await tester.scrollUntilVisible(
-        find.text('Bulk 099'),
+        find.text(bulkLabel(2 * searchPageSize - 1)),
         500,
         scrollable: list.first,
       );
-      expect(find.text('Bulk 099'), findsOneWidget);
+      expect(find.text(bulkLabel(2 * searchPageSize - 1)), findsOneWidget);
 
       // Third page holds the last 20: no longer full, so no more button.
       await tester.scrollUntilVisible(
@@ -402,9 +404,9 @@ void main() {
       );
       await tester.tap(find.text('Load more'));
       await tester.pumpAndSettle();
-      expect(repo.limits.last, 150);
+      expect(repo.limits.last, 3 * searchPageSize);
       await tester.scrollUntilVisible(
-        find.text('Bulk 119'),
+        find.text(bulkLabel(2 * searchPageSize + 19)),
         500,
         scrollable: list.first,
       );

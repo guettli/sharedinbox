@@ -18,7 +18,7 @@ final deleteExpectedMailboxZoneKey = Object();
 /// Page size of every local search (simple, folder, advanced). A search
 /// returns at most `limit` results; the UI starts at one page and grows the
 /// limit by one page per "Load more".
-const searchPageSize = 50;
+const searchPageSize = 100;
 
 abstract class EmailRepository {
   Stream<List<Email>> observeEmails(
