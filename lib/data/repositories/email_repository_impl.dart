@@ -4387,7 +4387,9 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// [setFlag] with an optional [source] recorded in the `email.flag` log
   /// entry (e.g. `sieve` when a local filter set the flag). Calls for the
-  /// same [emailId] run one after another, in call order.
+  /// same [emailId] run one after another, in call order. Never call this
+  /// inside `_db.transaction`: a queued outside call for the same id would
+  /// wait on the transaction lock while the inner call waits on it.
   Future<void> _setFlag(
     String emailId, {
     bool? seen,
@@ -4407,11 +4409,27 @@ class EmailRepositoryImpl implements EmailRepository {
           );
     // The chain tail swallows errors so one failed call does not fail the
     // next; the caller still gets this call's own error via [run].
-    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    // Fire-and-forget callers (the auto-mark-read on open) no longer surface
+    // the error to the zone because this handler is attached, so log it.
+    final tail = run.then<void>(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        log('setFlag($emailId) failed: $e');
+        unawaited(
+          _appLogger?.warn(
+            'email.flag_failed',
+            'Changing the read/star state failed',
+            emailId: emailId,
+            error: e,
+            stack: st,
+          ),
+        );
+      },
+    );
     _flagChains[emailId] = tail;
     unawaited(
       tail.whenComplete(() {
-        if (identical(_flagChains[emailId], tail)) _flagChains.remove(emailId);
+        _flagChains.removeWhere((k, v) => k == emailId && identical(v, tail));
       }),
     );
     return run;
@@ -4953,17 +4971,21 @@ class EmailRepositoryImpl implements EmailRepository {
         changeType == 'flag_flagged' ||
         changeType == 'add_keywords' ||
         changeType == 'clear_snooze') {
-      final existing = await (_db.select(_db.pendingChanges)
+      // Compare against the latest queued change of this type only: with
+      // `[seen:true, seen:false]` queued, a new `seen:true` is not redundant
+      // and must be appended, or the server would end up unread (#1186).
+      final latest = await (_db.select(_db.pendingChanges)
             ..where(
               (t) =>
                   t.resourceId.equals(resourceId) &
-                  t.changeType.equals(changeType) &
-                  t.payload.equals(payload) &
-                  t.attempts.equals(0),
+                  t.changeType.equals(changeType),
             )
+            ..orderBy([(t) => OrderingTerm.desc(t.id)])
             ..limit(1))
           .getSingleOrNull();
-      if (existing != null) return;
+      if (latest != null && latest.payload == payload && latest.attempts == 0) {
+        return;
+      }
     }
 
     await _db.into(_db.pendingChanges).insert(

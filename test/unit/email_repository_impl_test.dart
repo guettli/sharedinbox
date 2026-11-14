@@ -3013,6 +3013,36 @@ void main() {
       expect(email.isSeen, isFalse);
     });
 
+    // #1186: open (read), "Mark as unread", re-open before anything flushed.
+    // The third change matches the first queued one but not the latest, so it
+    // must be appended, or the server would end up unread.
+    test('read, unread, read again queues all three flag changes', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:5',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.setFlag('acc-1:5', seen: true);
+      await r.emails.setFlag('acc-1:5', seen: false);
+      await r.emails.setFlag('acc-1:5', seen: true);
+
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(changes.map((c) => c.payload.contains('"seen":true')).toList(), [
+        true,
+        false,
+        true,
+      ]);
+    });
+
     // #644: a repeated setFlag with an unchanged value must not pile up
     // duplicate un-attempted rows in pending_changes even if the first hasn't
     // flushed yet.
