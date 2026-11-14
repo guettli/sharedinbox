@@ -4377,9 +4377,47 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) =>
       _setFlag(emailId, seen: seen, flagged: flagged);
 
+  /// Tail of the in-flight [_setFlag] chain per email id. [_setFlag] reads the
+  /// row, drops no-op flags, then writes; two overlapping calls for the same
+  /// email could otherwise interleave, e.g. the unawaited auto-mark-read on
+  /// open landing after the user's "Mark as unread", which read the still
+  /// unread row, saw nothing to change and returned (#1186). Chaining makes
+  /// each call see the previous call's write.
+  final Map<String, Future<void>> _flagChains = {};
+
   /// [setFlag] with an optional [source] recorded in the `email.flag` log
-  /// entry (e.g. `sieve` when a local filter set the flag).
+  /// entry (e.g. `sieve` when a local filter set the flag). Calls for the
+  /// same [emailId] run one after another, in call order.
   Future<void> _setFlag(
+    String emailId, {
+    bool? seen,
+    bool? flagged,
+    String? source,
+  }) {
+    final previous = _flagChains[emailId];
+    final run = previous == null
+        ? _setFlagNow(emailId, seen: seen, flagged: flagged, source: source)
+        : previous.then(
+            (_) => _setFlagNow(
+              emailId,
+              seen: seen,
+              flagged: flagged,
+              source: source,
+            ),
+          );
+    // The chain tail swallows errors so one failed call does not fail the
+    // next; the caller still gets this call's own error via [run].
+    final tail = run.then<void>((_) {}, onError: (Object _) {});
+    _flagChains[emailId] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        if (identical(_flagChains[emailId], tail)) _flagChains.remove(emailId);
+      }),
+    );
+    return run;
+  }
+
+  Future<void> _setFlagNow(
     String emailId, {
     bool? seen,
     bool? flagged,
