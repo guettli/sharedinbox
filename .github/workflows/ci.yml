@@ -39,6 +39,19 @@ jobs:
                 echo "A self-hosted runner picked up the job — the ARC fleet is healthy."
                 exit 0 ;;
             esac
+            # The check runs on sharedinbox-arc-check, which has ONE runner, so
+            # it normally queues behind another run's check. That other check
+            # being in progress proves the scale set is servicing jobs.
+            busy="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?status=in_progress&per_page=20" \
+                      --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | .id" 2>/dev/null || true)"
+            for run in ${busy}; do
+              other="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs" \
+                         --jq '.jobs[] | select(.name=="Full Project Check" and .status=="in_progress") | .id' 2>/dev/null | head -n1 || true)"
+              if [ -n "${other}" ]; then
+                echo "Queued behind run ${run}, whose Full Project Check is in progress on the one-runner scale set — the ARC fleet is healthy."
+                exit 0
+              fi
+            done
             sleep 20
           done
           echo "::error title=No self-hosted runner available::'Full Project Check' was not picked up by a sharedinbox-arc runner within 15 minutes — failing fast instead of the silent 24h queue timeout."
@@ -46,13 +59,19 @@ jobs:
           echo "  * the shared guettli GITHUB_ADMIN_TOKEN expired -> ARC listeners crash-loop '401 Bad credentials'" >&2
           echo "    (kubectl -n arc-systems logs -l app.kubernetes.io/component=runner-scale-set-listener)" >&2
           echo "  * the ghcr.io/guettli/sharedinbox-ci-runner image can't be pulled -> runner pods in ImagePullBackOff" >&2
+          echo "  * the sharedinbox-arc-check scale set is missing or Outdated (kubectl -n arc-runners get autoscalingrunnerset)" >&2
           echo "    (kubectl -n arc-runners get pods)" >&2
           echo "Fix the fleet, then re-run this workflow." >&2
           exit 1
 
   check:
     name: Full Project Check
-    runs-on: sharedinbox-arc
+    # Its own one-runner ARC scale set (gitops
+    # k8s/helm-values/vps/arc-runner-set-sharedinbox-check.yaml): at most one
+    # full check on tc's shared Dagger engine at a time. Two at once next to
+    # Deploy's Gradle build OOM-killed the engine on 2026-11-13. Extra checks
+    # queue for the runner; a `concurrency` group would cancel them instead.
+    runs-on: sharedinbox-arc-check
     timeout-minutes: 60
     if: github.server_url == 'https://github.com'
     steps:

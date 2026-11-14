@@ -389,7 +389,10 @@ tasks:
         _ts() { date -u '+[%H:%M:%S]'; }
         run_dagger() {
           : > "$DAGGER_OUT"; : > "$RC_FILE"
-          { timeout --kill-after=10 600 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
+          # 900s per attempt (was 600): under engine load the unit tests alone
+          # overran 600s on 2026-11-13. 3 x 900s plus a prune still fits the
+          # job's timeout-minutes: 60 in ci.yml.
+          { timeout --kill-after=10 900 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
           RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
           if [ "$RC" -eq 124 ] && grep -q "All tests passed" "$DAGGER_OUT"; then
             echo "$(_ts) dagger: hung in teardown after success; treating as exit 0." >&2
