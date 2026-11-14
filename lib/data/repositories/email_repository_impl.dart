@@ -1475,13 +1475,16 @@ class EmailRepositoryImpl implements EmailRepository {
     return ids.toSet();
   }
 
-  /// Bumped, synchronously, whenever a local edit of an email starts
-  /// ([_setFlag], [_enqueueChange]); [_localEditSeqById] remembers the value
+  /// Bumped, synchronously, when [_enqueueChange] starts and again once its
+  /// row is queued; [_localEditSeqById] remembers the value
   /// per email while a server flag read is running. Together with
   /// [_ServerFlagRead] this closes the window a `pendingChanges` lookup alone
   /// leaves open: an edit queued *and already flushed* while the server's
   /// answer was on its way is no longer in `pendingChanges`, yet that answer
   /// predates it and would write the old read/star state back.
+  ///
+  /// In memory, so per isolate: a background (WorkManager) sync in another
+  /// isolate does not see the UI's edits and relies on the queue check alone.
   int _localEditSeq = 0;
   final Map<String, int> _localEditSeqById = {};
   int _activeServerFlagReads = 0;
@@ -1733,6 +1736,34 @@ class EmailRepositoryImpl implements EmailRepository {
     // it here would set the message body to the literal string `0>` (#680).
     const fetchItems = '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE '
         'RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
+    // Usually new UIDs only, but a row can already exist (re-keyed after a
+    // move, or a full sync without a checkpoint): its FLAGS must not undo a
+    // read/star change made meanwhile.
+    final flagRead = await _startServerFlagRead(account.id);
+    try {
+      return await _fetchAndUpsertImapGuarded(
+        client,
+        account,
+        mailboxPath,
+        sequence,
+        fetchItems,
+        flagRead,
+        objectIdKind: objectIdKind,
+      );
+    } finally {
+      _endServerFlagRead();
+    }
+  }
+
+  Future<int> _fetchAndUpsertImapGuarded(
+    imap.ImapClient client,
+    account_model.Account account,
+    String mailboxPath,
+    imap.MessageSequence sequence,
+    String fetchItems,
+    _ServerFlagRead flagRead, {
+    ObjectIdKind? objectIdKind,
+  }) async {
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1761,6 +1792,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // after the transaction so "Show Logs" starts with the fetch (#920).
     final newlyStored = <(String, String?, int?)>[];
     await _db.transaction(() async {
+      final queuedNow = await _inFlightFlagResourceIds(account.id);
       for (final msg in fetch.messages) {
         final envelope = msg.envelope;
         if (envelope == null) {
@@ -1829,6 +1861,7 @@ class EmailRepositoryImpl implements EmailRepository {
                   ..where(_db.emails.id.equals(emailId)))
                 .getSingleOrNull() ==
             null;
+        final keepLocalFlags = !isNew && flagRead.protects(emailId, queuedNow);
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
                 id: emailId,
@@ -1854,8 +1887,13 @@ class EmailRepositoryImpl implements EmailRepository {
                 preview: Value(
                   previewFromSnippet(msg, previewSnippetByUid[uid]),
                 ),
-                isSeen: Value(msg.flags?.contains(r'\Seen') ?? false),
-                isFlagged: Value(msg.flags?.contains(r'\Flagged') ?? false),
+                // Absent keeps the stored value of an edited existing row.
+                isSeen: keepLocalFlags
+                    ? const Value.absent()
+                    : Value(msg.flags?.contains(r'\Seen') ?? false),
+                isFlagged: keepLocalFlags
+                    ? const Value.absent()
+                    : Value(msg.flags?.contains(r'\Flagged') ?? false),
                 // enough_mail counts parts with Content-Disposition: attachment;
                 // JMAP's hasAttachment (below) is server-defined, so the two
                 // protocols may disagree on e.g. inline images.
@@ -4484,7 +4522,6 @@ class EmailRepositoryImpl implements EmailRepository {
     bool? flagged,
     String? source,
   }) {
-    _noteLocalEdit(emailId);
     final previous = _flagChains[emailId];
     final run = previous == null
         ? _setFlagNow(emailId, seen: seen, flagged: flagged, source: source)
@@ -5088,6 +5125,10 @@ class EmailRepositoryImpl implements EmailRepository {
             createdAt: DateTime.now(),
           ),
         );
+    // Again after the insert: a read that started during the awaits above
+    // took its sequence after the first note and read the queue before this
+    // row existed, so without this the change could flush unseen by it.
+    _noteLocalEdit(resourceId);
     final bulk = _bulkScope;
     if (bulk != null) {
       bulk.kickedAccounts.add(accountId);
@@ -9706,7 +9747,6 @@ Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
 /// [_BulkScope].
 final _bulkScopeKey = Object();
 
-/// State shared by every mutation running inside one bulk operation.
 /// A server flag read in progress (see
 /// [EmailRepositoryImpl._startServerFlagRead]). The server's answer reflects
 /// its state at some point after [_seq] was taken, so it must not overwrite a
@@ -9729,6 +9769,7 @@ class _ServerFlagRead {
       (_editSeqById[emailId] ?? 0) > _seq;
 }
 
+/// State shared by every mutation running inside one bulk operation.
 class _BulkScope {
   /// App Log writes deferred until the bulk transaction has committed.
   final logs = <Future<Object?>? Function()>[];

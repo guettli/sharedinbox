@@ -76,6 +76,9 @@ const _jmapPair = Account(
 http.Client _mockJmapEmails({
   required List<Map<String, dynamic>> apiResponses,
   List<Map<String, dynamic>>? requests,
+  // Runs before API call [callIndex] is answered, e.g. a local edit landing
+  // while that response is in flight.
+  Future<void> Function(int callIndex)? beforeResponse,
 }) {
   var callIndex = 0;
   return MockClient((req) async {
@@ -99,6 +102,7 @@ http.Client _mockJmapEmails({
     }
     requests?.add(jsonDecode(req.body) as Map<String, dynamic>);
     final resp = apiResponses[callIndex % apiResponses.length];
+    await beforeResponse?.call(callIndex);
     callIndex++;
     return http.Response(jsonEncode(resp), 200);
   });
@@ -6673,6 +6677,79 @@ void main() {
             ..where((t) => t.resourceType.equals('Email')))
           .getSingle();
       expect(emailState.state, 'est2');
+    });
+
+    group('a read change made while Email/get is in flight', () {
+      Future<void> run({required bool flushed}) async {
+        late ({
+          AccountRepositoryImpl accounts,
+          EmailRepositoryImpl emails,
+          AppDatabase db
+        }) r;
+        r = _makeRepos(
+          httpClient: _mockJmapEmails(
+            apiResponses: [
+              _emailChangesResponse(
+                oldState: 'est1',
+                newState: 'est2',
+                updated: ['e1'],
+              ),
+              // Built before the user's change: still unread, new subject.
+              _emailGetOnly(
+                state: 'est2',
+                list: [
+                  _jmapEmail(id: 'e1', mailboxId: 'mbx1', subject: 'Renamed'),
+                ],
+              ),
+            ],
+            beforeResponse: (i) async {
+              if (i != 1) return;
+              await r.emails.setFlag('jmap-1:e1', seen: true);
+              if (flushed) await r.db.delete(r.db.pendingChanges).go();
+            },
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insertOnConflictUpdate(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                subject: const Value('First'),
+                receivedAt: DateTime(2024),
+              ),
+            );
+        for (final (type, state) in [
+          ('Email', 'est1'),
+          ('JMAP:Reconcile:mbx1', DateTime.now().toIso8601String()),
+        ]) {
+          await r.db.into(r.db.syncStates).insertOnConflictUpdate(
+                SyncStatesCompanion.insert(
+                  accountId: 'jmap-1',
+                  resourceType: type,
+                  state: state,
+                  syncedAt: DateTime.now(),
+                ),
+              );
+        }
+
+        await r.emails.syncEmails('jmap-1', 'mbx1');
+
+        final email = (await r.emails.getEmail('jmap-1:e1'))!;
+        expect(email.isSeen, isTrue);
+        // The rest of the server's answer still applies.
+        expect(email.subject, 'Renamed');
+      }
+
+      test(
+        'keeps it while the change is still queued',
+        () => run(flushed: false),
+      );
+      test(
+        'keeps it when the change was already pushed',
+        () => run(flushed: true),
+      );
     });
 
     test('incremental sync with no changes updates state only', () async {
