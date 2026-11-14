@@ -18,7 +18,9 @@ jobs:
   runner-watchdog:
     name: Runner availability watchdog
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Above the script's 230-min queue budget below: a cancelled watchdog
+    # would fail the whole run even when the check later passes.
+    timeout-minutes: 240
     if: github.server_url == 'https://github.com'
     permissions:
       actions: read
@@ -28,9 +30,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          DEADLINE=900   # 15 min; a healthy ARC fleet cold-starts a runner in ~1-3 min
-          echo "Watching for a sharedinbox-arc runner to start 'Full Project Check' (max 15 min)..."
-          while [ "${SECONDS}" -lt "${DEADLINE}" ]; do
+          # The check runs on sharedinbox-arc-check, which has ONE runner, so it
+          # normally queues behind other runs' checks. Fail only after 15 min in
+          # which NO ci.yml run had a Full Project Check in progress: a check
+          # running anywhere proves the scale set is servicing jobs, so it
+          # pushes the deadline out. Keep polling rather than exit on that, so
+          # a fleet that breaks while we queue is still caught.
+          IDLE_LIMIT=900   # 15 min; a healthy ARC fleet cold-starts a runner in ~1-3 min
+          BUDGET=13800     # 230 min of queueing behind others: then stop watching,
+                           # GithubActionsRunQueuedTooLong (gitops vmalert) takes over
+          deadline=$((SECONDS + IDLE_LIMIT))
+          echo "Watching for a sharedinbox-arc-check runner to start 'Full Project Check'..."
+          while [ "${SECONDS}" -lt "${deadline}" ]; do
             status="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
                         --jq '.jobs[] | select(.name=="Full Project Check") | .status' 2>/dev/null | head -n1 || true)"
             echo "[$(date -u +%H:%M:%S)] Full Project Check: ${status:-<not scheduled yet>}"
@@ -39,28 +50,31 @@ jobs:
                 echo "A self-hosted runner picked up the job — the ARC fleet is healthy."
                 exit 0 ;;
             esac
-            # The check runs on sharedinbox-arc-check, which has ONE runner, so
-            # it normally queues behind another run's check. That other check
-            # being in progress proves the scale set is servicing jobs.
             busy="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?status=in_progress&per_page=20" \
                       --jq ".workflow_runs[] | select(.id != ${GITHUB_RUN_ID}) | .id" 2>/dev/null || true)"
             for run in ${busy}; do
               other="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs" \
                          --jq '.jobs[] | select(.name=="Full Project Check" and .status=="in_progress") | .id' 2>/dev/null | head -n1 || true)"
               if [ -n "${other}" ]; then
-                echo "Queued behind run ${run}, whose Full Project Check is in progress on the one-runner scale set — the ARC fleet is healthy."
-                exit 0
+                echo "  queued behind run ${run}, whose Full Project Check is in progress — fleet is servicing jobs"
+                deadline=$((SECONDS + IDLE_LIMIT))
+                break
               fi
             done
+            if [ "${SECONDS}" -ge "${BUDGET}" ]; then
+              echo "::warning title=Long CI queue::Still queued after $((BUDGET / 60)) min while other checks kept running — a backlog, not a dead fleet. Stopping the watch."
+              exit 0
+            fi
             sleep 20
           done
-          echo "::error title=No self-hosted runner available::'Full Project Check' was not picked up by a sharedinbox-arc runner within 15 minutes — failing fast instead of the silent 24h queue timeout."
+          echo "::error title=No self-hosted runner available::'Full Project Check' was not picked up by a sharedinbox-arc-check runner, and no other check ran, for 15 minutes — failing fast instead of the silent 24h queue timeout."
           echo "The self-hosted ARC runner fleet is not servicing jobs. Likely causes (see the arc-runner-secrets runbook):" >&2
           echo "  * the shared guettli GITHUB_ADMIN_TOKEN expired -> ARC listeners crash-loop '401 Bad credentials'" >&2
           echo "    (kubectl -n arc-systems logs -l app.kubernetes.io/component=runner-scale-set-listener)" >&2
           echo "  * the ghcr.io/guettli/sharedinbox-ci-runner image can't be pulled -> runner pods in ImagePullBackOff" >&2
-          echo "  * the sharedinbox-arc-check scale set is missing or Outdated (kubectl -n arc-runners get autoscalingrunnerset)" >&2
           echo "    (kubectl -n arc-runners get pods)" >&2
+          echo "  * the sharedinbox-arc-check scale set is missing or Outdated" >&2
+          echo "    (kubectl -n arc-runners get autoscalingrunnerset)" >&2
           echo "Fix the fleet, then re-run this workflow." >&2
           exit 1
 
@@ -72,7 +86,9 @@ jobs:
     # Deploy's Gradle build OOM-killed the engine on 2026-11-13. Extra checks
     # queue for the runner; a `concurrency` group would cancel them instead.
     runs-on: sharedinbox-arc-check
-    timeout-minutes: 60
+    # 75, not 60: check-dagger's worst case is 3 x 910s attempts plus two
+    # prune+settle pauses (~53 min), and setup + print-runner-wait run first.
+    timeout-minutes: 75
     if: github.server_url == 'https://github.com'
     steps:
       - uses: actions/checkout@v5

@@ -390,8 +390,8 @@ tasks:
         run_dagger() {
           : > "$DAGGER_OUT"; : > "$RC_FILE"
           # 900s per attempt (was 600): under engine load the unit tests alone
-          # overran 600s on 2026-11-13. 3 x 900s plus a prune still fits the
-          # job's timeout-minutes: 60 in ci.yml.
+          # overran 600s on 2026-11-13. ci.yml's timeout-minutes (75) is sized
+          # for 3 attempts. A timed-out attempt is not retried, see retry_dagger.
           { timeout --kill-after=10 900 "$@"; echo $? > "$RC_FILE"; } 2>&1 | tee "$DAGGER_OUT"
           RC=$(cat "$RC_FILE" 2>/dev/null || echo 1)
           if [ "$RC" -eq 124 ] && grep -q "All tests passed" "$DAGGER_OUT"; then
@@ -404,6 +404,14 @@ tasks:
           for attempt in 1 2 3; do
             run_dagger "$@" && return 0
             RC=$?
+            # Timed out (124/137 from timeout) without passing: the engine is
+            # overloaded or the suite hung. A retry would hold the ONE check
+            # runner another 15 min and most likely time out again, even though
+            # its output often contains "context deadline exceeded".
+            if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+              echo "$(_ts) dagger: attempt $attempt/3 hit the 900s timeout; not retrying." >&2
+              return "$RC"
+            fi
             if [ "$attempt" -lt 3 ] && { grep -qE "connection reset|context deadline exceeded|connection refused|invalid return status code" "$DAGGER_OUT" || [ "$RC" -eq 2 ]; }; then
               echo "$(_ts) dagger: network error on attempt $attempt/3, retrying..." >&2
             elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$DAGGER_OUT"; then
