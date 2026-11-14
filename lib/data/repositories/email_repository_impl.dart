@@ -8820,7 +8820,9 @@ class EmailRepositoryImpl implements EmailRepository {
         fromJoin: 'FROM email_notes_fts f'
             ' JOIN email_notes n ON n.rowid = f.rowid'
             ' JOIN emails e ON e.message_id = n.message_id'
-            ' AND e.account_id = n.account_id',
+            ' AND e.account_id = n.account_id'
+            // Deleted locally, still waiting for the server delete.
+            ' AND n.pending_delete = 0',
         ftsTable: 'email_notes_fts',
         readsFrom: {_db.emails, _db.emailNotes},
         accountId: accountId,

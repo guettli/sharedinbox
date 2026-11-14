@@ -12,7 +12,8 @@ abstract class NoteRepository {
     Iterable<String> messageIds,
   );
 
-  /// Pulls every note in the account's Notes folder into the local cache.
+  /// Pushes notes added or deleted on this device, then pulls every note in
+  /// the account's Notes folder into the local cache.
   ///
   /// Runs from the per-account sync loop and the OS-level WorkManager job so
   /// notes are already cached before the user opens the mail — offline
@@ -23,9 +24,11 @@ abstract class NoteRepository {
   /// so only newly appended notes are fetched on subsequent cycles.
   Future<void> syncAllNotes(String accountId);
 
-  /// Creates a new note on the server and caches it locally.
+  /// Stores a new note locally (works offline) and pushes it to the server
+  /// in the background; a failed push is retried by [syncAllNotes].
   Future<void> addNote(String accountId, String messageId, String text);
 
-  /// Deletes a note from the server and removes it from the local cache.
+  /// Hides the note at once (works offline) and removes the server copy in
+  /// the background; a failed delete is retried by [syncAllNotes].
   Future<void> deleteNote(String noteId);
 }

@@ -108,7 +108,10 @@ Future<void> _doBackgroundSync() async {
       db,
       const FlutterSecureStorageImpl(),
     );
-    final noteRepo = NoteRepositoryImpl(db, accountRepo);
+    // Pull only: pushing local note changes is left to the app's own sync,
+    // which serializes it. Two isolates pushing at once could upload a note
+    // twice or drop a delete while the other's upload is in flight.
+    final noteRepo = NoteRepositoryImpl(db, accountRepo, pushPending: false);
     final accounts = await accountRepo.observeAccounts().first;
     await initNotifications();
     for (final account in accounts) {
