@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/email.dart'
     show ImapMailboxState, SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart'
     show Mailbox, isDuplicateOfOtherFolders;
+import 'package:sharedinbox/core/net/connection_lost_exception.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
@@ -71,7 +72,9 @@ String syncErrorKey(String message) {
       ? 'timeout'
       : message.contains('Could not reach the mail server')
           ? 'unreachable'
-          : 'other';
+          : message.contains('Lost the connection to the mail server')
+              ? 'connection-lost'
+              : 'other';
   if (message.contains('folders failed')) return 'partial:$cause';
   // A transient hint collapses to its class; anything else keeps its full
   // text, so two distinct one-off problems stay distinct.
@@ -95,8 +98,16 @@ String syncErrorKey(String message) {
 /// Deliberately short and free of the words "network" and "DNS": it is
 /// rendered in a two-line banner (`EmailListScreen`) that ellipses anything
 /// longer, and the half that would be cut is the actionable half.
+///
+/// A connection that dropped mid-sync ([ConnectionLostException], e.g. errno
+/// 103 on a network switch) is neither: the server was reachable and did not
+/// time out — the phone lost the connection (#1224).
 @visibleForTesting
 String syncErrorMessage(Object e) {
+  if (e is ConnectionLostException) {
+    return 'Lost the connection to the mail server mid-sync. Will retry '
+        'automatically.';
+  }
   if (_isTimeoutError(e)) {
     return 'The mail server was reached but did not answer in time — the '
         'request took too long. Will retry automatically.';
@@ -1275,8 +1286,10 @@ class _AccountSync with _KickableWait {
     }
   }
 
+  // A [ConnectionLostException] like the one the IMAP client raises for the
+  // same event, so the banner reads the same whichever side notices first.
   static SocketException _idleConnectionLost() =>
-      const SocketException('IMAP IDLE connection lost');
+      const ConnectionLostException('IMAP IDLE connection lost');
 
   /// Whether the INBOX state the IDLE connection's SELECT reported
   /// ([selected]) differs from what the last sync cycle saw when it selected

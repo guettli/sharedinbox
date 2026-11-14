@@ -32,7 +32,11 @@ import 'package:sharedinbox/ui/utils/global_email_search.dart';
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'fake_imap.dart'
-    show FakeImapClient, ScriptedSmtpClient, SnoozeSpyImapClient;
+    show
+        FakeImapClient,
+        ScriptedSmtpClient,
+        SelectingFakeImapClient,
+        SnoozeSpyImapClient;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _account = Account(
@@ -3717,8 +3721,11 @@ void main() {
 
   group('IMAP flushPendingChanges', () {
     test('records attempt and error when IMAP throws', () async {
-      final r = _makeRepos();
-      // _makeRepos uses _noImapConnect which throws UnsupportedError
+      // A command fails; a failed connect is no attempt (#1224).
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            SelectingFakeImapClient(selectError: Exception('server said no')),
+      );
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.pendingChanges).insert(
             PendingChangesCompanion.insert(
@@ -3753,11 +3760,13 @@ void main() {
             ),
           );
 
-      // Force connection failure so the attempt counter increments
+      // Force a failing command so the attempt counter increments (a failed
+      // connect would not count, #1224).
       final failingEmails = EmailRepositoryImpl(
         r.db,
         r.accounts,
-        imapConnect: (_, __, ___) => Future.error(Exception('forced failure')),
+        imapConnect: (_, __, ___) async =>
+            SelectingFakeImapClient(selectError: Exception('forced failure')),
         smtpConnect: _noSmtpConnect,
       );
 
@@ -4925,6 +4934,282 @@ void main() {
         expect(pending.map((p) => p.attempts), [1, 0, 0]);
       });
     }
+
+    Future<List<PendingChangeRow>> pendingInOrder(AppDatabase db) =>
+        (db.select(db.pendingChanges)..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get();
+
+    // #1224: a failed connect never reached the server, so it must not use
+    // up an attempt — after _maxChangeAttempts offline syncs the user's
+    // queued actions were silently dropped.
+    test('IMAP flush with a failed connect leaves attempts untouched',
+        () async {
+      final r = _makeRepos(
+        imapConnect: (_, __, ___) async =>
+            throw const SocketException('Network is unreachable'),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 1);
+
+      for (var i = 0; i < 6; i++) {
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
+      }
+
+      final pending = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(pending.attempts, 0);
+      expect(pending.lastError, isNull);
+    });
+
+    group('batched moves (#1224)', () {
+      test('consecutive moves with one source and target share a UID MOVE',
+          () async {
+        final spy = _uidPlusSpy(
+          copyUidSourceToTarget: const {1: 11, 2: 12, 3: 13},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        for (final uid in [1, 2, 3]) {
+          await insertInboxMove(r.db, uid);
+        }
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 3);
+
+        expect(spy.calls, ['move INBOX:1,2,3->Trash']);
+        expect(spy.selects, ['INBOX']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        for (final (oldUid, newUid) in [(1, 11), (2, 12), (3, 13)]) {
+          expect(await r.emails.getEmail('acc-1:INBOX:$oldUid'), isNull);
+          expect(await r.emails.getEmail('acc-1:Trash:$newUid'), isNotNull);
+        }
+      });
+
+      test('a row the COPYUID does not map is applied on its own', () async {
+        final spy = _uidPlusSpy(
+          copyUidSourceToTarget: const {1: 11, 3: 13},
+          searchResultsByMailbox: const {
+            'Trash': [12],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        for (final uid in [1, 2, 3]) {
+          await insertInboxMove(r.db, uid);
+        }
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 3);
+
+        expect(spy.calls, [
+          'move INBOX:1,2,3->Trash',
+          'move INBOX:2->Trash',
+        ]);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail('acc-1:Trash:12'), isNotNull);
+      });
+
+      test('a batch never jumps over a change in between, or mixes targets',
+          () async {
+        final spy = _uidPlusSpy(
+          copyUidSourceToTarget: const {1: 11, 2: 12, 3: 13, 4: 14},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 1);
+        await r.db.into(r.db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: 'acc-1:INBOX:9',
+                changeType: 'add_keywords',
+                payload: jsonEncode({
+                  'uid': 9,
+                  'mailboxPath': 'INBOX',
+                  'keywords': ['k'],
+                }),
+                createdAt: DateTime.now(),
+              ),
+            );
+        await insertInboxMove(r.db, 2);
+        await insertInboxMove(r.db, 3, dest: 'Archive');
+        await insertInboxMove(r.db, 4, dest: 'Archive');
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 5);
+
+        expect(spy.calls, [
+          'move INBOX:1->Trash',
+          'store add 9 k',
+          'move INBOX:2->Trash',
+          'move INBOX:3,4->Archive',
+        ]);
+      });
+
+      test('a connection lost on the batch MOVE stops the flush', () async {
+        final spy = _uidPlusSpy(
+          onUidMove: () async =>
+              throw const SocketException('Software caused connection abort'),
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        for (final uid in [1, 2]) {
+          await insertInboxMove(r.db, uid);
+        }
+        await insertInboxMove(r.db, 3, dest: 'Archive');
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
+
+        final pending = await pendingInOrder(r.db);
+        expect(pending.map((p) => p.attempts), [1, 1, 0]);
+      });
+
+      test('without UIDPLUS, moves are not batched', () async {
+        final spy = SnoozeSpyImapClient(
+          copyUidValidity: 1,
+          copyUidSourceToTarget: const {1: 11, 2: 12},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 1);
+        await insertInboxMove(r.db, 2);
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 2);
+        expect(spy.calls, ['move INBOX:1->Trash', 'move INBOX:2->Trash']);
+      });
+
+      // A row the batch already moved is done, even when the connection drops
+      // on a later row's fallback; rows not reached get their claim back.
+      test('a connection lost on a fallback row keeps the batch result',
+          () async {
+        var moves = 0;
+        final spy = _uidPlusSpy(
+          copyUidSourceToTarget: const {1: 11},
+          onUidMove: () async {
+            if (++moves == 2) {
+              throw const SocketException('Software caused connection abort');
+            }
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        for (final uid in [1, 2, 3]) {
+          await insertInboxMove(r.db, uid);
+        }
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+
+        expect(await r.emails.getEmail('acc-1:Trash:11'), isNotNull);
+        final pending = await pendingInOrder(r.db);
+        expect(pending.map((p) => p.resourceId), [
+          'acc-1:INBOX:2',
+          'acc-1:INBOX:3',
+        ]);
+        expect(pending.map((p) => p.attempts), [1, 0]);
+      });
+
+      // Nothing reached the server: the claims are given back, so a dropped
+      // connection costs no attempts and Undo can still cancel.
+      test('a connection lost before the batch MOVE charges no attempt',
+          () async {
+        final spy = _SelectFailsImapClient(
+          const SocketException('Software caused connection abort'),
+        )..serverInfo.capabilities = const [imap.Capability('UIDPLUS')];
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 1);
+        await insertInboxMove(r.db, 2);
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
+
+        expect(spy.calls, isEmpty);
+        final pending = await pendingInOrder(r.db);
+        expect(pending.map((p) => p.attempts), [0, 0]);
+        expect(
+          await r.emails.cancelPendingChange('acc-1:INBOX:1', 'move'),
+          isTrue,
+        );
+      });
+    });
+
+    // #1224: with UIDPLUS, a MOVE without COPYUID moved nothing. The source
+    // (still selected) is searched first, without a SELECT round trip.
+    group('MOVE that visibly moved nothing (UIDPLUS, no COPYUID)', () {
+      test('a vanished message is dropped with one SELECT less', () async {
+        final spy = _uidPlusSpy();
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 9080);
+
+        await r.emails.flushPendingChanges('acc-1', 'pw');
+
+        expect(spy.calls, ['move INBOX:9080->Trash']);
+        // INBOX for the MOVE, Trash to check an earlier attempt's MOVE did
+        // not land there — no SELECT INBOX again for the source search.
+        expect(spy.selects, ['INBOX', 'Trash']);
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      });
+
+      test('a stale UID is re-found in the source and moved', () async {
+        final spy = _uidPlusSpy(
+          searchResultsByMailbox: const {
+            'INBOX': [205],
+          },
+          copyUidSourceToTarget: const {205: 7},
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 5);
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+
+        expect(spy.calls, [
+          'move INBOX:5->Trash',
+          'move INBOX:205->Trash',
+        ]);
+        // The source search needs no SELECT; the destination is checked
+        // before moving another copy.
+        expect(spy.selects, ['INBOX', 'Trash', 'INBOX']);
+        expect(await r.emails.getEmail('acc-1:Trash:7'), isNotNull);
+      });
+
+      test('a message an earlier attempt already moved is re-keyed', () async {
+        final spy = _uidPlusSpy(
+          searchResultsByMailbox: const {
+            'Trash': [77],
+          },
+        );
+        final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+        await r.accounts.addAccount(_account, 'pw');
+        await insertInboxMove(r.db, 5);
+
+        expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await r.emails.getEmail('acc-1:Trash:77'), isNotNull);
+      });
+    });
+
+    // #1224: whatever the error's wording, a client that reports itself
+    // disconnected ends the flush.
+    test('IMAP flush stops when the client reports it is disconnected',
+        () async {
+      var moves = 0;
+      late final SnoozeSpyImapClient spy;
+      spy = SnoozeSpyImapClient(
+        onUidMove: () async {
+          moves++;
+          spy.fakeConnected = false;
+          throw Exception('write failed');
+        },
+      );
+      final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
+      await r.accounts.addAccount(_account, 'pw');
+      await insertInboxMove(r.db, 1);
+      await insertInboxMove(r.db, 2, dest: 'Archive');
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(moves, 1);
+      final pending = await pendingInOrder(r.db);
+      expect(pending.map((p) => p.attempts), [1, 0]);
+    });
 
     // A connection lost during the source Message-ID search — the one that
     // decides "gone" — must not read as "no match" (which would drop the
@@ -11689,4 +11974,33 @@ class _SearchFailsImapClient extends SnoozeSpyImapClient {
       responseTimeout: responseTimeout,
     );
   }
+}
+
+/// [SnoozeSpyImapClient] advertising UIDPLUS, so MOVEs are batched and a
+/// MOVE without COPYUID reads as "moved nothing".
+SnoozeSpyImapClient _uidPlusSpy({
+  Map<String, List<int>> searchResultsByMailbox = const {},
+  Map<int, int> copyUidSourceToTarget = const {},
+  Future<void> Function()? onUidMove,
+}) =>
+    SnoozeSpyImapClient(
+      copyUidValidity: 1,
+      copyUidSourceToTarget: copyUidSourceToTarget,
+      searchResultsByMailbox: searchResultsByMailbox,
+      onUidMove: onUidMove,
+    )..serverInfo.capabilities = const [imap.Capability('UIDPLUS')];
+
+/// [SnoozeSpyImapClient] whose SELECT fails with [error].
+class _SelectFailsImapClient extends SnoozeSpyImapClient {
+  _SelectFailsImapClient(this.error);
+
+  final Object error;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      throw error;
 }

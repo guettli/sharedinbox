@@ -15,6 +15,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' show ImapClient, ImapException;
+import 'package:sharedinbox/core/net/connection_lost_exception.dart';
 import 'package:sharedinbox/core/sync/account_sync_manager.dart'
     show syncErrorDetail, syncErrorMessage, syncErrorKey;
 import 'package:test/test.dart';
@@ -98,6 +99,21 @@ void main() {
     test('still keeps an unreachable host on the original hint', () {
       const unreachable = SocketException('Connection refused');
       expect(syncErrorMessage(unreachable), contains('Could not reach'));
+    });
+
+    // #1224: a connection the phone dropped mid-sync is neither a slow
+    // server nor an unreachable one.
+    test('reports a lost connection as such', () {
+      const lost = ConnectionLostException(
+        'Connection to the mail server lost',
+        osError: OSError('Software caused connection abort', 103),
+      );
+      final message = syncErrorMessage(lost);
+      expect(message, contains('Lost the connection'));
+      expect(message, isNot(contains('did not answer in time')));
+      expect(message, isNot(contains('Could not reach')));
+      expect(message.length, lessThan(120));
+      expect(syncErrorKey(message), 'connection-lost');
     });
 
     test('leaves non-transient errors untouched', () {

@@ -15,6 +15,14 @@ class FakeImapClient extends imap.ImapClient {
 
   @override
   Future<dynamic> logout() async {}
+
+  /// Fakes are "connected" unless a test says otherwise, so error handling
+  /// that checks the connection (e.g. the pending-change flush) treats a
+  /// thrown error as the error, not as a dropped connection.
+  bool fakeConnected = true;
+
+  @override
+  bool get isConnected => fakeConnected;
 }
 
 /// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
@@ -121,8 +129,12 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     imap.QResyncParameters? qresync,
   }) async {
     selectedMailbox = path;
+    selects.add(path);
     return fakeMailbox(path);
   }
+
+  /// Every SELECT, in call order.
+  final List<String> selects = [];
 
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
@@ -184,11 +196,10 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     calls.add('move ${moves.last}');
     final result = imap.GenericImapResult();
     if (copyUidValidity != null && copyUidSourceToTarget.isNotEmpty) {
-      final sources = sequence.toList();
-      final mapped = sources
-          .where(copyUidSourceToTarget.containsKey)
-          .map((uid) => copyUidSourceToTarget[uid]!)
-          .toList();
+      // Only the UIDs actually moved appear in COPYUID, in matching order.
+      final sources =
+          sequence.toList().where(copyUidSourceToTarget.containsKey).toList();
+      final mapped = sources.map((uid) => copyUidSourceToTarget[uid]!).toList();
       if (mapped.isNotEmpty) {
         final src = sources.join(',');
         final dst = mapped.join(',');

@@ -2,10 +2,17 @@ import 'dart:async';
 import 'dart:io' show SocketException;
 
 import 'package:enough_mail/enough_mail.dart';
+// ignore: implementation_imports
+import 'package:enough_mail/src/private/imap/command.dart' show Command;
+// ignore: implementation_imports
+import 'package:enough_mail/src/private/imap/response_parser.dart'
+    show ResponseParser;
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/net/connection_lost_exception.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
+import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/rcpt_checking_smtp_client.dart';
 import 'package:sharedinbox/data/imap/tls_error.dart';
 
@@ -122,8 +129,16 @@ Future<void> upgradeImapToStartTls(
 /// used to hang the sync loop waiting for the greeting forever.
 const _imapGreetingTimeout = Duration(seconds: 45);
 
-/// [ImapClient] that fails a pending [connectToServer] as soon as the socket
-/// dies before the server greeting.
+/// [ImapClient] that fails fast once its socket dies:
+///
+/// * A pending [connectToServer] fails as soon as the socket dies before the
+///   server greeting (see below).
+/// * Commands still waiting for a response fail right away with a
+///   [ConnectionLostException], and so does every command sent afterwards.
+///   enough_mail itself leaves a pending command to its response timeout
+///   (20s each) and then fails later ones with `Bad state: Cannot add event
+///   after closing`, so a sync on a dead connection reported "the server did
+///   not answer in time" although the phone had dropped the connection.
 ///
 /// enough_mail completes its greeting future only from the first received
 /// bytes: a socket error or close in between (Android's `Software caused
@@ -140,9 +155,60 @@ class _GreetingAwareImapClient extends ImapClient {
 
   Completer<void>? _lostBeforeGreeting;
 
+  /// What ended the connection; only meaningful while not [isConnected]
+  /// (a later reconnect makes it stale).
+  Object? _lostCause;
+
+  /// Fails one command still waiting for its response.
+  final _pending = <void Function(Object error)>{};
+
+  bool get _isLost => _lostCause != null && !isConnected;
+
+  @override
+  Future<T> sendCommand<T>(
+    Command command,
+    ResponseParser<T> parser, {
+    bool returnCompleter = true,
+  }) {
+    if (_isLost) return Future.error(ConnectionLostException.from(_lostCause));
+    if (!returnCompleter) {
+      return super.sendCommand(command, parser, returnCompleter: false);
+    }
+    final result = Completer<T>();
+    void fail(Object error, [StackTrace? stack]) {
+      _pending.remove(fail);
+      if (result.isCompleted) return;
+      result.completeError(error, stack);
+    }
+
+    _pending.add(fail);
+    // The outcome is forwarded to [result]; nothing awaits this chain itself.
+    unawaited(
+      super.sendCommand(command, parser).then(
+        (value) {
+          _pending.remove(fail);
+          if (result.isCompleted) return;
+          result.complete(value);
+        },
+        onError: (Object e, StackTrace st) => fail(
+          _isLost && isImapConnectionLost(e)
+              ? ConnectionLostException.from(_lostCause)
+              : e,
+          st,
+        ),
+      ),
+    );
+    return result.future;
+  }
+
   @override
   void onConnectionError(dynamic error) {
     super.onConnectionError(error);
+    _lostCause = error ?? 'connection closed';
+    final lostError = ConnectionLostException.from(_lostCause);
+    for (final fail in _pending.toList()) {
+      fail(lostError);
+    }
     final lost = _lostBeforeGreeting;
     if (lost == null || lost.isCompleted) return;
     lost.completeError(

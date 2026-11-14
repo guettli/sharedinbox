@@ -6040,7 +6040,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String password,
     List<PendingChangeRow> rows,
   ) async {
-    imap.ImapClient? client;
+    final imap.ImapClient client;
     try {
       client = await _imapConnect(
         account,
@@ -6048,87 +6048,285 @@ class EmailRepositoryImpl implements EmailRepository {
         password,
       );
     } catch (e) {
-      // Connection-level failure — bump all rows, they'll retry next cycle.
-      for (final row in rows) {
-        await _recordChangeError(row, e);
-      }
+      // No change reached the server, so none is charged an attempt: a phone
+      // offline for [_maxChangeAttempts] syncs must not silently drop the
+      // user's queued actions. The next cycle retries; the sync's own connect
+      // reports the failure (#1224).
+      log('IMAP flush for ${account.id} skipped: connect failed ($e)');
       return 0;
     }
     var applied = 0;
     try {
-      for (final snapshot in rows) {
-        final row = await _claimPendingChange(snapshot);
-        if (row == null) continue;
-        try {
-          await _applyPendingChangeImap(client, row);
-          await (_db.delete(
-            _db.pendingChanges,
-          )..where((t) => t.id.equals(row.id)))
-              .go();
-          applied++;
-        } catch (e) {
-          if (isImapConnectionLost(e)) {
-            // The connection is dead (e.g. network switch on mobile): every
-            // further command would fail too, each only after a response
-            // timeout. Count this attempt and leave the remaining, unclaimed
-            // changes untouched for the next sync's fresh connection. A
-            // command that merely timed out stops the flush too; if one change
-            // keeps timing out, it blocks the queue only until it is dropped
-            // after [_maxChangeAttempts].
-            await _recordChangeError(row, e);
-            log('IMAP flush for ${account.id} stopped: connection lost ($e)');
-            break;
-          }
-          if (e is _ImapMessageGoneException) {
-            // Retrying cannot bring the message back, but the user's move
-            // (e.g. an Undo's reverse move, #1048) did not happen: drop the
-            // change and say so in the App Log at warn level.
-            await (_db.delete(
-              _db.pendingChanges,
-            )..where((t) => t.id.equals(row.id)))
-                .go();
-            log('IMAP change ${row.id} dropped: $e');
-            unawaited(
-              _appLogger?.warn(
-                'pending_change.message_gone',
-                'Dropped ${_describeChange(row)} — the message is no longer '
-                    'on the server (deleted or moved by another client)',
-                accountId: account.id,
-                emailId: row.resourceId,
-                data: {'changeType': row.changeType},
-                error: e,
-              ),
-            );
-            continue;
-          }
-          if (isImapMailboxNotFound(e)) {
-            // Email already gone on the server — treat as success so the
-            // pending change doesn't accumulate or block future changes.
-            await (_db.delete(
-              _db.pendingChanges,
-            )..where((t) => t.id.equals(row.id)))
-                .go();
-            applied++;
-            log('IMAP change ${row.id} skipped: message already gone ($e)');
-            unawaited(
-              _appLogger?.info(
-                'pending_change.skipped_gone',
-                'Skipped ${_describeChange(row)} — message already gone on '
-                    'the server',
-                accountId: account.id,
-                emailId: row.resourceId,
-                data: {'changeType': row.changeType},
-              ),
-            );
-            continue;
-          }
-          await _recordChangeError(row, e);
+      var next = 0;
+      while (next < rows.length) {
+        if (!client.isConnected) {
+          // Lost between two changes: claim nothing more.
+          log('IMAP flush for ${account.id} stopped: connection lost');
+          break;
         }
+        final batch = _imapMoveBatchAt(
+          rows,
+          next,
+          batching: client.serverInfo.supportsUidPlus,
+        );
+        next += batch.length;
+        final outcome = await _flushImapBatch(account, client, batch);
+        applied += outcome.applied;
+        if (outcome.connectionLost) break;
       }
     } finally {
       await closeImapClient(client);
     }
     return applied;
+  }
+
+  /// Upper bound on the UIDs sent in one batched `UID MOVE`.
+  static const _maxImapMoveBatch = 50;
+
+  /// The run of pending changes starting at [rows][[start]] that can share
+  /// one `UID MOVE`: consecutive plain moves (no snooze cleanup) with the same
+  /// source and destination and distinct UIDs. Any other change is a run of
+  /// one. Order is preserved, so a batch never jumps over another change.
+  ///
+  /// Only with [batching] (the server supports UIDPLUS): without `COPYUID`
+  /// every batched row would still need its own MOVE + search afterwards,
+  /// costing more round trips than it saves.
+  List<PendingChangeRow> _imapMoveBatchAt(
+    List<PendingChangeRow> rows,
+    int start, {
+    required bool batching,
+  }) {
+    final first = rows[start];
+    final head = _plainImapMove(first);
+    if (!batching || head == null) return [first];
+    final uids = <int>{};
+    final batch = <PendingChangeRow>[];
+    for (var i = start; i < rows.length; i++) {
+      final row = rows[i];
+      if (batch.length == _maxImapMoveBatch) break;
+      final move = _plainImapMove(row);
+      if (move == null || move.key != head.key) break;
+      if (!uids.add(move.uid)) break;
+      batch.add(row);
+    }
+    return batch;
+  }
+
+  /// Batch key (`'<source>\u0000<dest>'`) and UID of a plain IMAP move that
+  /// can be batched; null for anything else, including an unreadable payload
+  /// (which then fails on its own, as a run of one).
+  ({String key, int uid})? _plainImapMove(PendingChangeRow row) {
+    if (row.changeType != 'move') return null;
+    try {
+      final payload = jsonDecode(row.payload) as Map<String, dynamic>;
+      if (payload['clearSnooze'] == true) return null;
+      final src = payload['mailboxPath'];
+      final dest = payload['dest'];
+      final uid = payload['uid'];
+      if (src is! String || dest is! String || uid is! int) return null;
+      return (key: '$src\u0000$dest', uid: uid);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Applies [snapshots] — one change, or a batch from [_imapMoveBatchAt].
+  ///
+  /// A batch is claimed row by row, then moved with a single `UID MOVE`
+  /// (#1224): one round trip instead of a SELECT + MOVE per message. Every
+  /// row whose new UID the `COPYUID` reports is re-keyed and done; the rest
+  /// (no UIDPLUS, a stale UID, a failed batch command) go through the
+  /// one-by-one path, which re-checks where the message is.
+  Future<({int applied, bool connectionLost})> _flushImapBatch(
+    account_model.Account account,
+    imap.ImapClient client,
+    List<PendingChangeRow> snapshots,
+  ) async {
+    final claimed = <PendingChangeRow>[];
+    for (final snapshot in snapshots) {
+      final row = await _claimPendingChange(snapshot);
+      if (row == null) continue;
+      claimed.add(row);
+    }
+    if (claimed.isEmpty) return (applied: 0, connectionLost: false);
+
+    var applied = 0;
+    var pending = claimed;
+    if (claimed.length > 1) {
+      final batch = await _batchImapMove(client, claimed);
+      if (batch.error case final e?) {
+        if (_isImapConnectionLost(client, e)) {
+          if (batch.moveSent) {
+            // The MOVE may have reached the server: charge every row.
+            for (final row in claimed) {
+              await _recordChangeError(row, e);
+            }
+          } else {
+            // Nothing reached the server: undo the claims, so a dropped
+            // connection costs no attempts (and Undo can still cancel).
+            for (final row in claimed) {
+              await _unclaimPendingChange(row);
+            }
+          }
+          log('IMAP flush for ${account.id} stopped: connection lost ($e)');
+          return (applied: 0, connectionLost: true);
+        }
+        // E.g. `NO` for the whole set: let each row get its own outcome.
+        log('IMAP batch move failed, applying one by one: $e');
+      }
+      for (final row in batch.moved) {
+        await _deletePendingChange(row);
+        applied++;
+      }
+      pending = [
+        for (final row in claimed)
+          if (!batch.moved.contains(row)) row,
+      ];
+    }
+
+    for (var i = 0; i < pending.length; i++) {
+      final outcome = await _settleImapChange(account, client, pending[i]);
+      if (outcome.connectionLost != null) {
+        // Rows of this batch claimed but not reached: give the claim back.
+        for (final rest in pending.skip(i + 1)) {
+          await _unclaimPendingChange(rest);
+        }
+        return (applied: applied, connectionLost: true);
+      }
+      applied += outcome.applied;
+    }
+    return (applied: applied, connectionLost: false);
+  }
+
+  /// Returns a row claimed by [_claimPendingChange] to its pre-claim
+  /// attempts, for a change the flush never sent.
+  Future<void> _unclaimPendingChange(PendingChangeRow claimed) =>
+      (_db.update(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.id.equals(claimed.id) &
+                  t.attempts.equals(claimed.attempts + 1),
+            ))
+          .write(PendingChangesCompanion(attempts: Value(claimed.attempts)));
+
+  /// Sends one `UID MOVE` for all [rows] (same source and destination) and
+  /// re-keys every row the `COPYUID` response maps. Returns those rows, the
+  /// error that ended the attempt (if any), and whether the MOVE was sent.
+  Future<({Set<PendingChangeRow> moved, Object? error, bool moveSent})>
+      _batchImapMove(
+    imap.ImapClient client,
+    List<PendingChangeRow> rows,
+  ) async {
+    final payload = jsonDecode(rows.first.payload) as Map<String, dynamic>;
+    final src = payload['mailboxPath'] as String;
+    final dest = payload['dest'] as String;
+    final uidOf = {
+      for (final row in rows)
+        row: (jsonDecode(row.payload) as Map<String, dynamic>)['uid'] as int,
+    };
+    try {
+      await client.selectUnicodeMailboxByPath(src);
+    } catch (e) {
+      return (moved: <PendingChangeRow>{}, error: e, moveSent: false);
+    }
+    final imap.GenericImapResult result;
+    try {
+      result = await client.uidMove(
+        imap.MessageSequence.fromIds(uidOf.values.toList(), isUid: true),
+        targetMailboxPath: dest,
+      );
+    } catch (e) {
+      return (moved: <PendingChangeRow>{}, error: e, moveSent: true);
+    }
+    final moved = <PendingChangeRow>{};
+    for (final MapEntry(key: row, value: uid) in uidOf.entries) {
+      final newUid = _resolveCopyUid(result, uid);
+      if (newUid == null) continue;
+      // COPYUID maps it, so this only re-keys the local row (no command).
+      await _remapEmailAfterImapMove(
+        client,
+        oldId: row.resourceId,
+        sourceUid: uid,
+        destMailboxPath: dest,
+        moveResult: result,
+      );
+      moved.add(row);
+    }
+    return (moved: moved, error: null, moveSent: true);
+  }
+
+  /// True when [error] means [client]'s connection is gone, whatever the
+  /// error's wording: a recognised connection error, or enough_mail reporting
+  /// the socket closed.
+  bool _isImapConnectionLost(imap.ImapClient client, Object error) =>
+      isImapConnectionLost(error) || !client.isConnected;
+
+  Future<void> _deletePendingChange(PendingChangeRow row) =>
+      (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(row.id))).go();
+
+  /// Applies one claimed [row] and settles it: deleted when applied or moot,
+  /// error recorded otherwise. `connectionLost` carries the error when the
+  /// connection died, so the caller stops the flush.
+  Future<({int applied, Object? connectionLost})> _settleImapChange(
+    account_model.Account account,
+    imap.ImapClient client,
+    PendingChangeRow row,
+  ) async {
+    try {
+      await _applyPendingChangeImap(client, row);
+      await _deletePendingChange(row);
+      return (applied: 1, connectionLost: null);
+    } catch (e) {
+      if (_isImapConnectionLost(client, e)) {
+        // The connection is dead (e.g. network switch on mobile): every
+        // further command would fail too. Count this attempt and leave the
+        // remaining, unclaimed changes untouched for the next sync's fresh
+        // connection. A command that merely timed out stops the flush too;
+        // if one change keeps timing out, it blocks the queue only until it
+        // is dropped after [_maxChangeAttempts].
+        await _recordChangeError(row, e);
+        log('IMAP flush for ${account.id} stopped: connection lost ($e)');
+        return (applied: 0, connectionLost: e);
+      }
+      if (e is _ImapMessageGoneException) {
+        // Retrying cannot bring the message back, but the user's move
+        // (e.g. an Undo's reverse move, #1048) did not happen: drop the
+        // change and say so in the App Log at warn level.
+        await _deletePendingChange(row);
+        log('IMAP change ${row.id} dropped: $e');
+        unawaited(
+          _appLogger?.warn(
+            'pending_change.message_gone',
+            'Dropped ${_describeChange(row)} — the message is no longer '
+                'on the server (deleted or moved by another client)',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+            error: e,
+          ),
+        );
+        return (applied: 0, connectionLost: null);
+      }
+      if (isImapMailboxNotFound(e)) {
+        // Email already gone on the server — treat as success so the
+        // pending change doesn't accumulate or block future changes.
+        await _deletePendingChange(row);
+        log('IMAP change ${row.id} skipped: message already gone ($e)');
+        unawaited(
+          _appLogger?.info(
+            'pending_change.skipped_gone',
+            'Skipped ${_describeChange(row)} — message already gone on '
+                'the server',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+          ),
+        );
+        return (applied: 1, connectionLost: null);
+      }
+      await _recordChangeError(row, e);
+      return (applied: 0, connectionLost: null);
+    }
   }
 
   Future<void> _applyPendingChangeImap(
@@ -6160,14 +6358,17 @@ class EmailRepositoryImpl implements EmailRepository {
           await _removeImapSnoozeFlags(client, seq);
         }
         final result = await client.uidMove(seq, targetMailboxPath: dest);
-        final located = await _remapEmailAfterImapMove(
-          client,
-          oldId: row.resourceId,
-          sourceUid: uid,
-          destMailboxPath: dest,
-          moveResult: result,
-        );
-        if (located) return;
+        final movedNothing = _imapMoveMovedNothing(client, result);
+        if (!movedNothing &&
+            await _remapEmailAfterImapMove(
+              client,
+              oldId: row.resourceId,
+              sourceUid: uid,
+              destMailboxPath: dest,
+              moveResult: result,
+            )) {
+          return;
+        }
         await _retryImapMoveByMessageId(
           client,
           row: row,
@@ -6175,6 +6376,7 @@ class EmailRepositoryImpl implements EmailRepository {
           mailboxPath: mailboxPath,
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
+          movedNothing: movedNothing,
           beforeMove: payload['clearSnooze'] == true
               ? (s) => _removeImapSnoozeFlags(client, s)
               : null,
@@ -6198,14 +6400,17 @@ class EmailRepositoryImpl implements EmailRepository {
 
         await tag(seq);
         final snoozeResult = await client.uidMove(seq, targetMailboxPath: dest);
-        final located = await _remapEmailAfterImapMove(
-          client,
-          oldId: row.resourceId,
-          sourceUid: uid,
-          destMailboxPath: dest,
-          moveResult: snoozeResult,
-        );
-        if (located) return;
+        final movedNothing = _imapMoveMovedNothing(client, snoozeResult);
+        if (!movedNothing &&
+            await _remapEmailAfterImapMove(
+              client,
+              oldId: row.resourceId,
+              sourceUid: uid,
+              destMailboxPath: dest,
+              moveResult: snoozeResult,
+            )) {
+          return;
+        }
         // A stale UID (e.g. Undo re-snoozing a row rebuilt from its snapshot)
         // makes STORE + MOVE silent no-ops: re-find the message like a move.
         await _retryImapMoveByMessageId(
@@ -6216,6 +6421,7 @@ class EmailRepositoryImpl implements EmailRepository {
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
           beforeMove: tag,
+          movedNothing: movedNothing,
         );
       case 'unsnooze':
         final dest = payload['dest'] as String;
@@ -6300,7 +6506,9 @@ class EmailRepositoryImpl implements EmailRepository {
   }
 
   /// Handles a `UID MOVE` that reported OK but whose message could not be
-  /// found in [destMailboxPath] afterwards. Servers accept a MOVE of a UID that
+  /// found in [destMailboxPath] afterwards — or, with [movedNothing], that
+  /// visibly moved nothing: then the source, still selected, is searched
+  /// without another SELECT (#1224). Servers accept a MOVE of a UID that
   /// does not exist as a no-op, so a stale [staleUid] (e.g. Undo's reverse move
   /// queued before the original move re-keyed the row) would otherwise be
   /// dropped as "applied" while the message stays put (#1048).
@@ -6327,6 +6535,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String destMailboxPath,
     required String? messageId,
     Future<void> Function(imap.MessageSequence seq)? beforeMove,
+    bool movedNothing = false,
   }) async {
     final local = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(row.resourceId)))
@@ -6334,33 +6543,37 @@ class EmailRepositoryImpl implements EmailRepository {
     final mid = messageId ?? local?.messageId;
     if (mid == null || mid.isEmpty) return;
 
+    // After a MOVE that moved nothing, the source is still selected.
     final resolvedUid = await _searchUidByMessageId(
       client,
       mailboxPath,
       mid,
       throwOnFailure: true,
+      select: !movedNothing,
     );
-    if (resolvedUid == null) {
-      // [_remapEmailAfterImapMove] missed it in the destination after the first
-      // attempt, but a server whose index lags (e.g. Exchange) may list it
-      // there by now: then the move already happened, so finish it.
+    // True when the message already sits in the destination: then the move
+    // happened (an earlier attempt, or a remap that missed it because the
+    // server's index lags, e.g. Exchange), so it is finished there.
+    Future<bool> finishedInDestination() async {
       final destUid = await _searchUidByMessageId(
         client,
         destMailboxPath,
         mid,
         throwOnFailure: true,
       );
-      if (destUid != null) {
-        await client.selectUnicodeMailboxByPath(destMailboxPath);
-        await beforeMove
-            ?.call(imap.MessageSequence.fromId(destUid, isUid: true));
-        await _rekeyEmailAfterImapMove(
-          oldId: row.resourceId,
-          destMailboxPath: destMailboxPath,
-          newUid: destUid,
-        );
-        return;
-      }
+      if (destUid == null) return false;
+      await client.selectUnicodeMailboxByPath(destMailboxPath);
+      await beforeMove?.call(imap.MessageSequence.fromId(destUid, isUid: true));
+      await _rekeyEmailAfterImapMove(
+        oldId: row.resourceId,
+        destMailboxPath: destMailboxPath,
+        newUid: destUid,
+      );
+      return true;
+    }
+
+    if (resolvedUid == null) {
+      if (await finishedInDestination()) return;
       // In neither mailbox and both searches succeeded: another client already
       // deleted or moved it. Retrying can never succeed, so the flush drops
       // the change as "already gone". A failed search throws instead (see
@@ -6378,6 +6591,10 @@ class EmailRepositoryImpl implements EmailRepository {
         'effect: message $mid is still in $mailboxPath',
       );
     }
+    // The destination was not checked yet after a MOVE that moved nothing:
+    // if ours is there, the match in the source is another copy with the
+    // same Message-ID (e.g. cross-posted list mail), not to be moved.
+    if (movedNothing && await finishedInDestination()) return;
     await client.selectUnicodeMailboxByPath(mailboxPath);
     final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
     await beforeMove?.call(resolvedSeq);
@@ -6472,6 +6689,25 @@ class EmailRepositoryImpl implements EmailRepository {
     await _updateThread(row.accountId, destMailboxPath, threadId);
   }
 
+  /// True when a `UID MOVE` probably moved nothing: the server supports
+  /// UIDPLUS, which should answer a MOVE with `COPYUID` (RFC 6851 §4.3), and
+  /// this one did not — most likely the UID no longer exists in the source.
+  /// Only a hint: the callers still look in the destination before giving
+  /// up or moving another copy. Without UIDPLUS the missing code says
+  /// nothing.
+  bool _imapMoveMovedNothing(
+    imap.ImapClient client,
+    imap.GenericImapResult result,
+  ) {
+    if (!client.serverInfo.supportsUidPlus) return false;
+    try {
+      return result.responseCodeCopyUid == null;
+    } catch (_) {
+      // A malformed COPYUID still means something was moved.
+      return false;
+    }
+  }
+
   /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
   /// `COPYUID` response code (RFC 4315). Returns null when the server did not
   /// advertise UIDPLUS or the response code is malformed.
@@ -6505,10 +6741,11 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     String? messageId, {
     bool throwOnFailure = false,
+    bool select = true,
   }) async {
     if (messageId == null || messageId.isEmpty) return null;
     try {
-      await client.selectUnicodeMailboxByPath(mailboxPath);
+      if (select) await client.selectUnicodeMailboxByPath(mailboxPath);
       // Some servers (e.g. Exchange) only match the exact header token, so a
       // bare id is retried in its angle-bracketed form (and vice versa).
       final bare = messageId.startsWith('<') && messageId.endsWith('>')
