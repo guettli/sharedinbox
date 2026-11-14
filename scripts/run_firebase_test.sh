@@ -169,6 +169,11 @@ FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
 FETCH_CONSECUTIVE_TIMEOUTS=0
+# Resolving the alpha versionCode opens a Play edit, and opening an edit DELETES
+# any other open edit for the app — including the one a concurrent Deploy is
+# uploading its AAB into (#907, #1203). Resolve it on the first answered attempt
+# only, then pin it for every retry so a 90-minute poll opens one edit, not ~90.
+VERSION_CODE=""
 while :; do
     FETCH_ATTEMPT=$((FETCH_ATTEMPT + 1))
     # Start each attempt from a clean dest dir so a stale PENDING (or partial
@@ -183,10 +188,15 @@ while :; do
     # Capture rc separately: an `if !` clause flips $? to 0 in its then-block,
     # which would hide the timeout (124/137) vs real-failure distinction the
     # retry below depends on.
+    VERSION_CODE_ARGS=()
+    if [ -n "$VERSION_CODE" ]; then
+        VERSION_CODE_ARGS=(--version-code "$VERSION_CODE")
+    fi
     FETCH_RC=0
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env:PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
+            "${VERSION_CODE_ARGS[@]}" \
             -o "$APK_DIR" || FETCH_RC=$?
     # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
     # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".

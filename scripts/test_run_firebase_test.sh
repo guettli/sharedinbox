@@ -51,11 +51,15 @@ cat >"$SCRATCH/dagger" <<EOF
 n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
 
 # The loop passes the dest dir as \`-o <dir>\`; mirror Dagger's export into it.
+# Log each attempt's --version-code ("-" when absent) to check the pinning.
 dest=""
+vc="-"
 while [ \$# -gt 0 ]; do
     if [ "\$1" = "-o" ]; then dest="\$2"; fi
+    if [ "\$1" = "--version-code" ]; then vc="\$2"; fi
     shift
 done
+echo "\$vc" >>"$SCRATCH/version_codes"
 
 read -r -a plan <<<"\$FETCH_PLAN"
 idx=\$((n - 1))
@@ -102,6 +106,7 @@ chmod +x "$SCRATCH/sleep"
 run_fetch() {
     local plan="$1" budget="${2:-3600}"
     echo 0 >"$SCRATCH/attempts"
+    : >"$SCRATCH/version_codes"
     rm -rf "$SCRATCH/apks"
     mkdir -p "$SCRATCH/apks"
     PATH="$SCRATCH:$PATH" \
@@ -198,6 +203,22 @@ elif ! printf '%s' "$out" | grep -q "timed out after 5s (1/3 consecutive)"; then
     _fail "reset: second timeout should be counted as the first again" "$out"
 elif printf '%s' "$out" | grep -q "2/3 consecutive"; then
     _fail "reset: counter should have been reset by the PENDING answer" "$out"
+else
+    _pass
+fi
+
+# --- Retries pin the versionCode instead of opening a Play edit (#907, #1203) --
+# Resolving the versionCode opens a Play edit, which deletes a concurrent
+# Deploy's edit. Only attempts before the first answer may resolve it; every
+# later one must pass --version-code. Here: 124 (no answer), then PENDING (the
+# first answer, still resolving), then two pinned retries.
+out=$(run_fetch "124 pending pending ready")
+rc=$?
+codes=$(tr '\n' ' ' <"$SCRATCH/version_codes")
+if [ "$rc" -ne 0 ]; then
+    _fail "pin: should succeed" "$out"
+elif [ "$codes" != "- - 1790309773 1790309773 " ]; then
+    _fail "pin: expected '- - 1790309773 1790309773 ' as --version-code per attempt (got '$codes')" "$out"
 else
     _pass
 fi
