@@ -12,43 +12,12 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/app_log_screen.dart';
 
+import '../unit/recording_app_log_repository.dart';
 import 'helpers.dart';
 
-class _MemRepo extends NoOpAppLogRepository {
-  _MemRepo(this._rows);
-  final List<AppLogEntry> _rows;
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    final id = _rows.length + 1;
-    _rows.add(
-      AppLogEntry(
-        id: id,
-        createdAt: createdAt ?? DateTime.now(),
-        level: level,
-        event: event,
-        message: message,
-        dataJson: dataJson,
-        screen: screen,
-        accountId: accountId,
-        mailboxPath: mailboxPath,
-        emailId: emailId,
-        syncLogId: syncLogId,
-      ),
-    );
-    return id;
-  }
+class _MemRepo extends RecordingAppLogRepository {
+  _MemRepo(List<AppLogEntry> rows) : super(rows: rows);
+  List<AppLogEntry> get _rows => rows;
 
   @override
   Stream<List<AppLogEntry>> watchEntries(AppLogFilter filter) {

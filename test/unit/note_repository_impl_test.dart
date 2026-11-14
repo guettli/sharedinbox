@@ -17,6 +17,7 @@ import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'fake_imap.dart';
+import 'recording_app_log_repository.dart';
 
 // ── Test doubles ──────────────────────────────────────────────────────────
 
@@ -291,34 +292,6 @@ class _NotesFakeImap extends SelectingFakeImapClient {
 ImapConnectFn _fixedImapConnect(imap.ImapClient client) =>
     (account, username, password) async => client;
 
-/// Records every [AppLogger] insert so tests can assert on emitted events.
-class _RecordingLogRepo extends NoOpAppLogRepository {
-  final inserts = <Map<String, Object?>>[];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    inserts.add({
-      'level': level,
-      'event': event,
-      'accountId': accountId,
-      'emailId': emailId,
-      'dataJson': dataJson,
-    });
-    return inserts.length;
-  }
-}
-
 /// Flushes fire-and-forget (`unawaited`) log writes scheduled by the repo.
 Future<void> _pumpLogs() async {
   for (var i = 0; i < 5; i++) {
@@ -328,11 +301,12 @@ Future<void> _pumpLogs() async {
 
 /// Builds a JMAP-backed [NoteRepositoryImpl] wired to a recording logger,
 /// returning both so tests can drive the repo and assert on emitted logs.
-({NoteRepositoryImpl repo, _RecordingLogRepo logRepo}) _jmapRepoWithLogger(
+({NoteRepositoryImpl repo, RecordingAppLogRepository logRepo})
+    _jmapRepoWithLogger(
   AppDatabase db,
   http.Client client,
 ) {
-  final logRepo = _RecordingLogRepo();
+  final logRepo = RecordingAppLogRepository();
   final repo = NoteRepositoryImpl(
     db,
     _StubAccounts(),

@@ -5,45 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import '../unit/recording_app_log_repository.dart';
 
-/// Records every insert so tests can assert what the snackbar logged.
-class _RecordingRepo extends NoOpAppLogRepository {
-  final List<AppLogEntry> rows = [];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    final id = rows.length + 1;
-    rows.add(
-      AppLogEntry(
-        id: id,
-        createdAt: createdAt ?? DateTime(2024, 6),
-        level: level,
-        event: event,
-        message: message,
-        dataJson: dataJson,
-        screen: screen,
-        accountId: accountId,
-        mailboxPath: mailboxPath,
-        emailId: emailId,
-        syncLogId: syncLogId,
-      ),
-    );
-    return id;
-  }
-}
-
-Widget _host(_RecordingRepo repo, void Function(BuildContext) onTap) {
+Widget _host(
+  RecordingAppLogRepository repo,
+  void Function(BuildContext) onTap,
+) {
   return ProviderScope(
     overrides: [appLogRepositoryProvider.overrideWithValue(repo)],
     child: MaterialApp(
@@ -61,7 +28,7 @@ Widget _host(_RecordingRepo repo, void Function(BuildContext) onTap) {
 
 void main() {
   testWidgets('showAppSnackBar shows the snack and logs it', (tester) async {
-    final repo = _RecordingRepo();
+    final repo = RecordingAppLogRepository(defaultCreatedAt: DateTime(2024, 6));
     await tester.pumpWidget(
       _host(
         repo,
@@ -91,7 +58,7 @@ void main() {
   testWidgets('appMessenger() captured before an await still logs', (
     tester,
   ) async {
-    final repo = _RecordingRepo();
+    final repo = RecordingAppLogRepository(defaultCreatedAt: DateTime(2024, 6));
     await tester.pumpWidget(
       _host(repo, (context) {
         final messenger = context.appMessenger();

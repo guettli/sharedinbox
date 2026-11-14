@@ -5,40 +5,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 
-class _RecordingRepo extends NoOpAppLogRepository {
-  final inserts = <Map<String, Object?>>[];
-
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    inserts.add({
-      'level': level,
-      'event': event,
-      'message': message,
-      'dataJson': dataJson,
-      'screen': screen,
-      'accountId': accountId,
-      'mailboxPath': mailboxPath,
-      'emailId': emailId,
-      'syncLogId': syncLogId,
-    });
-    return inserts.length;
-  }
-}
+import 'recording_app_log_repository.dart';
 
 void main() {
   test('debug/info/warn/error wrappers set the level', () async {
-    final repo = _RecordingRepo();
+    final repo = RecordingAppLogRepository();
     final logger = AppLogger(repo);
 
     await logger.debug('e', 'd');
@@ -82,7 +53,7 @@ void main() {
   });
 
   test('context fields and dataJson are forwarded to the repository', () async {
-    final repo = _RecordingRepo();
+    final repo = RecordingAppLogRepository();
     final logger = AppLogger(repo);
 
     await logger.warn(
@@ -109,7 +80,9 @@ void main() {
   });
 
   test('insert failure in the repo does not throw out of log()', () async {
-    final logger = AppLogger(_ThrowingRepo());
+    final logger = AppLogger(
+      RecordingAppLogRepository(onInsert: (_) => throw StateError('db gone')),
+    );
     await expectLater(
       logger.info('e', 'm'),
       completes,
@@ -120,22 +93,4 @@ void main() {
 class _NotJson {
   @override
   String toString() => 'not-json';
-}
-
-class _ThrowingRepo extends NoOpAppLogRepository {
-  @override
-  Future<int?> insert({
-    required AppLogLevel level,
-    required String event,
-    required String message,
-    String? dataJson,
-    String? screen,
-    String? accountId,
-    String? mailboxPath,
-    String? emailId,
-    int? syncLogId,
-    DateTime? createdAt,
-  }) async {
-    throw StateError('db gone');
-  }
 }
