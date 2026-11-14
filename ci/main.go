@@ -776,8 +776,12 @@ func (m *Ci) AnalyzeFix() *dagger.Directory {
 }
 
 // CheckFast runs fast checks (hygiene, layers, format, analyze, mocks, coverage) in parallel.
+//
+// 30 minutes, not 15: Coverage alone takes 5-14 min on the shared tc engine,
+// and after an engine cache wipe the 15-min deadline killed three seats'
+// check-fast runs in a row (2026-11-13 21:24-21:39 UTC). Same budget as Check.
 func (m *Ci) CheckFast(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
 	var eg errgroup.Group
@@ -833,11 +837,18 @@ func (m *Ci) CheckGenerated(ctx context.Context) (string, error) {
 }
 
 // Coverage runs unit and widget tests with coverage gate.
+//
+// --concurrency=4: the default is one flutter_tester per CPU the engine sees
+// (8 on tc), and every tester is a few hundred MB of anon memory. With two
+// CI checks and a few seats' check-fast running at once, those testers filled
+// the engine's 12G memcg and the kernel OOM-killed the engine itself, ending
+// every session (2026-11-13 21:12 UTC). Four keeps the per-run peak at about
+// half, and on a shared 8-core host it costs little wall time.
 func (m *Ci) Coverage(ctx context.Context) (string, error) {
 	return m.setup(m.checkSrc()).
 		WithExec([]string{"/bin/bash", "-c",
 			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
-				`flutter test test/unit test/widget --exclude-tags golden --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`flutter test test/unit test/widget --concurrency=4 --exclude-tags golden --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
 		Stdout(ctx)
