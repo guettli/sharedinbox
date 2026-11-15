@@ -1077,9 +1077,13 @@ class EmailRepositoryImpl implements EmailRepository {
       } catch (_) {
         continue;
       }
-      if (payload['uid'] is! int || payload['uid'] == newUid) continue;
+      if (payload['uid'] is! int) continue;
+      if (payload['uid'] == newUid && payload[_uidAfterMoveKey] == null) {
+        continue;
+      }
       if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) continue;
       payload['uid'] = newUid;
+      payload.remove(_uidAfterMoveKey);
       // The new UID was learned under the folder's current UIDVALIDITY.
       payload.remove('uidValidity');
       final checkpoint =
@@ -2030,6 +2034,9 @@ class EmailRepositoryImpl implements EmailRepository {
       try {
         final payload = jsonDecode(r.payload) as Map<String, dynamic>;
         if (payload['mailboxPath'] != mailboxPath) continue;
+        // Its UID is the one from before a queued move, not this folder's:
+        // it may be another mail's here, which must not be skipped (#1266).
+        if (payload[_uidAfterMoveKey] == true) continue;
         final uid = payload['uid'];
         if (uid is int) result[uid] = r.changeType;
       } catch (_) {
@@ -4408,9 +4415,11 @@ class EmailRepositoryImpl implements EmailRepository {
       if (changed == null) continue;
       if (!paths.contains(changed['mailboxPath'])) continue;
       if (changed['uid'] != email.uid) continue;
+      // Back where its UID came from: the UID is right again.
       changed
         ..['mailboxPath'] = src
-        ..remove('uidValidity');
+        ..remove('uidValidity')
+        ..remove(_uidAfterMoveKey);
       if (payload['uidValidity'] case final int validity) {
         changed['uidValidity'] = validity;
       }
@@ -5401,6 +5410,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (await _isLocalEmail(resourceId)) return;
     payload = await _stampUidValidity(accountId, resourceId, payload);
+    payload = await _markUidAfterQueuedMove(resourceId, payload);
     if (supersedeFailures ?? Zone.current[_automaticChangeKey] != true) {
       await _deleteSupersededFailures(resourceId, changeType);
     }
@@ -5543,6 +5553,45 @@ class EmailRepositoryImpl implements EmailRepository {
     return jsonEncode(map);
   }
 
+  /// Marks an IMAP change [payload] whose UID is not the mail's UID in the
+  /// payload's folder yet: a move of the same mail to that folder is still
+  /// queued, so the local row and this UID are the pre-move ones (#1266).
+  /// There the UID may name another mail. The move's answer replaces it
+  /// ([_repointQueuedChanges]); a change still marked when it is applied
+  /// finds its mail by Message-ID instead, or fails ([_currentImapUid]).
+  Future<String> _markUidAfterQueuedMove(
+    String resourceId,
+    String payload,
+  ) async {
+    final Map<String, dynamic> map;
+    try {
+      map = jsonDecode(payload) as Map<String, dynamic>;
+    } catch (_) {
+      return payload;
+    }
+    if (map['uid'] is! int) return payload;
+    final path = map['mailboxPath'] ?? map['src'];
+    if (path is! String) return payload;
+    final moves = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(resourceId) &
+                t.state.equals(_pendingState) &
+                t.changeType.isIn(_locationChangeTypes),
+          ))
+        .get();
+    if (!moves.any((m) => _decodePayload(m)?['dest'] == path)) return payload;
+    map[_uidAfterMoveKey] = true;
+    if (map['messageId'] == null) {
+      final messageId = await _messageIdOf(resourceId);
+      if (messageId != null) map['messageId'] = messageId;
+    }
+    return jsonEncode(map);
+  }
+
+  /// Payload key set by [_markUidAfterQueuedMove].
+  static const _uidAfterMoveKey = 'uidAfterMove';
+
   /// Whether [emailId] refers to a local self-sent "virtual" row (#545).
   Future<bool> _isLocalEmail(String emailId) async {
     final row = await (_db.selectOnly(_db.emails)
@@ -5602,14 +5651,60 @@ class EmailRepositoryImpl implements EmailRepository {
       ..limit(1);
 
     final row = await query.getSingleOrNull();
-    if (row != null) {
-      final count = await (_db.delete(
-        _db.pendingChanges,
-      )..where((t) => t.id.equals(row.id)))
-          .go();
-      return count > 0;
+    if (row == null) return false;
+    final count = await (_db.delete(
+      _db.pendingChanges,
+    )..where((t) => t.id.equals(row.id)))
+        .go();
+    if (count == 0) return false;
+    if (_locationChangeTypes.contains(changeType)) {
+      await _unmarkAfterCancelledMove(row);
     }
-    return false;
+    return true;
+  }
+
+  /// After [cancelled], a queued move, was cancelled (Undo), the changes
+  /// queued behind it for the mail in its destination
+  /// ([_markUidAfterQueuedMove]) act in its source again: the mail stays
+  /// there, under the UID they carry. They stay marked when another move
+  /// queued before them still brings the mail to that source.
+  Future<void> _unmarkAfterCancelledMove(PendingChangeRow cancelled) async {
+    final moved = _decodePayload(cancelled);
+    final src = moved?['mailboxPath'] ?? moved?['src'];
+    final dest = moved?['dest'];
+    if (src is! String || dest is! String) return;
+    final queued = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(cancelled.resourceId) &
+                t.state.equals(_pendingState),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+        .get();
+    for (final change in queued) {
+      if (change.id < cancelled.id) continue;
+      final payload = _decodePayload(change);
+      if (payload == null || payload[_uidAfterMoveKey] != true) continue;
+      final key = payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src';
+      if (payload[key] != dest) continue;
+      final stillMoved = queued.any(
+        (m) =>
+            m.id < change.id &&
+            _locationChangeTypes.contains(m.changeType) &&
+            _decodePayload(m)?['dest'] == src,
+      );
+      // The cancelled move's stamp is the source's UIDVALIDITY.
+      payload
+        ..[key] = src
+        ..remove('uidValidity');
+      if (moved?['uidValidity'] case final int validity) {
+        payload['uidValidity'] = validity;
+      }
+      if (!stillMoved) payload.remove(_uidAfterMoveKey);
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.id.equals(change.id)))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+    }
   }
 
   @override
@@ -6838,6 +6933,8 @@ class EmailRepositoryImpl implements EmailRepository {
     try {
       final payload = jsonDecode(row.payload) as Map<String, dynamic>;
       if (payload['clearSnooze'] == true) return null;
+      // Its UID is not known yet: looked up on its own ([_currentImapUid]).
+      if (payload[_uidAfterMoveKey] == true) return null;
       final src = payload['mailboxPath'];
       final dest = payload['dest'];
       final uid = payload['uid'];
@@ -7030,6 +7127,9 @@ class EmailRepositoryImpl implements EmailRepository {
     required int? selectedUidValidity,
   }) async {
     final uid = payload['uid'] as int;
+    if (payload[_uidAfterMoveKey] == true) {
+      return _uidAfterUnansweredMove(client, row, payload, mailboxPath);
+    }
     final stamped = payload['uidValidity'];
     if (stamped is! int || selectedUidValidity == null) return uid;
     if (stamped == selectedUidValidity) return uid;
@@ -7055,6 +7155,66 @@ class EmailRepositoryImpl implements EmailRepository {
       'UID $uid → ${uids.single} by Message-ID',
     );
     return uids.single;
+  }
+
+  /// The UID of [row]'s mail in the selected [mailboxPath] when the move
+  /// queued before it reported none ([_markUidAfterQueuedMove]): its UID is
+  /// the one from before that move, so the mail is looked up by Message-ID
+  /// and acted on only when exactly one copy matches (#1266).
+  Future<int> _uidAfterUnansweredMove(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    Map<String, dynamic> payload,
+    String mailboxPath,
+  ) async {
+    final uids = await _searchUidsByMessageId(
+      client,
+      mailboxPath,
+      payload['messageId'] as String?,
+      throwOnFailure: true,
+      select: false,
+    );
+    if (uids.length != 1) {
+      throw _ImapMessageGoneException(
+        'the move queued before this change reported no new UID, and '
+        '${uids.isEmpty ? 'no' : 'more than one'} message in $mailboxPath '
+        'matches its Message-ID',
+      );
+    }
+    return uids.single;
+  }
+
+  /// Applies a marked move ([_markUidAfterQueuedMove]) from the selected
+  /// [mailboxPath]: its UID is not known, so the mail is found by Message-ID
+  /// there, or in the destination when an earlier attempt already moved it
+  /// and the answer was lost ([_retryImapMoveByMessageId]).
+  Future<void> _applyMoveAfterUnansweredMove(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    Map<String, dynamic> payload,
+    String mailboxPath,
+  ) async {
+    final messageId = payload['messageId'] as String?;
+    if (messageId == null || messageId.isEmpty) {
+      throw _ImapMessageGoneException(
+        'the move queued before this one reported no new UID, and the mail '
+        'has no Message-ID to find it by',
+      );
+    }
+    await _retryImapMoveByMessageId(
+      client,
+      row: row,
+      // No UID of this folder: none may count as "still in the source".
+      staleUid: -1,
+      mailboxPath: mailboxPath,
+      destMailboxPath: payload['dest'] as String,
+      messageId: messageId,
+      // The source is selected; look in the destination before moving.
+      movedNothing: true,
+      beforeMove: payload['clearSnooze'] == true
+          ? (s) => _removeImapSnoozeFlags(client, s)
+          : null,
+    );
   }
 
   /// The Message-ID of local email row [emailId], or null.
@@ -7200,6 +7360,10 @@ class EmailRepositoryImpl implements EmailRepository {
     } catch (e) {
       if (!isImapMailboxNotFound(e)) rethrow;
       throw _ImapSourceMailboxGoneException(e);
+    }
+    if (row.changeType == 'move' && payload[_uidAfterMoveKey] == true) {
+      await _applyMoveAfterUnansweredMove(client, row, payload, mailboxPath);
+      return;
     }
     final uid = await _currentImapUid(
       client,
@@ -7506,7 +7670,19 @@ class EmailRepositoryImpl implements EmailRepository {
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
         .getSingleOrNull();
-    if (row == null) return true;
+    if (row == null) {
+      // Deleted for good meanwhile: its queued delete still needs the UID.
+      final newUid = _resolveCopyUid(moveResult, sourceUid) ??
+          await _uniqueUidOfQueued(client, oldId, destMailboxPath);
+      if (newUid != null) {
+        await _repointQueuedChanges(
+          oldId: oldId,
+          destMailboxPath: destMailboxPath,
+          newUid: newUid,
+        );
+      }
+      return true;
+    }
 
     final newUid = _resolveCopyUid(moveResult, sourceUid) ??
         await _searchUidByMessageId(
@@ -7541,7 +7717,14 @@ class EmailRepositoryImpl implements EmailRepository {
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
         .getSingleOrNull();
-    if (row == null) return;
+    if (row == null) {
+      await _repointQueuedChanges(
+        oldId: oldId,
+        destMailboxPath: destMailboxPath,
+        newUid: newUid,
+      );
+      return;
+    }
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
     if (newId == oldId) return;
 
@@ -7556,6 +7739,75 @@ class EmailRepositoryImpl implements EmailRepository {
     final threadId = row.threadId ?? newId;
     await _updateThread(row.accountId, row.mailboxPath, threadId);
     await _updateThread(row.accountId, destMailboxPath, threadId);
+  }
+
+  /// Points the changes still queued for [oldId], whose local row is gone
+  /// (deleted for good while its move was queued), at the mail's [newUid] in
+  /// [destMailboxPath], as [_rekeyEmailRow] does for a row that still
+  /// exists. Otherwise a queued delete for good would expunge whatever
+  /// mail has the pre-move UID there (#1266).
+  Future<void> _repointQueuedChanges({
+    required String oldId,
+    required String destMailboxPath,
+    required int newUid,
+  }) async {
+    final queued = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.resourceId.equals(oldId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (queued == null) return;
+    final newId = '${queued.accountId}:$destMailboxPath:$newUid';
+    await _db.transaction(() async {
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.resourceId.equals(oldId)))
+          .write(PendingChangesCompanion(resourceId: Value(newId)));
+      await _rewritePendingChangeUids(
+        resourceId: newId,
+        mailboxPath: destMailboxPath,
+        newUid: newUid,
+      );
+      // Undo of the delete for good cancels its queued change by id.
+      await _db.customStatement(
+        'UPDATE undo_actions SET data_json = '
+        'REPLACE(data_json, ?1, ?2) '
+        'WHERE data_json LIKE ?3',
+        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+      );
+      await _db.customStatement(
+        'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
+        [newId, oldId],
+      );
+    });
+  }
+
+  /// The UID in [destMailboxPath] of the mail whose local row [oldId] is
+  /// gone, found by the Message-ID stamped on its queued changes, when
+  /// exactly one message matches; null otherwise, or when nothing besides
+  /// the move itself is queued for it. A wrong guess here would point a
+  /// queued delete for good at another copy, so an ambiguous match leaves
+  /// the changes marked ([_uidAfterUnansweredMove] then fails them).
+  Future<int?> _uniqueUidOfQueued(
+    imap.ImapClient client,
+    String oldId,
+    String destMailboxPath,
+  ) async {
+    final queued = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.resourceId.equals(oldId)))
+        .get();
+    if (queued.length < 2) return null;
+    String? messageId;
+    for (final change in queued) {
+      if (_decodePayload(change)?['messageId'] case final String id) {
+        messageId = id;
+        break;
+      }
+    }
+    final uids = await _searchUidsByMessageId(
+      client,
+      destMailboxPath,
+      messageId,
+    );
+    return uids.length == 1 ? uids.single : null;
   }
 
   /// True when a `UID MOVE` probably moved nothing: the server supports
@@ -10568,9 +10820,10 @@ class _BulkScope {
   final accounts = <String, account_model.Account?>{};
 }
 
-/// A queued IMAP move whose message is no longer in its source or destination
-/// mailbox — another client deleted or moved it. The flush marks the change
-/// failed.
+/// A queued IMAP change whose message is gone: a move's message is in
+/// neither its source nor its destination mailbox (another client deleted or
+/// moved it), or a change queued behind a move cannot find its message
+/// after that move. The flush marks the change failed.
 class _ImapMessageGoneException implements Exception {
   _ImapMessageGoneException(this.message);
 
