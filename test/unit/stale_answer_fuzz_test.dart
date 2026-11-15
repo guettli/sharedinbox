@@ -195,7 +195,6 @@ void _knownBugs() {
       },
     );
 
-    // The part of the #1268 case below that #1266's fix covers.
     test(
       'a star queued behind a move that failed does not star the mail with '
       'the old UID in the destination',
@@ -239,11 +238,6 @@ void _knownBugs() {
         );
         expect(await _rowsOf(db, 'a@test'), isEmpty, reason: 'a is gone');
       },
-      skip: _knownBug(
-        'known bug #1268: the failed move ("message gone", no '
-        'revert) leaves the row in Archive with its INBOX UID; the queued '
-        "star then hits Archive's UID 1, and the row never goes away",
-      ),
     );
 
     test(
@@ -679,12 +673,6 @@ class _FuzzRun {
       _trace.add('  user: (not moving $what again: #1276)');
       return;
     }
-    if (!current) {
-      // Excluded, known bug #1268: another client moved or expunged the mail
-      // since the app last saw it, so the move would fail as "message gone".
-      _trace.add('  user: (not moving/deleting $what, moved away: #1268)');
-      return;
-    }
     if (r < 0.9) {
       final dest = _pick(_folders.where((f) => f != row.mailboxPath).toList());
       _trace.add('  user: move $what to $dest');
@@ -757,12 +745,6 @@ class _FuzzRun {
       );
       _server.setFlagElsewhere(messageId, r'\Flagged', on: !message.flagged);
       intent.flagged = null;
-      return;
-    }
-    if (await _hasQueuedMove(messageId: messageId)) {
-      // Excluded, known bug #1268: the queued move would fail as "message
-      // gone".
-      _trace.add('  other client: (leaves $where alone: #1268)');
       return;
     }
     intent
