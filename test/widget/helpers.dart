@@ -608,8 +608,15 @@ class FakeEmailRepository implements EmailRepository {
   String? sentEmailAccountId;
   EmailDraft? sentEmailDraft;
 
+  /// How often [sendEmail] (the direct send past the outbox) was called.
+  int sendEmailCalls = 0;
+
+  /// Outbox row id returned by [enqueueSend].
+  int enqueueSendRowId = 0;
+
   @override
   Future<void> sendEmail(String accountId, EmailDraft draft) async {
+    sendEmailCalls++;
     sentEmailAccountId = accountId;
     sentEmailDraft = draft;
   }
@@ -618,7 +625,7 @@ class FakeEmailRepository implements EmailRepository {
   Future<int> enqueueSend(String accountId, EmailDraft draft) async {
     sentEmailAccountId = accountId;
     sentEmailDraft = draft;
-    return 0;
+    return enqueueSendRowId;
   }
 
   @override

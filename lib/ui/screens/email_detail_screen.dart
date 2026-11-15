@@ -18,6 +18,7 @@ import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
@@ -2605,9 +2606,29 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   static IconData _iconFor(Uri uri) =>
       uri.scheme == 'mailto' ? Icons.email_outlined : Icons.open_in_new;
 
+  void _showUnsubscribeQueued(
+    AppMessenger messenger,
+    String? reason, {
+    Object? error,
+    StackTrace? stack,
+  }) {
+    messenger.show(
+      reason == null || reason.isEmpty
+          ? 'Unsubscribe email queued, it will be sent shortly'
+          : 'Unsubscribe email queued, will retry: $reason',
+      level: AppLogLevel.warn,
+      event: 'email.unsubscribe.queued',
+      accountId: widget.email.accountId,
+      emailId: widget.email.id,
+      error: error,
+      stack: stack,
+    );
+  }
+
   Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
     final messenger = context.appMessenger();
     setState(() => _sending = true);
+    var queued = false;
     try {
       final accountId = widget.email.accountId;
       final account =
@@ -2635,16 +2656,50 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
         subject: uri.queryParameters['subject'] ?? 'unsubscribe',
         body: uri.queryParameters['body'] ?? '',
       );
-      await ref.read(emailRepositoryProvider).sendEmail(accountId, draft);
+      // Queue first, like compose: the request is durable even offline and
+      // the outbox retries it on every sync cycle (#1240). Then try to send
+      // right away so the user sees the outcome.
+      final repo = ref.read(emailRepositoryProvider);
+      final rowId = await repo.enqueueSend(accountId, draft);
+      queued = true;
+      final result = await repo.sendNow(accountId, outboxRowId: rowId);
       if (!mounted) return;
-      messenger.show(
-        'Unsubscribe email sent',
-        event: 'email.unsubscribe.sent',
-        accountId: widget.email.accountId,
-        emailId: widget.email.id,
-      );
+      switch (result.outcome) {
+        case SendNowOutcome.sent:
+          final warning = result.warning;
+          messenger.show(
+            warning == null
+                ? 'Unsubscribe email sent'
+                : 'Unsubscribe email sent. $warning',
+            level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
+            event: 'email.unsubscribe.sent',
+            accountId: accountId,
+            emailId: widget.email.id,
+          );
+        case SendNowOutcome.queued:
+        case SendNowOutcome.transientFailed:
+          _showUnsubscribeQueued(messenger, result.message);
+        case SendNowOutcome.permanentlyFailed:
+          messenger.show(
+            'Failed to send unsubscribe: '
+            '${result.message ?? 'rejected by the server'}',
+            level: AppLogLevel.error,
+            event: 'email.unsubscribe.send_failed',
+            accountId: accountId,
+            emailId: widget.email.id,
+          );
+      }
     } catch (e, stack) {
       if (!mounted) return;
+      if (queued) {
+        _showUnsubscribeQueued(
+          messenger,
+          userErrorMessage(e),
+          error: e,
+          stack: stack,
+        );
+        return;
+      }
       messenger.show(
         'Failed to send unsubscribe: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
