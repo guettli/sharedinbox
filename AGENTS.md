@@ -155,6 +155,8 @@ phone is needed. See [EXPLORATORY-TESTING.md](EXPLORATORY-TESTING.md).
 ## Code conventions
 
 - Avoid `else`, use "early return".
+- Every feature is offline-first. Follow the rules and the review checklist in
+  [OFFLINE-FIRST.md](OFFLINE-FIRST.md).
 
 ## Drift (DB)
 
