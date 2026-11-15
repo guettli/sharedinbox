@@ -433,6 +433,38 @@ class AccountSyncManager {
     }
   }
 
+  /// Checks that the server answers before a force re-sync wipes anything.
+  /// Without this, a resync started offline cleared the local mail and then
+  /// failed to fetch it again, leaving an empty account until the network
+  /// came back (#1236). The probe is a mailbox sync: it needs a working login
+  /// and is the first thing the resync would do anyway.
+  ///
+  /// Returns true (after emitting a failed snapshot) when the server cannot
+  /// be reached; the caller must then return without clearing.
+  Future<bool> _abortIfUnreachable(
+    String accountId,
+    void Function(ForceResyncProgress) emit,
+  ) async {
+    try {
+      await _mailboxes.syncMailboxes(accountId);
+      return false;
+    } catch (e, st) {
+      log(
+        'forceResync: server unreachable, nothing cleared',
+        error: e,
+        stackTrace: st,
+      );
+      emit(
+        ForceResyncProgress(
+          phase: ForceResyncPhase.failed,
+          error: 'Could not connect to or log in to the server, so nothing '
+              'was cleared. ($e)',
+        ),
+      );
+      return true;
+    }
+  }
+
   Future<void> _runForceResync(
     String accountId,
     StreamController<ForceResyncProgress> ctrl,
@@ -451,16 +483,6 @@ class AccountSyncManager {
       _active.remove(accountId)?.stop();
       _emitSyncing(accountId, syncing: true);
 
-      emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
-
-      // Push any un-pushed local mutations (e.g. a just-starred mail) to the
-      // server before wiping the cache — otherwise the re-fetch below would
-      // overwrite the optimistic local state with stale server truth and the
-      // change would be lost (#558).
-      await _flushBeforeResync(accountId);
-      await _emails.clearForResync(accountId);
-      await _mailboxes.clearForResync(accountId);
-
       final accounts = await _accounts.observeAccounts().first;
       account = accounts.cast<Account?>().firstWhere(
             (a) => a?.id == accountId,
@@ -475,6 +497,16 @@ class AccountSyncManager {
         );
         return;
       }
+      if (await _abortIfUnreachable(accountId, emit)) return;
+      emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
+
+      // Push any un-pushed local mutations (e.g. a just-starred mail) to the
+      // server before wiping the cache — otherwise the re-fetch below would
+      // overwrite the optimistic local state with stale server truth and the
+      // change would be lost (#558).
+      await _flushBeforeResync(accountId);
+      await _emails.clearForResync(accountId);
+      await _mailboxes.clearForResync(accountId);
 
       emit(
         const ForceResyncProgress(phase: ForceResyncPhase.syncingMailboxes),
@@ -630,6 +662,20 @@ class AccountSyncManager {
       }
       final mailbox = matches.first;
 
+      if (await _abortIfUnreachable(accountId, emit)) return;
+      // The probe synced the folder list; a folder deleted on the server is
+      // gone from it now, so there is nothing to re-sync.
+      final stillThere = (await _mailboxes.observeMailboxes(accountId).first)
+          .any((m) => m.path == mailboxPath);
+      if (!stillThere) {
+        emit(
+          const ForceResyncProgress(
+            phase: ForceResyncPhase.failed,
+            error: 'Folder not found on the server',
+          ),
+        );
+        return;
+      }
       emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
       // Push un-pushed local mutations before wiping the cache (see #558).
       await _flushBeforeResync(accountId);
