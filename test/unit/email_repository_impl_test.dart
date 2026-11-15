@@ -4588,7 +4588,10 @@ void main() {
         final warning = recorder.entries
             .singleWhere((e) => e.event == 'pending_change.message_gone');
         expect(warning.level, AppLogLevel.warn);
-        expect(warning.emailId, oldId);
+        // The row named no message any more (#1268): it is gone, and the
+        // warning does not point at it.
+        expect(await r.db.select(r.db.emails).get(), isEmpty);
+        expect(warning.emailId, isNull);
       });
     });
 

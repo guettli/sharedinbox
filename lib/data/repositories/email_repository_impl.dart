@@ -4240,6 +4240,30 @@ class EmailRepositoryImpl implements EmailRepository {
     return dependents;
   }
 
+  /// Drops the local row of [failed], a move whose message is in neither
+  /// its source nor its destination folder (another client deleted it or
+  /// moved it elsewhere), or whose source folder is gone. The row sits in the destination with its source
+  /// UID, so there it would name whichever mail has that UID: sync would
+  /// copy that mail's flags onto it, and the user's changes would act on
+  /// it (#1268). If the mail is in a third folder, sync shows it there.
+  /// The failed change itself stays on the Pending Changes screen; changes
+  /// queued behind it find no mail and fail there too. Returns whether a
+  /// row was dropped.
+  Future<bool> _dropGoneRow(PendingChangeRow failed) async {
+    if (!_locationChangeTypes.contains(failed.changeType)) return false;
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(failed.resourceId)))
+        .getSingleOrNull();
+    if (email == null || !_sameMessage(failed, email.messageId)) return false;
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(email.id))).go();
+    await _updateThread(
+      email.accountId,
+      email.mailboxPath,
+      email.threadId ?? email.id,
+    );
+    return true;
+  }
+
   /// App Log warnings for the [dependents] failed together with [row].
   void _logDependentFailures(
     PendingChangeRow row,
@@ -7285,7 +7309,11 @@ class EmailRepositoryImpl implements EmailRepository {
         // Retrying cannot bring the message back, but the user's move
         // (e.g. an Undo's reverse move, #1048) did not happen: mark the
         // change failed and say so in the App Log at warn level.
-        await _markChangeFailed(row, e, revert: false);
+        // One transaction: a phantom row must not outlive a crash here.
+        final dropped = await _db.transaction(() async {
+          await _markChangeFailed(row, e, revert: false);
+          return e.inNeitherMailbox && await _dropGoneRow(row);
+        });
         log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
@@ -7294,7 +7322,8 @@ class EmailRepositoryImpl implements EmailRepository {
                 'longer on the server (deleted or moved by another client); '
                 'kept on the Pending Changes screen',
             accountId: account.id,
-            emailId: row.resourceId,
+            // A log row must not reference the email row just dropped.
+            emailId: dropped ? null : row.resourceId,
             data: {'changeType': row.changeType},
             error: e,
           ),
@@ -7328,7 +7357,12 @@ class EmailRepositoryImpl implements EmailRepository {
         // The mail's folder is gone on the server, and the mail with it
         // (or, for a flag change or delete, the target is gone): treat as
         // success so the change doesn't accumulate or block future changes.
-        await _deletePendingChange(row);
+        await _db.transaction(() async {
+          await _deletePendingChange(row);
+          // A moved row sits in its destination with the deleted folder's
+          // UID, naming whichever mail has that UID there (#1268).
+          if (sourceGone) await _dropGoneRow(row);
+        });
         log('IMAP change ${row.id} skipped: message already gone ($e)');
         unawaited(
           _appLogger?.info(
@@ -7464,12 +7498,29 @@ class EmailRepositoryImpl implements EmailRepository {
         await _removeImapSnoozeFlags(client, seq);
         final unsnoozeResult =
             await client.uidMove(seq, targetMailboxPath: dest);
-        await _remapEmailAfterImapMove(
+        final unsnoozedNothing = _imapMoveMovedNothing(client, unsnoozeResult);
+        if (!unsnoozedNothing &&
+            await _remapEmailAfterImapMove(
+              client,
+              oldId: row.resourceId,
+              sourceUid: uid,
+              destMailboxPath: dest,
+              moveResult: unsnoozeResult,
+            )) {
+          return;
+        }
+        // E.g. another device woke the mail first: find it like a move, so
+        // the row is re-keyed where it is, or dropped when it is gone,
+        // instead of keeping the Snoozed folder's UID in [dest] (#1268).
+        await _retryImapMoveByMessageId(
           client,
-          oldId: row.resourceId,
-          sourceUid: uid,
+          row: row,
+          staleUid: uid,
+          mailboxPath: mailboxPath,
           destMailboxPath: dest,
-          moveResult: unsnoozeResult,
+          messageId: payload['messageId'] as String?,
+          beforeMove: (s) => _removeImapSnoozeFlags(client, s),
+          movedNothing: unsnoozedNothing,
         );
       case 'clear_snooze':
         await _clearImapSnoozeFlags(
@@ -7614,6 +7665,7 @@ class EmailRepositoryImpl implements EmailRepository {
       throw _ImapMessageGoneException(
         'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
         'effect: message $mid is in neither mailbox',
+        inNeitherMailbox: true,
       );
     }
     if (resolvedUid == staleUid) {
@@ -10825,9 +10877,13 @@ class _BulkScope {
 /// moved it), or a change queued behind a move cannot find its message
 /// after that move. The flush marks the change failed.
 class _ImapMessageGoneException implements Exception {
-  _ImapMessageGoneException(this.message);
+  _ImapMessageGoneException(this.message, {this.inNeitherMailbox = false});
 
   final String message;
+
+  /// A move's message was searched for in its source and its destination
+  /// and found in neither: the local row names no message any more.
+  final bool inNeitherMailbox;
 
   @override
   String toString() => message;
