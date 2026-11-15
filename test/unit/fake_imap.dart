@@ -177,7 +177,10 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
     int? unchangedSinceModSequence,
   }) async {
     calls.add(
-      'store ${action?.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
+      // enough_mail's uidMarkSeen & co. pass no action; its _store then
+      // defaults to add, so record what reaches the wire.
+      'store ${(action ?? imap.StoreAction.add).name} '
+      '${sequence.toList().join(',')} ${flags.join(' ')}',
     );
     return imap.StoreImapResult();
   }

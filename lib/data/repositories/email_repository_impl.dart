@@ -1079,6 +1079,14 @@ class EmailRepositoryImpl implements EmailRepository {
       if (payload['uid'] is! int || payload['uid'] == newUid) continue;
       if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) continue;
       payload['uid'] = newUid;
+      // The new UID was learned under the folder's current UIDVALIDITY.
+      payload.remove('uidValidity');
+      final checkpoint =
+          await _loadImapCheckpoint(row.accountId, 'IMAP:$mailboxPath');
+      if (checkpoint?['uidValidity'] case final int validity
+          when validity != 0) {
+        payload['uidValidity'] = validity;
+      }
       await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
           .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
     }
@@ -5087,6 +5095,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // is instead applied locally and carried over to the real message when it
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (await _isLocalEmail(resourceId)) return;
+    payload = await _stampUidValidity(accountId, resourceId, payload);
 
     // Collapse redundant flag changes: if an un-attempted `flag_seen` /
     // `flag_flagged` / `clear_snooze` for this message with the same payload is
@@ -5135,6 +5144,47 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
     _changeCtrl.add(accountId);
+  }
+
+  /// Adds the source folder's UIDVALIDITY to an IMAP change [payload] (one
+  /// with a `uid` and a `mailboxPath`/`src`), as known from that folder's
+  /// sync checkpoint. A UID only names a message under one UIDVALIDITY: if
+  /// the server resets it before the flush, the same UID can belong to a
+  /// different message, and a queued delete would expunge the wrong mail.
+  /// The flush compares the stamp with what SELECT reports
+  /// ([_currentImapUid]). The row's Message-ID is stamped too, while
+  /// [resourceId] still names this message: after a reset, sync re-inserts
+  /// the folder under new UIDs and the same row id can then belong to
+  /// another message. JMAP payloads and folders never synced (no
+  /// checkpoint yet, e.g. during the first full sync) are left as they are.
+  /// The stamp is the folder's UIDVALIDITY at enqueue time, not proof of
+  /// where the UID was learned: an optimistically moved row still carries
+  /// its source UID, as before.
+  Future<String> _stampUidValidity(
+    String accountId,
+    String resourceId,
+    String payload,
+  ) async {
+    final Map<String, dynamic> map;
+    try {
+      map = jsonDecode(payload) as Map<String, dynamic>;
+    } catch (_) {
+      return payload;
+    }
+    if (map['uid'] is! int || map.containsKey('uidValidity')) return payload;
+    final path = map['mailboxPath'] ?? map['src'];
+    if (path is! String) return payload;
+    final checkpoint = await _loadImapCheckpoint(accountId, 'IMAP:$path');
+    final validity = checkpoint?['uidValidity'];
+    // 0 is no valid UIDVALIDITY (RFC 3501): the checkpoint's fallback for a
+    // server that reported none.
+    if (validity is! int || validity == 0) return payload;
+    map['uidValidity'] = validity;
+    if (map['messageId'] == null) {
+      final messageId = await _messageIdOf(resourceId);
+      if (messageId != null) map['messageId'] = messageId;
+    }
+    return jsonEncode(map);
   }
 
   /// Whether [emailId] refers to a local self-sent "virtual" row (#545).
@@ -6315,7 +6365,11 @@ class EmailRepositoryImpl implements EmailRepository {
       final dest = payload['dest'];
       final uid = payload['uid'];
       if (src is! String || dest is! String || uid is! int) return null;
-      return (key: '$src\u0000$dest', uid: uid);
+      // Rows stamped with different UIDVALIDITYs never share a MOVE.
+      return (
+        key: '$src\u0000$dest\u0000${payload['uidValidity']}',
+        uid: uid,
+      );
     } catch (_) {
       return null;
     }
@@ -6416,7 +6470,19 @@ class EmailRepositoryImpl implements EmailRepository {
         row: (jsonDecode(row.payload) as Map<String, dynamic>)['uid'] as int,
     };
     try {
-      await client.selectUnicodeMailboxByPath(src);
+      final selected = await client.selectUnicodeMailboxByPath(src);
+      final stamped = payload['uidValidity'];
+      if (stamped is int &&
+          selected.uidValidity != null &&
+          selected.uidValidity != stamped) {
+        // The UIDs may name other messages now: let the one-by-one path
+        // look each up again by Message-ID ([_currentImapUid]).
+        return (
+          moved: <PendingChangeRow>{},
+          error: StateError('UIDVALIDITY of $src changed'),
+          moveSent: false,
+        );
+      }
     } catch (e) {
       return (moved: <PendingChangeRow>{}, error: e, moveSent: false);
     }
@@ -6444,6 +6510,58 @@ class EmailRepositoryImpl implements EmailRepository {
       moved.add(row);
     }
     return (moved: moved, error: null, moveSent: true);
+  }
+
+  /// The UID [row]'s change must act on in the selected [mailboxPath]. That
+  /// is the payload's UID unless the folder's UIDVALIDITY changed since the
+  /// change was queued ([_stampUidValidity]): the old UID may then name a
+  /// different message, so the message is looked up again by Message-ID and
+  /// acted on only when exactly one copy matches. Otherwise the change is
+  /// moot ([_ImapMessageGoneException]): acting on the stale UID could flag,
+  /// move or expunge someone else's mail.
+  Future<int> _currentImapUid(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    Map<String, dynamic> payload, {
+    required String mailboxPath,
+    required int? selectedUidValidity,
+  }) async {
+    final uid = payload['uid'] as int;
+    final stamped = payload['uidValidity'];
+    if (stamped is! int || selectedUidValidity == null) return uid;
+    if (stamped == selectedUidValidity) return uid;
+    // Only the Message-ID stamped at enqueue time: the local row behind
+    // [row.resourceId] may be a different message since the reset.
+    final messageId = payload['messageId'] as String?;
+    final uids = await _searchUidsByMessageId(
+      client,
+      mailboxPath,
+      messageId,
+      throwOnFailure: true,
+      select: false,
+    );
+    if (uids.length != 1) {
+      throw _ImapUidValidityChangedException(
+        'UIDVALIDITY of $mailboxPath changed ($stamped → '
+        '$selectedUidValidity) and ${uids.isEmpty ? 'no' : 'more than one'} '
+        'message matches its Message-ID',
+      );
+    }
+    log(
+      'IMAP change ${row.id}: UIDVALIDITY of $mailboxPath changed, '
+      'UID $uid → ${uids.single} by Message-ID',
+    );
+    return uids.single;
+  }
+
+  /// The Message-ID of local email row [emailId], or null.
+  Future<String?> _messageIdOf(String emailId) async {
+    final row = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.messageId])
+          ..where(_db.emails.id.equals(emailId))
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.read(_db.emails.messageId);
   }
 
   /// True when [error] means [client]'s connection is gone, whatever the
@@ -6478,6 +6596,24 @@ class EmailRepositoryImpl implements EmailRepository {
         await _recordChangeError(row, e);
         log('IMAP flush for ${account.id} stopped: connection lost ($e)');
         return (applied: 0, connectionLost: e);
+      }
+      if (e is _ImapUidValidityChangedException) {
+        // The folder was renumbered and the message cannot be identified
+        // safely: drop the change rather than act on someone else's mail.
+        await _deletePendingChange(row);
+        log('IMAP change ${row.id} dropped: $e');
+        unawaited(
+          _appLogger?.warn(
+            'pending_change.uidvalidity_changed',
+            'Dropped ${_describeChange(row)} — the server renumbered the '
+                'folder and the message could not be found again',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+            error: e,
+          ),
+        );
+        return (applied: 0, connectionLost: null);
       }
       if (e is _ImapMessageGoneException) {
         // Retrying cannot bring the message back, but the user's move
@@ -6525,11 +6661,17 @@ class EmailRepositoryImpl implements EmailRepository {
     PendingChangeRow row,
   ) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
-    final uid = payload['uid'] as int;
     // snooze/unsnooze payloads use 'src' for the source folder; all others use 'mailboxPath'.
     final mailboxPath = (payload['mailboxPath'] ?? payload['src']) as String;
+    final selected = await client.selectUnicodeMailboxByPath(mailboxPath);
+    final uid = await _currentImapUid(
+      client,
+      row,
+      payload,
+      mailboxPath: mailboxPath,
+      selectedUidValidity: selected.uidValidity,
+    );
     final seq = imap.MessageSequence.fromId(uid, isUid: true);
-    await client.selectUnicodeMailboxByPath(mailboxPath);
 
     switch (row.changeType) {
       case 'flag_seen':
@@ -6934,7 +7076,28 @@ class EmailRepositoryImpl implements EmailRepository {
     bool throwOnFailure = false,
     bool select = true,
   }) async {
-    if (messageId == null || messageId.isEmpty) return null;
+    final uids = await _searchUidsByMessageId(
+      client,
+      mailboxPath,
+      messageId,
+      throwOnFailure: throwOnFailure,
+      select: select,
+    );
+    if (uids.isEmpty) return null;
+    return uids.reduce((a, b) => a > b ? a : b);
+  }
+
+  /// Every UID in [mailboxPath] whose Message-ID header is [messageId]; empty
+  /// when none matches, or when the search fails and [throwOnFailure] is
+  /// false.
+  Future<List<int>> _searchUidsByMessageId(
+    imap.ImapClient client,
+    String mailboxPath,
+    String? messageId, {
+    bool throwOnFailure = false,
+    bool select = true,
+  }) async {
+    if (messageId == null || messageId.isEmpty) return const [];
     try {
       if (select) await client.selectUnicodeMailboxByPath(mailboxPath);
       // Some servers (e.g. Exchange) only match the exact header token, so a
@@ -6953,15 +7116,15 @@ class EmailRepositoryImpl implements EmailRepository {
         );
         final uids = result.matchingSequence?.toList() ?? const <int>[];
         if (uids.isEmpty) continue;
-        return uids.reduce((a, b) => a > b ? a : b);
+        return uids;
       }
-      return null;
+      return const [];
     } catch (e) {
       // A dead connection is not "no match": let it reach the caller so a
       // batch (e.g. the pending-change flush) stops instead of carrying on.
       if (isImapConnectionLost(e)) rethrow;
-      log('_searchUidByMessageId failed for $messageId in $mailboxPath: $e');
-      if (!throwOnFailure) return null;
+      log('_searchUidsByMessageId failed for $messageId in $mailboxPath: $e');
+      if (!throwOnFailure) return const [];
       // Wording must not match [isImapMailboxNotFound], which would treat
       // the change as applied.
       throw StateError('Message-ID search in $mailboxPath failed: $e');
@@ -9787,6 +9950,17 @@ class _BulkScope {
 /// mailbox — another client deleted or moved it. The flush drops the change.
 class _ImapMessageGoneException implements Exception {
   _ImapMessageGoneException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// A queued IMAP change whose folder's UIDVALIDITY changed, and whose
+/// message is not found exactly once again by Message-ID.
+class _ImapUidValidityChangedException implements Exception {
+  _ImapUidValidityChangedException(this.message);
 
   final String message;
 

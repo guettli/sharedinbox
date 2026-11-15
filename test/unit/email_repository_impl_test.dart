@@ -3842,6 +3842,175 @@ void main() {
     });
   });
 
+  group('queued IMAP changes and UIDVALIDITY', () {
+    const resourceId = 'acc-1:INBOX:5';
+
+    Future<_Repos> rig(_UidValiditySpyImapClient client) async {
+      final r = _makeRepos(imapConnect: (_, __, ___) async => client);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: resourceId,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              messageId: const Value('<m@example.com>'),
+            ),
+          );
+      await r.db.into(r.db.syncStates).insert(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode({'uidValidity': 1, 'lastUid': 5}),
+              syncedAt: DateTime(2024),
+            ),
+          );
+      return r;
+    }
+
+    Future<Map<String, dynamic>> queuedPayload(_Repos r) async {
+      final row = (await r.db.select(r.db.pendingChanges).get()).single;
+      return jsonDecode(row.payload) as Map<String, dynamic>;
+    }
+
+    test('a queued change carries the folder UIDVALIDITY and Message-ID',
+        () async {
+      final r = await rig(_UidValiditySpyImapClient(uidValidity: 1));
+
+      await r.emails.setFlag(resourceId, seen: true);
+
+      final payload = await queuedPayload(r);
+      expect(payload['uid'], 5);
+      expect(payload['uidValidity'], 1);
+      expect(payload['messageId'], '<m@example.com>');
+    });
+
+    test('a folder without a checkpoint queues an unstamped change', () async {
+      final client = _UidValiditySpyImapClient(uidValidity: 2);
+      final r = await rig(client);
+      await r.db.delete(r.db.syncStates).go();
+      await r.emails.setFlag(resourceId, seen: true);
+
+      expect((await queuedPayload(r)).containsKey('uidValidity'), isFalse);
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(client.calls.single, startsWith('store add 5 '));
+    });
+
+    test('after a reset the row id may name another message: no guess',
+        () async {
+      // Queued for message M at UID 5 under UIDVALIDITY 1 …
+      final client = _UidValiditySpyImapClient(
+        uidValidity: 2,
+        onSearch: (_, criteria) =>
+            criteria.contains('other@example.com') ? [5] : const [],
+      );
+      final r = await rig(client);
+      await r.emails.setFlag(resourceId, seen: true);
+      // … then sync re-inserted the folder: the same id is now message B.
+      const other = EmailsCompanion(messageId: Value('<other@example.com>'));
+      await (r.db.update(r.db.emails)..where((t) => t.id.equals(resourceId)))
+          .write(other);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // B must not get M's read flag.
+      expect(client.calls, isEmpty);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('unchanged UIDVALIDITY acts on the queued UID', () async {
+      final client = _UidValiditySpyImapClient(uidValidity: 1);
+      final r = await rig(client);
+      await r.emails.setFlag(resourceId, seen: true);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(client.calls.single, startsWith('store add 5 '));
+      expect(client.lastSearchCriteria, isNull);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('changed UIDVALIDITY finds the message again by Message-ID', () async {
+      final client = _UidValiditySpyImapClient(
+        uidValidity: 2,
+        searchResultsByMailbox: {
+          'INBOX': [9],
+        },
+      );
+      final r = await rig(client);
+      await r.emails.setFlag(resourceId, seen: true);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // UID 5 may be someone else's mail now: the flag goes to UID 9.
+      expect(client.calls.single, startsWith('store add 9 '));
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('changed UIDVALIDITY and no match never touches the stale UID',
+        () async {
+      final client = _UidValiditySpyImapClient(uidValidity: 2);
+      final r = await rig(client);
+      await r.emails.deleteEmail(resourceId);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(client.calls, isEmpty);
+      expect(client.expunged, isFalse);
+      // Dropped, not retried against a UID that may be someone else's mail.
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(client.lastSearchCriteria, contains('m@example.com'));
+    });
+
+    test('a batched move with a changed UIDVALIDITY is re-resolved per row',
+        () async {
+      final client = _UidValiditySpyImapClient(
+        uidValidity: 2,
+        searchResultsByMailbox: {
+          'INBOX': [9],
+        },
+      );
+      final r = await rig(client);
+      for (final uid in [6, 7]) {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:INBOX:$uid',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                receivedAt: DateTime(2024),
+                messageId: Value('<m$uid@example.com>'),
+              ),
+            );
+      }
+      for (final uid in [5, 6, 7]) {
+        await r.emails.moveEmail('acc-1:INBOX:$uid', 'Archive');
+      }
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      // No batched MOVE of the stale UIDs 5,6,7; each row was looked up again.
+      expect(client.moves.where((m) => m.contains(',')), isEmpty);
+      expect(client.moves.where((m) => m.startsWith('INBOX:5')), isEmpty);
+    });
+
+    test('changed UIDVALIDITY and two matches is not guessed', () async {
+      final client = _UidValiditySpyImapClient(
+        uidValidity: 2,
+        searchResultsByMailbox: {
+          'INBOX': [9, 11],
+        },
+      );
+      final r = await rig(client);
+      await r.emails.setFlag(resourceId, flagged: true);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(client.calls, isEmpty);
+    });
+  });
+
   group('IMAP flushPendingChanges', () {
     test('records attempt and error when IMAP throws', () async {
       // A command fails; a failed connect is no attempt (#1224).
@@ -12334,3 +12503,44 @@ class _GatedAccountRepository extends AccountRepositoryImpl {
     return super.getAccount(id);
   }
 }
+
+/// Records STOREs like [SnoozeSpyImapClient] and reports [uidValidity] on
+/// every SELECT, to model a server that reset a folder's UIDVALIDITY.
+class _UidValiditySpyImapClient extends SnoozeSpyImapClient {
+  _UidValiditySpyImapClient({
+    required this.uidValidity,
+    super.searchResultsByMailbox,
+    super.onSearch,
+  });
+
+  final int uidValidity;
+  bool expunged = false;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async {
+    await super.selectMailboxByPath(path);
+    return imap.Mailbox(
+      encodedName: path,
+      encodedPath: path,
+      pathSeparator: '/',
+      flags: [],
+      uidValidity: uidValidity,
+    );
+  }
+
+  @override
+  Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
+    expunged = true;
+    return null;
+  }
+}
+
+typedef _Repos = ({
+  AppDatabase db,
+  AccountRepositoryImpl accounts,
+  EmailRepositoryImpl emails,
+});
