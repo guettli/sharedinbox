@@ -405,6 +405,35 @@ SYNC_RELIABILITY_ARGS=$'--fuzz\n--fuzz-seed=42\n--fuzz-prob=0.15\n--cycles=5' \
 The fault-injection layer itself lives in `scripts/sync_reliability_fuzz.dart`
 and has unit coverage in `test/unit/sync_reliability_fuzz_test.dart`.
 
+**Stale answers.** `test/unit/stale_answer_fuzz_test.dart` runs in
+`task check-fast` (no network; about 15 s on its own, more under the
+`--coverage` run of check-fast). It drives the real
+`EmailRepositoryImpl` against a stateful in-memory IMAP server
+(`test/unit/helpers/stateful_fake_imap.dart`: folders with UIDVALIDITY,
+UIDs, Message-IDs, flags and MODSEQ; SELECT, UID SEARCH, UID FETCH incl.
+CHANGEDSINCE, UID STORE, UID MOVE with COPYUID, UID EXPUNGE). The server
+can hold an answer back after computing it: the test then lets the user
+star, mark read, move or delete a mail, runs another flush, or lets another
+client change the server, before the app reads the old answer. After the
+queue drains and sync settles it checks, per mail: local read/star/folder
+equal the server, the server equals the user's last action on each field
+(unless another client changed that field since), the app changed nothing on
+the server the user did not ask for, and no change is left `pending` or
+`failed` (unless the server refused it or another client moved the mail
+away). A failure prints the seed and the action trace. A seed reproduces
+the run only against the same code (any change in the IMAP commands the app
+sends shifts the random choices), so the trace is the durable record. Bugs it
+found are kept as skipped regression tests in the same file (#1266, #1267,
+#1268, #1269, #1270, #1271), and the
+driver avoids exactly their triggers. Longer or focused runs (locally, with a
+Flutter SDK):
+
+```
+STALE_FUZZ_SEEDS=500 flutter test test/unit/stale_answer_fuzz_test.dart
+STALE_FUZZ_SEED=17,42 STALE_FUZZ_VERBOSE=1 flutter test test/unit/stale_answer_fuzz_test.dart
+STALE_FUZZ_KNOWN_BUGS=1 flutter test test/unit/stale_answer_fuzz_test.dart  # run the skipped ones
+```
+
 To check how a real server behaves before relying on a semantic (rather than
 fuzzing the engine), probe a throwaway Stalwart directly — see
 `stalwart-dev/README.md` and `stalwart-dev/jmap_probe.py`.
