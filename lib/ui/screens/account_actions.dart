@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/unsynced_work_repository.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
@@ -121,12 +122,17 @@ Future<void> runAccountAction(
       await context.push('/accounts/send');
       break;
     case AccountAction.delete:
+      // Removing the account discards its work that exists only on this
+      // device (drafts are kept), so say what would be lost instead of
+      // dropping it silently (#1237).
+      final unsynced = await _countUnsyncedWork(ref, account.id);
+      if (!context.mounted) return;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Delete account'),
           content: Text(
-            'Remove "${account.displayName}" (${account.email})? This cannot be undone.',
+            deleteAccountMessage(account, unsynced),
           ),
           actions: [
             TextButton(
@@ -144,6 +150,28 @@ Future<void> runAccountAction(
         await ref.read(accountRepositoryProvider).removeAccount(account.id);
       }
       break;
+  }
+}
+
+/// Body of the delete-account confirmation. Lists the work that only exists
+/// on this device, because removing the account discards it.
+String deleteAccountMessage(Account account, UnsyncedWork unsynced) {
+  final base =
+      'Remove "${account.displayName}" (${account.email})? This cannot be undone.';
+  if (unsynced.isEmpty) return base;
+  final lines = unsynced.describe().map((l) => '• $l').join('\n');
+  return '$base\n\nOnly on this device, and will be lost:\n$lines';
+}
+
+/// Counts the account's device-only work. A failing count must not block
+/// the deletion, so it falls back to the plain confirmation.
+Future<UnsyncedWork> _countUnsyncedWork(WidgetRef ref, String accountId) async {
+  try {
+    return await ref
+        .read(unsyncedWorkRepositoryProvider)
+        .countForAccount(accountId);
+  } catch (_) {
+    return const UnsyncedWork();
   }
 }
 

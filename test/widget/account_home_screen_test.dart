@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/unsynced_work_repository.dart';
 import 'package:sharedinbox/data/db/database.dart' show SyncHealthRow;
+import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/account_list_screen.dart';
 
 import 'helpers.dart';
@@ -17,16 +19,22 @@ Future<void> _pumpAccountHome(
   List<Mailbox> mailboxes, {
   AccountRepository? accounts,
   SyncHealthRow? syncHealth,
+  UnsyncedWork? unsynced,
 }) async {
   await tester.pumpWidget(
     buildApp(
       initialLocation: '/accounts/acc-1',
-      overrides: baseOverrides(
-        accounts: [kTestAccount],
-        mailboxes: mailboxes,
-        accountRepository: accounts,
-        syncHealth: syncHealth,
-      ),
+      overrides: [
+        ...baseOverrides(
+          accounts: [kTestAccount],
+          mailboxes: mailboxes,
+          accountRepository: accounts,
+          syncHealth: syncHealth,
+        ),
+        unsyncedWorkRepositoryProvider.overrideWithValue(
+          _FixedUnsyncedWork(unsynced ?? const UnsyncedWork()),
+        ),
+      ],
     ),
   );
   await tester.pumpAndSettle();
@@ -50,6 +58,15 @@ class _LiveAccountRepository extends FakeAccountRepository {
     await super.removeAccount(id);
     _changes.add(accounts);
   }
+}
+
+class _FixedUnsyncedWork implements UnsyncedWorkRepository {
+  _FixedUnsyncedWork(this.work);
+
+  final UnsyncedWork work;
+
+  @override
+  Future<UnsyncedWork> countForAccount(String accountId) async => work;
 }
 
 const _inbox = Mailbox(
@@ -98,6 +115,26 @@ void main() {
       // It used to stay here and say "Account not found".
       expect(find.text('Account not found'), findsNothing);
       expect(find.byType(AccountListScreen), findsOneWidget);
+    });
+
+    testWidgets('the delete dialog lists work that would be lost (#1237)', (
+      tester,
+    ) async {
+      // Tall enough that the Delete tile at the end of the list is built.
+      tester.view.physicalSize = const Size(1080, 4000);
+      addTearDown(tester.view.reset);
+      await _pumpAccountHome(
+        tester,
+        [_inbox],
+        unsynced: const UnsyncedWork(queuedChanges: 3, unsentEmails: 1),
+      );
+
+      await tester.tap(find.text('Delete account'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('will be lost'), findsOneWidget);
+      expect(find.textContaining('• 1 unsent email'), findsOneWidget);
+      expect(find.textContaining('• 3 queued changes'), findsOneWidget);
     });
 
     testWidgets('cancelling the deletion stays on the account', (tester) async {

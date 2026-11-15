@@ -896,8 +896,11 @@ class AppDatabase extends _$AppDatabase {
       kind: UpdateKind.update,
     );
     await run(
+      // reply_to_email_id goes too: the email it answers is deleted, and a
+      // draft that still names one is hidden from the new-message chooser,
+      // so a reply draft would be kept but unreachable (#1237).
       'UPDATE drafts SET account_id = NULL, imap_server_id = NULL, '
-      'jmap_server_id = NULL, dirty = 1 '
+      'jmap_server_id = NULL, reply_to_email_id = NULL, dirty = 1 '
       'WHERE account_id IS NOT NULL AND $_missingAccount',
       {drafts},
       kind: UpdateKind.update,

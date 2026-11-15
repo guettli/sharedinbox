@@ -27,6 +27,7 @@ import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_state_repository.dart';
 import 'package:sharedinbox/core/repositories/undo_repository.dart';
+import 'package:sharedinbox/core/repositories/unsynced_work_repository.dart';
 import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -68,6 +69,7 @@ import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_state_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/unsynced_work_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
@@ -226,6 +228,10 @@ final syncLogRepositoryProvider = Provider<SyncLogRepository>((ref) {
 
 final syncStateRepositoryProvider = Provider<SyncStateRepository>((ref) {
   return SyncStateRepositoryImpl(ref.watch(dbProvider));
+});
+
+final unsyncedWorkRepositoryProvider = Provider<UnsyncedWorkRepository>((ref) {
+  return UnsyncedWorkRepositoryImpl(ref.watch(dbProvider));
 });
 
 /// One-shot future of the per-mailbox sync state for a single account.
