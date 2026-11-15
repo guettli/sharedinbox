@@ -288,6 +288,8 @@ server round-trip; if it had already been flushed, a compensating move is queued
   deleted only after the server acknowledges the change.
 - **No silent data loss**: permanent server errors surface as `FailedMutation` records
   visible in the UI (Settings → Failed mutations).
+- **Offline-first**: the user-facing contract these invariants serve is in
+  [OFFLINE-FIRST.md](OFFLINE-FIRST.md).
 - **UI layer isolation**: `lib/ui/` never imports `lib/data/`; all interaction goes
   through `core/` interfaces. The `check-layers` Taskfile task enforces this.
 
