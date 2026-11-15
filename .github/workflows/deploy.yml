@@ -44,7 +44,7 @@ jobs:
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. print-runner-wait \
-            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --github-token env://GH_RUNNER_WAIT_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
@@ -58,7 +58,7 @@ jobs:
           TARGETS: '{"android":"^(android/|integration_test/|lib/|pubspec\\.yaml|pubspec\\.lock|drift_schemas/|scripts/deploy_playstore\\.py)","linux":"^(linux/|lib/|pubspec\\.yaml|pubspec\\.lock)"}'
         run: |
           RESULT=$(dagger call --progress=plain -q -m ci --source=. changed-targets \
-            --github-token env:GH_CHANGED_TARGETS_TOKEN \
+            --github-token env://GH_CHANGED_TARGETS_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --head-sha "$GITHUB_SHA" \
@@ -104,7 +104,7 @@ jobs:
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. print-runner-wait \
-            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --github-token env://GH_RUNNER_WAIT_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
@@ -130,7 +130,7 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: |
           dagger call --progress=plain -q -m ci --source=. verify-play-store-deploy \
-            --play-store-config env:PLAY_STORE_CONFIG_JSON
+            --play-store-config env://PLAY_STORE_CONFIG_JSON
 
       # Append one row (date, git hash, delivered size + per-component breakdown)
       # to the android-app-size.tsv on the dedicated, unprotected
@@ -177,7 +177,7 @@ jobs:
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. print-runner-wait \
-            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --github-token env://GH_RUNNER_WAIT_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
@@ -218,7 +218,7 @@ jobs:
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. print-runner-wait \
-            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --github-token env://GH_RUNNER_WAIT_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
@@ -312,7 +312,7 @@ jobs:
           ALL_SUCCEEDED: ${{ (needs.deploy-playstore.result == 'success' || needs.deploy-playstore.result == 'skipped') && (needs.deploy-apk.result == 'success' || needs.deploy-apk.result == 'skipped') && (needs.build-linux.result == 'success' || needs.build-linux.result == 'skipped') }}
         run: |
           dagger call --progress=plain -q -m ci --source=. update-deploy-health-label \
-            --github-token env:GITHUB_TOKEN \
+            --github-token env://GITHUB_TOKEN \
             --issue-number "$DEPLOY_HEALTH_ISSUE" \
             --all-succeeded "$ALL_SUCCEEDED" \
             --github-repository "$GITHUB_REPOSITORY" \
