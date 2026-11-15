@@ -52,12 +52,12 @@ done
 ROOT=$(git rev-parse --show-toplevel)
 
 # DAGGER_VERSION=X.Y.Z on the dagger install line (shared by both Dockerfiles).
-arc_runner=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/arc-runner-image/Dockerfile" \
+arc_runner=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$ROOT/arc-runner-image/Dockerfile" \
   | head -n1 | cut -d= -f2)
-dockerfile_dev=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/Dockerfile.dev" \
+dockerfile_dev=$(grep -oE 'DAGGER_VERSION=[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$ROOT/Dockerfile.dev" \
   | head -n1 | cut -d= -f2)
 # DAGGER.md — the engine's Docker image tag (registry.dagger.io/engine:vX.Y.Z).
-dagger_md=$(grep -oE 'registry\.dagger\.io/engine:v[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/DAGGER.md" \
+dagger_md=$(grep -oE 'registry\.dagger\.io/engine:v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' "$ROOT/DAGGER.md" \
   | head -n1 | sed -E 's@.*:v@@')
 # ci/dagger.json — strip leading "v" for comparison.
 dagger_json=$(grep -oE '"engineVersion"[[:space:]]*:[[:space:]]*"[^"]+"' "$ROOT/ci/dagger.json" \
@@ -160,8 +160,8 @@ for attempt in $(seq 1 "$QUERY_MAX_ATTEMPTS"); do
   sleep "$QUERY_RETRY_WAIT_S"
 done
 
-engine=$(printf '%s' "$engine_out" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+"' \
-  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+engine=$(printf '%s' "$engine_out" | grep -oE '"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?"' \
+  | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -n1 || true)
 
 if [ "$query_rc" -ne 0 ] || [ -z "$engine" ]; then
   {
@@ -178,7 +178,7 @@ if [ "$query_rc" -ne 0 ] || [ -z "$engine" ]; then
   exit 1
 fi
 
-cli=$(dagger version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+cli=$(dagger version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -n1 || true)
 printf 'live engine                  version        = v%s   (queried over the tunnel)\n' "$engine"
 printf 'runner CLI                   version        = v%s   (dagger version)\n' "${cli:-unknown}"
 
