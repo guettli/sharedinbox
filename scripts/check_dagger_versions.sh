@@ -3,7 +3,8 @@
 #
 # Three "deployment" pins say which Dagger CLI to install. They MUST all be the
 # same, and must match the engine they talk to. The engine itself is pinned
-# out-of-repo (gitops: ansible/tc/systemd/system/dagger-engine.service.j2) and the
+# out-of-repo (gitops: dagger_version in ansible/group_vars/all.yml and the image
+# in k8s/plain/tc/dagger/dagger/apps_Deployment/dagger-engine.yaml) and the
 # CLI<->engine match is enforced at runtime by scripts/setup_dagger_remote.sh.
 # CLI and engine must be identical -- there is no fallback when they differ.
 #   - arc-runner-image/Dockerfile  (CLI baked into the sharedinbox-arc CI runner)
@@ -90,8 +91,8 @@ if [ "$arc_runner" != "$dockerfile_dev" ] || [ "$arc_runner" != "$dagger_md" ]; 
     echo "         Dockerfile.dev              : $dockerfile_dev"
     echo "         DAGGER.md                   : $dagger_md"
     echo "       When bumping, also update the engine in gitops:"
-    echo "         dagger_version in ansible/group_vars/all.yml (rendered into"
-    echo "         ansible/tc/systemd/system/dagger-engine.service.j2 on tc)"
+    echo "         dagger_version in ansible/group_vars/all.yml and the image in"
+    echo "         k8s/plain/tc/dagger/dagger/apps_Deployment/dagger-engine.yaml"
   } >&2
   exit 1
 fi
@@ -114,6 +115,27 @@ if [ "$dagger_json" = "$arc_runner" ]; then
 else
   echo "Dagger versions OK: engineVersion v$dagger_json <= deployment v$arc_runner (staged upgrade)."
 fi
+
+# ---------------------------------------------------------------------------
+# Secret references must name their provider with a scheme. Dagger v1.0 rejects
+# the old `--flag env:NAME` form ("must name its provider with a scheme"); it
+# needs `env://NAME` (same for file:// and cmd://). On 2026-11-15 the bump to
+# v1.0.0-beta.27 left 28 old-form refs behind and broke deploy, release and the
+# website pipeline until #1258. Static, so pre-commit catches it too.
+# ---------------------------------------------------------------------------
+old_refs=$(git -C "$ROOT" grep -nE -- '--[a-z][a-z0-9-]*[= ]+["'"'"']?(env|file|cmd):[^/[:space:]]' \
+  -- '.github/workflows/*.yml' '.github/workflows/*.yaml' 'Taskfile.yml' '*.sh' ':!scripts/check_dagger_versions.sh' || true)
+if [ -n "$old_refs" ]; then
+  {
+    echo ""
+    echo "ERROR: Dagger secret references without a scheme. Dagger v1.0 needs"
+    echo "       env://NAME (or file://PATH, cmd://CMD); env:NAME fails at runtime with"
+    echo "       \"must name its provider with a scheme\":"
+    printf '%s\n' "$old_refs" | sed 's/^/         /'
+  } >&2
+  exit 1
+fi
+echo "Dagger secret references use env:// (Dagger v1.0 scheme)."
 
 [ "$WITH_ENGINE" = "1" ] || exit 0
 
@@ -193,8 +215,8 @@ if [ "$lower" != "$dagger_json" ]; then
     echo "       module with:"
     echo "         module requires dagger v$dagger_json, but you have v$engine"
     echo "       FIX: either lower engineVersion, or bump the engine first in gitops"
-    echo "       (dagger_version in ansible/group_vars/all.yml, re-run tc.yml, then"
-    echo "       systemctl restart dagger-engine). See guettli/gitops#112."
+    echo "       (dagger_version in ansible/group_vars/all.yml and the engine"
+    echo "       Deployment image; Flux rolls the pod). See guettli/gitops#1011."
   } >&2
   exit 1
 fi
