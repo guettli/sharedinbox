@@ -431,7 +431,8 @@ Map<String, dynamic> _emailSetResponse(Map<String, dynamic> args) => {
 
 /// An IMAP Notes folder in memory: APPEND, UID SEARCH (ALL, `UID n:*`,
 /// `HEADER X-SharedInbox-Note-Id "…"`), UID FETCH of the full message, and
-/// STORE \Deleted + UID EXPUNGE. No UIDPLUS, so an APPEND answers no UID.
+/// STORE \Deleted, SEARCH DELETED and EXPUNGE. No UIDPLUS, so an APPEND
+/// answers no UID and there is no UID EXPUNGE.
 class _NotesServerImap extends FakeImapClient {
   final Map<int, String> raw = {};
   int nextUid = 1;
@@ -474,6 +475,7 @@ class _NotesServerImap extends FakeImapClient {
   }) async {
     final all = raw.keys.toList()..sort();
     var hits = all;
+    if (searchCriteria == 'DELETED') hits = _deleted.toList();
     final header = RegExp(r'^HEADER X-SharedInbox-Note-Id "(.+)"$').firstMatch(
       searchCriteria,
     );
@@ -542,10 +544,10 @@ class _NotesServerImap extends FakeImapClient {
   }
 
   @override
-  Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
-    for (final uid in sequence.toList()) {
-      if (_deleted.remove(uid)) raw.remove(uid);
-    }
+  Future<imap.Mailbox?> expunge() async {
+    _deleted
+      ..forEach(raw.remove)
+      ..clear();
     return null;
   }
 }

@@ -423,9 +423,9 @@ the server the user did not ask for, and no change is left `pending` or
 away). A failure prints the seed and the action trace. A seed reproduces
 the run only against the same code (any change in the IMAP commands the app
 sends shifts the random choices), so the trace is the durable record. Bugs it
-found are kept as skipped regression tests in the same file (#1266, #1267,
-#1268, #1269, #1270, #1271), and the
-driver avoids exactly their triggers. Longer or focused runs (locally, with a
+found and not yet fixed are kept as skipped regression tests in the same
+file (#1266, #1267, #1268, #1269, #1270), and the driver avoids exactly
+their triggers. Longer or focused runs (locally, with a
 Flutter SDK):
 
 ```

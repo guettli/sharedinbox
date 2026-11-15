@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/imap_expunge.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _notesFolder = 'Notes';
@@ -813,11 +814,7 @@ class NoteRepositoryImpl implements NoteRepository {
       for (final row in deletes) {
         try {
           final uids = await _imapUidsOfNote(client, row);
-          if (uids.isNotEmpty) {
-            final seq = imap.MessageSequence.fromIds(uids, isUid: true);
-            await client.uidMarkDeleted(seq);
-            await _expunge(client, seq);
-          }
+          if (uids.isNotEmpty) await deleteAndExpungeUids(client, uids);
           await _dropTombstone(row);
         } catch (e) {
           if (isImapConnectionLost(e)) rethrow;
@@ -826,20 +823,6 @@ class NoteRepositoryImpl implements NoteRepository {
       }
     } finally {
       await closeImapClient(client);
-    }
-  }
-
-  /// `UID EXPUNGE` needs UIDPLUS. Without it, a plain EXPUNGE: the Notes
-  /// folder holds only notes, and only ours are marked \Deleted.
-  Future<void> _expunge(
-    imap.ImapClient client,
-    imap.MessageSequence seq,
-  ) async {
-    try {
-      await client.uidExpunge(seq);
-    } catch (e) {
-      if (isImapConnectionLost(e)) rethrow;
-      await client.expunge();
     }
   }
 

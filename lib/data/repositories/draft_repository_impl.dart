@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/imap_expunge.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/storage/attachment_store.dart';
@@ -513,9 +514,7 @@ class DraftRepositoryImpl extends DraftRepository {
       final uid = int.tryParse(tombstone.serverId);
       if (uid != null) {
         try {
-          final seq = imap.MessageSequence.fromId(uid, isUid: true);
-          await client.uidMarkDeleted(seq);
-          await client.uidExpunge(seq);
+          await deleteAndExpungeUids(client, [uid]);
         } catch (_) {
           // Already gone or transient error — drop the tombstone anyway so
           // we don't retry forever.
@@ -661,9 +660,7 @@ class DraftRepositoryImpl extends DraftRepository {
       final oldUidInt = int.tryParse(oldUid);
       if (oldUidInt != null) {
         try {
-          final seq = imap.MessageSequence.fromId(oldUidInt, isUid: true);
-          await client.uidMarkDeleted(seq);
-          await client.uidExpunge(seq);
+          await deleteAndExpungeUids(client, [oldUidInt]);
         } catch (_) {
           // Gone already, or the server refused: the tombstone retries.
           keptOldUid = oldUid;

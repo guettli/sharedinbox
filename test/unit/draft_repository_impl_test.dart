@@ -54,6 +54,11 @@ class _ImapAccounts extends _StubAccounts {
 /// Records which folder draft sync creates, selects and appends to.
 class _DraftsSpyImapClient extends SelectingFakeImapClient
     with StubMailboxList {
+  _DraftsSpyImapClient() {
+    // So deletes go through `UID EXPUNGE`, which [expunged] records.
+    serverInfo.capabilities = [const imap.Capability('UIDPLUS')];
+  }
+
   final created = <String>[];
   final selected = <String>[];
   final appendedTo = <String?>[];

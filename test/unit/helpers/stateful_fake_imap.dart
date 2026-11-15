@@ -234,6 +234,12 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   List<int> _search(String criteria) {
     final messages = _folder.messages;
     if (criteria == 'ALL') return messages.keys.toList();
+    if (criteria == 'DELETED') {
+      return [
+        for (final m in messages.values)
+          if (m.flags.contains(r'\Deleted')) m.uid,
+      ];
+    }
     if (criteria == 'UNSEEN') {
       return [
         for (final m in messages.values)
@@ -368,14 +374,24 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
     // UID EXPUNGE is part of UIDPLUS (RFC 4315).
     if (!server.uidPlus) throw _no('BAD Unknown command UID EXPUNGE');
+    _expungeDeleted(_named(sequence));
+    return _answer('UID EXPUNGE', null);
+  }
+
+  @override
+  Future<imap.Mailbox?> expunge() async {
+    _expungeDeleted(_folder.messages.values.toList());
+    return _answer('EXPUNGE', null);
+  }
+
+  void _expungeDeleted(List<FakeServerMessage> candidates) {
     final folder = _folder;
-    for (final m in _named(sequence)) {
+    for (final m in candidates) {
       if (!m.flags.contains(r'\Deleted')) continue;
       folder.messages.remove(m.uid);
       server._bump(folder);
       server.hits.add((command: 'EXPUNGE', messageId: m.messageId));
     }
-    return _answer('EXPUNGE', null);
   }
 
   @override

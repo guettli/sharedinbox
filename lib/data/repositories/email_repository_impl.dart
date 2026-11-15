@@ -40,6 +40,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/imap_expunge.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
@@ -7251,8 +7252,7 @@ class EmailRepositoryImpl implements EmailRepository {
               : null,
         );
       case 'delete':
-        await client.uidMarkDeleted(seq);
-        await client.uidExpunge(seq);
+        await deleteAndExpungeUids(client, [uid]);
       case 'snooze':
         final until = payload['until'] as String;
         // ISO8601 with colons is fine for IMAP atoms, but we use a cleaner
