@@ -115,11 +115,6 @@ void _knownBugs() {
         expect(server.find('b@test'), isNotNull, reason: 'b was not touched');
         expect(server.find('a@test'), isNull);
       },
-      skip: _knownBug(
-        'known bug #1266: the queued delete names Trash with the '
-        "mail's INBOX UID, and the move's re-key does not rewrite it because "
-        'the local row is already gone',
-      ),
     );
 
     test(
@@ -148,11 +143,76 @@ void _knownBugs() {
         expect(server.find('a@test')?.folder.path, 'INBOX');
         expect(await _rowsOf(db, 'b@test'), hasLength(1));
       },
-      skip: _knownBug(
-        'known bug #1267: the second move is queued for Trash with '
-        "the mail's INBOX UID, so sync skips Trash's own mail with that UID "
-        'as a pending move, and the checkpoint moves past it for good',
-      ),
+    );
+
+    test(
+      'a mark-read queued behind a move that Undo cancelled acts on the '
+      'mail where it stayed',
+      () async {
+        server
+          ..deliver('INBOX', 'a@test')
+          ..deliver('Trash', 'b@test');
+        await open();
+        final a = await row('a@test');
+
+        await emails.moveEmail(a.id, 'Trash');
+        await emails.setFlag(a.id, seen: true);
+        // Undo before any flush: the move is cancelled, the mail stays.
+        expect(await emails.cancelPendingChange(a.id, 'move'), isTrue);
+        await _syncCycle(emails);
+
+        expect(server.find('a@test')!.folder.path, 'INBOX');
+        expect(server.find('a@test')!.message.seen, isTrue);
+        expect(server.find('b@test')!.message.seen, isFalse);
+      },
+    );
+
+    test(
+      'without COPYUID, a delete for good behind a move does not pick one '
+      'of two copies with the same Message-ID',
+      () async {
+        server = StatefulFakeImapServer(
+          uidValidityByFolder: {'INBOX': 11, 'Archive': 22, 'Trash': 33},
+          uidPlus: false,
+        )
+          ..deliver('INBOX', 'a@test')
+          ..deliver('Trash', 'a@test');
+        await open();
+        final a = (await _rowsOf(db, 'a@test'))
+            .singleWhere((r) => r.mailboxPath == 'INBOX');
+
+        expect(await emails.deleteEmail(a.id), 'Trash');
+        expect(await emails.deleteEmail(a.id), isNull);
+        await _syncCycle(emails);
+
+        final copies = server.folders['Trash']!.messages.values
+            .where((m) => m.messageId == 'a@test');
+        expect(copies, hasLength(2), reason: 'which copy is ours is unknown');
+        final failed = await (db.select(db.pendingChanges)
+              ..where((t) => t.state.equals('failed')))
+            .get();
+        expect(failed.map((c) => c.changeType), ['delete']);
+      },
+    );
+
+    // The part of the #1268 case below that #1266's fix covers.
+    test(
+      'a star queued behind a move that failed does not star the mail with '
+      'the old UID in the destination',
+      () async {
+        server
+          ..deliver('INBOX', 'a@test')
+          ..deliver('Archive', 'b@test');
+        await open();
+        final a = await row('a@test');
+
+        server.expungeElsewhere('a@test');
+        await emails.moveEmail(a.id, 'Archive');
+        await emails.setFlag(a.id, flagged: true);
+        await _syncCycle(emails);
+
+        expect(server.find('b@test')!.message.flagged, isFalse);
+      },
     );
 
     test(
@@ -611,11 +671,12 @@ class _FuzzRun {
         ..touchedFlagged = true;
       return;
     }
-    if (await _hasQueuedMove(emailId: row.id)) {
-      // Excluded, known bugs #1266 and #1267: a move or delete queued while
-      // the mail's earlier move is still queued addresses the destination
-      // folder with the source UID.
-      _trace.add('  user: (not moving/deleting $what again: #1266, #1267)');
+    final deleteForGood = r >= 0.9 && row.mailboxPath == 'Trash';
+    if (!deleteForGood && await _hasQueuedMove(emailId: row.id)) {
+      // Excluded: a second move while the mail's first move is still
+      // queued. The case of #1267 is fixed (its test above runs), but
+      // chains of moves still trip the fuzz's checks (see #1276).
+      _trace.add('  user: (not moving $what again: #1276)');
       return;
     }
     if (!current) {
