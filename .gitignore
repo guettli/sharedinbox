@@ -127,3 +127,10 @@ dagger-certs
 .last_deployed_sha
 .fail_count
 /*.kubeconfig
+
+# --- Dagger ---
+# Dagger >= v1.0 writes a lockfile that pins every image and git ref by digest
+# and asks to be committed. Not committed here: the image tags in the module
+# code stay the single source of truth, and Renovate keeps those current; a
+# committed lock would freeze them until someone ran `dagger lock update`.
+dagger.lock

@@ -51,6 +51,7 @@
     {
       "description": [
         "Dagger is lock-stepped with the engine, which Renovate cannot reach: the engine tag is pinned by Ansible in guettli/gitops (ansible/p16/systemd/system/dagger-engine.service) and CI talks to it over an SSH tunnel. A Dagger PR therefore stays red until that host is bumped and dagger-engine restarted.",
+        "The 1.0.0 betas are tags, not GitHub releases, so this datasource does not see them: Renovate stays quiet until 1.0.0 (or later) is released and then proposes it over the beta. Beta-to-beta bumps are by hand. The currentValue regexes include the -beta.N suffix so that proposal replaces the whole version.",
         "Never automerge, and keep every in-repo CLI pin in ONE PR so it is at least internally consistent. Landing it is a two-repo operation: merge the engine bump in gitops first, then this. See DAGGER.md and guettli/gitops#112."
       ],
       "matchDepNames": ["dagger/dagger"],
@@ -73,7 +74,7 @@
       "description": "Dagger CLI baked into the local dev container. A deployment pin: must equal the engine version.",
       "customType": "regex",
       "fileMatch": ["^Dockerfile\\.dev$"],
-      "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
@@ -82,7 +83,7 @@
       "description": "Dagger CLI baked into the sharedinbox-arc CI runner image. A deployment pin: must equal the engine version. Without this manager Renovate moved the other pins and left this one behind, producing a PR that could not pass its own check_dagger_versions.sh.",
       "customType": "regex",
       "fileMatch": ["^arc-runner-image/Dockerfile$"],
-      "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)"],
       "depNameTemplate": "dagger/dagger",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>.*)$"
