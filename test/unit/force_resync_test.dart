@@ -17,6 +17,7 @@
 // duplicating a hand-written fake for every repository method.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:mockito/mockito.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -175,6 +176,66 @@ void main() {
     ]);
   });
 
+  group('offline (#1236)', () {
+    void stubOffline(MockMailboxRepository mailboxes) {
+      when(mailboxes.syncMailboxes(_accountId))
+          .thenThrow(const SocketException('Network is unreachable'));
+    }
+
+    test('forceResync clears nothing when the server cannot be reached',
+        () async {
+      final rig = makeRig();
+      stubOffline(rig.mailboxes);
+      _stubEmptySync(rig.emails);
+
+      final snapshots = await rig.manager.forceResync(_accountId).toList();
+
+      expect(snapshots.last.phase, ForceResyncPhase.failed);
+      expect(snapshots.last.error, contains('nothing was cleared'));
+      verifyNever(rig.emails.clearForResync(any));
+      verifyNever(rig.mailboxes.clearForResync(any));
+      verifyNever(rig.emails.syncEmails(any, any));
+      // The "clearing" phase is never shown, since nothing was cleared.
+      expect(
+        snapshots.map((s) => s.phase),
+        isNot(contains(ForceResyncPhase.clearing)),
+      );
+    });
+
+    test('forceResyncMailbox clears nothing when the server cannot be reached',
+        () async {
+      final rig = makeRig();
+      stubOffline(rig.mailboxes);
+      _stubEmptySync(rig.emails);
+
+      final snapshots = await rig.manager
+          .forceResyncMailbox(_accountId, _inbox.path)
+          .toList();
+
+      expect(snapshots.last.phase, ForceResyncPhase.failed);
+      expect(snapshots.last.error, contains('nothing was cleared'));
+      verifyNever(rig.emails.clearMailboxForResync(any, any));
+      verifyNever(rig.emails.syncEmails(any, any));
+    });
+  });
+
+  test('forceResyncMailbox stops when the probe shows the folder is gone',
+      () async {
+    final rig = makeRig();
+    // Listed locally at first, gone after the probe synced the folder list.
+    var calls = 0;
+    when(rig.mailboxes.observeMailboxes(_accountId)).thenAnswer(
+      (_) => Stream.value(calls++ == 0 ? const [_inbox] : const <Mailbox>[]),
+    );
+
+    final snapshots =
+        await rig.manager.forceResyncMailbox(_accountId, _inbox.path).toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.failed);
+    expect(snapshots.last.error, contains('Folder not found'));
+    verifyNever(rig.emails.clearMailboxForResync(any, any));
+  });
+
   test('forceResync surfaces per-mailbox errors in the terminal snapshot',
       () async {
     final rig = makeRig();
@@ -201,12 +262,13 @@ void main() {
 
     expect(snapshots.last.phase, ForceResyncPhase.complete);
 
-    // Only the mailbox-scoped clear ran; the account-wide clears and the
-    // mailbox-list sync were never touched.
+    // Only the mailbox-scoped clear ran; the account-wide clears never did.
+    // The mailbox list is synced exactly once, as the reachability probe that
+    // runs before anything is cleared (#1236).
     verify(rig.emails.clearMailboxForResync(_accountId, _inbox.path)).called(1);
     verifyNever(rig.emails.clearForResync(_accountId));
     verifyNever(rig.mailboxes.clearForResync(_accountId));
-    verifyNever(rig.mailboxes.syncMailboxes(_accountId));
+    verify(rig.mailboxes.syncMailboxes(_accountId)).called(1);
     verify(rig.emails.syncEmails(_accountId, _inbox.path))
         .called(greaterThanOrEqualTo(1));
 
