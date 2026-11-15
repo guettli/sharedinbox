@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
@@ -2322,40 +2323,50 @@ void main() {
       },
     );
 
-    testWidgets(
-      'confirming mailto unsubscribe sends the email directly via sendEmail',
-      (tester) async {
-        final email = testEmail(
-          listUnsubscribeHeader:
-              '<mailto:unsub@example.com?subject=unsubscribe-please>',
-        );
-        final repo = FakeEmailRepository(
-          emailDetail: email,
+    /// Opens the detail screen for [repo]'s email and confirms the mailto
+    /// unsubscribe dialog.
+    Future<void> confirmMailtoUnsubscribe(
+      WidgetTester tester,
+      FakeEmailRepository repo,
+    ) async {
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider
+                .overrideWithValue(FakeMailboxRepository()),
+            emailRepositoryProvider.overrideWithValue(repo),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Unsubscribe'));
+      await tester.pumpAndSettle();
+    }
+
+    FakeEmailRepository mailtoRepo() => FakeEmailRepository(
+          emailDetail: testEmail(
+            listUnsubscribeHeader:
+                '<mailto:unsub@example.com?subject=unsubscribe-please>',
+          ),
           emailBody: const EmailBody(emailId: 'acc-1:42', attachments: []),
         );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation:
-                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider
-                  .overrideWithValue(FakeMailboxRepository()),
-              emailRepositoryProvider.overrideWithValue(repo),
-            ],
-          ),
-        );
-        await tester.pumpAndSettle();
 
-        await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
-        await tester.pumpAndSettle();
+    testWidgets(
+      'confirming mailto unsubscribe queues it in the outbox and sends now',
+      (tester) async {
+        final repo = mailtoRepo()..enqueueSendRowId = 7;
+        await confirmMailtoUnsubscribe(tester, repo);
 
-        await tester.tap(find.widgetWithText(FilledButton, 'Unsubscribe'));
-        await tester.pumpAndSettle();
-
-        // The email was handed off to the repository, not to an external app.
+        // The email was queued in the outbox (enqueueSend) and sent right
+        // away for that row (sendNow), not sent past the outbox (#1240).
+        expect(repo.sendEmailCalls, 0);
+        expect(repo.sendNowRowIds, [7]);
         expect(repo.sentEmailAccountId, 'acc-1');
         expect(repo.sentEmailDraft, isNotNull);
         expect(repo.sentEmailDraft!.from.email, kTestAccount.email);
@@ -2365,6 +2376,55 @@ void main() {
 
         // Confirmation snack bar is shown.
         expect(find.text('Unsubscribe email sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'mailto unsubscribe while offline stays queued and says so',
+      (tester) async {
+        final repo = mailtoRepo()
+          ..sendNowResult = const SendNowResult(
+            SendNowOutcome.transientFailed,
+            message: 'No connection',
+          );
+        await confirmMailtoUnsubscribe(tester, repo);
+
+        expect(repo.sentEmailDraft, isNotNull);
+        expect(
+          find.text('Unsubscribe email queued, will retry: No connection'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Failed'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'mailto unsubscribe refused by the server reports the failure',
+      (tester) async {
+        final repo = mailtoRepo()
+          ..sendNowResult =
+              const SendNowResult(SendNowOutcome.permanentlyFailed);
+        await confirmMailtoUnsubscribe(tester, repo);
+
+        expect(
+          find.text('Failed to send unsubscribe: rejected by the server'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('queued'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'mailto unsubscribe reports queued when sendNow throws after queuing',
+      (tester) async {
+        final repo = mailtoRepo()..sendNowError = Exception('socket closed');
+        await confirmMailtoUnsubscribe(tester, repo);
+
+        expect(repo.sentEmailDraft, isNotNull);
+        expect(
+          find.textContaining('Unsubscribe email queued'),
+          findsOneWidget,
+        );
       },
     );
 

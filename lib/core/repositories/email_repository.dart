@@ -85,9 +85,10 @@ abstract class EmailRepository {
   /// if it was hard-deleted.
   Future<String?> deleteEmails(List<String> emailIds);
 
-  /// Sends [draft] synchronously. Throws on network/protocol failure.
-  /// Prefer [enqueueSend] for user-initiated compose actions so the UI does
-  /// not block on connectivity.
+  /// Sends [draft] synchronously, past the outbox. Throws on network/protocol
+  /// failure, and nothing is retried. UI code must use [enqueueSend] (then
+  /// [sendNow]) instead, so a send made offline is not lost (#1240); this is
+  /// kept for tests and backend tools.
   Future<void> sendEmail(String accountId, EmailDraft draft);
 
   /// Persists [draft] in the offline send queue. Always returns immediately —
