@@ -25,6 +25,27 @@ class FakeImapClient extends imap.ImapClient {
   bool get isConnected => fakeConnected;
 }
 
+/// Lets a fake server hand out a *stale* answer: [beforeAnswer] runs after
+/// the answer to [command] is fixed and before the caller gets it, so a
+/// local change made there lands while the reply is in flight (#1234).
+/// Not re-entered: commands the hook itself causes are answered at once.
+mixin StaleAnswerHook {
+  Future<void> Function(String command)? beforeAnswer;
+  bool _answering = false;
+
+  Future<T> answerLate<T>(String command, T answer) async {
+    final hook = beforeAnswer;
+    if (hook == null || _answering) return answer;
+    _answering = true;
+    try {
+      await hook(command);
+    } finally {
+      _answering = false;
+    }
+    return answer;
+  }
+}
+
 /// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
 /// mailbox of that name — or throws [selectError] when one is given.
 class SelectingFakeImapClient extends FakeImapClient {
@@ -51,6 +72,46 @@ imap.Mailbox fakeMailbox(String path) => imap.Mailbox(
       flags: [],
     );
 
+/// Routes `UID STORE` and `UID MOVE` to [fakeStore] and [fakeMove], so a
+/// fake implements them without restating enough_mail's signatures.
+mixin StoreAndMove on imap.ImapClient {
+  /// [action] is never null: enough_mail's `uidMarkSeen` & co. pass none and
+  /// its own `_store` then sends an add, so that is what reaches the wire.
+  Future<imap.StoreImapResult> fakeStore(
+    imap.MessageSequence sequence,
+    List<String> flags,
+    imap.StoreAction action,
+  );
+
+  Future<imap.GenericImapResult> fakeMove(
+    imap.MessageSequence sequence,
+    String? targetMailboxPath,
+  );
+
+  @override
+  Future<imap.StoreImapResult> uidStore(
+    imap.MessageSequence sequence,
+    List<String> flags, {
+    imap.StoreAction? action,
+    bool? silent,
+    int? unchangedSinceModSequence,
+  }) {
+    // The fakes ignore UNCHANGEDSINCE: fail loudly once the app uses it.
+    assert(unchangedSinceModSequence == null, 'UNCHANGEDSINCE not faked');
+    return fakeStore(sequence, flags, action ?? imap.StoreAction.add);
+  }
+
+  @override
+  Future<imap.GenericImapResult> uidMove(
+    imap.MessageSequence sequence, {
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+  }) {
+    assert(targetMailbox == null, 'only targetMailboxPath is faked');
+    return fakeMove(sequence, targetMailboxPath);
+  }
+}
+
 /// Answers LIST with [listedMailboxes].
 mixin StubMailboxList on imap.ImapClient {
   List<imap.Mailbox> get listedMailboxes;
@@ -67,7 +128,8 @@ mixin StubMailboxList on imap.ImapClient {
 }
 
 /// Spy IMAP client that records snooze-related operations and succeeds silently.
-class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
+class SnoozeSpyImapClient extends FakeImapClient
+    with StubMailboxList, StoreAndMove {
   SnoozeSpyImapClient({
     this.copyUidValidity,
     this.copyUidSourceToTarget = const {},
@@ -169,28 +231,22 @@ class SnoozeSpyImapClient extends FakeImapClient with StubMailboxList {
   List<imap.Mailbox> get listedMailboxes => [fakeMailbox('INBOX')];
 
   @override
-  Future<imap.StoreImapResult> uidStore(
+  Future<imap.StoreImapResult> fakeStore(
     imap.MessageSequence sequence,
-    List<String> flags, {
-    imap.StoreAction? action,
-    bool? silent,
-    int? unchangedSinceModSequence,
-  }) async {
+    List<String> flags,
+    imap.StoreAction action,
+  ) async {
     calls.add(
-      // enough_mail's uidMarkSeen & co. pass no action; its _store then
-      // defaults to add, so record what reaches the wire.
-      'store ${(action ?? imap.StoreAction.add).name} '
-      '${sequence.toList().join(',')} ${flags.join(' ')}',
+      'store ${action.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
     );
     return imap.StoreImapResult();
   }
 
   @override
-  Future<imap.GenericImapResult> uidMove(
-    imap.MessageSequence sequence, {
-    imap.Mailbox? targetMailbox,
+  Future<imap.GenericImapResult> fakeMove(
+    imap.MessageSequence sequence,
     String? targetMailboxPath,
-  }) async {
+  ) async {
     await onUidMove?.call();
     movedToMailbox = targetMailboxPath;
     moves.add(

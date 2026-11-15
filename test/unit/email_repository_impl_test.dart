@@ -36,7 +36,8 @@ import 'fake_imap.dart'
         FakeImapClient,
         ScriptedSmtpClient,
         SelectingFakeImapClient,
-        SnoozeSpyImapClient;
+        SnoozeSpyImapClient,
+        StaleAnswerHook;
 import 'recording_app_log_repository.dart';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -11288,7 +11289,10 @@ void main() {
         await r.accounts.addAccount(_account, 'pw');
         await r.emails.syncEmails('acc-1', 'INBOX');
         expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
-        client.beforeFlagsAnswer = () async {
+        client.beforeAnswer = (command) async {
+          // Once, inside the next FLAGS fetch.
+          if (command != 'FLAGS') return;
+          client.beforeAnswer = null;
           await r.emails.setFlag('acc-1:INBOX:42', seen: true);
           // Flushed: the STORE reached the server after it built the answer.
           await r.db.delete(r.db.pendingChanges).go();
@@ -11310,7 +11314,7 @@ void main() {
 
         await r.emails.syncEmails('acc-1', 'INBOX');
 
-        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        expect(client.beforeAnswer, isNull, reason: 'race not exercised');
         await expectStillRead(r.db);
       });
 
@@ -11324,7 +11328,7 @@ void main() {
 
         await r.emails.syncEmails('acc-1', 'INBOX');
 
-        expect(client.beforeFlagsAnswer, isNull, reason: 'race not exercised');
+        expect(client.beforeAnswer, isNull, reason: 'race not exercised');
         await expectStillRead(r.db);
       });
 
@@ -12964,13 +12968,11 @@ class _CondstoreImapClient extends _PreviewSyncImapClient {
   }
 }
 
-/// [_CondstoreImapClient] that runs [beforeFlagsAnswer] once, inside the next
-/// `FLAGS` fetch, after the answer's state is fixed and before it is
-/// returned: a local change landing while the server's reply is in flight.
-class _RacingFlagsImapClient extends _CondstoreImapClient {
+/// [_CondstoreImapClient] that hands every FLAGS fetch through
+/// [StaleAnswerHook]: the race tests set [beforeAnswer] to make a local change
+/// after the answer's state is fixed and before it is returned.
+class _RacingFlagsImapClient extends _CondstoreImapClient with StaleAnswerHook {
   _RacingFlagsImapClient({required super.messages});
-
-  Future<void> Function()? beforeFlagsAnswer;
 
   @override
   Future<imap.FetchImapResult> uidFetchMessages(
@@ -12985,11 +12987,7 @@ class _RacingFlagsImapClient extends _CondstoreImapClient {
       changedSinceModSequence: changedSinceModSequence,
       responseTimeout: responseTimeout,
     );
-    final hook = beforeFlagsAnswer;
-    if (hook == null || fetchContentDefinition != 'FLAGS') return result;
-    beforeFlagsAnswer = null;
-    await hook();
-    return result;
+    return answerLate(fetchContentDefinition ?? '', result);
   }
 }
 
