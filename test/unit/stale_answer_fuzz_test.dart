@@ -246,12 +246,6 @@ void _knownBugs() {
             .get();
         expect(failed, isEmpty);
       },
-      skip: _knownBug(
-        'known bug #1271: a delete for good always sends UID '
-        'EXPUNGE, which needs UIDPLUS (RFC 4315); without it the server '
-        'answers BAD and the change fails after five attempts, the mail '
-        'flagged \\Deleted on the server but gone locally',
-      ),
     );
 
     test(
@@ -637,12 +631,6 @@ class _FuzzRun {
       intent
         ..location = dest
         ..touchedLocation = true;
-      return;
-    }
-    if (!_server.uidPlus && row.mailboxPath == 'Trash') {
-      // Excluded, see the skipped regression test "a delete for good works
-      // on a server without UIDPLUS" (#1271): it always sends UID EXPUNGE.
-      _trace.add('  user: (not deleting $what for good: no UIDPLUS)');
       return;
     }
     _trace.add('  user: delete $what');
