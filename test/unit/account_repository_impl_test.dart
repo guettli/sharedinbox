@@ -113,6 +113,7 @@ Future<void> _seedMailOf(AppDatabase db, String accountId) async {
           subjectText: Value('draft of $accountId'),
           updatedAt: DateTime(2024, 6),
           imapServerId: const Value('7'),
+          replyToEmailId: Value('$accountId:INBOX:1'),
         ),
       );
 }
@@ -201,6 +202,9 @@ void main() {
       expect(drafts['draft of acc-2']!.accountId, 'acc-2');
       expect(drafts['draft of acc-1']!.accountId, isNull);
       expect(drafts['draft of acc-1']!.imapServerId, isNull);
+      // A reply draft becomes a plain draft, so it stays reachable (#1237).
+      expect(drafts['draft of acc-1']!.replyToEmailId, isNull);
+      expect(drafts['draft of acc-2']!.replyToEmailId, 'acc-2:INBOX:1');
       await db.close();
     });
 
