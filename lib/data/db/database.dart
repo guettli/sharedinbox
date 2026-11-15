@@ -236,6 +236,10 @@ class PendingChanges extends Table {
   DateTimeColumn get createdAt => dateTime()();
   IntColumn get attempts => integer().withDefault(const Constant(0))();
   TextColumn get lastError => text().nullable()();
+  // "pending" (queued or retrying) | "failed" (gave up: retry limit reached
+  // or the server refused it). A failed row is never flushed and protects
+  // no local value from sync; it waits for Retry or Discard (SYNC.md §6).
+  TextColumn get state => text().withDefault(const Constant('pending'))();
 }
 
 /// Sync checkpoint per (account, resource type).
@@ -1636,6 +1640,10 @@ class AppDatabase extends _$AppDatabase {
       // Offline-first notes: local add/delete waits here for the push.
       await _addColumnIfMissing(m, emailNotes, emailNotes.pendingUpload);
       await _addColumnIfMissing(m, emailNotes, emailNotes.pendingDelete);
+    }
+    if (from >= 6 && from < 68 && await _tableExists(this, 'pending_changes')) {
+      // Failed changes are kept as `state = 'failed'` instead of deleted.
+      await _addColumnIfMissing(m, pendingChanges, pendingChanges.state);
     }
   }
 

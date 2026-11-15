@@ -1302,7 +1302,12 @@ class EmailRepositoryImpl implements EmailRepository {
             'IMAP SELECT failed for "$mailboxPath" (folder deleted on '
             'server) — pruning local cache: $e',
           );
-          await removeLocalMailbox(_db, account.id, mailboxPath);
+          await removeLocalMailbox(
+            _db,
+            account.id,
+            mailboxPath,
+            appLogger: _appLogger,
+          );
           return model.SyncEmailsResult.zero;
         }
         rethrow;
@@ -1461,11 +1466,13 @@ class EmailRepositoryImpl implements EmailRepository {
   /// reverted by a server-truth flag refresh before it has been pushed. The
   /// `flag_flagged` / `flag_seen` change a mail-to-self dissolve queues when it
   /// carries the star onto the real message lives here until it flushes (#565).
+  /// A failed change protects nothing: server truth wins again.
   Future<Set<String>> _inFlightFlagResourceIds(String accountId) async {
     final ids = await (_db.selectOnly(_db.pendingChanges)
           ..addColumns([_db.pendingChanges.resourceId])
           ..where(
             _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.state.equals(_pendingState) &
                 _db.pendingChanges.changeType.isIn(
                   const [
                     'flag_seen',
@@ -2002,7 +2009,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // UIDs in [mailboxPath] that have a pending local delete or move queued.
   // Used by the IMAP fetch path to avoid re-inserting rows the user has
-  // already removed from view but whose change has not yet flushed.
+  // already removed from view but whose change has not yet flushed. A
+  // failed change is not counted: the server's copy is shown again.
   Future<Map<int, String>> _pendingDeleteOrMoveUids(
     String accountId,
     String mailboxPath,
@@ -2011,6 +2019,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
+                t.state.equals(_pendingState) &
                 t.resourceType.equals('Email') &
                 (t.changeType.equals('delete') | t.changeType.equals('move')),
           ))
@@ -2739,9 +2748,20 @@ class EmailRepositoryImpl implements EmailRepository {
   static bool _jmapEnumerationComplete(Set<String> seen, int? reportedTotal) =>
       reportedTotal != null && seen.length == reportedTotal;
 
-  /// Pending changes exceeding this attempt count are evicted rather than
-  /// retried, preventing unbounded queue growth from permanent server errors.
-  static const _maxChangeAttempts = 5;
+  /// A pending change that has failed this many attempts is marked
+  /// [_failedState] and no longer retried, so a permanent server error does
+  /// not retry forever. It is kept until the user retries or discards it.
+  static const _maxChangeAttempts = model.maxPendingChangeAttempts;
+
+  /// `pending_changes.state` of a change that is queued or still retrying.
+  /// Only these rows are flushed and protect a local value from sync.
+  static const _pendingState = 'pending';
+
+  /// `pending_changes.state` of a change the app gave up on (retry limit or
+  /// a permanent refusal). Never flushed and protects nothing, so the next
+  /// server read shows server truth again; listed on the Pending Changes
+  /// screen.
+  static const _failedState = 'failed';
 
   static const _emailProperties = [
     'id',
@@ -3526,11 +3546,13 @@ class EmailRepositoryImpl implements EmailRepository {
   ///
   /// For a guard that only needs "does the user have an edit in flight", use
   /// [_inFlightFlagResourceIds] — it covers flag edits and deletes too.
+  /// A failed move or snooze is not counted: its row follows the server.
   Future<Set<String>> _rowsWithUnflushedMoveOrSnooze(String accountId) async {
     final ids = await (_db.selectOnly(_db.pendingChanges)
           ..addColumns([_db.pendingChanges.resourceId])
           ..where(
             _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.state.equals(_pendingState) &
                 _db.pendingChanges.changeType.isIn(
                   const ['move', 'snooze', 'unsnooze'],
                 ),
@@ -4077,16 +4099,14 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// Records a failure for [row]: increments attempt count and stores the
   /// error message. When attempts reach [_maxChangeAttempts] the row is
-  /// deleted instead — the change is permanently abandoned.
+  /// marked [_failedState] instead: no longer retried, kept for the user to
+  /// retry or discard, and a move's optimistic location is undone
+  /// ([_revertFailedLocation]).
   Future<void> _recordChangeError(PendingChangeRow row, Object error) async {
     final next = row.attempts + 1;
-    final dropped = next >= _maxChangeAttempts;
-    if (dropped) {
-      await (_db.delete(
-        _db.pendingChanges,
-      )..where((t) => t.id.equals(row.id)))
-          .go();
-    } else {
+    final gaveUp = next >= _maxChangeAttempts;
+    var dependents = const <PendingChangeRow>[];
+    await _db.transaction(() async {
       await (_db.update(
         _db.pendingChanges,
       )..where((t) => t.id.equals(row.id)))
@@ -4094,9 +4114,12 @@ class EmailRepositoryImpl implements EmailRepository {
         PendingChangesCompanion(
           attempts: Value(next),
           lastError: Value(error.toString()),
+          state: gaveUp ? const Value(_failedState) : const Value.absent(),
         ),
       );
-    }
+      if (gaveUp) dependents = await _afterLocationFailure(row, revert: true);
+    });
+    _logDependentFailures(row, dependents);
 
     // Mirror the failure into the App Log so a failed delete/move/flag is
     // discoverable in the per-message "Show Logs" view and in bug reports —
@@ -4107,11 +4130,12 @@ class EmailRepositoryImpl implements EmailRepository {
       'attempts': next,
       'maxAttempts': _maxChangeAttempts,
     };
-    if (dropped) {
+    if (gaveUp) {
       unawaited(
         _appLogger?.error(
           'pending_change.failed',
-          'Giving up on ${_describeChange(row)} after $next attempts',
+          'Gave up on ${_describeChange(row)} after $next attempts; kept '
+              'on the Pending Changes screen',
           accountId: row.accountId,
           emailId: row.resourceId,
           data: data,
@@ -4130,6 +4154,270 @@ class EmailRepositoryImpl implements EmailRepository {
           error: error,
         ),
       );
+    }
+  }
+
+  /// Marks a claimed [row] [_failedState] at once, without further retries:
+  /// the server refused it, or the message it names is gone. Keeps the row
+  /// (with [error] and the claimed attempt) for the user to retry or discard.
+  /// With [revert], a move's optimistic location is undone as well
+  /// ([_revertFailedLocation]); pass false when the message is gone and there
+  /// is nothing to go back to.
+  Future<void> _markChangeFailed(
+    PendingChangeRow row,
+    Object error, {
+    bool revert = true,
+  }) async {
+    final dependents = await _db.transaction(() async {
+      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+          .write(
+        PendingChangesCompanion(
+          attempts: Value(row.attempts + 1),
+          lastError: Value(error.toString()),
+          state: const Value(_failedState),
+        ),
+      );
+      return _afterLocationFailure(row, revert: revert);
+    });
+    _logDependentFailures(row, dependents);
+  }
+
+  /// Change types that change where a mail is.
+  static const _locationChangeTypes = ['move', 'snooze', 'unsnooze'];
+
+  /// Change types that change where a mail is, or whether it exists: a later
+  /// one of these depends on an earlier one for the same mail having applied.
+  static const _placementChangeTypes = [..._locationChangeTypes, 'delete'];
+
+  /// Called (inside the transaction that marked [row] failed) when a change
+  /// just became failed. If [row] moves or deletes the mail, the mail's later
+  /// queued moves/snoozes/unsnoozes/deletes depended on it — they address the
+  /// mail where [row] would have put it — so they are marked failed too
+  /// (`depends on failed change #id`, nothing reverted for them). Then, with
+  /// [revert], [row]'s optimistic location is undone
+  /// ([_revertFailedLocation]); a revert that throws is logged and rolled
+  /// back on its own, never taking the failed state with it. Returns the
+  /// dependents, for [_logDependentFailures] once the transaction is done.
+  Future<List<PendingChangeRow>> _afterLocationFailure(
+    PendingChangeRow row, {
+    required bool revert,
+  }) async {
+    if (!_placementChangeTypes.contains(row.changeType)) return const [];
+    final dependents = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(row.resourceId) &
+                t.state.equals(_pendingState) &
+                t.id.isBiggerThanValue(row.id) &
+                t.changeType.isIn(_placementChangeTypes),
+          )
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+        .get();
+    for (final dependent in dependents) {
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.id.equals(dependent.id)))
+          .write(
+        PendingChangesCompanion(
+          lastError: Value('depends on failed change #${row.id}'),
+          state: const Value(_failedState),
+        ),
+      );
+    }
+    if (!revert) return dependents;
+    try {
+      await _db.transaction(() => _revertFailedLocation(row, dependents));
+    } catch (e) {
+      log('Could not revert failed change ${row.id}: $e');
+    }
+    return dependents;
+  }
+
+  /// App Log warnings for the [dependents] failed together with [row].
+  void _logDependentFailures(
+    PendingChangeRow row,
+    List<PendingChangeRow> dependents,
+  ) {
+    for (final dependent in dependents) {
+      unawaited(
+        _appLogger?.warn(
+          'pending_change.dependent_failed',
+          'Could not apply ${_describeChange(dependent)} — it depends on a '
+              'failed ${_describeChange(row)}; kept on the Pending Changes '
+              'screen',
+          accountId: dependent.accountId,
+          emailId: dependent.resourceId,
+          data: {'changeType': dependent.changeType, 'dependsOn': row.id},
+        ),
+      );
+    }
+  }
+
+  /// Undoes the optimistic local part of [row], a move/snooze/unsnooze that
+  /// just failed, together with its [dependents] (the later location changes
+  /// for the mail that were failed with it): the mail goes back to [row]'s
+  /// source folder with its earlier snooze state, so the app shows where it
+  /// really is on the server. IMAP changes queued after it for the same mail
+  /// that address it where those changes put it are pointed back at the
+  /// source too ([_pointLaterChangesAtSource]).
+  ///
+  /// Does nothing when the mail is no longer where the last of these changes
+  /// put it (e.g. a dependent delete removed the row), when the IMAP row does
+  /// not name [row]'s source UID, or when the source folder was renumbered
+  /// since [row] was queued.
+  Future<void> _revertFailedLocation(
+    PendingChangeRow row,
+    List<PendingChangeRow> dependents,
+  ) async {
+    if (!_locationChangeTypes.contains(row.changeType)) return;
+    final payload = _decodePayload(row);
+    if (payload == null) return;
+    final src = payload['mailboxPath'] ?? payload['src'];
+    final dest = payload['dest'];
+    if (src is! String || dest is! String) return;
+    // Every place the mail was shown in along the way, the last one being
+    // where it should be now.
+    final shownIn = [dest];
+    for (final dependent in dependents) {
+      if (dependent.changeType == 'delete') return;
+      final later = _decodePayload(dependent)?['dest'];
+      if (later is String) shownIn.add(later);
+    }
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    if (email == null) return;
+    if (!await _isAtLocation(email, shownIn.last)) return;
+    final account = await _accounts.getAccount(row.accountId);
+    if (account == null) return;
+    final isImap = account.type == account_model.AccountType.imap;
+    final uid = payload['uid'];
+    if (isImap &&
+        (email.uid != uid || email.id != '${row.accountId}:$src:$uid')) {
+      return;
+    }
+    if (isImap && !await _stampStillValid(row.accountId, src, payload)) return;
+
+    // A snooze is undone to the snooze state from before it (none, or the
+    // earlier one of a re-snooze); a move or unsnooze that ended a snooze
+    // brings that snooze back.
+    final prevUntil = DateTime.tryParse(
+      payload['prevSnoozedUntil'] as String? ?? '',
+    );
+    final prevFrom = payload['prevSnoozedFrom'] as String?;
+    final target = await _resolveSnoozedPlaceholder(row.accountId, src);
+    await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(target),
+        snoozedUntil: Value(prevUntil),
+        snoozedFromMailboxPath: Value(prevUntil == null ? null : prevFrom),
+      ),
+    );
+    if (isImap) {
+      await _pointLaterChangesAtSource(
+        row,
+        payload: payload,
+        email: email,
+        src: src,
+        shownIn: shownIn,
+      );
+    }
+    final threadId = email.threadId ?? email.id;
+    await _reconcileSourceThreads(
+      row.accountId,
+      email.mailboxPath,
+      email.id,
+      threadId,
+    );
+    await _updateThread(row.accountId, target, threadId);
+    log(
+      'Pending change ${row.id} failed: ${email.id} back in $target '
+      '(was shown in ${email.mailboxPath})',
+    );
+  }
+
+  /// [row]'s JSON payload, or null when it is not a JSON object.
+  static Map<String, dynamic>? _decodePayload(PendingChangeRow row) {
+    try {
+      return jsonDecode(row.payload) as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Whether the UIDVALIDITY stamped on an IMAP change [payload] for [src]
+  /// still matches [src]'s sync checkpoint: only then does its UID still name
+  /// the same message there. True when either is unknown.
+  Future<bool> _stampStillValid(
+    String accountId,
+    String src,
+    Map<String, dynamic> payload,
+  ) async {
+    final stamped = payload['uidValidity'];
+    if (stamped is! int) return true;
+    final checkpoint = await _loadImapCheckpoint(accountId, 'IMAP:$src');
+    final current = checkpoint?['uidValidity'];
+    if (current is! int || current == 0) return true;
+    return current == stamped;
+  }
+
+  /// [path], with the `Snoozed` placeholder a snooze queued before the
+  /// folder was known replaced by [accountId]'s real Snoozed folder.
+  Future<String> _resolveSnoozedPlaceholder(
+    String accountId,
+    String path,
+  ) async {
+    if (path != _snoozedPlaceholder) return path;
+    return _snoozedMailboxPath(accountId);
+  }
+
+  /// Whether [email] is in [mailboxPath], counting the Snoozed folder and the
+  /// `Snoozed` placeholder a snooze queued before it was known as the same.
+  Future<bool> _isAtLocation(Email email, String mailboxPath) async {
+    if (email.mailboxPath == mailboxPath) return true;
+    final snoozedPath = await _snoozedMailboxPath(email.accountId);
+    return _isSnoozedPath(email.mailboxPath, snoozedPath) &&
+        _isSnoozedPath(mailboxPath, snoozedPath);
+  }
+
+  /// Points the IMAP payloads of the other changes queued after [failed] for
+  /// [email] that address it in one of the folders it was [shownIn] back at
+  /// [src], after [failed] was undone. They get [failed]'s own UIDVALIDITY
+  /// stamp and Message-ID ([payload]): its source UID is valid only under
+  /// that stamp, so a change is left as it is when [src] was renumbered
+  /// since ([_stampStillValid]; the caller checks this before reverting).
+  Future<void> _pointLaterChangesAtSource(
+    PendingChangeRow failed, {
+    required Map<String, dynamic> payload,
+    required Email email,
+    required String src,
+    required List<String> shownIn,
+  }) async {
+    final later = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(failed.resourceId) &
+                t.state.equals(_pendingState) &
+                t.id.isBiggerThanValue(failed.id) &
+                t.changeType.isNotIn(_placementChangeTypes),
+          ))
+        .get();
+    final paths = {email.mailboxPath, ...shownIn};
+    for (final row in later) {
+      final changed = _decodePayload(row);
+      if (changed == null) continue;
+      if (!paths.contains(changed['mailboxPath'])) continue;
+      if (changed['uid'] != email.uid) continue;
+      changed
+        ..['mailboxPath'] = src
+        ..remove('uidValidity');
+      if (payload['uidValidity'] case final int validity) {
+        changed['uidValidity'] = validity;
+      }
+      if (payload['messageId'] case final String messageId) {
+        changed['messageId'] = messageId;
+      }
+      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(changed))));
     }
   }
 
@@ -4815,28 +5103,12 @@ class EmailRepositoryImpl implements EmailRepository {
           'src': srcMailboxPath,
           'dest': destMailboxPath,
           if (clearSnooze) 'clearSnooze': true,
+          ..._prevSnooze(row),
         }),
       );
       // Optimistic: move the cached row so it disappears from the current
       // mailbox immediately and is visible in the destination mailbox.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(
-          mailboxPath: Value(destMailboxPath),
-          snoozedUntil: const Value(null),
-          snoozedFromMailboxPath: const Value(null),
-        ),
-      );
-      await _reconcileSourceThreads(
-        row.accountId,
-        srcMailboxPath,
-        emailId,
-        row.threadId ?? emailId,
-      );
-      await _updateThread(
-        row.accountId,
-        destMailboxPath,
-        row.threadId ?? emailId,
-      );
+      await _applyLocalMove(row, destMailboxPath);
     } else {
       await _enqueueChange(
         account.id,
@@ -4850,27 +5122,11 @@ class EmailRepositoryImpl implements EmailRepository {
           // [_retryImapMoveByMessageId]) instead of silently no-op'ing (#1048).
           if (row.messageId != null) 'messageId': row.messageId,
           if (clearSnooze) 'clearSnooze': true,
+          ..._prevSnooze(row),
         }),
       );
       // Optimistic: move the cached row locally instead of hard-deleting.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(
-          mailboxPath: Value(destMailboxPath),
-          snoozedUntil: const Value(null),
-          snoozedFromMailboxPath: const Value(null),
-        ),
-      );
-      await _reconcileSourceThreads(
-        row.accountId,
-        srcMailboxPath,
-        emailId,
-        row.threadId ?? emailId,
-      );
-      await _updateThread(
-        row.accountId,
-        destMailboxPath,
-        row.threadId ?? emailId,
-      );
+      await _applyLocalMove(row, destMailboxPath);
       // Destination UID will be updated when synced (IMAP move = delete + copy).
     }
 
@@ -4893,6 +5149,39 @@ class EmailRepositoryImpl implements EmailRepository {
         },
       ),
     );
+  }
+
+  /// The optimistic local part of a move of [row] to [destMailboxPath]: the
+  /// row shows in the destination at once, its snooze ended. No change is
+  /// queued here (see [_moveRow]).
+  Future<void> _applyLocalMove(Email row, String destMailboxPath) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(destMailboxPath),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
+    );
+    await _reconcileSourceThreads(
+      row.accountId,
+      row.mailboxPath,
+      row.id,
+      row.threadId ?? row.id,
+    );
+    await _updateThread(row.accountId, destMailboxPath, row.threadId ?? row.id);
+  }
+
+  /// Payload keys recording [row]'s snooze before a move/snooze/unsnooze
+  /// changes it, so [_revertFailedLocation] can bring it back if the change
+  /// fails. Empty when [row] is not snoozed.
+  static Map<String, Object> _prevSnooze(Email row) {
+    final until = row.snoozedUntil;
+    if (until == null) return const {};
+    final from = row.snoozedFromMailboxPath;
+    return {
+      'prevSnoozedUntil': until.toIso8601String(),
+      if (from != null) 'prevSnoozedFrom': from,
+    };
   }
 
   @override
@@ -5083,12 +5372,27 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── pending_changes queue ──────────────────────────────────────────────────
 
+  /// Zone key marking changes the app queues on its own (snooze wake-up,
+  /// local Sieve filters, the #545 dissolve replay), not as a direct user
+  /// action; see [_asAutomaticChange].
+  static final _automaticChangeKey = Object();
+
+  /// Runs [action] so that the changes it queues do not replace the user's
+  /// failed changes ([_deleteSupersededFailures]): only the user's own action
+  /// may settle one of their failures.
+  Future<T> _asAutomaticChange<T>(Future<T> Function() action) =>
+      runZoned(action, zoneValues: {_automaticChangeKey: true});
+
+  /// Queues a change. A user action ([supersedeFailures], the default unless
+  /// run via [_asAutomaticChange]) also deletes the failed changes it
+  /// replaces.
   Future<void> _enqueueChange(
     String accountId,
     String resourceId,
     String changeType,
-    String payload,
-  ) async {
+    String payload, {
+    bool? supersedeFailures,
+  }) async {
     _noteLocalEdit(resourceId);
     // Local self-sent "virtual" messages have no server counterpart yet, so an
     // outbound mutation would be rejected (`notFound`) and evicted. The state
@@ -5096,6 +5400,9 @@ class EmailRepositoryImpl implements EmailRepository {
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (await _isLocalEmail(resourceId)) return;
     payload = await _stampUidValidity(accountId, resourceId, payload);
+    if (supersedeFailures ?? Zone.current[_automaticChangeKey] != true) {
+      await _deleteSupersededFailures(resourceId, changeType);
+    }
 
     // Collapse redundant flag changes: if an un-attempted `flag_seen` /
     // `flag_flagged` / `clear_snooze` for this message with the same payload is
@@ -5110,10 +5417,12 @@ class EmailRepositoryImpl implements EmailRepository {
       // Compare against the latest queued change of this type only: with
       // `[seen:true, seen:false]` queued, a new `seen:true` is not redundant
       // and must be appended, or the server would end up unread (#1186).
+      // A failed change is not queued work: the new one must be appended.
       final latest = await (_db.select(_db.pendingChanges)
             ..where(
               (t) =>
                   t.resourceId.equals(resourceId) &
+                  t.state.equals(_pendingState) &
                   t.changeType.equals(changeType),
             )
             ..orderBy([(t) => OrderingTerm.desc(t.id)])
@@ -5144,6 +5453,52 @@ class EmailRepositoryImpl implements EmailRepository {
       return;
     }
     _changeCtrl.add(accountId);
+  }
+
+  /// Deletes failed changes of [resourceId] that a new [changeType] change
+  /// replaces: the same flag change, or for a move/snooze/unsnooze/delete any
+  /// failed location change. Redoing the action (or an Undo) clears the stale
+  /// failure instead of piling up next to it.
+  Future<void> _deleteSupersededFailures(
+    String resourceId,
+    String changeType,
+  ) async {
+    final superseded = _supersededBy(changeType);
+    if (superseded.isEmpty) return;
+    final failed = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(resourceId) &
+                t.state.equals(_failedState) &
+                t.changeType.isIn(superseded),
+          ))
+        .get();
+    if (failed.isEmpty) return;
+    final messageId = await _messageIdOf(resourceId);
+    for (final row in failed) {
+      // After a UIDVALIDITY reset the same row id can name another mail: a
+      // failure stamped with a different Message-ID is not this mail's.
+      if (!_sameMessage(row, messageId)) continue;
+      await _deletePendingChange(row);
+    }
+  }
+
+  /// Whether [row] was queued for the mail with [messageId]: true unless its
+  /// payload carries a different Message-ID stamp.
+  static bool _sameMessage(PendingChangeRow row, String? messageId) {
+    final stamped = _decodePayload(row)?['messageId'];
+    if (stamped is! String) return true;
+    return stamped == messageId;
+  }
+
+  static List<String> _supersededBy(String changeType) {
+    if (changeType == 'flag_seen' || changeType == 'flag_flagged') {
+      return [changeType];
+    }
+    if (_placementChangeTypes.contains(changeType)) {
+      return _placementChangeTypes;
+    }
+    return const [];
   }
 
   /// Adds the source folder's UIDVALIDITY to an IMAP change [payload] (one
@@ -5203,8 +5558,9 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Otherwise an Undo racing the flush would "cancel" a MOVE that still lands
   /// on the server and skip its reverse move (#1048).
   ///
-  /// Returns null when the row was cancelled (or claimed by another isolate)
-  /// since the flush took its snapshot — the caller must then skip it.
+  /// Returns null when the row was cancelled, claimed by another isolate or
+  /// marked failed since the flush took its snapshot — the caller must then
+  /// skip it.
   /// Otherwise returns the row as currently stored: an earlier change in the
   /// same flush may have re-keyed it ([_rekeyEmailRow] rewrites `resourceId`
   /// and the payload UID). The attempt count is the pre-claim one, so a failed
@@ -5215,7 +5571,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final count = await (_db.update(_db.pendingChanges)
           ..where(
             (t) =>
-                t.id.equals(snapshot.id) & t.attempts.equals(snapshot.attempts),
+                t.id.equals(snapshot.id) &
+                t.state.equals(_pendingState) &
+                t.attempts.equals(snapshot.attempts),
           ))
         .write(
       PendingChangesCompanion(attempts: Value(snapshot.attempts + 1)),
@@ -5236,6 +5594,7 @@ class EmailRepositoryImpl implements EmailRepository {
         (t) =>
             t.resourceId.equals(emailId) &
             t.changeType.equals(changeType) &
+            t.state.equals(_pendingState) &
             t.attempts.equals(0),
       )
       ..orderBy([(t) => OrderingTerm.desc(t.id)])
@@ -5290,13 +5649,7 @@ class EmailRepositoryImpl implements EmailRepository {
         .go();
 
     // Optimistic local update.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(
-        mailboxPath: Value(destPath),
-        snoozedUntil: Value(until),
-        snoozedFromMailboxPath: Value(row.mailboxPath),
-      ),
-    );
+    await _applyLocalSnooze(row, destPath, until);
 
     await _enqueueChange(
       accountId,
@@ -5310,11 +5663,9 @@ class EmailRepositoryImpl implements EmailRepository {
         // Lets the IMAP flush re-find a stale UID by Message-ID, as a move
         // does (#1048).
         if (row.messageId != null) 'messageId': row.messageId,
+        ..._prevSnooze(row),
       }),
     );
-
-    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
-    await _updateThread(accountId, destPath, row.threadId ?? row.id);
 
     unawaited(
       _appLogger?.info(
@@ -5332,6 +5683,28 @@ class EmailRepositoryImpl implements EmailRepository {
         },
       ),
     );
+  }
+
+  /// The optimistic local part of snoozing [row] into [destPath] until
+  /// [until]. No change is queued here (see [_snoozeRow]).
+  Future<void> _applyLocalSnooze(
+    Email row,
+    String destPath,
+    DateTime until,
+  ) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(destPath),
+        snoozedUntil: Value(until),
+        snoozedFromMailboxPath: Value(row.mailboxPath),
+      ),
+    );
+    await _updateThread(
+      row.accountId,
+      row.mailboxPath,
+      row.threadId ?? row.id,
+    );
+    await _updateThread(row.accountId, destPath, row.threadId ?? row.id);
   }
 
   /// The path of [accountId]'s Snoozed mailbox (by role, then by name), or
@@ -5371,7 +5744,10 @@ class EmailRepositoryImpl implements EmailRepository {
       mailboxPath == snoozedPath || mailboxPath == _snoozedPlaceholder;
 
   @override
-  Future<int> wakeUpEmails(String accountId) async {
+  Future<int> wakeUpEmails(String accountId) =>
+      _asAutomaticChange(() => _wakeUpEmails(accountId));
+
+  Future<int> _wakeUpEmails(String accountId) async {
     final now = DateTime.now();
     final expired = await (_db.select(_db.emails)
           ..where(
@@ -5384,8 +5760,22 @@ class EmailRepositoryImpl implements EmailRepository {
     if (expired.isEmpty) return 0;
 
     final snoozedPath = await _snoozedMailboxPath(accountId);
+    // A mail whose move/snooze/unsnooze failed waits for the user's Retry or
+    // Discard: waking it would queue a change that fails the same way on
+    // every cycle.
+    final failedIds = (await (_db.selectOnly(_db.pendingChanges)
+              ..addColumns([_db.pendingChanges.resourceId])
+              ..where(
+                _db.pendingChanges.accountId.equals(accountId) &
+                    _db.pendingChanges.state.equals(_failedState) &
+                    _db.pendingChanges.changeType.isIn(_locationChangeTypes),
+              ))
+            .map((r) => r.read(_db.pendingChanges.resourceId)!)
+            .get())
+        .toSet();
     var woken = 0;
     for (final row in expired) {
+      if (failedIds.contains(row.id)) continue;
       // Only a mail still waiting in the Snoozed folder goes back to the
       // Inbox. One the user (or another client) filed elsewhere since keeps
       // its place; its stale snooze is dropped, and so is the server-side
@@ -5448,20 +5838,16 @@ class EmailRepositoryImpl implements EmailRepository {
       accountId,
       row.id,
       'unsnooze',
-      jsonEncode({'uid': row.uid, 'src': row.mailboxPath, 'dest': dest}),
+      jsonEncode({
+        'uid': row.uid,
+        'src': row.mailboxPath,
+        'dest': dest,
+        ..._prevSnooze(row),
+      }),
     );
 
     // Optimistic local update.
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(
-        mailboxPath: Value(dest),
-        snoozedUntil: const Value(null),
-        snoozedFromMailboxPath: const Value(null),
-      ),
-    );
-
-    await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
-    await _updateThread(accountId, dest, row.threadId ?? row.id);
+    await _applyLocalUnsnooze(row, dest);
 
     unawaited(
       _appLogger?.info(
@@ -5477,6 +5863,24 @@ class EmailRepositoryImpl implements EmailRepository {
         },
       ),
     );
+  }
+
+  /// The optimistic local part of un-snoozing [row] back to [dest]. No change
+  /// is queued here (see [_unsnoozeRow]).
+  Future<void> _applyLocalUnsnooze(Email row, String dest) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(
+        mailboxPath: Value(dest),
+        snoozedUntil: const Value(null),
+        snoozedFromMailboxPath: const Value(null),
+      ),
+    );
+    await _updateThread(
+      row.accountId,
+      row.mailboxPath,
+      row.threadId ?? row.id,
+    );
+    await _updateThread(row.accountId, dest, row.threadId ?? row.id);
   }
 
   /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
@@ -5566,7 +5970,24 @@ class EmailRepositoryImpl implements EmailRepository {
         messageId,
       );
 
+  /// Replays the user's earlier actions on a virtual row onto the real
+  /// message: queued as automatic changes ([_asAutomaticChange]).
   Future<void> _maybeDissolveLocalMessage(
+    String accountId,
+    String arrivalMailboxPath,
+    String realEmailId,
+    String? messageId,
+  ) =>
+      _asAutomaticChange(
+        () => _dissolveLocalMessage(
+          accountId,
+          arrivalMailboxPath,
+          realEmailId,
+          messageId,
+        ),
+      );
+
+  Future<void> _dissolveLocalMessage(
     String accountId,
     String arrivalMailboxPath,
     String realEmailId,
@@ -6083,6 +6504,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.id,
         'move',
         jsonEncode({'src': row.mailboxPath, 'dest': destPath}),
+        supersedeFailures: false,
       );
     } else {
       destPath = folder;
@@ -6095,6 +6517,7 @@ class EmailRepositoryImpl implements EmailRepository {
           'mailboxPath': row.mailboxPath,
           'dest': destPath,
         }),
+        supersedeFailures: false,
       );
     }
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
@@ -6114,6 +6537,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.id,
         'delete',
         jsonEncode(<String, dynamic>{}),
+        supersedeFailures: false,
       );
     } else {
       await _enqueueChange(
@@ -6121,6 +6545,7 @@ class EmailRepositoryImpl implements EmailRepository {
         row.id,
         'delete',
         jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
+        supersedeFailures: false,
       );
     }
     await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
@@ -6158,11 +6583,13 @@ class EmailRepositoryImpl implements EmailRepository {
     final seen = normalized.flags.contains(r'\Seen');
     final flagged = normalized.flags.contains(r'\Flagged');
     if (seen || flagged) {
-      await _setFlag(
-        row.id,
-        seen: seen ? true : null,
-        flagged: flagged ? true : null,
-        source: 'sieve',
+      await _asAutomaticChange(
+        () => _setFlag(
+          row.id,
+          seen: seen ? true : null,
+          flagged: flagged ? true : null,
+          source: 'sieve',
+        ),
       );
     }
     final keywords = normalized.flags
@@ -6183,6 +6610,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 'keywords': keywords,
               },
       ),
+      supersedeFailures: false,
     );
   }
 
@@ -6199,7 +6627,11 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<int> flushPendingChanges(String accountId, String password) async {
     final rows = await (_db.select(_db.pendingChanges)
-          ..where((t) => t.accountId.equals(accountId))
+          // A failed change waits for the user's Retry or Discard.
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) & t.state.equals(_pendingState),
+          )
           // Flush in enqueue order. The autoincrement id gives that exactly;
           // `createdAt` can tie for changes queued together (a Sieve flag +
           // move) and would follow the wall clock if it steps back.
@@ -6232,10 +6664,19 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     var applied = 0;
+    // Mails whose move/snooze/unsnooze/delete did not apply in this flush:
+    // their later changes address the mail where that change would have put
+    // it, so they wait (unclaimed, uncharged) for the next flush.
+    final blocked = <String>{};
 
     for (final snapshot in rows) {
+      if (blocked.contains(snapshot.resourceId)) continue;
       final row = await _claimPendingChange(snapshot);
       if (row == null) continue;
+      if (_placementChangeTypes.contains(row.changeType)) {
+        // Unblocked again below once it applied.
+        blocked.add(row.resourceId);
+      }
       try {
         // Pending-change `Email/set`s deliberately omit `ifInState`: each patch
         // targets a single email's own `mailboxIds`/`keywords`, so it is safe
@@ -6251,18 +6692,36 @@ class EmailRepositoryImpl implements EmailRepository {
         )..where((t) => t.id.equals(row.id)))
             .go();
         applied++;
+        blocked.remove(row.resourceId);
       } on JmapSetItemException catch (e) {
-        // Permanent per-item rejection (e.g. notFound, forbidden) — discard
-        // the change so the queue doesn't grow unboundedly.
-        await (_db.delete(
-          _db.pendingChanges,
-        )..where((t) => t.id.equals(row.id)))
-            .go();
+        if (e.type == 'notFound' && row.changeType == 'delete') {
+          // The mail is already gone: the delete's intent is satisfied.
+          blocked.remove(row.resourceId);
+          await _deletePendingChange(row);
+          log('JMAP change ${row.id} skipped: message already gone ($e)');
+          unawaited(
+            _appLogger?.info(
+              'pending_change.skipped_gone',
+              'Skipped ${_describeChange(row)} — message already gone on '
+                  'the server',
+              accountId: account.id,
+              emailId: row.resourceId,
+              data: {'changeType': row.changeType},
+            ),
+          );
+          applied++;
+          continue;
+        }
+        // Permanent per-item rejection (e.g. notFound, forbidden): retrying
+        // cannot help, so mark it failed at once and keep it for the user.
+        // `notFound`: the mail is gone, there is no place to go back to.
+        await _markChangeFailed(row, e, revert: e.type != 'notFound');
         log('JMAP permanent error for change ${row.id}: $e');
         unawaited(
           _appLogger?.error(
             'pending_change.rejected',
-            'Server rejected ${_describeChange(row)} — dropping it',
+            'Server rejected ${_describeChange(row)}; kept on the Pending '
+                'Changes screen',
             accountId: account.id,
             emailId: row.resourceId,
             data: {'changeType': row.changeType},
@@ -6270,6 +6729,19 @@ class EmailRepositoryImpl implements EmailRepository {
           ),
         );
       } catch (e) {
+        if (isJmapNetworkError(e)) {
+          // No answer from the server (offline, network switch, timeout):
+          // no step towards giving up, like a failed IMAP connect (#1224).
+          // The request may still have landed (a timeout does not cancel
+          // it), so the claim stays: Undo must queue a reverse change, not
+          // cancel this one (#1048). Sending it again is safe: a move sets
+          // `mailboxIds`, flag patches are idempotent and a second destroy
+          // answers `notFound`, which counts as applied. The rest of the
+          // queue would fail the same way: stop and retry next sync.
+          await _keepClaimWithoutCharge(row, e);
+          log('JMAP flush for ${account.id} stopped: network error ($e)');
+          break;
+        }
         await _recordChangeError(row, e);
       }
     }
@@ -6297,6 +6769,10 @@ class EmailRepositoryImpl implements EmailRepository {
       return 0;
     }
     var applied = 0;
+    // Mails whose move/snooze/unsnooze/delete did not apply in this flush:
+    // their later changes address the mail where that change would have put
+    // it, so they wait (unclaimed, uncharged) for the next flush.
+    final blocked = <String>{};
     try {
       var next = 0;
       while (next < rows.length) {
@@ -6311,7 +6787,7 @@ class EmailRepositoryImpl implements EmailRepository {
           batching: client.serverInfo.supportsUidPlus,
         );
         next += batch.length;
-        final outcome = await _flushImapBatch(account, client, batch);
+        final outcome = await _flushImapBatch(account, client, batch, blocked);
         applied += outcome.applied;
         if (outcome.connectionLost) break;
       }
@@ -6382,13 +6858,19 @@ class EmailRepositoryImpl implements EmailRepository {
   /// row whose new UID the `COPYUID` reports is re-keyed and done; the rest
   /// (no UIDPLUS, a stale UID, a failed batch command) go through the
   /// one-by-one path, which re-checks where the message is.
+  ///
+  /// Skips the changes of mails in [blocked], and adds a mail to it when its
+  /// move/snooze/unsnooze/delete does not apply (see
+  /// [_flushPendingChangesImap]).
   Future<({int applied, bool connectionLost})> _flushImapBatch(
     account_model.Account account,
     imap.ImapClient client,
     List<PendingChangeRow> snapshots,
+    Set<String> blocked,
   ) async {
     final claimed = <PendingChangeRow>[];
     for (final snapshot in snapshots) {
+      if (blocked.contains(snapshot.resourceId)) continue;
       final row = await _claimPendingChange(snapshot);
       if (row == null) continue;
       claimed.add(row);
@@ -6430,7 +6912,12 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     for (var i = 0; i < pending.length; i++) {
-      final outcome = await _settleImapChange(account, client, pending[i]);
+      final row = pending[i];
+      if (blocked.contains(row.resourceId)) {
+        await _unclaimPendingChange(row);
+        continue;
+      }
+      final outcome = await _settleImapChange(account, client, row);
       if (outcome.connectionLost != null) {
         // Rows of this batch claimed but not reached: give the claim back.
         for (final rest in pending.skip(i + 1)) {
@@ -6439,9 +6926,24 @@ class EmailRepositoryImpl implements EmailRepository {
         return (applied: applied, connectionLost: true);
       }
       applied += outcome.applied;
+      if (outcome.applied == 0 &&
+          _placementChangeTypes.contains(row.changeType)) {
+        blocked.add(row.resourceId);
+      }
     }
     return (applied: applied, connectionLost: false);
   }
+
+  /// Settles a claimed [row] whose request got no answer: keeps the claim
+  /// marker (attempts at least 1, so [cancelPendingChange] leaves it alone)
+  /// but charges nothing beyond it, and records [error].
+  Future<void> _keepClaimWithoutCharge(PendingChangeRow row, Object error) =>
+      (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id))).write(
+        PendingChangesCompanion(
+          attempts: Value(math.max(row.attempts, 1)),
+          lastError: Value(error.toString()),
+        ),
+      );
 
   /// Returns a row claimed by [_claimPendingChange] to its pre-claim
   /// attempts, for a change the flush never sent.
@@ -6573,9 +7075,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> _deletePendingChange(PendingChangeRow row) =>
       (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(row.id))).go();
 
-  /// Applies one claimed [row] and settles it: deleted when applied or moot,
-  /// error recorded otherwise. `connectionLost` carries the error when the
-  /// connection died, so the caller stops the flush.
+  /// Applies one claimed [row] and settles it: deleted when applied, marked
+  /// failed when it can never apply, error recorded otherwise.
+  /// `connectionLost` carries the error when the connection died, so the
+  /// caller stops the flush.
   Future<({int applied, Object? connectionLost})> _settleImapChange(
     account_model.Account account,
     imap.ImapClient client,
@@ -6592,21 +7095,23 @@ class EmailRepositoryImpl implements EmailRepository {
         // remaining, unclaimed changes untouched for the next sync's fresh
         // connection. A command that merely timed out stops the flush too;
         // if one change keeps timing out, it blocks the queue only until it
-        // is dropped after [_maxChangeAttempts].
+        // is marked failed after [_maxChangeAttempts].
         await _recordChangeError(row, e);
         log('IMAP flush for ${account.id} stopped: connection lost ($e)');
         return (applied: 0, connectionLost: e);
       }
       if (e is _ImapUidValidityChangedException) {
         // The folder was renumbered and the message cannot be identified
-        // safely: drop the change rather than act on someone else's mail.
-        await _deletePendingChange(row);
-        log('IMAP change ${row.id} dropped: $e');
+        // safely: mark the change failed rather than act on someone else's
+        // mail. Nothing to go back to: the mail is not known there.
+        await _markChangeFailed(row, e, revert: false);
+        log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
             'pending_change.uidvalidity_changed',
-            'Dropped ${_describeChange(row)} — the server renumbered the '
-                'folder and the message could not be found again',
+            'Could not apply ${_describeChange(row)} — the server renumbered '
+                'the folder and the message could not be found again; kept '
+                'on the Pending Changes screen',
             accountId: account.id,
             emailId: row.resourceId,
             data: {'changeType': row.changeType},
@@ -6617,15 +7122,16 @@ class EmailRepositoryImpl implements EmailRepository {
       }
       if (e is _ImapMessageGoneException) {
         // Retrying cannot bring the message back, but the user's move
-        // (e.g. an Undo's reverse move, #1048) did not happen: drop the
-        // change and say so in the App Log at warn level.
-        await _deletePendingChange(row);
-        log('IMAP change ${row.id} dropped: $e');
+        // (e.g. an Undo's reverse move, #1048) did not happen: mark the
+        // change failed and say so in the App Log at warn level.
+        await _markChangeFailed(row, e, revert: false);
+        log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
             'pending_change.message_gone',
-            'Dropped ${_describeChange(row)} — the message is no longer '
-                'on the server (deleted or moved by another client)',
+            'Could not apply ${_describeChange(row)} — the message is no '
+                'longer on the server (deleted or moved by another client); '
+                'kept on the Pending Changes screen',
             accountId: account.id,
             emailId: row.resourceId,
             data: {'changeType': row.changeType},
@@ -6634,9 +7140,33 @@ class EmailRepositoryImpl implements EmailRepository {
         );
         return (applied: 0, connectionLost: null);
       }
-      if (isImapMailboxNotFound(e)) {
-        // Email already gone on the server — treat as success so the
-        // pending change doesn't accumulate or block future changes.
+      final sourceGone = e is _ImapSourceMailboxGoneException;
+      if (!sourceGone &&
+          isImapMailboxNotFound(e) &&
+          _locationChangeTypes.contains(row.changeType)) {
+        // The source folder was selected, so the mail is still there: a
+        // missing destination (`NO [TRYCREATE]` from the MOVE) means the
+        // move did not happen. Mark it failed and show the mail where it is.
+        await _markChangeFailed(row, e);
+        log('IMAP change ${row.id} failed: destination missing ($e)');
+        unawaited(
+          _appLogger?.warn(
+            'pending_change.dest_missing',
+            'Could not apply ${_describeChange(row)} — the destination '
+                'folder does not exist on the server; kept on the Pending '
+                'Changes screen',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+            error: e,
+          ),
+        );
+        return (applied: 0, connectionLost: null);
+      }
+      if (sourceGone || isImapMailboxNotFound(e)) {
+        // The mail's folder is gone on the server, and the mail with it
+        // (or, for a flag change or delete, the target is gone): treat as
+        // success so the change doesn't accumulate or block future changes.
         await _deletePendingChange(row);
         log('IMAP change ${row.id} skipped: message already gone ($e)');
         unawaited(
@@ -6663,7 +7193,13 @@ class EmailRepositoryImpl implements EmailRepository {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     // snooze/unsnooze payloads use 'src' for the source folder; all others use 'mailboxPath'.
     final mailboxPath = (payload['mailboxPath'] ?? payload['src']) as String;
-    final selected = await client.selectUnicodeMailboxByPath(mailboxPath);
+    final imap.Mailbox selected;
+    try {
+      selected = await client.selectUnicodeMailboxByPath(mailboxPath);
+    } catch (e) {
+      if (!isImapMailboxNotFound(e)) rethrow;
+      throw _ImapSourceMailboxGoneException(e);
+    }
     final uid = await _currentImapUid(
       client,
       row,
@@ -9736,6 +10272,7 @@ class EmailRepositoryImpl implements EmailRepository {
                   lastError: r.lastError!,
                   attempts: r.attempts,
                   createdAt: r.createdAt,
+                  failed: r.state == _failedState,
                 ),
               )
               .toList(),
@@ -9749,9 +10286,93 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<void> retryMutation(int id) async {
-    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id))).write(
-      const PendingChangesCompanion(attempts: Value(0), lastError: Value(null)),
-    );
+    final row = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (row == null) return;
+    if (row.state != _failedState) {
+      // Still queued: it keeps its place, so newer changes stay newer and a
+      // change being flushed right now is not queued twice. Just flush soon.
+      _changeCtrl.add(row.accountId);
+      return;
+    }
+    _noteLocalEdit(row.resourceId);
+    await _db.transaction(() async {
+      final current = await (_db.select(_db.pendingChanges)
+            ..where((t) => t.id.equals(id) & t.state.equals(_failedState)))
+          .getSingleOrNull();
+      if (current == null) return;
+      // The failure showed the server's state again; show the user's
+      // intent again while it is retried.
+      await _reapplyRetriedChange(current);
+      // A fresh row at the end of the queue (new autoincrement id): the
+      // retried change must not jump ahead of changes queued after it, or it
+      // could undo the user's newer intent for the same mail.
+      await _db.into(_db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: current.accountId,
+              resourceType: current.resourceType,
+              resourceId: current.resourceId,
+              changeType: current.changeType,
+              payload: current.payload,
+              createdAt: DateTime.now(),
+            ),
+          );
+      await _deletePendingChange(current);
+    });
+    _noteLocalEdit(row.resourceId);
+    _changeCtrl.add(row.accountId);
+  }
+
+  /// Re-applies the optimistic local part of a failed [row] that is being
+  /// retried, without queueing or mirroring anything: the flag value, or for
+  /// a move/snooze/unsnooze the destination, when the mail is (again) at the
+  /// change's source. Leaves the mail alone otherwise.
+  Future<void> _reapplyRetriedChange(PendingChangeRow row) async {
+    final Map<String, dynamic> payload;
+    try {
+      payload = jsonDecode(row.payload) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    if (email == null) return;
+    if (!_sameMessage(row, email.messageId)) return;
+    final seen = payload['seen'];
+    final flagged = payload['flagged'];
+    if ((row.changeType == 'flag_seen' && seen is bool) ||
+        (row.changeType == 'flag_flagged' && flagged is bool)) {
+      await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
+        EmailsCompanion(
+          isSeen: seen is bool ? Value(seen) : const Value.absent(),
+          isFlagged: flagged is bool ? Value(flagged) : const Value.absent(),
+        ),
+      );
+      await _updateThread(
+        email.accountId,
+        email.mailboxPath,
+        email.threadId ?? email.id,
+      );
+      return;
+    }
+    if (!_locationChangeTypes.contains(row.changeType)) return;
+    final src = payload['mailboxPath'] ?? payload['src'];
+    final dest = payload['dest'];
+    if (src is! String || dest is! String) return;
+    if (!await _isAtLocation(email, src)) return;
+    final target = await _resolveSnoozedPlaceholder(email.accountId, dest);
+    switch (row.changeType) {
+      case 'move':
+        await _applyLocalMove(email, target);
+      case 'snooze':
+        final until = DateTime.tryParse(payload['until'] as String? ?? '');
+        if (until == null) return;
+        await _applyLocalSnooze(email, target, until);
+      case 'unsnooze':
+        await _applyLocalUnsnooze(email, target);
+    }
   }
 
   @override
@@ -9788,6 +10409,7 @@ class EmailRepositoryImpl implements EmailRepository {
         createdAt: r.createdAt,
         attempts: r.attempts,
         lastError: r.lastError,
+        failed: r.state == _failedState,
       );
 
   @override
@@ -9947,7 +10569,8 @@ class _BulkScope {
 }
 
 /// A queued IMAP move whose message is no longer in its source or destination
-/// mailbox — another client deleted or moved it. The flush drops the change.
+/// mailbox — another client deleted or moved it. The flush marks the change
+/// failed.
 class _ImapMessageGoneException implements Exception {
   _ImapMessageGoneException(this.message);
 
@@ -9955,6 +10578,17 @@ class _ImapMessageGoneException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// The folder a queued IMAP change acts in could not be selected because it
+/// no longer exists: the change is moot (see `_settleImapChange`).
+class _ImapSourceMailboxGoneException implements Exception {
+  _ImapSourceMailboxGoneException(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => cause.toString();
 }
 
 /// A queued IMAP change whose folder's UIDVALIDITY changed, and whose

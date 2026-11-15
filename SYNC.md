@@ -230,7 +230,8 @@ reaches the server:
 | `type` | `flag_seen`, `flag_flagged`, `move`, `delete`, `snooze` |
 | `payload` | JSON-encoded protocol-specific arguments |
 | `retry_count` | Incremented on each failed flush attempt |
-| `created_at` | For ordering and debug |
+| `created_at` | For debug; the flush runs in `id` order |
+| `state` | `pending` (queued or retrying) or `failed` (given up on) |
 
 **Optimistic UI** — every mutation writes the local change first, then inserts into
 `pending_changes`. The Drift reactive stream delivers the update to the UI before
@@ -238,8 +239,48 @@ the network round-trip completes.
 
 **Conflict resolution** — the server always wins. On the next sync cycle the server's
 state overwrites local rows. Outbound mutations are retried up to 5 times; after that
-they are evicted and a `FailedMutation` record is created. Permanent per-item JMAP
-errors (`notFound`, `forbidden`) skip the retry counter and evict immediately.
+they are marked `state = 'failed'`, not deleted. Permanent per-item JMAP errors
+(`forbidden`, `notFound` for a flag or move) and an IMAP change whose message is gone
+(or cannot be found again after a UIDVALIDITY reset) skip the retry counter and are
+marked failed at once. A JMAP `notFound` for a delete, and an IMAP change whose
+source folder no longer exists, count as applied: the mail is already gone.
+
+A network error charges no attempt: a failed IMAP connect, or a JMAP request that got
+no answer (socket, TLS, `http` client error, timeout), stops the flush for the next
+cycle. A JMAP request may still have landed, so its change keeps the claim marker
+(attempts at least 1: Undo queues a reverse change instead of cancelling it) but is
+not charged further; re-sending it is safe.
+
+A failed change is never flushed again and protects nothing from sync (the guards
+only count `pending` rows), so the next server read shows server truth again. A failed
+move, snooze or unsnooze is also undone locally at once: the mail goes back to its
+source folder with its earlier snooze state (payloads carry `prevSnoozedUntil` /
+`prevSnoozedFrom` for that), and later IMAP flag changes queued for it in the
+destination are pointed back at the source UID. This is skipped when the mail is
+gone (message gone, UIDVALIDITY reset, JMAP `notFound`), when it is no longer where
+the change put it, or when its source folder was renumbered since. The mail's later
+queued moves, snoozes, unsnoozes and deletes address it where the failed change
+would have put it, so they fail with it (`depends on failed change #id`), and the
+revert goes back to the first change's source. Within one flush, once a mail's move,
+snooze, unsnooze or delete did not apply, its later changes wait (uncharged) for the
+next flush. A move
+whose destination folder is missing (`NO [TRYCREATE]`) fails this way too; a change
+naming a folder removed on the server is marked failed (`folder removed on the
+server`) instead of deleted.
+
+Failed changes are listed on the Pending Changes screen and the mailbox-list banner,
+with **Retry** (queues a fresh copy at the end of the queue, so it cannot jump ahead
+of newer changes, and shows its effect locally again; a change still queued keeps
+its place and is only flushed sooner) and **Discard** (deletes it). Queueing the same
+action again (or an Undo) deletes the failed change it replaces; changes the app
+queues on its own (snooze wake-up, local Sieve filters, the #545 replay) never do,
+and the wake-up skips a mail whose move, snooze or unsnooze failed.
+
+Known gaps: a failed **delete** is not undone locally, and a hard-deleted row is not
+fetched back until a force resync. Rows already removed by a reconcile before the
+change failed (IMAP: the source UID is at or below the folder checkpoint; JMAP: the
+mailbox prune) are not recovered either, nor is a mail optimistically moved into a
+folder that was then removed on the server (its row goes with the folder).
 
 ---
 
@@ -286,8 +327,9 @@ server round-trip; if it had already been flushed, a compensating move is queued
   overwriting an optimistic local state that the server hasn't seen yet.
 - **Idempotency**: `flushPendingChanges` is safe to call multiple times. Each row is
   deleted only after the server acknowledges the change.
-- **No silent data loss**: permanent server errors surface as `FailedMutation` records
-  visible in the UI (Settings → Failed mutations).
+- **No silent data loss**: a change the app gives up on (retry limit, permanent server
+  error, message gone) is kept as a `failed` row and surfaces as a `FailedMutation`
+  in the UI (mailbox-list banner → Pending Changes), never deleted without the user.
 - **Offline-first**: the user-facing contract these invariants serve is in
   [OFFLINE-FIRST.md](OFFLINE-FIRST.md).
 - **UI layer isolation**: `lib/ui/` never imports `lib/data/`; all interaction goes

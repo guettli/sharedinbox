@@ -45,6 +45,7 @@ PendingChange _pc({
   String payload = '{}',
   int attempts = 0,
   String? lastError,
+  bool failed = false,
 }) =>
     PendingChange(
       id: id,
@@ -56,6 +57,7 @@ PendingChange _pc({
       createdAt: DateTime.utc(2026, 3, 4, 9),
       attempts: attempts,
       lastError: lastError,
+      failed: failed,
     );
 
 Email _email({
@@ -134,8 +136,9 @@ void main() {
       _pc(
         kind: 'move',
         payload: '{"src":"INBOX","dest":"Archive"}',
-        attempts: 3,
+        attempts: 5,
         lastError: 'MOVE failed: mailbox is read-only',
+        failed: true,
       ),
       _pc(id: 2, account: 'acc-2', kind: 'delete', resourceId: 'acc-2:99'),
     ], [
@@ -155,6 +158,28 @@ void main() {
     );
     expect(find.text('Delete'), findsOneWidget);
     expect(find.text('Old newsletter · Carol'), findsOneWidget);
+    expect(find.textContaining('failed after 5 attempts'), findsOneWidget);
+  });
+
+  testWidgets('tells a failed change from one still retrying', (tester) async {
+    final repo = _StubbedQueue([
+      _pc(attempts: 5, lastError: 'NO', failed: true),
+      _pc(id: 2, attempts: 2, lastError: 'timeout'),
+      _pc(id: 3),
+      _pc(id: 4, attempts: 1, lastError: 'forbidden', failed: true),
+    ]);
+    await pump(tester, repo: repo);
+
+    expect(find.byIcon(Icons.error), findsNWidgets(2));
+    expect(find.byIcon(Icons.sync_problem), findsOneWidget);
+    expect(find.byIcon(Icons.sync), findsOneWidget);
+    expect(find.textContaining('failed after 5 attempts'), findsOneWidget);
+    expect(find.textContaining('rejected by the server'), findsOneWidget);
+    expect(
+      find.textContaining('2 of 5 attempts failed – retrying'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('attempts 0'), findsOneWidget);
   });
 
   testWidgets('renders the concrete mutation for each change kind',
@@ -331,6 +356,7 @@ void main() {
       expect(report, contains('Kind:       move (Move)'));
       expect(report, contains('Resource:   Email acc-1:e42'));
       expect(report, contains('Attempts:   2'));
+      expect(report, contains('State:      pending'));
       expect(report, contains('"dest": "Junk"'));
       expect(
         report,

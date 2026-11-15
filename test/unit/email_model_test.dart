@@ -302,6 +302,7 @@ void main() {
       expect(fm.id, 1);
       expect(fm.changeType, 'move');
       expect(fm.createdAt, now);
+      expect(fm.failed, isFalse);
     });
   });
 }

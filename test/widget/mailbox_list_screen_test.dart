@@ -369,7 +369,18 @@ void main() {
               changeType: 'move',
               resourceId: 'acc-1:42',
               lastError: 'server said no',
-              attempts: 3,
+              attempts: 5,
+              createdAt: DateTime.utc(2026, 3, 4, 9),
+              failed: true,
+            ),
+            // Still retrying: not counted in the banner.
+            FailedMutation(
+              id: 2,
+              accountId: 'acc-1',
+              changeType: 'move',
+              resourceId: 'acc-1:43',
+              lastError: 'timeout',
+              attempts: 2,
               createdAt: DateTime.utc(2026, 3, 4, 9),
             ),
           ],
@@ -402,6 +413,42 @@ void main() {
         expect(find.text('Pending Changes'), findsOneWidget);
       },
     );
+
+    testWidgets('no failed-mutation banner while changes are only retrying',
+        (tester) async {
+      final emailRepo = FakeEmailRepository(
+        failedMutations: [
+          FailedMutation(
+            id: 1,
+            accountId: 'acc-1',
+            changeType: 'move',
+            resourceId: 'acc-1:42',
+            lastError: 'timeout',
+            attempts: 2,
+            createdAt: DateTime.utc(2026, 3, 4, 9),
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(emailRepo),
+            syncNowProvider.overrideWithValue((_) => false),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('failed'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'View'), findsNothing);
+    });
 
     testWidgets('shows a bare 0 when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(

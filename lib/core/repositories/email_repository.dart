@@ -177,7 +177,8 @@ abstract class EmailRepository {
   Future<int> flushPendingChanges(String accountId, String password);
 
   /// Emits the list of pending mutations that have failed at least once for
-  /// [accountId]. Updates live whenever the queue changes.
+  /// [accountId]: given up on ([FailedMutation.failed]) or still retrying.
+  /// Updates live whenever the queue changes.
   Stream<List<FailedMutation>> observeFailedMutations(String accountId);
 
   /// Emits every outbound queue row (failed or not-yet-tried) for [accountId],
@@ -191,8 +192,9 @@ abstract class EmailRepository {
   /// Permanently removes the pending mutation with [id] from the queue.
   Future<void> discardMutation(int id);
 
-  /// Resets the attempt counter for mutation [id] so the next sync cycle
-  /// retries it.
+  /// Queues mutation [id] again as a fresh change at the end of the queue
+  /// (attempts and error cleared), so the next sync cycle retries it after
+  /// any change queued since.
   Future<void> retryMutation(int id);
 
   /// Tries to remove a pending change for [emailId] of [changeType] from the

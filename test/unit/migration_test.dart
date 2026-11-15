@@ -16,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 67);
+      expect(db.schemaVersion, 68);
       await db.close();
     });
 
@@ -178,6 +178,10 @@ void main() {
       expect(draftColumns, contains('dirty')); // v43
       expect(draftColumns, contains('bcc_text')); // v65
       expect(draftColumns, contains('attachments_json')); // v66
+      expect(
+        await _tableColumns(db, 'pending_changes'),
+        contains('state'), // v68
+      );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
       final allTables = await db
@@ -376,7 +380,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -417,7 +421,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -448,7 +452,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -486,7 +490,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -527,7 +531,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -575,7 +579,54 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
+      await db.close();
+    });
+
+    test('v67→v68 adds pending_changes.state, pending for queued rows',
+        () async {
+      final dbFile = File('test_migration_v67_change_state.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x'); // creates the schema
+      await fresh.close();
+
+      var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE pending_changes DROP COLUMN state;')
+        ..execute(
+          'INSERT INTO pending_changes (id, account_id, resource_type, '
+          'resource_id, change_type, payload, created_at, attempts, '
+          "last_error) VALUES (1, 'acc-x', 'email', 'acc-x:INBOX:1', "
+          "'move', '{}', 0, 2, 'NO');",
+        )
+        ..execute('PRAGMA user_version = 67;');
+      rawDb.close();
+
+      var db = AppDatabase(NativeDatabase(dbFile));
+      final row = await db
+          .customSelect(
+            'SELECT change_type, attempts, last_error, state '
+            'FROM pending_changes WHERE id = 1',
+          )
+          .getSingle();
+      expect(row.read<String>('change_type'), 'move');
+      expect(row.read<int>('attempts'), 2);
+      expect(row.read<String>('last_error'), 'NO');
+      expect(row.read<String>('state'), 'pending');
+      await db.close();
+
+      // An interrupted earlier upgrade can leave the column at v67 already.
+      rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('PRAGMA user_version = 67;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await _tableColumns(db, 'pending_changes'), contains('state'));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 68);
       await db.close();
     });
 
@@ -671,7 +722,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 67);
+      expect(version.read<int>('user_version'), 68);
     });
 
     test(
@@ -1206,6 +1257,10 @@ void main() {
       expect(draftColumns, contains('dirty')); // v43
       expect(draftColumns, contains('bcc_text')); // v65
       expect(draftColumns, contains('attachments_json')); // v66
+      expect(
+        await _tableColumns(db, 'pending_changes'),
+        contains('state'), // v68
+      );
 
       // v30: duration_ms column on sync_log_mailboxes.
       final syncLogMailboxColumns = await _tableColumns(
