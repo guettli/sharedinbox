@@ -194,7 +194,7 @@ while :; do
     fi
     FETCH_RC=0
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
-            --play-store-config env:PLAY_STORE_CONFIG_JSON \
+            --play-store-config env://PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
             "${VERSION_CODE_ARGS[@]}" \
             -o "$APK_DIR" || FETCH_RC=$?
@@ -249,7 +249,7 @@ _run() {
     {
         timeout --kill-after=10 2400 dagger call --progress=plain -q -m ci --source=. test-android-firebase \
             --apks "$APK_DIR" \
-            --service-account-key env:FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY
+            --service-account-key env://FIREBASE_TEST_LAB_SERVICE_ACCOUNT_KEY
         echo $? > "$RC_FILE"
     } 2>&1 | tee "$OUT" | _strip_ansi | _filter_noise
 }

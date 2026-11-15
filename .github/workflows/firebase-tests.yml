@@ -48,7 +48,7 @@ jobs:
           GH_RUNNER_WAIT_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. print-runner-wait \
-            --github-token env:GH_RUNNER_WAIT_TOKEN \
+            --github-token env://GH_RUNNER_WAIT_TOKEN \
             --api-url "$GITHUB_API_URL" \
             --repository "$GITHUB_REPOSITORY" \
             --run-id "$GITHUB_RUN_ID"
@@ -85,7 +85,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           dagger call --progress=plain -q -m ci --source=. create-firebase-failure-issue \
-            --github-token env:GITHUB_TOKEN \
+            --github-token env://GITHUB_TOKEN \
             --run-url "$RUN_URL" \
             --github-repository "$GITHUB_REPOSITORY" \
             --github-api-url "$GITHUB_API_URL"

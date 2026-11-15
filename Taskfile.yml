@@ -204,7 +204,7 @@ tasks:
         HASH=$(git rev-parse --short HEAD)
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
         BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
-        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --release-version "$VERSION" --build-number "$BUILD_NUMBER"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. deploy-linux --ssh-key env://SSH_PRIVATE_KEY --known-hosts env://SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --release-version "$VERSION" --build-number "$BUILD_NUMBER"
 
   package-linux-release:
     desc: Build the mise-installable Linux tarball via Dagger and export it to build/ (VERSION defaults to the commit's CalVer)
@@ -239,7 +239,7 @@ tasks:
         TARGET=$(git rev-parse HEAD)
         BUILD_NUMBER=$(git log -1 --format=%ct HEAD)
         echo "Releasing v$VERSION from $HASH"
-        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env:GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --keep-days "${KEEP_DAYS:-30}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+        scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. release-linux --github-token env://GITHUB_TOKEN --version "$VERSION" --commit-hash "$HASH" --target-commit "$TARGET" --build-number "$BUILD_NUMBER" --keep-releases "${KEEP_RELEASES:-20}" --keep-days "${KEEP_DAYS:-30}" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
   retract-linux-release:
     desc: Convert the release for this commit back to a draft, hiding it from mise (used when verification fails)
@@ -250,7 +250,7 @@ tasks:
       # Runs in a container: the CI runner image has no gh.
       - |
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
-        timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. retract-linux-release --github-token env:GITHUB_TOKEN --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
+        timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. retract-linux-release --github-token env://GITHUB_TOKEN --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)"
 
   gui-test-release:
     desc: Drive the packaged release through its accessibility tree against a live Stalwart (needs a published release + network)
@@ -258,7 +258,7 @@ tasks:
       - |
         VERSION="${VERSION:-$(scripts/release_version.sh)}"
         TOKEN_ARG=""
-        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env://GITHUB_TOKEN"
         # No dagger_with_retry and a tight budget, unlike the other release
         # tasks: three 30-minute attempts would outlast the job's own timeout,
         # and a cancelled job skips the retract step. Fail fast instead.
@@ -292,7 +292,7 @@ tasks:
         # GITHUB_TOKEN only lifts the anonymous GitHub API rate limit; the
         # check works without it, so it stays optional for local runs.
         TOKEN_ARG=""
-        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env:GITHUB_TOKEN"
+        [ -n "${GITHUB_TOKEN:-}" ] && TOKEN_ARG="--github-token env://GITHUB_TOKEN"
         scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. check-mise-install --version "$VERSION" --repository "${GITHUB_REPOSITORY:-guettli/sharedinbox}" --cache-buster "$(date -u +%s)" $TOKEN_ARG
 
   build-android-bundle:
@@ -330,7 +330,7 @@ tasks:
       - sh: test -f build/app/outputs/bundle/release/app-release.aab
         msg: "AAB not found — run build-android-bundle first"
     cmds:
-      - timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. upload-to-play-store --aab build/app/outputs/bundle/release/app-release.aab --play-store-config env:PLAY_STORE_CONFIG_JSON
+      - timeout --kill-after=10 600 dagger call --progress=plain -q -m ci --source=. upload-to-play-store --aab build/app/outputs/bundle/release/app-release.aab --play-store-config env://PLAY_STORE_CONFIG_JSON
 
   publish-android:
     desc: Build cached AAB, stamp versionCode, sign, and publish to Play Store via Dagger
@@ -343,7 +343,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env:PLAY_STORE_CONFIG_JSON --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-android --play-store-config env://PLAY_STORE_CONFIG_JSON --keystore-base64 env://ANDROID_KEYSTORE_BASE64 --keystore-password env://ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
 
   smoke-test-release:
     desc: Boot the release APK on a KVM-accelerated emulator (Dagger) and fail on launch crash
@@ -353,7 +353,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. smoke-test-release --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. smoke-test-release --keystore-base64 env://ANDROID_KEYSTORE_BASE64 --keystore-password env://ANDROID_KEYSTORE_PASSWORD --commit-hash "$HASH"
 
   deploy-apk:
     desc: Build and deploy Android APK via Dagger
@@ -368,7 +368,7 @@ tasks:
       - sh: test -n "$ANDROID_KEYSTORE_PASSWORD"
         msg: "ANDROID_KEYSTORE_PASSWORD is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env:ANDROID_KEYSTORE_BASE64 --keystore-password env:ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 3000 dagger call --progress=plain -q -m ci --source=. deploy-apk --ssh-key env://SSH_PRIVATE_KEY --known-hosts env://SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH" --keystore-base64 env://ANDROID_KEYSTORE_BASE64 --keystore-password env://ANDROID_KEYSTORE_PASSWORD --build-number "$(git log -1 --format=%ct HEAD)"
 
   publish-website:
     desc: Build and publish website via Dagger
@@ -378,7 +378,7 @@ tasks:
       - sh: test -n "$SSH_KNOWN_HOSTS"
         msg: "SSH_KNOWN_HOSTS is not set"
     cmds:
-      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env:SSH_PRIVATE_KEY --known-hosts env:SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
+      - HASH=$(git rev-parse --short HEAD) && scripts/dagger_with_retry.sh timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. publish-website --ssh-key env://SSH_PRIVATE_KEY --known-hosts env://SSH_KNOWN_HOSTS --ssh-user "$SSH_USER" --ssh-host "$SSH_HOST" --commit-hash "$HASH"
 
   check-dagger:
     desc: Run full check suite via Dagger
@@ -450,7 +450,7 @@ tasks:
         msg: "GITHUB_TOKEN is not set"
     cmds:
       - |
-        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate --github-token env:GITHUB_TOKEN
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. renovate --github-token env://GITHUB_TOKEN
 
   integration-android:
     desc: UI integration tests on a connected Android emulator (Stalwart on host, emulator reaches it via 10.0.2.2)
@@ -690,7 +690,7 @@ tasks:
         set -a; [ -f "$HOME/.env" ] && . "$HOME/.env"; set +a
         : "${GMAIL_MAIL:?set GMAIL_MAIL (in ~/.env, or the agentloop-repo-sharedinbox-secrets Secret)}"
         : "${GMAIL_PASSWORD:?set GMAIL_PASSWORD (in ~/.env, or the Secret)}"
-        dagger call --progress=plain -q -m ci --source=. gmail-probe --gmail-mail=env:GMAIL_MAIL --gmail-password=env:GMAIL_PASSWORD
+        dagger call --progress=plain -q -m ci --source=. gmail-probe --gmail-mail=env://GMAIL_MAIL --gmail-password=env://GMAIL_PASSWORD
 
   coverage:
     desc: Coverage gate — run after test (and optionally integration) have written lcov.info

@@ -32,7 +32,7 @@ jobs:
           REGISTRY_TOKEN: ${{ github.token }}
         run: |
           dagger call --progress=plain -q -m ci --source=. publish-dev-container \
-            --registry-token env:REGISTRY_TOKEN \
+            --registry-token env://REGISTRY_TOKEN \
             --registry-user "${{ github.actor }}" \
             --image-ref ghcr.io/guettli/sharedinbox-dev \
             --commit-sha "$GITHUB_SHA"
