@@ -370,7 +370,7 @@ over, so an upgrade never strands queued work.
   `MockClient`).
 
 **Phase 1 — the op table.** Evolve `pending_changes` into `ops` in place:
-`state`, `group`, `ack_seq`, `lease_until`, `origin`, plus the read-sequence
+`state`, `ack_seq`, `lease_until`, `origin`, plus the read-sequence
 table. The flush uses `state`, the outcome table (§5) and the lease; Undo
 stores op seqs. Effective state is still the merged columns, so the visible
 behaviour stays as it is apart from failure handling.
