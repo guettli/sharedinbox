@@ -1,16 +1,35 @@
+import 'dart:io' show SocketException;
+
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/data/imap/imap_expunge.dart';
 
 import 'helpers/stateful_fake_imap.dart';
 
-/// EXPUNGE fails, as a server may refuse it.
+/// EXPUNGE fails with [error] (the connection dropped), or without one is
+/// refused by the server; [restores] counts the `\Deleted` re-flags tried afterwards.
 class _FailingExpungeClient extends StatefulFakeImapClient {
-  _FailingExpungeClient(super.server);
+  _FailingExpungeClient(super.server, [this.error]);
+
+  final Object? error;
+  int restores = 0;
+  bool _expunged = false;
 
   @override
-  Future<imap.Mailbox?> expunge() async =>
-      throw imap.ImapException(this, 'NO expunge refused');
+  Future<imap.Mailbox?> expunge() async {
+    _expunged = true;
+    throw error ?? imap.ImapException(this, 'NO expunge refused');
+  }
+
+  @override
+  Future<imap.StoreImapResult> fakeStore(
+    imap.MessageSequence sequence,
+    List<String> flags,
+    imap.StoreAction action,
+  ) {
+    if (_expunged) restores++;
+    return super.fakeStore(sequence, flags, action);
+  }
 }
 
 void main() {
@@ -37,11 +56,17 @@ void main() {
         final mine = server.deliver('Trash', 'mine@test');
         server.deliver('Trash', 'kept@test');
         final client = await select(server.connect());
+        final commands = <String>[];
+        server.beforeAnswer = (command) async => commands.add(command);
 
         await deleteAndExpungeUids(client, [mine.uid]);
 
         expect(server.find('mine@test'), isNull);
         expect(server.find('kept@test'), isNotNull);
+        expect(
+          commands.where((c) => c.contains('EXPUNGE')),
+          [if (uidPlus) 'UID EXPUNGE (Trash)' else 'EXPUNGE (Trash)'],
+        );
       });
 
       test(
@@ -62,15 +87,6 @@ void main() {
     });
   }
 
-  test('without UIDPLUS it never sends UID EXPUNGE', () async {
-    final server = serverWith(uidPlus: false);
-    final mine = server.deliver('Trash', 'mine@test');
-    final client = await select(server.connect());
-
-    // The fake answers UID EXPUNGE with BAD without UIDPLUS, as servers do.
-    await expectLater(deleteAndExpungeUids(client, [mine.uid]), completes);
-  });
-
   test(
     'a failed EXPUNGE gives the other message its \\Deleted flag back',
     () async {
@@ -88,4 +104,22 @@ void main() {
       expect(server.find('mine@test'), isNotNull);
     },
   );
+
+  test('a dropped connection is not followed by a restore attempt', () async {
+    final server = serverWith(uidPlus: false);
+    final mine = server.deliver('Trash', 'mine@test');
+    server.deliver('Trash', 'theirs@test', flags: [r'\Deleted']);
+    final client = _FailingExpungeClient(
+      server,
+      const SocketException('Connection reset by peer'),
+    );
+    await select(client);
+
+    await expectLater(
+      deleteAndExpungeUids(client, [mine.uid]),
+      throwsA(isA<SocketException>()),
+    );
+
+    expect(client.restores, 0);
+  });
 }
