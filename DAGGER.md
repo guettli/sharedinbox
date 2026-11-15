@@ -40,14 +40,21 @@ The engine image is `registry.dagger.io/engine:v1.0.0-beta.27`.
 engine must be the exact same version, there is no fallback when they differ
 (the tunnel authenticates but the protocol handshake fails).
 
-Bumping the engine means changing `dagger_version` in gitops, re-running the tc
-playbook, and restarting `dagger-engine` on tc. **Order matters:** publish the
-new runner image *first* (it only takes effect on newly-started runner pods),
-then restart the engine — the two cannot move atomically, and that ordering
-keeps the mismatch window to seconds rather than the minutes an image build
-takes. sharedinbox CI fails for the duration; nothing else does. The unit
-template in gitops carries the full procedure and the authoritative list of
-everything that must move together.
+Bumping Dagger: bump the engine in gitops first (`dagger_version` in
+`ansible/group_vars/all.yml` and the engine Deployment image; Flux rolls the
+pod), then open the sharedinbox PR that moves the three pins here. That PR
+passes on the *old* runner image: `setup_dagger_remote.sh` asks the engine for
+its version and, when the runner's baked-in CLI differs, fetches exactly that
+CLI ([`scripts/dagger_cli_for_engine.sh`](scripts/dagger_cli_for_engine.sh),
+sha256-verified against dl.dagger.io) and puts it first on `PATH` for the rest
+of the job. The runner image is republished from main after the PR merges; the
+baked-in CLI is only a fast path that skips the ~15s download. This removed the
+"bump deadlock" in which a bump PR could only pass on a runner image that is
+published from main, which needed a hand-built, hand-tagged image twice.
+
+Between the engine bump and that PR merging, sharedinbox CI on other branches
+fails the `--engine` pin check (pin != engine) -- by design, it is what tells
+you the pins are behind.
 
 The check has two modes:
 

@@ -237,16 +237,16 @@ if [ "$arc_runner" != "$engine" ]; then
   exit 1
 fi
 
-# 3. The CLI on this runner must equal the engine. Catches a stale runner image
-#    that still ships an older CLI than its Dockerfile now claims.
+# 3. The CLI on this runner must equal the engine. setup_dagger_remote.sh fetches
+#    the engine's CLI when the runner image's differs, so a mismatch here means
+#    that switch did not happen (or this ran without setup_dagger_remote.sh).
 if [ -n "$cli" ] && [ "$cli" != "$engine" ]; then
   {
     echo ""
     echo "ERROR: the Dagger CLI on this runner (v$cli) does not match the engine"
-    echo "       (v$engine), even though arc-runner-image/Dockerfile pins v$arc_runner."
-    echo "       The runner image is stale: it was built before the pin changed."
-    echo "       FIX: republish ghcr.io/guettli/sharedinbox-ci-runner"
-    echo "       (.github/workflows/publish-ci-runner.yml)."
+    echo "       (v$engine). scripts/setup_dagger_remote.sh should have fetched the"
+    echo "       engine's CLI (scripts/dagger_cli_for_engine.sh) and put it on PATH;"
+    echo "       look for its \"fetching CLI\" line or warning in the setup step."
   } >&2
   exit 1
 fi
