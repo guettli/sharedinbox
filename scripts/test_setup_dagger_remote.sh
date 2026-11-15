@@ -31,8 +31,12 @@ _fail() {
 # starts at the `# Verify the connection` comment. Everything above that line
 # decrypts secrets and sets up the SSH tunnel — irrelevant for the diagnostic
 # and retry behavior under test, and would require real network/SOPS access.
-_verify_snippet=$(awk '/^# Verify the connection/,0' "$SCRIPT")
-if [ -z "$_verify_snippet" ]; then
+# Stop before the tunnel watchdog: it is a never-ending background loop, and
+# sourcing it here leaked one immortal process per test run, each calling the
+# stubbed (later: the real) ssh every 10s and skewing the tunnel tests' ssh
+# call counts below.
+_verify_snippet=$(awk '/^# Keep the tunnel alive/{exit} /^# Verify the connection/{p=1} p' "$SCRIPT")
+if [ -z "$_verify_snippet" ] || printf '%s' "$_verify_snippet" | grep -q 'nohup'; then
     echo "FAIL: could not locate verify block in $SCRIPT"
     exit 1
 fi
@@ -434,6 +438,31 @@ elif ! printf '%s' "$_keyscan_defaults" | grep -qE 'KEYSCAN_RETRY_WAIT_S="\$\{DA
 else
     _pass
 fi
+
+# --- Tunnel watchdog only starts where something reaps it ---------------------
+# The watchdog never exits on its own, so it must start on CI runners (ephemeral
+# pods) and nowhere else unless asked. `nohup` is stubbed to a no-op so no real
+# loop starts; the decision is read from the script's own status line (the
+# stub runs disowned in the background, so a marker file would race).
+_watchdog_snippet=$(awk '/^# Keep the tunnel alive/,0' "$SCRIPT")
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SCRATCH/nohup"
+chmod +x "$SCRATCH/nohup"
+run_watchdog() {
+    local out
+    out=$(env -u CI -u DAGGER_TUNNEL_WATCHDOG PATH="$SCRATCH:$PATH" HOME="$SCRATCH" DAGGER_ENGINE_HOST=engine.example \
+        "$@" bash -c "$_watchdog_snippet" 2>&1)
+    case "$out" in
+        *"watchdog started"*) echo started ;;
+        *"watchdog not started"*) echo skipped ;;
+        *) echo "unknown: $out" ;;
+    esac
+}
+for case in "CI=true:started" "CI=false:skipped" ":skipped" "DAGGER_TUNNEL_WATCHDOG=1:started" "CI=true DAGGER_TUNNEL_WATCHDOG=0:skipped"; do
+    vars=${case%:*}; want=${case##*:}
+    # shellcheck disable=SC2086
+    got=$(run_watchdog $vars)
+    [ "$got" = "$want" ] && _pass || _fail "watchdog gate [${vars:-no CI}]: want $want, got $got"
+done
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

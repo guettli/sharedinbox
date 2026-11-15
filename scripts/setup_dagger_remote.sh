@@ -308,6 +308,15 @@ echo "Dagger connection verified successfully (CLI ${CLI_VERSION:-unknown})."
 # workflow's timeout-minutes.
 # Export so the backgrounded child shell below inherits the host (it is a local
 # var otherwise) and the body can stay single-quoted (no fragile quote-breaking).
+#
+# Only where something reaps it: the loop never exits by itself, so outside an
+# ephemeral runner pod (a developer sourcing this script, or a test) it would
+# outlive the shell forever and keep re-running ssh every 10s. CI=true on the
+# runners; DAGGER_TUNNEL_WATCHDOG=1/0 forces it on/off.
+if [ "${DAGGER_TUNNEL_WATCHDOG:-${CI:-false}}" != "true" ] && [ "${DAGGER_TUNNEL_WATCHDOG:-}" != "1" ]; then
+    echo "Dagger tunnel watchdog not started (not on a CI runner; set DAGGER_TUNNEL_WATCHDOG=1 to start it)."
+    return 0 2>/dev/null || exit 0
+fi
 export DAGGER_ENGINE_HOST
 nohup bash -c '
   while true; do
