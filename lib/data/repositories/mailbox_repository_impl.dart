@@ -249,7 +249,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
     // Remove destroyed mailboxes (and their cached emails / sync state).
     for (final jmapId in destroyed) {
-      await removeLocalMailbox(_db, accountId, jmapId);
+      await removeLocalMailbox(
+        _db,
+        accountId,
+        jmapId,
+        appLogger: _appLogger,
+      );
     }
 
     await _saveSyncState(accountId, 'Mailbox', newState);
@@ -592,7 +597,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
     for (final row in existing) {
       if (keepPaths.contains(row.path)) continue;
       log('Mailbox "${row.path}" deleted on server — removing local cache');
-      await removeLocalMailbox(_db, accountId, row.path);
+      await removeLocalMailbox(
+        _db,
+        accountId,
+        row.path,
+        appLogger: _appLogger,
+      );
     }
   }
 
@@ -973,7 +983,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
       case account_model.AccountType.jmap:
         await _deleteMailboxJmap(account, password, row, removeEmails);
     }
-    await removeLocalMailbox(_db, accountId, row.path);
+    await removeLocalMailbox(
+      _db,
+      accountId,
+      row.path,
+      appLogger: _appLogger,
+    );
   }
 
   @override
@@ -1392,14 +1407,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
 ///
 /// Removes the row in `mailboxes`, every `emails` row whose `mailboxPath`
 /// matches (which cascades into `email_bodies`), every `threads` row, the
-/// IMAP per-mailbox checkpoint in `sync_states`, and any `pending_changes`
-/// rows whose JSON payload references the path as `mailboxPath`, `src` or
-/// `dest`. Idempotent — safe to call when nothing matches.
+/// IMAP per-mailbox checkpoint in `sync_states`. Queued `pending_changes`
+/// whose JSON payload references the path as `mailboxPath`, `src` or `dest`
+/// are not deleted but marked failed (they can no longer apply, and must not
+/// protect anything from sync), so the user sees them on the Pending Changes
+/// screen; each is logged to [appLogger] as a warning. Idempotent — safe to
+/// call when nothing matches.
 Future<void> removeLocalMailbox(
   AppDatabase db,
   String accountId,
-  String path,
-) async {
+  String path, {
+  AppLogger? appLogger,
+}) async {
+  final failed = <PendingChangeRow>[];
   await db.transaction(() async {
     await (db.delete(db.emails)
           ..where(
@@ -1419,10 +1439,12 @@ Future<void> removeLocalMailbox(
           ))
         .go();
 
-    // pending_changes payloads are protocol-specific JSON; drop any row
-    // referring to the gone path so the queue doesn't keep retrying.
+    // pending_changes payloads are protocol-specific JSON; fail any queued
+    // row referring to the gone path so the queue doesn't keep retrying.
     final pending = await (db.select(db.pendingChanges)
-          ..where((t) => t.accountId.equals(accountId)))
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.state.equals('pending'),
+          ))
         .get();
     for (final row in pending) {
       Map<String, dynamic> payload;
@@ -1432,10 +1454,15 @@ Future<void> removeLocalMailbox(
         continue;
       }
       final refs = [payload['mailboxPath'], payload['src'], payload['dest']];
-      if (refs.contains(path)) {
-        await (db.delete(db.pendingChanges)..where((t) => t.id.equals(row.id)))
-            .go();
-      }
+      if (!refs.contains(path)) continue;
+      await (db.update(db.pendingChanges)..where((t) => t.id.equals(row.id)))
+          .write(
+        const PendingChangesCompanion(
+          state: Value('failed'),
+          lastError: Value('folder removed on the server'),
+        ),
+      );
+      failed.add(row);
     }
 
     await (db.delete(db.mailboxes)
@@ -1444,4 +1471,17 @@ Future<void> removeLocalMailbox(
           ))
         .go();
   });
+  for (final row in failed) {
+    unawaited(
+      appLogger?.warn(
+        'pending_change.folder_removed',
+        'Could not apply a queued ${row.changeType} change — the folder '
+            '"$path" was removed on the server; kept on the Pending Changes '
+            'screen',
+        accountId: accountId,
+        emailId: row.resourceId,
+        data: {'changeType': row.changeType, 'mailboxPath': path},
+      ),
+    );
+  }
 }

@@ -1425,8 +1425,10 @@ void main() {
           final states = await db.select(db.syncStates).get();
           expect(states.where((s) => s.resourceType == 'IMAP:Old'), isEmpty);
 
-          final pending = await db.select(db.pendingChanges).get();
-          expect(pending, isEmpty);
+          // The queued change can no longer apply: kept, but failed.
+          final pending = await db.select(db.pendingChanges).getSingle();
+          expect(pending.state, 'failed');
+          expect(pending.lastError, 'folder removed on the server');
         },
       );
     });

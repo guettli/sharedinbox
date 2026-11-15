@@ -370,8 +370,8 @@ class EmailAttachment {
   });
 }
 
-/// A pending local mutation (flag, move, delete) that has failed at least once
-/// and may be stuck in the outbound queue.
+/// A pending local mutation (flag, move, delete) that has failed at least
+/// once: either still being retried, or given up on ([failed]).
 class FailedMutation {
   final int id;
   final String accountId;
@@ -383,6 +383,11 @@ class FailedMutation {
   final int attempts;
   final DateTime createdAt;
 
+  /// True when the app gave up on the change (retry limit reached or refused
+  /// by the server): it is no longer flushed and waits for Retry or Discard.
+  /// False while it is still being retried.
+  final bool failed;
+
   const FailedMutation({
     required this.id,
     required this.accountId,
@@ -391,6 +396,7 @@ class FailedMutation {
     required this.lastError,
     required this.attempts,
     required this.createdAt,
+    this.failed = false,
   });
 }
 

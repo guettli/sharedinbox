@@ -26,10 +26,16 @@ final _dateFmt = DateFormat('MMM d, HH:mm');
 /// row opens a copyable detail view (all stored fields plus the decoded
 /// payload) for filing bug reports. Actions:
 ///
-///  * **Retry now** — resets the row's attempt/error state and asks the sync
+///  * **Retry now** — for a failed change, queues it again at the end of the
+///    queue (fresh attempt/error state) and shows its effect locally again;
+///    for a change still queued, keeps its place. Either way asks the sync
 ///    manager to flush the account immediately.
-///  * **Discard**  — drops the row from the queue. Local state stays as it is
-///    (the optimistic local mutation is not undone).
+///  * **Discard**  — drops the row from the queue. Nothing is undone locally:
+///    a failed change already shows the server's state again; for a change
+///    still queued, the next sync shows the server's state.
+///
+/// A failed change (given up on, no longer flushed) is marked as such; one
+/// with an error that is not failed yet is still being retried.
 class PendingChangesScreen extends ConsumerWidget {
   const PendingChangesScreen({super.key});
 
@@ -156,7 +162,7 @@ class PendingChangeTile extends StatelessWidget {
     return ListTile(
       onTap: () => _showChangeDetails(context, change),
       leading: Icon(
-        change.hasError ? Icons.error : Icons.sync,
+        _statusIcon(change),
         color: change.hasError ? theme.colorScheme.error : null,
       ),
       title: Text(describeChange(change)),
@@ -167,7 +173,7 @@ class PendingChangeTile extends StatelessWidget {
           Text(
             'Queued: ${_dateFmt.format(change.createdAt.toLocal())}'
             ' • age ${_formatAge(DateTime.now().difference(change.createdAt))}'
-            ' • attempts ${change.attempts}',
+            ' • ${attemptsLabel(change)}',
             style: theme.textTheme.bodySmall,
           ),
           if (change.lastError != null)
@@ -211,6 +217,27 @@ class PendingChangeTile extends StatelessWidget {
       ),
     );
   }
+}
+
+IconData _statusIcon(PendingChange change) {
+  if (change.failed) return Icons.error;
+  if (change.hasError) return Icons.sync_problem;
+  return Icons.sync;
+}
+
+/// Where [change] stands: given up on, still retrying after an error, or
+/// queued.
+String attemptsLabel(PendingChange change) {
+  final n = change.attempts;
+  if (change.failed && n < maxPendingChangeAttempts) {
+    // Given up on before the retry limit: refused, or nothing to act on.
+    return 'rejected by the server';
+  }
+  if (change.failed) return 'failed after $n attempts';
+  if (change.hasError) {
+    return '$n of $maxPendingChangeAttempts attempts failed – retrying';
+  }
+  return 'attempts $n';
 }
 
 /// Opens a dialog with the full technical detail of [change] — every field the
@@ -260,6 +287,7 @@ String changeReport(PendingChange change) {
         ..writeln('Resource:   ${change.resourceType} ${change.resourceId}')
         ..writeln('Queued:     ${change.createdAt.toUtc().toIso8601String()}')
         ..writeln('Attempts:   ${change.attempts}')
+        ..writeln('State:      ${change.failed ? 'failed' : 'pending'}')
         ..writeln('Payload:    ${_prettyPayload(change.payload)}')
         ..write('Last error: ${change.lastError ?? '(none)'}'))
       .toString();

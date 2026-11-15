@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpException, SocketException, TlsException;
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -603,12 +604,24 @@ class JmapException implements Exception {
   String toString() => 'JmapException: $message';
 }
 
+/// True when [error] is a transport failure of a JMAP request: the server's
+/// answer never arrived (offline, refused or dropped socket, TLS handshake,
+/// `http` client error, timeout). Not an answer from the server, so the
+/// pending-change flush charges no attempt for it.
+bool isJmapNetworkError(Object error) =>
+    error is SocketException ||
+    error is TlsException ||
+    error is HttpException ||
+    error is http.ClientException ||
+    error is TimeoutException;
+
 /// Thrown when an individual email update or destroy inside an `Email/set`
 /// is rejected by the server (RFC 8620 §5.3 `notUpdated` / `notDestroyed`).
 ///
 /// This is a permanent per-item error (e.g. `notFound`, `forbidden`) rather
-/// than a transient transport failure, so the pending change should be
-/// discarded rather than retried indefinitely.
+/// than a transient transport failure, so the pending change is marked
+/// failed rather than retried indefinitely. [type] is the RFC 8620 SetError
+/// type.
 class JmapSetItemException implements Exception {
   JmapSetItemException(this.type, this.description);
   final String type;

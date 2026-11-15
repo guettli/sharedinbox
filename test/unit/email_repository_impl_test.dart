@@ -441,6 +441,11 @@ class _QpDanglingBodyImapClient extends FakeImapClient {
 /// Fake IMAP client whose move op always fails with a non-"gone" error, so the
 /// pending change is retried and its failure recorded/logged (#579).
 class _MoveFailsImapClient extends FakeImapClient {
+  _MoveFailsImapClient([this.error = 'server said no']);
+
+  /// The text of the exception every `UID MOVE` throws.
+  final String error;
+
   @override
   Future<imap.Mailbox> selectMailboxByPath(
     String path, {
@@ -455,7 +460,7 @@ class _MoveFailsImapClient extends FakeImapClient {
     imap.Mailbox? targetMailbox,
     String? targetMailboxPath,
   }) async =>
-      throw Exception('server said no');
+      throw Exception(error);
 }
 
 /// Fake IMAP client that records the Sent-copy APPEND so the send path can be
@@ -3914,9 +3919,10 @@ void main() {
 
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
-      // B must not get M's read flag.
+      // B must not get M's read flag; the change is kept as failed.
       expect(client.calls, isEmpty);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
     });
 
     test('unchanged UIDVALIDITY acts on the queued UID', () async {
@@ -3958,8 +3964,10 @@ void main() {
 
       expect(client.calls, isEmpty);
       expect(client.expunged, isFalse);
-      // Dropped, not retried against a UID that may be someone else's mail.
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // Failed, not retried against a UID that may be someone else's mail.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('UIDVALIDITY'));
       expect(client.lastSearchCriteria, contains('m@example.com'));
     });
 
@@ -4036,7 +4044,7 @@ void main() {
       expect(changes.first.lastError, isNotNull);
     });
 
-    test('evicts IMAP change after max attempts (5)', () async {
+    test('marks IMAP change failed after max attempts (5)', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       // Pre-seed a flag_seen at attempts=4
@@ -4064,8 +4072,29 @@ void main() {
 
       await failingEmails.flushPendingChanges(_account.id, 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → evicted
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // 4+1 = 5 = _maxChangeAttempts → kept, but failed.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.attempts, 5);
+      expect(change.lastError, contains('forced failure'));
+      final mutations =
+          await failingEmails.observeFailedMutations(_account.id).first;
+      expect(mutations.single.failed, isTrue);
+
+      // A failed change is not flushed again.
+      final spy = SnoozeSpyImapClient();
+      final next = EmailRepositoryImpl(
+        r.db,
+        r.accounts,
+        imapConnect: (_, __, ___) async => spy,
+        smtpConnect: _noSmtpConnect,
+      );
+      expect(await next.flushPendingChanges(_account.id, 'pw'), 0);
+      expect(spy.selectedMailbox, isNull);
+      expect(
+        (await r.db.select(r.db.pendingChanges).get()).single.attempts,
+        5,
+      );
     });
 
     test('logs a retry warning when a move flush fails (#579)', () async {
@@ -4116,8 +4145,7 @@ void main() {
       expect(warn.dataJson, contains('move'));
     });
 
-    test('logs a final error when a change is dropped after max attempts',
-        () async {
+    test('logs a final error when a change fails after max attempts', () async {
       final recorder = _PushStatusRecorder();
       final r = _makeRepos(
         imapConnect: (_, __, ___) async => _MoveFailsImapClient(),
@@ -4152,12 +4180,16 @@ void main() {
 
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → dropped, and logged at error level.
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // 4+1 = 5 = _maxChangeAttempts → failed, and logged at error level.
+      expect(
+        (await r.db.select(r.db.pendingChanges).get()).single.state,
+        'failed',
+      );
       final err = recorder.entries
           .firstWhere((e) => e.event == 'pending_change.failed');
       expect(err.level, AppLogLevel.error);
       expect(err.emailId, resourceId);
+      expect(err.message, contains('kept on the Pending Changes screen'));
     });
 
     test(
@@ -4529,9 +4561,9 @@ void main() {
       });
 
       // The message is in neither mailbox (e.g. purged from Trash by another
-      // client): retrying can never succeed, so the change is dropped — not
-      // silently counted as applied — and the App Log gets a warning.
-      test('move whose message is in neither mailbox is dropped with a warning',
+      // client): retrying can never succeed, so the change is marked failed —
+      // not silently counted as applied — and the App Log gets a warning.
+      test('move whose message is in neither mailbox fails with a warning',
           () async {
         final recorder = _PushStatusRecorder();
         final spy = SnoozeSpyImapClient(
@@ -4548,7 +4580,10 @@ void main() {
         final applied = await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(applied, 0);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        final change = (await r.db.select(r.db.pendingChanges).get()).single;
+        expect(change.state, 'failed');
+        expect(change.attempts, 1);
+        expect(change.lastError, isNotNull);
         final warning = recorder.entries
             .singleWhere((e) => e.event == 'pending_change.message_gone');
         expect(warning.level, AppLogLevel.warn);
@@ -5149,8 +5184,8 @@ void main() {
 
     // Another client already deleted the message: the MOVE is an OK no-op and
     // the Message-ID is in neither mailbox. Retrying can never succeed, so the
-    // change is dropped instead of re-running ~6 commands on every sync.
-    test('IMAP move of a message gone from both mailboxes is dropped',
+    // change is marked failed instead of re-running ~6 commands on every sync.
+    test('IMAP move of a message gone from both mailboxes is marked failed',
         () async {
       final spy = SnoozeSpyImapClient(searchResultsByMailbox: const {});
       final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
@@ -5161,7 +5196,14 @@ void main() {
 
       expect(applied, 0);
       expect(spy.calls, ['move INBOX:9080->Trash']);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final change = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('in neither mailbox'));
+
+      // Not flushed again on the next sync.
+      spy.calls.clear();
+      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
+      expect(spy.calls, isEmpty);
     });
 
     test('IMAP move whose MOVE had no effect on a present message is retried',
@@ -5423,7 +5465,7 @@ void main() {
     // #1224: with UIDPLUS, a MOVE without COPYUID moved nothing. The source
     // (still selected) is searched first, without a SELECT round trip.
     group('MOVE that visibly moved nothing (UIDPLUS, no COPYUID)', () {
-      test('a vanished message is dropped with one SELECT less', () async {
+      test('a vanished message fails with one SELECT less', () async {
         final spy = _uidPlusSpy();
         final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
         await r.accounts.addAccount(_account, 'pw');
@@ -5435,7 +5477,10 @@ void main() {
         // INBOX for the MOVE, Trash to check an earlier attempt's MOVE did
         // not land there — no SELECT INBOX again for the source search.
         expect(spy.selects, ['INBOX', 'Trash']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(
+          (await r.db.select(r.db.pendingChanges).getSingle()).state,
+          'failed',
+        );
       });
 
       test('a stale UID is re-found in the source and moved', () async {
@@ -7718,6 +7763,48 @@ void main() {
       });
     }
 
+    /// Session as [mockFlush]; every API call answers `Email/set` with
+    /// [setResult], or throws [apiError] when given.
+    http.Client mockSetResult(
+      Map<String, dynamic> setResult, {
+      Object? apiError,
+      List<String>? calls,
+    }) {
+      return MockClient((req) async {
+        if (req.url.path.contains('well-known')) {
+          return http.Response(
+            jsonEncode({
+              'apiUrl': 'https://jmap.example.com/api/',
+              'accounts': {'acct1': {}},
+              'primaryAccounts': {
+                'urn:ietf:params:jmap:core': 'acct1',
+                'urn:ietf:params:jmap:mail': 'acct1',
+              },
+              'capabilities': {},
+              'username': 'alice@example.com',
+              'state': 'sess1',
+            }),
+            200,
+          );
+        }
+        calls?.add(req.body);
+        if (apiError != null) throw apiError;
+        return http.Response(
+          jsonEncode({
+            'sessionState': 's1',
+            'methodResponses': [
+              [
+                'Email/set',
+                {'accountId': 'acct1', ...setResult},
+                '0',
+              ],
+            ],
+          }),
+          200,
+        );
+      });
+    }
+
     Future<void> seedChange(
       AppDatabase db,
       AccountRepositoryImpl accounts, {
@@ -8014,7 +8101,7 @@ void main() {
     );
 
     test(
-      'discards change immediately on notUpdated (permanent error)',
+      'marks change failed immediately on notUpdated (permanent error)',
       () async {
         final client = MockClient((req) async {
           if (req.url.path.contains('well-known')) {
@@ -8069,12 +8156,162 @@ void main() {
 
         await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-        // Permanent error — change is immediately evicted
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // Permanent error — no retries, but kept as a failed change.
+        final change = (await r.db.select(r.db.pendingChanges).get()).single;
+        expect(change.state, 'failed');
+        expect(change.attempts, 1);
+        expect(change.lastError, contains('notFound'));
+        final failed = await r.emails.observeFailedMutations('jmap-1').first;
+        expect(failed.single.failed, isTrue);
       },
     );
 
-    test('evicts change after max attempts (5)', () async {
+    test('notFound for a delete counts as applied: the mail is gone', () async {
+      final r = _makeRepos(
+        httpClient: mockSetResult({
+          'notDestroyed': {
+            'e1': {'type': 'notFound'},
+          },
+        }),
+      );
+      await seedChange(r.db, r.accounts, changeType: 'delete', payload: '{}');
+
+      final applied = await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(applied, 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('a forbidden delete is kept as failed', () async {
+      final r = _makeRepos(
+        httpClient: mockSetResult({
+          'notDestroyed': {
+            'e1': {'type': 'forbidden'},
+          },
+        }),
+      );
+      await seedChange(r.db, r.accounts, changeType: 'delete', payload: '{}');
+
+      expect(await r.emails.flushPendingChanges('jmap-1', 'pw'), 0);
+
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('forbidden'));
+    });
+
+    test('a network error charges no attempt and stops the flush', () async {
+      final calls = <String>[];
+      final r = _makeRepos(
+        httpClient: mockSetResult(
+          const {},
+          apiError: http.ClientException('Connection closed'),
+          calls: calls,
+        ),
+      );
+      await seedChange(r.db, r.accounts);
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'Email',
+              resourceId: 'jmap-1:e2',
+              changeType: 'flag_seen',
+              payload: '{"seen":true}',
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      expect(await r.emails.flushPendingChanges('jmap-1', 'pw'), 0);
+
+      // Only the first change was tried. It keeps its claim (the request
+      // may have landed) but is charged nothing beyond it; the second one
+      // was never touched.
+      expect(calls, hasLength(1));
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(changes.map((c) => c.attempts), [1, 0]);
+      expect(changes.first.lastError, contains('Connection closed'));
+      expect(changes.map((c) => c.state), ['pending', 'pending']);
+
+      // Another network error does not move it towards giving up.
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+      expect(
+        (await r.db.select(r.db.pendingChanges).get()).first.attempts,
+        1,
+      );
+    });
+
+    for (final (type, back) in [('forbidden', true), ('notFound', false)]) {
+      test('a move rejected as $type ${back ? 'goes back' : 'stays'}',
+          () async {
+        final r = _makeRepos(
+          httpClient: mockSetResult({
+            'notUpdated': {
+              'e1': {'type': type},
+            },
+          }),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx-inbox',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+        await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+        expect(
+          (await r.db.select(r.db.pendingChanges).getSingle()).state,
+          'failed',
+        );
+        // `notFound`: the mail is gone, there is nothing to go back to.
+        expect(
+          (await r.emails.getEmail('jmap-1:e1'))!.mailboxPath,
+          back ? 'mbx-inbox' : 'mbx-archive',
+        );
+      });
+    }
+
+    test('after a JMAP timeout, Undo queues a reverse move (#1048)', () async {
+      final r = _makeRepos(
+        httpClient: mockSetResult(
+          const {},
+          apiError: TimeoutException('no answer'),
+        ),
+      );
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:e1',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx-inbox',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      // The MOVE may have landed: it must not be cancelled …
+      expect(await r.emails.cancelPendingChange('jmap-1:e1', 'move'), isFalse);
+      // … so Undo's move back is queued after it.
+      await r.emails.moveEmail('jmap-1:e1', 'mbx-inbox');
+      final moves = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(
+        moves.map((c) => (jsonDecode(c.payload) as Map)['dest']),
+        ['mbx-archive', 'mbx-inbox'],
+      );
+    });
+
+    test('marks change failed after max attempts (5)', () async {
       final r = _makeRepos(httpClient: mockFlush(500));
       await r.accounts.addAccount(_jmapAccount, 'pw');
       // Seed a change already at attempts=4 (one below the eviction threshold)
@@ -8092,8 +8329,10 @@ void main() {
 
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → evicted
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // 4+1 = 5 = _maxChangeAttempts → kept, but failed.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.attempts, 5);
     });
 
     test(
@@ -9217,12 +9456,35 @@ void main() {
             ),
           );
 
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'email',
+              resourceId: 'acc-1:12',
+              changeType: 'delete',
+              payload: '{}',
+              createdAt: DateTime.now(),
+              attempts: const Value(5),
+              lastError: const Value('NO'),
+              state: const Value('failed'),
+            ),
+          );
+
       final mutations = await r.emails.observeFailedMutations('acc-1').first;
 
-      expect(mutations, hasLength(1));
+      expect(mutations, hasLength(2));
       expect(mutations.first.resourceId, 'acc-1:10');
       expect(mutations.first.changeType, 'flag_seen');
       expect(mutations.first.lastError, 'network error');
+      // Still retrying, versus given up on.
+      expect(mutations.first.failed, isFalse);
+      expect(mutations.last.resourceId, 'acc-1:12');
+      expect(mutations.last.failed, isTrue);
+      final all = await r.emails.observePendingChanges('acc-1').first;
+      expect(
+        {for (final c in all) c.resourceId: c.failed},
+        {'acc-1:10': false, 'acc-1:11': false, 'acc-1:12': true},
+      );
     });
 
     test('discardMutation removes the row', () async {
@@ -9247,27 +9509,530 @@ void main() {
       expect(rows, isEmpty);
     });
 
-    test('retryMutation resets attempts and clears lastError', () async {
+    test('retryMutation requeues the change behind newer ones', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      const payload = '{"uid":10,"mailboxPath":"INBOX","dest":"Trash",'
+          '"uidValidity":7}';
+      final rowId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:INBOX:10',
+              changeType: 'move',
+              payload: payload,
+              createdAt: DateTime(2024),
+              attempts: const Value(5),
+              lastError: const Value('connection refused'),
+              state: const Value('failed'),
+            ),
+          );
+      // Queued after the failed move.
+      final newerId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:INBOX:10',
+              changeType: 'flag_seen',
+              payload: '{"uid":10,"mailboxPath":"INBOX","seen":true}',
+              createdAt: DateTime(2024, 2),
+            ),
+          );
+      final queued = r.emails.onChangesQueued.first;
+
+      await r.emails.retryMutation(rowId);
+
+      final rows = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(rows.map((c) => c.id), [newerId, greaterThan(newerId)]);
+      final retried = rows.last;
+      expect(retried.changeType, 'move');
+      expect(retried.resourceId, 'acc-1:INBOX:10');
+      expect(retried.resourceType, 'Email');
+      // The payload, with its UIDVALIDITY stamp, is kept as it was.
+      expect(retried.payload, payload);
+      expect(retried.attempts, 0);
+      expect(retried.lastError, isNull);
+      expect(retried.state, 'pending');
+      expect(retried.createdAt.isAfter(DateTime(2024, 2)), isTrue);
+      expect(await queued, 'acc-1');
+    });
+
+    test('retryMutation of an unknown id does nothing', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+
+      await r.emails.retryMutation(42);
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test('a failed flag change no longer protects the local flag', () async {
+      final client = _CondstoreImapClient(
+        messages: {
+          42: _PreviewTestMessage(
+            subject: 'Lunch tomorrow?',
+            from: 'alice@example.com',
+            text: 'Noon?',
+            messageId: '<m42@example.com>',
+          ),
+        },
+      );
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.emails.syncEmails('acc-1', 'INBOX');
+      // Marked read locally; the change is queued, the server still says
+      // unread.
+      await r.emails.setFlag('acc-1:INBOX:42', seen: true);
+      client.modSeq = 2;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isTrue);
+
+      // The change failed: the next server read reverts the optimistic value,
+      // and the failure stays listed.
+      await r.db.update(r.db.pendingChanges).write(
+            const PendingChangesCompanion(
+              attempts: Value(5),
+              lastError: Value('NO'),
+              state: Value('failed'),
+            ),
+          );
+      client.modSeq = 3;
+      await r.emails.syncEmails('acc-1', 'INBOX');
+
+      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+      final failed = await r.emails.observeFailedMutations('acc-1').first;
+      expect(failed.single.failed, isTrue);
+    });
+
+    test('queueing the action again replaces the failed change', () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:INBOX:1',
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 1,
+              receivedAt: DateTime(2024),
+            ),
+          );
+      Future<void> seedFailed(String changeType, String payload) =>
+          r.db.into(r.db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'Email',
+                  resourceId: 'acc-1:INBOX:1',
+                  changeType: changeType,
+                  payload: payload,
+                  createdAt: DateTime.now(),
+                  attempts: const Value(5),
+                  lastError: const Value('NO'),
+                  state: const Value('failed'),
+                ),
+              );
+      await seedFailed(
+        'flag_seen',
+        '{"uid":1,"mailboxPath":"INBOX","seen":true}',
+      );
+      await seedFailed(
+        'flag_flagged',
+        '{"uid":1,"mailboxPath":"INBOX","flagged":true}',
+      );
+      await seedFailed(
+        'snooze',
+        '{"uid":1,"src":"INBOX","dest":"Snoozed","until":"2030-01-01"}',
+      );
+      Future<List<String>> rows() async => [
+            for (final c in await (r.db.select(r.db.pendingChanges)
+                  ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+                .get())
+              '${c.changeType}:${c.state}',
+          ];
+
+      await r.emails.setFlag('acc-1:INBOX:1', seen: true);
+      // Only the failed read change is replaced.
+      expect(await rows(), [
+        'flag_flagged:failed',
+        'snooze:failed',
+        'flag_seen:pending',
+      ]);
+      // Undo cancels the new, pending change only.
+      expect(
+        await r.emails.cancelPendingChange('acc-1:INBOX:1', 'flag_seen'),
+        isTrue,
+      );
+      expect(
+        await r.emails.cancelPendingChange('acc-1:INBOX:1', 'flag_flagged'),
+        isFalse,
+      );
+
+      // Any location change replaces a failed location change.
+      await r.emails.moveEmail('acc-1:INBOX:1', 'Archive');
+      expect(await rows(), ['flag_flagged:failed', 'move:pending']);
+    });
+
+    test('retryMutation of a change still queued only kicks the flush',
+        () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       final rowId = await r.db.into(r.db.pendingChanges).insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',
-              resourceType: 'email',
-              resourceId: 'acc-1:10',
-              changeType: 'move',
-              payload: '{"dest":"Trash"}',
+              resourceType: 'Email',
+              resourceId: 'acc-1:INBOX:1',
+              changeType: 'flag_seen',
+              payload: '{"uid":1,"mailboxPath":"INBOX","seen":true}',
+              createdAt: DateTime.now(),
+              attempts: const Value(2),
+              lastError: const Value('timeout'),
+            ),
+          );
+      final newerId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:INBOX:1',
+              changeType: 'flag_seen',
+              payload: '{"uid":1,"mailboxPath":"INBOX","seen":false}',
+              createdAt: DateTime.now(),
+            ),
+          );
+      final queued = r.emails.onChangesQueued.first;
+
+      await r.emails.retryMutation(rowId);
+
+      // `[seen:true, seen:false]` keeps its order: the user's last intent
+      // (unread) still wins.
+      final rows = await (r.db.select(r.db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      expect(rows.map((c) => c.id), [rowId, newerId]);
+      expect(rows.first.attempts, 2);
+      expect(await queued, 'acc-1');
+    });
+  });
+
+  group('a failed move goes back to where the mail is', () {
+    const id = 'acc-1:INBOX:5';
+
+    Future<_Repos> rig(imap.ImapClient client) async {
+      final r = _makeRepos(imapConnect: (_, __, ___) async => client);
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: id,
+              accountId: 'acc-1',
+              mailboxPath: 'INBOX',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              threadId: const Value('t1'),
+            ),
+          );
+      await r.db.into(r.db.syncStates).insert(
+            SyncStatesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'IMAP:INBOX',
+              state: jsonEncode({'uidValidity': 1, 'lastUid': 5}),
+              syncedAt: DateTime(2024),
+            ),
+          );
+      return r;
+    }
+
+    Future<void> giveUp(_Repos r) async {
+      await r.db.update(r.db.pendingChanges).write(
+            const PendingChangesCompanion(attempts: Value(4)),
+          );
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+    }
+
+    Future<PendingChangeRow> change(_Repos r, String type) async =>
+        (await r.db.select(r.db.pendingChanges).get())
+            .singleWhere((c) => c.changeType == type);
+
+    test('after the retry limit, with later flag changes pointed back',
+        () async {
+      final spy = SnoozeSpyImapClient(
+        onUidMove: () async => throw Exception('server said no'),
+      );
+      final r = await rig(spy);
+      await r.emails.moveEmail(id, 'Archive');
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'Archive');
+      // Queued after the move, addressed to the mail in Archive.
+      await r.emails.setFlag(id, flagged: true);
+      expect(
+        (jsonDecode((await change(r, 'flag_flagged')).payload)
+            as Map)['mailboxPath'],
+        'Archive',
+      );
+      await (r.db.update(r.db.pendingChanges)
+            ..where((t) => t.changeType.equals('move')))
+          .write(const PendingChangesCompanion(attempts: Value(4)));
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect((await change(r, 'move')).state, 'failed');
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'INBOX');
+      final threads = await r.db.select(r.db.threads).get();
+      expect(threads.map((t) => t.mailboxPath), ['INBOX']);
+      // The later flag change waited in this flush and now addresses UID 5
+      // in INBOX under the move's own stamp, not whatever has UID 5 in
+      // Archive.
+      expect(spy.calls, isEmpty);
+      final flag = await change(r, 'flag_flagged');
+      expect(flag.attempts, 0);
+      final payload = jsonDecode(flag.payload) as Map;
+      expect(payload['mailboxPath'], 'INBOX');
+      expect(payload['uid'], 5);
+      expect(payload['uidValidity'], 1);
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      expect(spy.selects.last, 'INBOX');
+      expect(spy.calls, [r'store add 5 \Flagged']);
+      expect(
+        (await r.db.select(r.db.pendingChanges).get()).map((c) => c.changeType),
+        ['move'],
+      );
+    });
+
+    test('a missing destination (TRYCREATE) fails at once and reverts',
+        () async {
+      final r = await rig(
+        _MoveFailsImapClient('NO [TRYCREATE] Mailbox does not exist'),
+      );
+      await r.emails.moveEmail(id, 'Gone');
+
+      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
+
+      final move = await change(r, 'move');
+      expect(move.state, 'failed');
+      expect(move.attempts, 1);
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'INBOX');
+    });
+
+    Future<List<PendingChangeRow>> queue(_Repos r) =>
+        (r.db.select(r.db.pendingChanges)
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get();
+
+    test('later moves fail with the first; the mail returns to its source',
+        () async {
+      // Archive → INBOX → Archive: the mail is back at the first move's
+      // destination, but on the server it never left INBOX.
+      final r = await rig(_MoveFailsImapClient());
+      await r.emails.moveEmail(id, 'Archive');
+      await r.emails.moveEmail(id, 'INBOX');
+      await r.emails.moveEmail(id, 'Archive');
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'Archive');
+      final first = (await queue(r)).first;
+      await (r.db.update(r.db.pendingChanges)
+            ..where((t) => t.id.equals(first.id)))
+          .write(const PendingChangesCompanion(attempts: Value(4)));
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      final rows = await queue(r);
+      expect(rows.map((c) => c.state), ['failed', 'failed', 'failed']);
+      expect(
+        rows.skip(1).map((c) => c.lastError),
+        everyElement('depends on failed change #${first.id}'),
+      );
+      // The later moves were not tried, nor charged.
+      expect(rows.skip(1).map((c) => c.attempts), [0, 0]);
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'INBOX');
+    });
+
+    test('a delete queued after a failing move never hits the destination UID',
+        () async {
+      // Move INBOX → Trash, then delete for good from Trash: the delete
+      // names UID 5 in Trash, which is someone else's mail while the move
+      // has not happened.
+      final spy = SnoozeSpyImapClient(
+        onUidMove: () async => throw Exception('server said no'),
+      );
+      final r = await rig(spy);
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'acc-1:Trash',
+              accountId: 'acc-1',
+              path: 'Trash',
+              name: 'Trash',
+              role: const Value('trash'),
+            ),
+          );
+      await r.emails.moveEmail(id, 'Trash');
+      await r.emails.deleteEmail(id);
+      expect((await queue(r)).map((c) => c.changeType), ['move', 'delete']);
+
+      // The move fails (attempt 1 of 5): the delete waits, uncharged.
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(spy.calls, isEmpty);
+      expect(spy.selects, ['INBOX']);
+      var rows = await queue(r);
+      expect(rows.map((c) => c.attempts), [1, 0]);
+      expect(rows.map((c) => c.state), ['pending', 'pending']);
+
+      // The move gives up: the delete fails with it.
+      await (r.db.update(r.db.pendingChanges)
+            ..where((t) => t.id.equals(rows.first.id)))
+          .write(const PendingChangesCompanion(attempts: Value(4)));
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(spy.calls, isEmpty);
+      rows = await queue(r);
+      expect(rows.map((c) => c.state), ['failed', 'failed']);
+      expect(rows.last.lastError, 'depends on failed change #${rows.first.id}');
+    });
+
+    test('a move after a failed one goes back to the first source', () async {
+      // INBOX → Archive fails (no Archive), so Archive → Trash cannot
+      // happen either: the mail is in INBOX, not in Trash.
+      final r = await rig(
+        _MoveFailsImapClient('NO [TRYCREATE] Mailbox does not exist'),
+      );
+      await r.emails.moveEmail(id, 'Archive');
+      await r.emails.moveEmail(id, 'Trash');
+
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+
+      final rows = await queue(r);
+      expect(rows.map((c) => c.state), ['failed', 'failed']);
+      expect(rows.last.attempts, 0);
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'INBOX');
+    });
+
+    test('wake-up keeps the failed change and the mail where it is', () async {
+      final r = await rig(_MoveFailsImapClient());
+      final past = DateTime(2024);
+      Future<void> snoozed(String rowId) async {
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: rowId,
+                accountId: 'acc-1',
+                mailboxPath: 'Snoozed',
+                uid: 9,
+                receivedAt: DateTime(2024),
+                snoozedUntil: Value(past),
+                snoozedFromMailboxPath: const Value('INBOX'),
+              ),
+            );
+      }
+
+      Future<void> failed(String rowId, String changeType) =>
+          r.db.into(r.db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'Email',
+                  resourceId: rowId,
+                  changeType: changeType,
+                  payload: jsonEncode({
+                    'uid': 9,
+                    'mailboxPath': 'Snoozed',
+                    if (changeType == 'move') 'dest': 'Archive',
+                  }),
+                  createdAt: DateTime.now(),
+                  attempts: const Value(5),
+                  lastError: const Value('NO'),
+                  state: const Value('failed'),
+                ),
+              );
+      // A failed move out of Snoozed: the wake-up leaves this mail alone.
+      await snoozed('acc-1:Snoozed:9');
+      await failed('acc-1:Snoozed:9', 'move');
+      // A failed delete: the wake-up unsnoozes, but must not settle the
+      // user's failure.
+      await snoozed('acc-1:Snoozed:10');
+      await failed('acc-1:Snoozed:10', 'delete');
+
+      expect(await r.emails.wakeUpEmails('acc-1'), 1);
+
+      expect(
+        (await r.emails.getEmail('acc-1:Snoozed:9'))!.mailboxPath,
+        'Snoozed',
+      );
+      expect(
+        (await r.emails.getEmail('acc-1:Snoozed:10'))!.mailboxPath,
+        'INBOX',
+      );
+      expect(
+        (await queue(r))
+            .map((c) => '${c.resourceId} ${c.changeType} ${c.state}'),
+        [
+          'acc-1:Snoozed:9 move failed',
+          'acc-1:Snoozed:10 delete failed',
+          'acc-1:Snoozed:10 unsnooze pending',
+        ],
+      );
+    });
+
+    test('a failed move of a snoozed mail brings the snooze back', () async {
+      const snoozedId = 'acc-1:Snoozed:5';
+      final until = DateTime(2030, 1, 2, 9);
+      final r = await rig(_MoveFailsImapClient());
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: snoozedId,
+              accountId: 'acc-1',
+              mailboxPath: 'Snoozed',
+              uid: 5,
+              receivedAt: DateTime(2024),
+              snoozedUntil: Value(until),
+              snoozedFromMailboxPath: const Value('INBOX'),
+            ),
+          );
+      // Filing a snoozed mail by hand ends its snooze.
+      await r.emails.moveEmail(snoozedId, 'Archive');
+      expect((await r.emails.getEmail(snoozedId))!.snoozedUntil, isNull);
+
+      await giveUp(r);
+
+      final back = (await r.emails.getEmail(snoozedId))!;
+      expect(back.mailboxPath, 'Snoozed');
+      expect(back.snoozedUntil, until);
+      expect(back.snoozedFromMailboxPath, 'INBOX');
+    });
+
+    test('Retry shows the move again and queues it last', () async {
+      final r = await rig(_MoveFailsImapClient());
+      await r.emails.moveEmail(id, 'Archive');
+      await giveUp(r);
+      final failed = await change(r, 'move');
+      expect(failed.state, 'failed');
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'INBOX');
+
+      await r.emails.retryMutation(failed.id);
+
+      final retried = await change(r, 'move');
+      expect(retried.id, greaterThan(failed.id));
+      expect(retried.state, 'pending');
+      expect(retried.attempts, 0);
+      expect((await r.emails.getEmail(id))!.mailboxPath, 'Archive');
+    });
+
+    test('Retry of a failed flag change shows the flag again', () async {
+      final r = await rig(_MoveFailsImapClient());
+      final rowId = await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: id,
+              changeType: 'flag_flagged',
+              payload: '{"uid":5,"mailboxPath":"INBOX","flagged":true}',
               createdAt: DateTime.now(),
               attempts: const Value(5),
-              lastError: const Value('connection refused'),
+              lastError: const Value('NO'),
+              state: const Value('failed'),
             ),
           );
 
       await r.emails.retryMutation(rowId);
 
-      final row = (await r.db.select(r.db.pendingChanges).get()).first;
-      expect(row.attempts, 0);
-      expect(row.lastError, isNull);
+      expect((await r.emails.getEmail(id))!.isFlagged, isTrue);
+      expect((await change(r, 'flag_flagged')).state, 'pending');
     });
   });
 
@@ -9879,10 +10644,37 @@ void main() {
         expect(emails, isEmpty);
         final states = await r.db.select(r.db.syncStates).get();
         expect(states.where((s) => s.resourceType == 'IMAP:Old'), isEmpty);
-        final pending = await r.db.select(r.db.pendingChanges).get();
-        expect(pending, isEmpty);
+        // The queued change can no longer apply: failed, not deleted.
+        final pending = await r.db.select(r.db.pendingChanges).getSingle();
+        expect(pending.state, 'failed');
+        expect(pending.lastError, 'folder removed on the server');
       },
     );
+
+    test('a change whose source folder is gone counts as applied', () async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _NonExistentSelectImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Old:1',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 1,
+                'mailboxPath': 'Old',
+                'dest': 'Archive',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
   });
 
   group('IMAP body connection pooling (#679)', () {

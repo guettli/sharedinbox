@@ -79,7 +79,12 @@ class MailboxListScreen extends ConsumerWidget {
           StreamBuilder<List<FailedMutation>>(
             stream: emailRepo.observeFailedMutations(accountId),
             builder: (ctx, snap) {
-              final mutations = snap.data ?? [];
+              // Only changes the app gave up on; ones still retrying are
+              // listed on the Pending Changes screen.
+              final mutations = [
+                for (final m in snap.data ?? const <FailedMutation>[])
+                  if (m.failed) m,
+              ];
               if (mutations.isEmpty) return const SizedBox.shrink();
               return _FailedMutationBanner(
                 mutations: mutations,
