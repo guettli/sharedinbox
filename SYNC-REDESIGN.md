@@ -1,6 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **proposal**, not implemented. Goal: make offline-first (the rules in
+Status: **proposal, chosen direction**, not implemented. Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -56,32 +56,71 @@ More problems with the same root:
 
 ## 2. Model
 
-Keep **one row per message instance** in `emails`, and split each
-user-changeable field into three columns:
+Keep **one row per message instance** in `emails`, and give each
+user-changeable field three ordinary columns:
 
 ```
-  srv_<field>     written only by sync, from server answers
-  local_<field>   written only by the fold of pending ops (NULL = no intent)
-  <field>         GENERATED ALWAYS AS (COALESCE(local_<field>, srv_<field>)) STORED, indexed
+  srv_<field>     what the server last said; written only by the server-write gate
+  local_<field>   the user's pending intent (NULL = none); written only by the fold
+  <field>         the value the app reads = COALESCE(local_<field>, srv_<field>)
 ```
 
 ```
-  sync (IMAP/JMAP) ──writes──▶ srv_*  ─┐
-                                       ├─▶ SQLite computes <field> ─▶ all reads
-  user action ──▶ ops ──fold──▶ local_* ┘      (threads, FTS, lists, search)
+  sync (IMAP/JMAP) ──▶ server-write gate ──▶ srv_<field> ─┐
+                                                          ├─▶ <field> ─▶ all reads
+  user action ──▶ ops ──▶ fold ───────────▶ local_<field> ┘   (threads, FTS, lists, search)
 ```
 
-- **Every read path stays the same**: lists, the `threads` aggregate
-  (`_updateThread` already materialises it from the row), FTS triggers,
-  search, detail. They read the effective `<field>` columns, which keep
-  today's names.
+Three writers own these columns. All of them write the effective
+`<field>` in the same statement through one shared helper, the
+**email state writer**. It lives in its own file, because
+`mailbox_repository_impl.dart` (rename at 1161, `removeLocalMailbox` at
+1404) needs it too:
+
+- the **server-write gate**: the only way sync code may set a
+  user-changeable field, including inserting a new row. It applies the
+  read-order rules of §4 and writes `srv_<field>`;
+- the **fold** (below): it writes `local_<field>`;
+- **local row creation**: virtual self-sent rows (`_createLocalSelfMessages`
+  7495, the virtual Sent copy in `_storeSentCopyLocally` 7427) have no
+  server answer yet. A `create_local` step inserts them with `local_*`
+  set and `srv_*` empty.
+
+The writer sets only the columns it changes, never the whole row. Today's
+`insertOnConflictUpdate` sets every column and so re-fires the FTS update
+trigger (`email_fts_au` is `AFTER UPDATE OF subject, preview, from_json`,
+database.dart:666). It also has a SQL bulk form for `markAllAsRead`.
+
+Former writers that disappear: `restoreEmails` (5769) is no longer needed,
+because a hidden row still exists and undo just discards or inverts the op.
+`restoreLocalSnooze` (5370) becomes an op. `_repointSnoozedPlaceholder`
+(7071) rewrites the `dest` of the queued ops and re-folds, instead of
+writing columns.
+
+The effective columns are ordinary columns, not SQLite generated columns.
+Generated STORED columns cannot be added with `ALTER TABLE`, so they would
+force a rebuild of `emails` and its FTS index on every device at upgrade,
+and they would only protect against a direct write that the checks in §8
+already catch. With ordinary columns the migration is `ALTER TABLE ADD
+COLUMN` plus one `UPDATE` copying today's values into `srv_*`.
+
+- **UI read paths stay the same**: lists, the `threads` aggregate
+  (`_updateThread` already materialises it from the row), FTS, search,
+  detail. They read the effective `<field>` columns, which keep today's
+  names. The exceptions are the hidden-row filters listed below.
+- **Sync scans read the server columns.** Every folder-scoped scan done for
+  sync must use `srv_mailbox_path`, not the effective one: the flag
+  reconcile (1625), `_reconcileDeletedImap` (2074), `_movedDestinationId`
+  (2144), the JMAP prune (3546) and the JMAP flag reconcile (3691).
+  Otherwise a row with a pending move looks absent from its destination's
+  listing and gets marked `srv_gone`, and a hidden row is never seen to
+  vanish from its source, so an acked delete is never dropped.
 - **One row per message**: no second copy, no extra FTS churn, and no cascade
   hazard. `email_bodies` and `attachment_files` cascade on delete of the
   `emails` row (database.dart:155, 182); hiding a row never deletes it, so a
   pending delete or a failure revert cannot lose the offline body.
-- **Enforcement for free**: Drift does not allow writes to generated
-  columns, so nobody can write the effective value directly. To verify in
-  the phase 3 spike.
+- **Cheap migration**: added columns and one copy, no table rebuild, no
+  FTS rebuild.
 
 Fields and read groups. A *read group* is the set of fields one kind of
 server read returns; each group has its own read stamp (§4):
@@ -89,11 +128,41 @@ server read returns; each group has its own read stamp (§4):
 | Read group | srv / local columns | Effective column |
 |---|---|---|
 | `keywords` | `is_seen`, `is_flagged`, `snoozed_until` (from the `snz:` keyword) | same names |
-| `location` | `mailbox_path`, plus `local_hidden` (pending delete) and `srv_gone` (server said absent) | `mailbox_path` = `CASE WHEN local_hidden OR (srv_gone AND local_mailbox_path IS NULL) THEN NULL ELSE COALESCE(local_mailbox_path, srv_mailbox_path) END` |
+| `location` | `mailbox_path`, plus `local_hidden` (pending delete) and `srv_gone` (server said absent) | `mailbox_path` = `''` if `local_hidden`, or if `srv_gone` and `local_mailbox_path IS NULL`; otherwise `COALESCE(local_mailbox_path, srv_mailbox_path)` |
 
-A hidden row has a NULL effective `mailbox_path`, so every existing
+A hidden row gets the empty string as its effective `mailbox_path` (the
+column is NOT NULL today, and changing that would need a table rebuild).
+No IMAP mailbox name or JMAP mailbox id is empty, so every existing
 `mailbox_path = ?` query already excludes it, and no read needs an extra
 `AND visible`.
+
+Queries that do not filter by mailbox must add `mailbox_path <> ''` in
+phase 4:
+- **Searches:** FTS search (8765), body search (8801), notes search (8822),
+  `searchEmailsStructured` (8890) and `searchAddresses` (9149).
+- **Lookups by address or thread:** `getEmailsByAddress` (9104), thread
+  across folders (9323), and `getEmail(id)` (503): the detail view or a
+  notification tap on a hidden row should show "deleted".
+- **Internal lookups:**
+  - `_findEmailRowByNormalisedMessageId` (5488, counterpart mirroring)
+  - `findEmailByMessageId` (5754, undo)
+  - `_localRowFor` (5580)
+  - `_hasArrivedOutsideSent` (7587)
+  - `wakeUpEmails` (5326)
+- **Folder statistics:** `sync_state_repository_impl.dart:20`, which would
+  otherwise show a phantom `''` folder.
+
+Notifications, unread counts and `observeAllInboxThreads` already filter by
+mailbox.
+
+Guards:
+- `_updateThread` is never called with `''`. A move or hide refreshes the
+  old folder's thread using the *previous* effective path.
+- Any user action on a row whose effective `mailbox_path` is `''` does
+  nothing. Otherwise an `UndoAction` could record `''` as a source folder.
+
+**Clean-up rule:** a row that is `srv_gone` and has no ops left is deleted.
+Bodies cascade only then, when nothing can bring the row back.
 
 Server location facts that are not user-facing values get plain `srv_`
 columns: `srv_uid`, `srv_uid_validity`, `srv_mailbox_ids` (full JMAP set as
@@ -111,11 +180,20 @@ may span both read groups. It runs in the same
 transaction as anything that changes the row's ops (append, state change,
 drop). Sync does not call it except when it drops an acked op (§4).
 
-Rejected alternative: a separate server-mirror table plus a materialised
-projection table. It doubles storage, adds FTS churn, risks wiping bodies
-through cascades, and still needs a grep-based check to stop direct writes.
-SQL views over ops were rejected because the list sorts by the precomputed
-`threads` aggregate.
+Rejected alternatives:
+
+- **Keep the merged row and only add the gate.** This is the smallest
+  change, and the gate is part of this design anyway. But once the user's
+  value overwrites the row, the server's value is gone, so a refused change
+  cannot revert without a re-fetch, and "pending" vs "confirmed" stays
+  implicit in a join against the queue.
+- **A separate server-mirror table plus a materialised projection table.**
+  It doubles storage, adds FTS churn and risks wiping bodies through
+  cascades.
+- **SQL views over ops.** The list sorts by the precomputed `threads`
+  aggregate, which a view cannot keep cheap.
+- **SQLite generated columns for the effective value.** They force a table
+  rebuild, see above.
 
 ## 3. Operation log
 
@@ -147,7 +225,7 @@ Types and the `local_*` columns each one writes:
 | `set_flagged(v)` | `is_flagged` |
 | `add_keywords(k)` | none locally (no column; server-only today, 6084) |
 | `move(dest)` | `mailbox_path`, and `snoozed_until = NULL` when the source was snoozed (4796) |
-| `delete` (hard; the UI's delete is `move(trash)`, `_deleteRow` 5018) | `hidden` |
+| `delete` (hard; the UI's delete is `move(trash)`, `_deleteRow` 5018) | `local_hidden` |
 | `snooze(until)` | `mailbox_path`, `snoozed_until` |
 | `unsnooze` | `mailbox_path`, `snoozed_until = NULL` |
 | `clear_snooze` | `snoozed_until = NULL` |
@@ -379,7 +457,8 @@ behaviour stays as it is apart from failure handling.
 - Add plain (not yet overlaid) server-location columns `srv_mailbox_path`,
   `srv_uid`, `srv_uid_validity` with a unique index on
   `(account_id, srv_mailbox_path, srv_uid_validity, srv_uid)`; backfill them
-  from the current id and columns. Sync looks rows up by this index, never
+  from the row id, which names the server location even during a pending
+  move, never from the optimistic `mailboxPath`. Sync looks rows up by this index, never
   by building an id: ERI:1817 and `background_sync.dart:257` build ids from
   a location today. Lookup must not use the merged, optimistic
   `mailboxPath`, or a re-fetch during a pending move inserts a duplicate.
@@ -393,18 +472,30 @@ behaviour stays as it is apart from failure handling.
 Appendix A, so that later checks can map files to roles. This comes before
 the location overlay because otherwise the fold would have to re-key rows.
 
-**Phase 3 — the `keywords` overlay.** A table rebuild adds `srv_`/`local_`
-pairs and generated effective columns for `is_seen`, `is_flagged` and
-`snoozed_until`, followed by an FTS `rebuild`. Measure the migration time on
-a 50k-row DB. Add the per-group stamps, monotonic writes and the drop rules
-(§4). Delete `_ServerFlagRead`, `_noteLocalEdit` and the flag `protects()`
+**Phase 3 — the `keywords` overlay.** `ALTER TABLE ADD COLUMN` for the
+`srv_`/`local_` pairs of `is_seen`, `is_flagged` and `snoozed_until`, plus
+one `UPDATE` copying today's values into `srv_*`. Today's columns hold
+optimistic values for rows with queued changes, so the copy must not trust
+them for those rows: it sets their `srv_keywords_seq` to 0 and queues a
+full flag reconcile for the next sync. The migration then folds the queued
+keyword ops once, so `local_*` is right from the start. Add the
+server-write gate, the per-group stamps, monotonic writes and the drop rules
+(§4), and move every sync write of these fields onto the gate. Delete `_ServerFlagRead`, `_noteLocalEdit` and the flag `protects()`
 calls.
-- Built-in check: "a row with no foldable ops has all `local_*` NULL". It
-  runs sampled in release builds and logs violations to the App Log.
+- Built-in checks, run in tests and sampled in release builds (violations
+  logged to the App Log): "every row's `<field>` equals
+  `COALESCE(local_<field>, srv_<field>)`" and "a row with no foldable ops has
+  all `local_*` NULL".
 
 **Phase 4 — the `location` overlay.**
-- `mailbox_path`, `hidden` / `srv_gone`, the absence rules, and in-place
-  matching of virtual rows.
+- `ALTER TABLE ADD COLUMN` for `local_mailbox_path`, `local_hidden` and
+  `srv_gone`. `srv_mailbox_path` already exists from phase 2. It was
+  backfilled from the row **id**, which still names the source of a pending
+  move, never from the optimistic `mailboxPath`. `mailbox_path` becomes
+  effective (empty string when hidden).
+- Switch the sync scans to `srv_mailbox_path`, add the hidden-row filters
+  and guards from §2, and add the clean-up rule.
+- The absence rules and in-place matching of virtual rows.
 - Counterpart shadow ops and the unread-count delta.
 - Sync stops deleting rows that have ops. This fixes #1238 and #1239 by
   construction.
@@ -416,11 +507,15 @@ calls.
 `_pendingDeleteOrMoveUids` and the per-path queue checks, and update SYNC.md.
 
 **Enforcement, from phase 3 on:**
-- Generated columns block direct writes of effective values.
-- A grep check over Drift companion field names: `srv*:` only in the
-  sync-role files, `local*:` only in the fold. This is possible after the
-  phase 2 file split. `check-layers` is an import grep (`Taskfile.yml:791`)
-  and cannot do this.
+- **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
+  (`update`, `into`, `delete`) and raw `UPDATE`/`INSERT`/`DELETE` on
+  `emails` may appear only in the email state writer and in migrations.
+  Grepping for field names does not work: `mailboxPath:` appears more than
+  100 times in `lib/`, mostly in logger calls and model constructors.
+  `check-layers` is an import grep (`Taskfile.yml:791`) and cannot do this
+  either. If the allow-list proves too coarse, a custom lint is the next
+  step.
+- The consistency checks from phase 3.
 - The phase 0 fuzz property runs in CI.
 
 ## 9. Effect on open issues
@@ -440,12 +535,13 @@ calls.
 
 ## 10. Risks and open questions
 
-- **Table rebuild** for generated columns on large DBs (phase 3, again in
-  phase 4). SQLite cannot add a STORED generated column with `ALTER TABLE`.
-  Measure first; consider doing both groups in one rebuild if phase 4
-  follows soon.
-- **Drift support** for STORED generated columns with indexes, and whether
-  companions really exclude them: verify in a spike before phase 3.
+- **The copy `UPDATE`** on a large DB (phases 3 and 4) rewrites every row
+  once and grows the WAL. It sets only `srv_*`, so no FTS trigger fires.
+  Phase 2 also builds the unique location index. Measure both on a 50k-row
+  DB.
+- **Enforcement is a check, not the schema.** A direct write that slips
+  past the grep check is caught by the consistency checks, not refused at
+  compile time.
 - **Fold cost** inside large sync transactions: today `_updateThread` runs
   outside the fetch transaction (1928). Sync does not fold except on drop,
   so this mainly hits `markAllAsRead` and bulk Sieve runs. Batch them.
@@ -480,7 +576,6 @@ calls.
 - `_healMismatchedImapBody` (891), which updates `srv_uid` and no longer
   re-keys.
 - `_storeSentCopyLocally` (7427), a server fact from APPENDUID.
-- `_createLocalSelfMessages` (7495), local rows.
 - `_maybeDissolveLocalMessage` (5519), replaced by the in-place match.
 - `BodyCacheService` (foreground and background isolate) reaches body
   healing and the header backfill through its own repository instance.
@@ -499,13 +594,20 @@ calls.
   (4891, 5005).
 - `snoozeEmail` / `_snoozeRow` (5206, 5228) and `wakeUpEmails` /
   `_unsnoozeRow` (5324, 5385).
-- `restoreLocalSnooze` (5370) and `restoreEmails` (5769), which undo uses.
+- `restoreLocalSnooze` (5370), which becomes an op.
 - Sieve `_enqueueSieveMove/Delete/Flags` (6011–6087).
 - `_mirror*ToCounterparts` (5447–5691) and `_dropStaleCounterpartRow`
   (5682), which become shadow ops.
 - `cancelPendingChange` (5181) and `retryMutation` (9588).
 - Mailbox create, rename, move and delete
   (`mailbox_repository_impl.dart:600–1356`, rename rewrites at 1161).
+
+**Local row creation**
+- `_createLocalSelfMessages` (7495) and the virtual Sent copy in
+  `_storeSentCopyLocally` (7427).
+
+**Removed**
+- `restoreEmails` (5769), replaced by discarding or inverting the op.
 
 **Derived (unchanged, they read the effective columns)**
 - `_updateThread` (347), `_reconcileSourceThreads` (430) and
