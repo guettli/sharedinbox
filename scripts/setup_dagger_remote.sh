@@ -191,13 +191,44 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080" >> "$GITHUB_ENV"
 fi
 
+# Make the CLI match the engine (the "bump deadlock" fix). Ask the engine for
+# its version with whatever CLI the runner image baked in -- the `{version}`
+# query works across versions (a v0.21 CLI reads a v1.0 engine) -- and if it
+# differs, fetch the exact CLI the engine runs (scripts/dagger_cli_for_engine.sh,
+# sha256-verified) and put it first on PATH for this and all later steps. A PR
+# that bumps Dagger then passes on a runner image built before the bump, so the
+# image no longer has to be published from a branch by hand. If the query
+# fails, nothing changes here and the verify below reports the problem.
+ENGINE_QUERY_TIMEOUT_S="${DAGGER_VERIFY_TIMEOUT_S:-60}"
+engine_live=""
+for attempt in 1 2 3; do
+    q_out=$(echo '{version}' | DAGGER_NO_NAG=1 timeout "$ENGINE_QUERY_TIMEOUT_S" dagger query 2>/dev/null) || q_out=""
+    engine_live=$(printf '%s' "$q_out" \
+        | grep -oE '"version"[[:space:]]*:[[:space:]]*"v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' \
+        | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1 || true)
+    [ -n "$engine_live" ] && break
+    [ "$attempt" -lt 3 ] && sleep "${DAGGER_VERIFY_RETRY_WAIT_S:-15}"
+done
+cli_baked=$(dagger version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1 || true)
+if [ -z "$engine_live" ]; then
+    echo "::warning::Could not read the engine version; keeping the runner's Dagger CLI ${cli_baked:-unknown}."
+elif [ "$engine_live" != "$cli_baked" ]; then
+    echo "Engine runs Dagger v${engine_live}, runner CLI is v${cli_baked:-unknown}: fetching CLI v${engine_live}..."
+    cli_dir=$("$(dirname "$0")/dagger_cli_for_engine.sh" "$engine_live")
+    export PATH="$cli_dir:$PATH"
+    if [ -n "${GITHUB_PATH:-}" ]; then
+        echo "$cli_dir" >> "$GITHUB_PATH"
+    fi
+    echo "::notice::Dagger CLI v${engine_live} fetched to match the engine (runner image ships v${cli_baked:-unknown}; republish it once the pin moves)."
+fi
+
 # Verify the connection AND that the runner's Dagger CLI matches the engine.
 # The Dagger CLI and engine must run the exact same version. When they differ,
 # the engine looks "unreachable" even though the SSH tunnel itself is healthy
 # (it authenticated and the forward is up) — the failure is the CLI/engine
 # protocol handshake, not the network. There is deliberately no fallback: a
 # mismatch must fail the job loudly rather than silently degrade.
-CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1)
 echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VERSION:-unknown})..."
 # `dagger core` forces a real engine connection without a complex GraphQL query.
 # Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
@@ -232,20 +263,20 @@ if [ "$verify_rc" -ne 0 ]; then
     # (the engine-timeout case) — otherwise set -e + pipefail exits silently the
     # moment grep returns "no match" and the user sees nothing.
     ENGINE_VERSION=$(printf '%s' "$verify_out" \
-        | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+' \
-        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+        | grep -ioE 'engine[^0-9]*v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' \
+        | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1 || true)
     if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
         echo "::error::Dagger engine did not respond within ${VERIFY_TIMEOUT_S}s on ${VERIFY_MAX_ATTEMPTS} attempts via the SSH tunnel."
         echo "::error::The tunnel authenticated and the port forward is up, but"
         echo "::error::\`dagger core --help\` timed out before the engine replied."
         echo "::error::This usually means the engine is down or unreachable; check"
-        echo "::error::the engine on the remote host (gitops:"
-        echo "::error::ansible/tc/systemd/system/dagger-engine.service.j2)."
+        echo "::error::the engine pod on tc (gitops:"
+        echo "::error::k8s/plain/tc/dagger/dagger/apps_Deployment/dagger-engine.yaml)."
     else
         echo "::error::Dagger CLI/engine version mismatch — the SSH tunnel authenticated"
         echo "::error::and the port forward is up, so this is NOT a network problem."
         echo "::error::  runner CLI    : ${CLI_VERSION:-unknown}   <- sharedinbox: arc-runner-image/Dockerfile (DAGGER_VERSION), republish the runner image"
-        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: dagger_version in ansible/group_vars/all.yml, then re-run tc.yml and restart dagger-engine"
+        echo "::error::  remote engine : ${ENGINE_VERSION:-unreadable, see diagnostics}   <- gitops: dagger_version in ansible/group_vars/all.yml + the engine Deployment image"
         echo "::error::FIX: set BOTH to the exact same version. They are lock-stepped; there is no fallback. See DAGGER.md."
     fi
     echo "--- diagnostics ---"
