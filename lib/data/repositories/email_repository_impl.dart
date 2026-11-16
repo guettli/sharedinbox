@@ -1353,6 +1353,7 @@ class EmailRepositoryImpl implements EmailRepository {
             mailboxPath,
             imap.MessageSequence.fromIds(allUids, isUid: true),
             objectIdKind: objectIdKind,
+            uidValidity: selectedMailbox.uidValidity,
           );
         }
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
@@ -1408,6 +1409,7 @@ class EmailRepositoryImpl implements EmailRepository {
             mailboxPath,
             imap.MessageSequence.fromIds(newUids, isUid: true),
             objectIdKind: objectIdKind,
+            uidValidity: selectedMailbox.uidValidity,
           );
         }
 
@@ -1748,6 +1750,7 @@ class EmailRepositoryImpl implements EmailRepository {
     String mailboxPath,
     imap.MessageSequence sequence, {
     ObjectIdKind? objectIdKind,
+    int? uidValidity,
   }) async {
     // The offline preview snippet (matching the JMAP `preview` field, see
     // [_upsertJmapEmails] — IMAP has no standard preview property) is fetched
@@ -1769,6 +1772,7 @@ class EmailRepositoryImpl implements EmailRepository {
         fetchItems,
         flagRead,
         objectIdKind: objectIdKind,
+        uidValidity: uidValidity,
       );
     } finally {
       _endServerFlagRead();
@@ -1783,7 +1787,17 @@ class EmailRepositoryImpl implements EmailRepository {
     String fetchItems,
     _ServerFlagRead flagRead, {
     ObjectIdKind? objectIdKind,
+    int? uidValidity,
   }) async {
+    // Taken before the FETCH as well as after it: a move or delete queued
+    // before the FETCH and sent by a flush while its answer was on the way
+    // is no longer queued afterwards, yet the answer still lists the mail
+    // here (#1269).
+    final pendingBeforeFetch = await _pendingDeleteOrMoveUids(
+      account.id,
+      mailboxPath,
+      uidValidity: uidValidity,
+    );
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1799,10 +1813,28 @@ class EmailRepositoryImpl implements EmailRepository {
       client,
       sequence,
     );
-    final pendingByUid = await _pendingDeleteOrMoveUids(
-      account.id,
-      mailboxPath,
-    );
+    // A change that failed meanwhile (e.g. a refused delete) no longer
+    // hides the mail: the server's copy is shown again, as below for a
+    // change made during the FETCH.
+    final failedNow = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.accountId.equals(account.id) &
+                t.state.equals(_failedState) &
+                t.changeType.isIn(_placementChangeTypes),
+          ))
+        .get();
+    final failedIds = {for (final c in failedNow) c.id};
+    final failedResourceIds = {for (final c in failedNow) c.resourceId};
+    final pendingByUid = {
+      for (final MapEntry(:key, :value) in pendingBeforeFetch.entries)
+        if (!failedIds.contains(value.id)) key: value,
+      ...await _pendingDeleteOrMoveUids(
+        account.id,
+        mailboxPath,
+        uidValidity: uidValidity,
+      ),
+    };
     var bytes = 0;
     final affectedThreads = <String>{};
     // (realEmailId, messageId) of each row we just wrote — checked afterwards
@@ -1834,7 +1866,7 @@ class EmailRepositoryImpl implements EmailRepository {
         if (pendingByUid.containsKey(uid)) {
           log(
             'IMAP: skipping insert for uid=$uid in $mailboxPath '
-            '(pending ${pendingByUid[uid]})',
+            '(pending ${pendingByUid[uid]!.changeType})',
           );
           continue;
         }
@@ -1881,6 +1913,20 @@ class EmailRepositoryImpl implements EmailRepository {
                   ..where(_db.emails.id.equals(emailId)))
                 .getSingleOrNull() ==
             null;
+        // No row, but the user changed it since the FETCH was sent: it was
+        // moved or deleted here meanwhile, and maybe already sent, so the
+        // answer predates that. Inserting it would duplicate the mail in its
+        // old folder (#1269). If a move fails, its revert brings the row
+        // back.
+        if (isNew &&
+            flagRead.editedSince(emailId) &&
+            !failedResourceIds.contains(emailId)) {
+          log(
+            'IMAP: skipping insert for uid=$uid in $mailboxPath '
+            '(changed locally while the FETCH ran)',
+          );
+          continue;
+        }
         final keepLocalFlags = !isNew && flagRead.protects(emailId, queuedNow);
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
@@ -2012,33 +2058,44 @@ class EmailRepositoryImpl implements EmailRepository {
     return row != null;
   }
 
-  // UIDs in [mailboxPath] that have a pending local delete or move queued.
-  // Used by the IMAP fetch path to avoid re-inserting rows the user has
-  // already removed from view but whose change has not yet flushed. A
-  // failed change is not counted: the server's copy is shown again.
-  Future<Map<int, String>> _pendingDeleteOrMoveUids(
+  // UIDs in [mailboxPath] that have a pending local delete, move, snooze or
+  // unsnooze queued, with that change. Used by the IMAP fetch path to avoid
+  // re-inserting rows the user has already removed from view but whose
+  // change has not yet flushed. A failed change is not counted: the
+  // server's copy is shown again. Neither is one stamped with another
+  // [uidValidity] than the folder's current one: its UID names another
+  // mail now.
+  Future<Map<int, PendingChangeRow>> _pendingDeleteOrMoveUids(
     String accountId,
-    String mailboxPath,
-  ) async {
+    String mailboxPath, {
+    int? uidValidity,
+  }) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.state.equals(_pendingState) &
                 t.resourceType.equals('Email') &
-                (t.changeType.equals('delete') | t.changeType.equals('move')),
+                t.changeType.isIn(_placementChangeTypes),
           ))
         .get();
-    final result = <int, String>{};
+    final result = <int, PendingChangeRow>{};
     for (final r in rows) {
       try {
         final payload = jsonDecode(r.payload) as Map<String, dynamic>;
-        if (payload['mailboxPath'] != mailboxPath) continue;
+        // Snooze and unsnooze name their source `src`.
+        if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) {
+          continue;
+        }
         // Its UID is the one from before a queued move, not this folder's:
         // it may be another mail's here, which must not be skipped (#1266).
         if (payload[_uidAfterMoveKey] == true) continue;
+        final stamped = payload['uidValidity'];
+        if (uidValidity != null && stamped is int && stamped != uidValidity) {
+          continue;
+        }
         final uid = payload['uid'];
-        if (uid is int) result[uid] = r.changeType;
+        if (uid is int) result[uid] = r;
       } catch (_) {
         // Malformed payload — skip.
       }
@@ -10912,7 +10969,11 @@ class _ServerFlagRead {
   bool protects(String emailId, Set<String> queuedNow) =>
       _queuedAtStart.contains(emailId) ||
       queuedNow.contains(emailId) ||
-      (_editSeqById[emailId] ?? 0) > _seq;
+      editedSince(emailId);
+
+  /// Whether a change for [emailId] was queued (or retried) after the read
+  /// started.
+  bool editedSince(String emailId) => (_editSeqById[emailId] ?? 0) > _seq;
 }
 
 /// State shared by every mutation running inside one bulk operation.
