@@ -985,7 +985,9 @@ class _FuzzRun {
   Future<List<PendingChangeRow>> _pendingRows({bool failed = false}) =>
       (_db.select(_db.pendingChanges)
             ..where(
-              (t) => t.state.equals(failed ? 'failed' : 'pending'),
+              (t) => failed
+                  ? t.state.equals('failed')
+                  : t.state.isIn(const ['pending', 'inflight']),
             ))
           .get();
 

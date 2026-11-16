@@ -203,18 +203,22 @@ class PendingChangeTile extends StatelessWidget {
             ),
         ],
       ),
-      trailing: QueueRowActions(
-        onRetry: () => retryQueueRow(
-          context: context,
-          accountId: change.accountId,
-          retry: () => repo.retryMutation(change.id),
-          syncNow: syncNow,
-          runningMessage: 'Retrying change…',
-          notRunningMessage: 'Sync is not running for this account. '
-              'Enable it so the change can be applied.',
-        ),
-        onDiscard: () => unawaited(repo.discardMutation(change.id)),
-      ),
+      // A change being sent can be neither retried nor discarded: it may be
+      // reaching the server right now.
+      trailing: change.sending
+          ? null
+          : QueueRowActions(
+              onRetry: () => retryQueueRow(
+                context: context,
+                accountId: change.accountId,
+                retry: () => repo.retryMutation(change.id),
+                syncNow: syncNow,
+                runningMessage: 'Retrying change…',
+                notRunningMessage: 'Sync is not running for this account. '
+                    'Enable it so the change can be applied.',
+              ),
+              onDiscard: () => unawaited(repo.discardMutation(change.id)),
+            ),
     );
   }
 }
@@ -234,6 +238,7 @@ String attemptsLabel(PendingChange change) {
     return 'rejected by the server';
   }
   if (change.failed) return 'failed after $n attempts';
+  if (change.sending) return 'sending…';
   if (change.hasError) {
     return '$n of $maxPendingChangeAttempts attempts failed – retrying';
   }
@@ -287,7 +292,10 @@ String changeReport(PendingChange change) {
         ..writeln('Resource:   ${change.resourceType} ${change.resourceId}')
         ..writeln('Queued:     ${change.createdAt.toUtc().toIso8601String()}')
         ..writeln('Attempts:   ${change.attempts}')
-        ..writeln('State:      ${change.failed ? 'failed' : 'pending'}')
+        ..writeln(
+          'State:      '
+          '${change.failed ? 'failed' : change.sending ? 'inflight' : 'pending'}',
+        )
         ..writeln('Payload:    ${_prettyPayload(change.payload)}')
         ..write('Last error: ${change.lastError ?? '(none)'}'))
       .toString();

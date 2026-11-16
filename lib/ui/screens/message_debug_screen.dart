@@ -295,6 +295,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
             child: _KeyValueTable(
               rows: [
                 ('changeType', p.changeType),
+                ('state', p.state),
                 ('attempts', p.attempts.toString()),
                 ('createdAt', _timeFmt.format(p.createdAt.toLocal())),
                 if (p.lastError != null) ('lastError', p.lastError!),

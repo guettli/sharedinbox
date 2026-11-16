@@ -236,10 +236,19 @@ class PendingChanges extends Table {
   DateTimeColumn get createdAt => dateTime()();
   IntColumn get attempts => integer().withDefault(const Constant(0))();
   TextColumn get lastError => text().nullable()();
-  // "pending" (queued or retrying) | "failed" (gave up: retry limit reached
-  // or the server refused it). A failed row is never flushed and protects
-  // no local value from sync; it waits for Retry or Discard (SYNC.md §6).
+  // "pending" (queued or retrying) | "inflight" (a flush claimed it and may
+  // be sending it right now) | "failed" (gave up: retry limit reached or
+  // the server refused it). A failed row is never flushed and protects no
+  // local value from sync; it waits for Retry or Discard (SYNC.md §6).
   TextColumn get state => text().withDefault(const Constant('pending'))();
+  // While "inflight": until when the claim holds. A flush that finds an
+  // expired lease (the app was killed mid-send) treats the change as maybe
+  // sent: one attempt is charged and it is sent again (SYNC.md §6).
+  DateTimeColumn get leaseUntil => dateTime().nullable()();
+  // While "inflight": which flush holds the claim (random per flush). Every
+  // outcome write checks it, so a flush that lost its claim (lease expired
+  // and taken over) cannot overwrite the new one.
+  TextColumn get claimToken => text().nullable()();
 }
 
 /// Sync checkpoint per (account, resource type).
@@ -1644,6 +1653,11 @@ class AppDatabase extends _$AppDatabase {
     if (from >= 6 && from < 68 && await _tableExists(this, 'pending_changes')) {
       // Failed changes are kept as `state = 'failed'` instead of deleted.
       await _addColumnIfMissing(m, pendingChanges, pendingChanges.state);
+    }
+    if (from >= 6 && from < 69 && await _tableExists(this, 'pending_changes')) {
+      // The claim of a flush is `state = 'inflight'` with a lease.
+      await _addColumnIfMissing(m, pendingChanges, pendingChanges.leaseUntil);
+      await _addColumnIfMissing(m, pendingChanges, pendingChanges.claimToken);
     }
   }
 

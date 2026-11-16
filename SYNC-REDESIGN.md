@@ -453,6 +453,22 @@ table. The flush uses `state`, the outcome table (§5) and the lease; Undo
 stores op seqs. Effective state is still the merged columns, so the visible
 behaviour stays as it is apart from failure handling.
 
+As implemented, phase 1 is narrower, in this order:
+1. `inflight` + `lease_until` replace "attempts raised" as the claim
+   marker; an expired lease is the ambiguous outcome (done, schema v69).
+2. The outcome table as one settle function, without behaviour change.
+3. `stuck` instead of `failed` at the retry limit, with backoff in
+   `lease_until`.
+4. The satisfied/refused corrections of §5.
+5. Undo stores op seqs.
+6. `origin` (may slip to phase 4, where counterpart ops need it).
+
+The table and the Dart names stay `pending_changes` / `PendingChangeRow`,
+`seq` is its `id`: a rename touches about 30 files for no behaviour gain.
+`ack_seq`, the read-sequence table and the `acked` state move to phase 3:
+acked rows are still deleted at ack time, so nothing would read them before
+the stamps and drop rules of §4 exist. `parked` comes with phase 4.
+
 **Phase 2 — frozen, opaque ids.**
 - Add plain (not yet overlaid) server-location columns `srv_mailbox_path`,
   `srv_uid`, `srv_uid_validity` with a unique index on
