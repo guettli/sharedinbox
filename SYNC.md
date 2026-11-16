@@ -112,8 +112,10 @@ a UID whose move, snooze, unsnooze or delete is queued, checked both before the 
 sent and after its answer arrived. A row the user moved or deleted *while* the answer was
 on its way (and a flush may already have sent) is skipped too, via the in-memory edit
 sequence of `_ServerFlagRead`: the answer predates the change and would bring the mail
-back as a duplicate in its old folder (#1269). If such a move fails, its revert puts the
-row back; a failed delete stays on the Pending Changes screen like any other.
+back as a duplicate in its old folder (#1269). A change that is `failed` by the time the
+answer is processed hides nothing (a failed move's revert has already put the row back;
+for a failed delete the answer's copy is inserted again), and neither does one stamped
+with an older UIDVALIDITY.
 
 **IDLE cap** — IDLE sessions are limited to 25 minutes per the RFC. The loop also wakes
 immediately if `syncNow()` is called (e.g. user pulls-to-refresh).

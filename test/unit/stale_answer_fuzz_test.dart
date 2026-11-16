@@ -311,6 +311,44 @@ void _knownBugs() {
     );
 
     test(
+      'a mail whose delete fails while a FETCH answer is on its way is shown '
+      'again',
+      () async {
+        server.deliver('Archive', 'a@test');
+        await open();
+        await emails.moveEmail((await row('a@test')).id, 'Trash');
+        await emails.flushPendingChanges(_account.id, 'pw');
+        // Queued before the sync starts; the server refuses it while the
+        // answer is held, until the app gives up.
+        await emails.deleteEmail((await row('a@test')).id);
+        server.refuses = (messageId) => messageId == 'a@test';
+
+        server.beforeAnswer = (command) async {
+          if (command == 'FETCH headers (Trash)') {
+            for (var i = 0; i < 6; i++) {
+              await emails.flushPendingChanges(_account.id, 'pw');
+            }
+          }
+        };
+        await emails.syncEmails(_account.id, 'Trash');
+
+        final failed = await (db.select(db.pendingChanges)
+              ..where((t) => t.state.equals('failed')))
+            .get();
+        expect(
+          failed.map((c) => c.changeType),
+          ['delete'],
+          reason: 'race not exercised: the delete did not fail meanwhile',
+        );
+        expect(server.find('a@test')?.folder.path, 'Trash');
+        expect(
+          [for (final r in await _rowsOf(db, 'a@test')) r.mailboxPath],
+          ['Trash'],
+        );
+      },
+    );
+
+    test(
       'a delete for good works on a server without UIDPLUS',
       () async {
         server = StatefulFakeImapServer(
