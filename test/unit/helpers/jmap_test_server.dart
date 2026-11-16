@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -355,6 +356,7 @@ Future<void> insertJmapEmailRow(
           mailboxPath: mailboxPath,
           uid: 0,
           receivedAt: receivedAt ?? DateTime(2026),
+          srvJmapId: Value(jmapId),
         ),
       );
 }

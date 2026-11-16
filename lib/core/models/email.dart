@@ -37,6 +37,14 @@ class Email {
   // JMAP `size`); null when not known yet, e.g. mail cached before it was
   // stored or a local virtual copy.
   final int? size;
+  // Where the server has the message, as sync last saw it (the
+  // `srv_mailbox_path` / `srv_uid` / `srv_uid_validity` / `srv_jmap_id`
+  // columns). Null for local virtual copies. Carried so a restored row
+  // (Undo) keeps its server identity.
+  final String? srvMailboxPath;
+  final int? srvUid;
+  final int? srvUidValidity;
+  final String? srvJmapId;
 
   /// When the mail was written (its Date header), or when it arrived if it
   /// has no Date header, so a date can always be shown.
@@ -68,6 +76,10 @@ class Email {
     this.listUnsubscribeHeader,
     this.isLocal = false,
     this.size,
+    this.srvMailboxPath,
+    this.srvUid,
+    this.srvUidValidity,
+    this.srvJmapId,
   });
 
   factory Email.fromJson(Map<String, dynamic> json) {
@@ -111,6 +123,10 @@ class Email {
       listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
       isLocal: (json['isLocal'] as bool?) ?? false,
       size: json['size'] as int?,
+      srvMailboxPath: json['srvMailboxPath'] as String?,
+      srvUid: json['srvUid'] as int?,
+      srvUidValidity: json['srvUidValidity'] as int?,
+      srvJmapId: json['srvJmapId'] as String?,
     );
   }
 
@@ -141,6 +157,10 @@ class Email {
       'listUnsubscribeHeader': listUnsubscribeHeader,
       'isLocal': isLocal,
       'size': size,
+      'srvMailboxPath': srvMailboxPath,
+      'srvUid': srvUid,
+      'srvUidValidity': srvUidValidity,
+      'srvJmapId': srvJmapId,
     };
   }
 
@@ -170,6 +190,10 @@ class Email {
     String? listUnsubscribeHeader,
     bool? isLocal,
     int? size,
+    String? srvMailboxPath,
+    int? srvUid,
+    int? srvUidValidity,
+    String? srvJmapId,
   }) {
     return Email(
       id: id ?? this.id,
@@ -199,6 +223,10 @@ class Email {
           listUnsubscribeHeader ?? this.listUnsubscribeHeader,
       isLocal: isLocal ?? this.isLocal,
       size: size ?? this.size,
+      srvMailboxPath: srvMailboxPath ?? this.srvMailboxPath,
+      srvUid: srvUid ?? this.srvUid,
+      srvUidValidity: srvUidValidity ?? this.srvUidValidity,
+      srvJmapId: srvJmapId ?? this.srvJmapId,
     );
   }
 }

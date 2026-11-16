@@ -492,6 +492,42 @@ the stamps and drop rules of §4 exist. `parked` comes with phase 4.
 Appendix A, so that later checks can map files to roles. This comes before
 the location overlay because otherwise the fold would have to re-key rows.
 
+As implemented, phase 2 is a series of PRs:
+1. **2a (done, schema v70):** `srv_mailbox_path`, `srv_uid`,
+   `srv_uid_validity` and `srv_jmap_id` on `emails`, with unique partial
+   indexes `(account_id, srv_mailbox_path, srv_uid, srv_uid_validity)`
+   (UID before UIDVALIDITY, so a lookup by folder and UID is a point lookup
+   whether the UIDVALIDITY is known or not) and `(account_id, srv_jmap_id)`.
+   The backfill takes the IMAP path from `mailbox_path`, and from the id only
+   while a move, snooze or unsnooze is queued (pending, inflight or stuck):
+   after a folder rename the id still names the old path. UIDVALIDITY comes
+   from the folder's checkpoint. A location held by several rows stays with
+   the one whose id names it. Every writer keeps the columns current: the
+   IMAP and JMAP upserts, `_rekeyEmailRow` (the server location follows
+   even when the shown folder stays behind a later queued move), the
+   rename, the Sent copy and Undo's restore. Sync looks rows up by them
+   (fetch upsert, CONDSTORE flag refresh, JMAP upsert, disclaimed and
+   destroyed ids, JMAP prune and flag reconcile, the failed-move revert),
+   and server calls about a row use them (body fetch and its healing,
+   attachment download, raw message, JMAP flush, the debug probe). The
+   periodic IMAP flag reconcile and size backfill already scan by
+   `srv_mailbox_path`. New rows still get today's ids, and re-keys still
+   happen. When another mail's row already has that id (it outlived a
+   UIDVALIDITY reset, or a renamed folder's old name came back), the new
+   row or the re-key gets `id#2`, `#3`, … instead of overwriting it; a row
+   of that id without a recorded location is taken over. A JMAP row without
+   a recorded id is never pruned as gone. Left for later: the other
+   folder-scoped scans still filter by `mailbox_path` (phase 4); the JMAP
+   flush parses the resource id when the row is gone, and Undo's restore of
+   a pre-v70 JMAP snapshot takes the id from the row id; background
+   notifications build `account:INBOX:uid`.
+2. **2b (planned):** an opaque id generator for new rows, and a check that
+   bans building and parsing ids.
+3. **2c (planned):** frozen ids: every re-key becomes an update of the
+   `srv_` columns.
+4. **2d (planned):** split `email_repository_impl.dart` along the writer
+   roles.
+
 **Phase 3 — the `keywords` overlay.** `ALTER TABLE ADD COLUMN` for the
 `srv_`/`local_` pairs of `is_seen`, `is_flagged` and `snoozed_until`, plus
 one `UPDATE` copying today's values into `srv_*`. Today's columns hold

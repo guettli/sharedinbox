@@ -1128,9 +1128,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// Rewrites the local rows for [row] and every descendant so `path`,
   /// `displayPath`, and `name` reflect the new server path. IMAP `path`
   /// equals its hierarchical location, so relocating a folder cascades to
-  /// every child. Also rewrites `emails.mailboxPath`, `threads.mailboxPath`
-  /// and the `IMAP:$path` sync checkpoint so the local cache follows the
-  /// server. Returns the updated [Mailbox] for the top row.
+  /// every child. Also rewrites `emails.mailboxPath`, the server location
+  /// `emails.srv_mailbox_path` (also of mail shown elsewhere behind a queued
+  /// move), `threads.mailboxPath` and the `IMAP:$path` sync checkpoint so the
+  /// local cache follows the server. Returns the updated [Mailbox] for the
+  /// top row.
   Future<model.Mailbox> _applyImapPathRewrite(
     MailboxRow row,
     String newPath,
@@ -1153,6 +1155,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
           r,
     ];
     final newId = '${row.accountId}:$newPath';
+    var released = 0;
     await _db.transaction(() async {
       for (final d in descendants) {
         final suffix = d.path.substring(oldPath.length);
@@ -1180,6 +1183,32 @@ class MailboxRepositoryImpl implements MailboxRepository {
                     t.mailboxPath.equals(d.path),
               ))
             .write(EmailsCompanion(mailboxPath: Value(rewrittenPath)));
+        // The server location follows the folder (a server fact, not a
+        // re-key). A row that still records a location under the new
+        // path (that folder did not exist on the server) is stale: it
+        // gives the location up, so one location keeps one row.
+        released += await _db.customUpdate(
+          'UPDATE emails SET srv_mailbox_path = NULL, srv_uid = NULL, '
+          'srv_uid_validity = NULL '
+          'WHERE account_id = ?1 AND srv_mailbox_path = ?2 '
+          'AND srv_uid IN (SELECT srv_uid FROM emails '
+          'WHERE account_id = ?1 AND srv_mailbox_path = ?3 '
+          'AND srv_uid IS NOT NULL)',
+          variables: [
+            Variable.withString(d.accountId),
+            Variable.withString(rewrittenPath),
+            Variable.withString(d.path),
+          ],
+          updates: {_db.emails},
+          updateKind: UpdateKind.update,
+        );
+        await (_db.update(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(d.accountId) &
+                    t.srvMailboxPath.equals(d.path),
+              ))
+            .write(EmailsCompanion(srvMailboxPath: Value(rewrittenPath)));
         await (_db.update(_db.threads)
               ..where(
                 (t) =>
@@ -1216,6 +1245,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
         }
       }
     });
+    if (released > 0) {
+      unawaited(
+        _appLogger?.warn(
+          'mailbox.rename.server_location_released',
+          'Renaming "$oldPath" to "$newPath": $released cached message(s) '
+              'still recorded a place in "$newPath" on the server, which no '
+              'longer holds them; sync no longer updates those copies.',
+          accountId: row.accountId,
+          mailboxPath: newPath,
+        ),
+      );
+    }
     final refreshed = await (_db.select(
       _db.mailboxes,
     )..where((t) => t.id.equals(newId)))

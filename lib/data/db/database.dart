@@ -148,6 +148,22 @@ class Emails extends Table {
   // a folder move instead of deleting and re-inserting it (#589).
   TextColumn get serverEmailId => text().nullable()();
 
+  // Added in schema v70: where the server has this message, as last known
+  // to sync (SYNC-REDESIGN.md §2, §6). Sync finds a row by these columns,
+  // never by building or parsing [id], and never by [mailboxPath], which
+  // already shows the destination of a queued move. Unique per account
+  // (indexes `emails_srv_imap_location` / `emails_srv_jmap_id`). All null
+  // for local "virtual" rows ([isLocal]), and on the rare row whose
+  // location another row took over.
+  //
+  // IMAP: the folder and UID the server has the message under, and that
+  // folder's UIDVALIDITY when the UID was learnt (null when unknown).
+  TextColumn get srvMailboxPath => text().nullable()();
+  IntColumn get srvUid => integer().nullable()();
+  IntColumn get srvUidValidity => integer().nullable()();
+  // JMAP: the server's Email id.
+  TextColumn get srvJmapId => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -824,6 +840,166 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// One row per server message: sync looks rows up by these. The UID
+  /// comes before UIDVALIDITY so a lookup by (folder, UID) is a point
+  /// lookup whether or not the UIDVALIDITY is known; uniqueness is the
+  /// same in any column order. A null UIDVALIDITY never collides (SQLite
+  /// treats NULLs as distinct).
+  Future<void> _createSrvLocationIndexes() async {
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS emails_srv_imap_location ON emails '
+      '(account_id, srv_mailbox_path, srv_uid, srv_uid_validity) '
+      'WHERE srv_uid IS NOT NULL;',
+    );
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS emails_srv_jmap_id ON emails '
+      '(account_id, srv_jmap_id) WHERE srv_jmap_id IS NOT NULL;',
+    );
+  }
+
+  /// Fills the v70 server-location columns of existing rows. The row id
+  /// names the server location (`account:path:uid`, `account:jmapId`), but
+  /// on IMAP it is stale after a folder rename (only `mailbox_path`
+  /// follows), so the path comes from `mailbox_path` — except while a
+  /// move, snooze or unsnooze is queued: `mailbox_path` then already shows
+  /// the destination, and the server still has the mail where the id says.
+  /// Before the unique indexes are created, a location held by more than
+  /// one row is kept by one of them (the one whose id names it), so the
+  /// upgrade cannot fail.
+  Future<void> _backfillSrvLocation() async {
+    // IMAP. `':' || uid` is the id's tail; the path in between must be
+    // non-empty.
+    const idShaped = '''
+      substr(id, 1, length(account_id) + 1) = account_id || ':'
+      AND substr(id, -length(':' || uid)) = ':' || uid
+      AND length(id) > length(account_id) + 1 + length(':' || uid)''';
+    const idPath = '''
+      substr(id, length(account_id) + 2,
+        length(id) - length(account_id) - 1 - length(':' || uid))''';
+    final hasQueue = await _tableExists(this, 'pending_changes');
+    final moveQueued = hasQueue
+        ? '''EXISTS (SELECT 1 FROM pending_changes p
+              WHERE p.resource_id = emails.id
+                AND p.state IN ('pending', 'inflight', 'stuck')
+                AND p.change_type IN ('move', 'snooze', 'unsnooze'))'''
+        : '0';
+    await customStatement('''
+      UPDATE emails SET
+        srv_uid = uid,
+        srv_mailbox_path = CASE WHEN $moveQueued AND $idShaped
+          THEN $idPath ELSE mailbox_path END,
+        srv_uid_validity = NULL,
+        srv_jmap_id = NULL
+      WHERE is_local = 0
+        AND account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+    ''');
+    // UIDVALIDITY from each folder's sync checkpoint (JSON), when known.
+    if (await _tableExists(this, 'sync_states')) {
+      final validities = <(String, String, int)>[];
+      for (final c in await customSelect(
+        'SELECT account_id, resource_type, state FROM sync_states '
+        "WHERE resource_type LIKE 'IMAP:%'",
+      ).get()) {
+        final Object? decoded;
+        try {
+          decoded = jsonDecode(c.read<String>('state'));
+        } catch (_) {
+          continue; // Not a folder checkpoint (e.g. a reconcile timestamp).
+        }
+        if (decoded is! Map) continue;
+        final validity = decoded['uidValidity'];
+        if (validity is! int || validity == 0) continue;
+        final type = c.read<String>('resource_type');
+        final path = type.substring('IMAP:'.length);
+        validities.add((c.read<String>('account_id'), path, validity));
+      }
+      if (validities.isNotEmpty) {
+        // One pass over emails instead of one per folder.
+        await customStatement(
+          'CREATE TEMP TABLE srv_uid_validity_v70 (account_id TEXT NOT NULL, '
+          'path TEXT NOT NULL, validity INTEGER NOT NULL, '
+          'PRIMARY KEY (account_id, path))',
+        );
+        for (final (account, path, validity) in validities) {
+          await customStatement(
+            'INSERT OR REPLACE INTO srv_uid_validity_v70 VALUES (?1, ?2, ?3)',
+            [account, path, validity],
+          );
+        }
+        await customStatement('''
+          UPDATE emails SET srv_uid_validity = (
+            SELECT v.validity FROM srv_uid_validity_v70 v
+            WHERE v.account_id = emails.account_id
+              AND v.path = emails.srv_mailbox_path)
+          WHERE srv_uid IS NOT NULL
+        ''');
+        await customStatement('DROP TABLE srv_uid_validity_v70');
+      }
+    }
+    // JMAP: the id is `account:jmapId`.
+    await customStatement('''
+      UPDATE emails SET
+        srv_jmap_id = substr(id, length(account_id) + 2),
+        srv_mailbox_path = NULL, srv_uid = NULL, srv_uid_validity = NULL
+      WHERE is_local = 0
+        AND account_id IN (SELECT id FROM accounts WHERE account_type = 'jmap')
+        AND substr(id, 1, length(account_id) + 1) = account_id || ':'
+        AND length(id) > length(account_id) + 1
+    ''');
+    // A location held by several rows: keep it on one, preferably the row
+    // whose id names it. NULL UIDVALIDITYs never collide.
+    final imapDuplicates = await customSelect('''
+      SELECT account_id, srv_mailbox_path, srv_uid, srv_uid_validity
+      FROM emails
+      WHERE srv_uid IS NOT NULL AND srv_uid_validity IS NOT NULL
+      GROUP BY account_id, srv_mailbox_path, srv_uid, srv_uid_validity
+      HAVING COUNT(*) > 1
+    ''').get();
+    for (final d in imapDuplicates) {
+      await customStatement(
+        '''
+        UPDATE emails SET srv_mailbox_path = NULL, srv_uid = NULL,
+          srv_uid_validity = NULL
+        WHERE account_id = ?1 AND srv_mailbox_path = ?2 AND srv_uid = ?3
+          AND srv_uid_validity = ?4
+          AND rowid <> (
+            SELECT rowid FROM emails
+            WHERE account_id = ?1 AND srv_mailbox_path = ?2 AND srv_uid = ?3
+              AND srv_uid_validity = ?4
+            ORDER BY id = account_id || ':' || srv_mailbox_path || ':' || srv_uid
+              DESC, rowid
+            LIMIT 1)
+        ''',
+        [
+          d.read<String>('account_id'),
+          d.read<String>('srv_mailbox_path'),
+          d.read<int>('srv_uid'),
+          d.read<int>('srv_uid_validity'),
+        ],
+      );
+    }
+    final jmapDuplicates = await customSelect('''
+      SELECT account_id, srv_jmap_id FROM emails
+      WHERE srv_jmap_id IS NOT NULL
+      GROUP BY account_id, srv_jmap_id
+      HAVING COUNT(*) > 1
+    ''').get();
+    for (final d in jmapDuplicates) {
+      await customStatement(
+        '''
+        UPDATE emails SET srv_jmap_id = NULL
+        WHERE account_id = ?1 AND srv_jmap_id = ?2
+          AND rowid <> (
+            SELECT rowid FROM emails
+            WHERE account_id = ?1 AND srv_jmap_id = ?2
+            ORDER BY id = account_id || ':' || srv_jmap_id DESC, rowid
+            LIMIT 1)
+        ''',
+        [d.read<String>('account_id'), d.read<String>('srv_jmap_id')],
+      );
+    }
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
@@ -834,6 +1010,7 @@ class AppDatabase extends _$AppDatabase {
           await _createAppLogsIndexes();
           await _createForeignKeyIndexes();
           await _createListOrderIndexes();
+          await _createSrvLocationIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -1658,6 +1835,22 @@ class AppDatabase extends _$AppDatabase {
       // The claim of a flush is `state = 'inflight'` with a lease.
       await _addColumnIfMissing(m, pendingChanges, pendingChanges.leaseUntil);
       await _addColumnIfMissing(m, pendingChanges, pendingChanges.claimToken);
+    }
+    if (from < 70 &&
+        await _tableExists(this, 'emails') &&
+        await _tableExists(this, 'accounts')) {
+      // Server-location columns; sync looks rows up by them (phase 2a of
+      // SYNC-REDESIGN.md).
+      await _addColumnIfMissing(m, emails, emails.srvMailboxPath);
+      await _addColumnIfMissing(m, emails, emails.srvUid);
+      await _addColumnIfMissing(m, emails, emails.srvUidValidity);
+      await _addColumnIfMissing(m, emails, emails.srvJmapId);
+      // An interrupted earlier upgrade may have left the indexes behind;
+      // the backfill rewrites every row, so drop them first.
+      await customStatement('DROP INDEX IF EXISTS emails_srv_imap_location');
+      await customStatement('DROP INDEX IF EXISTS emails_srv_jmap_id');
+      await _backfillSrvLocation();
+      await _createSrvLocationIndexes();
     }
   }
 

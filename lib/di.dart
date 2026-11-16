@@ -324,13 +324,14 @@ final messageDebugSnapshotProvider = FutureProvider.autoDispose
 });
 
 /// Resolves the account + password behind [messageRef] and fetches the remote
-/// snapshot for [uid]. Shared by the "Debug messages" and "Debug Mail" screens
-/// so the probe wiring isn't duplicated. Returns [ProbeResult.error] when the
-/// account has gone; the probe itself never throws for network issues.
+/// snapshot of [email] from where the server has it. Shared by the "Debug
+/// messages" and "Debug Mail" screens so the probe wiring isn't duplicated.
+/// Returns [ProbeResult.error] when the account has gone; the probe itself
+/// never throws for network issues.
 Future<ProbeResult> fetchRemoteMessageSnapshot(
   WidgetRef ref,
   DebugMessageRef messageRef,
-  int uid,
+  MessageDebugEmail email,
 ) async {
   final accountRepo = ref.read(accountRepositoryProvider);
   final account = await accountRepo.getAccount(messageRef.accountId);
@@ -340,9 +341,9 @@ Future<ProbeResult> fetchRemoteMessageSnapshot(
   return probe.fetch(
     account: account,
     password: password,
-    mailboxPath: messageRef.mailboxPath,
-    emailId: messageRef.emailId,
-    uid: uid,
+    mailboxPath: email.srvMailboxPath ?? messageRef.mailboxPath,
+    uid: email.srvUid ?? email.uid,
+    jmapId: email.srvJmapId,
   );
 }
 

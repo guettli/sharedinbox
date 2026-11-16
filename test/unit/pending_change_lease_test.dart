@@ -3,61 +3,24 @@
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/db/database.dart';
 
 import 'db_test_helper.dart';
-import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
+import 'helpers/stateful_imap_rig.dart';
 
-const _account = Account(
-  id: 'acc-1',
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
-);
+const _account = statefulRigAccount;
 
 void main() {
   setUpAll(configureSqliteForTests);
 
-  late StatefulFakeImapServer server;
-  late AppDatabase db;
-  late EmailRepositoryImpl emails;
-  var now = DateTime.utc(2026, 11, 16, 12);
-
   setUp(() async {
-    now = DateTime.utc(2026, 11, 16, 12);
-    server = StatefulFakeImapServer(
-      uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
-    )..deliver('INBOX', 'a@test');
-    db = openTestDatabase();
-    final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
-    emails = EmailRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: (_, __, ___) async => server.connect(),
-      smtpConnect: (_, __, ___) =>
-          Future.error(UnsupportedError('no SMTP in this test')),
-      fetchObjectIds: (_, __, ___) async => const {},
-      fetchPreviewSnippets: (_, __, ___) async => const {},
-      now: () => now,
+    rig = await StatefulImapRig.open(
+      StatefulFakeImapServer(
+        uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
+      )..deliver('INBOX', 'a@test'),
+      folders: [('INBOX', 'inbox'), ('Archive', 'archive')],
     );
-    await accounts.addAccount(_account, 'pw');
-    for (final (path, role) in [('INBOX', 'inbox'), ('Archive', 'archive')]) {
-      await db.into(db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: '${_account.id}:$path',
-              accountId: _account.id,
-              path: path,
-              name: path,
-              role: Value(role),
-            ),
-          );
-    }
-    await emails.syncEmails(_account.id, 'INBOX');
   });
   tearDown(() => db.close());
 

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/utils/host_utils.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show verboseLogKey;
@@ -108,6 +109,23 @@ class JmapClient {
   /// [connect] runs several times per cycle — a generous count would multiply
   /// [metadataTimeout] waits under a genuinely bad connection.
   static const _connectMaxAttempts = 3;
+
+  /// [connect] for [account]: its JMAP URL and login name (the username,
+  /// or the address when it has none). Null when it has no JMAP URL.
+  static Future<JmapClient?> connectAccount({
+    required http.Client httpClient,
+    required Account account,
+    required String password,
+  }) async {
+    final jmapUrl = account.jmapUrl;
+    if (jmapUrl == null || jmapUrl.isEmpty) return null;
+    return connect(
+      httpClient: httpClient,
+      jmapUrl: Uri.parse(jmapUrl),
+      username: account.username.isNotEmpty ? account.username : account.email,
+      password: password,
+    );
+  }
 
   /// Fetches the JMAP Session object from [jmapUrl] and returns a connected
   /// client. Throws [JmapException] on HTTP errors or missing capabilities.

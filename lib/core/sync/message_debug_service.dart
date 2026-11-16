@@ -107,6 +107,10 @@ class MessageDebugEmail {
     required this.snoozedUntil,
     required this.snoozedFromMailboxPath,
     required this.listUnsubscribeHeader,
+    this.srvMailboxPath,
+    this.srvUid,
+    this.srvUidValidity,
+    this.srvJmapId,
   });
 
   final String id;
@@ -132,6 +136,19 @@ class MessageDebugEmail {
   final DateTime? snoozedUntil;
   final String? snoozedFromMailboxPath;
   final String? listUnsubscribeHeader;
+  // Where the server has the message, as sync last saw it.
+  final String? srvMailboxPath;
+  final int? srvUid;
+  final int? srvUidValidity;
+  final String? srvJmapId;
+
+  /// The recorded server location in one line, or "none" (local copy).
+  String get serverLocation {
+    if (srvJmapId != null) return 'JMAP id $srvJmapId';
+    if (srvUid == null) return 'none';
+    return '$srvMailboxPath UID $srvUid '
+        '(UIDVALIDITY ${srvUidValidity ?? 'unknown'})';
+  }
 }
 
 class MessageDebugBody {
@@ -231,6 +248,10 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
             snoozedUntil: email.snoozedUntil,
             snoozedFromMailboxPath: email.snoozedFromMailboxPath,
             listUnsubscribeHeader: email.listUnsubscribeHeader,
+            srvMailboxPath: email.srvMailboxPath,
+            srvUid: email.srvUid,
+            srvUidValidity: email.srvUidValidity,
+            srvJmapId: email.srvJmapId,
           ),
     body: body == null
         ? null
@@ -315,6 +336,7 @@ String buildMessageDebugMarkdown(
     ('accountType', account?.typeLabel ?? ''),
     ('mailboxPath', email.mailboxPath),
     ('uid', email.uid.toString()),
+    ('serverLocation', email.serverLocation),
     ('subject', email.subject ?? ''),
     ('sentAt', _fmtTime(email.sentAt)),
     ('receivedAt', _fmtTime(email.receivedAt)),

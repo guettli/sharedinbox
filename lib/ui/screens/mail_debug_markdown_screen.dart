@@ -112,7 +112,7 @@ class _MailDebugMarkdownScreenState
       _fetchingProbe = true;
       _probe = null;
     });
-    final result = await _safeProbe(email.uid);
+    final result = await _safeProbe(email);
     if (!mounted) return;
     setState(() {
       _probe = result;
@@ -122,9 +122,9 @@ class _MailDebugMarkdownScreenState
 
   /// Wraps [fetchRemoteMessageSnapshot] so an unexpected throw surfaces in the
   /// markdown as a remote-fetch error rather than tearing down the screen.
-  Future<ProbeResult> _safeProbe(int uid) async {
+  Future<ProbeResult> _safeProbe(MessageDebugEmail email) async {
     try {
-      return await fetchRemoteMessageSnapshot(ref, widget.messageRef, uid);
+      return await fetchRemoteMessageSnapshot(ref, widget.messageRef, email);
     } catch (e) {
       return ProbeResult.error(e.toString());
     }
