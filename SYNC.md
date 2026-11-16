@@ -103,7 +103,10 @@ UID is taken from the RFC 4315 `COPYUID` response code returned by `MOVE`; if th
 does not advertise `UIDPLUS`, a `UID SEARCH HEADER Message-ID …` in the destination
 mailbox is used as a fallback. `email_bodies`, `threads`, `pending_changes`, and
 `undo_actions` rows that reference the old id are updated atomically so cached bodies and
-pending undo operations keep tracking the same physical message. Deletion reconciliation
+pending undo operations keep tracking the same physical message. When a later move,
+snooze or unsnooze of the mail is still queued (it starts in this move's destination),
+only the row's id and UID follow the server: the row keeps showing the mail where the
+user's last move put it (#1276). Deletion reconciliation
 also skips rows whose move is still queued, so the optimistic local move never gets
 wiped mid-flight.
 
@@ -444,8 +447,7 @@ the run only against the same code (any change in the IMAP commands the app
 sends shifts the random choices), so the trace is the durable record. Bugs it
 finds and that are not fixed yet are kept as skipped regression tests in the
 same file, and the driver avoids exactly their triggers; the regression tests
-of fixed ones (#1266–#1271) run. The driver still avoids moving a mail again
-while its earlier move is queued (#1276).
+of fixed ones (#1266–#1271, #1276) run.
 Longer or focused runs (locally, with a
 Flutter SDK):
 
