@@ -266,7 +266,9 @@ only count `pending` rows), so the next server read shows server truth again. A 
 read or star change makes the flag reconcile of the mail's folder due, so the next sync
 reads that folder's flags (with CONDSTORE, and with JMAP, an unchanged mail is otherwise
 read again only every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker
-keeps a reconcile already running from overwriting that. It also puts the flag back at
+keeps a reconcile already running from overwriting that: a pass clears it only when it
+ran to the end, the marker was not set again meanwhile, and it did not have to skip a
+mail with a failed flag change because another change of that mail is still queued. It also puts the flag back at
 once to its value before the change, unless another change of the same flag exists for
 the mail (then that value is not known locally).
 A failed move, snooze or unsnooze is also undone locally at once: the mail goes back to its

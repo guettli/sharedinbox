@@ -505,7 +505,7 @@ StatefulFakeImapServer _newServer() => StatefulFakeImapServer(
     );
 
 /// As if the 15-minute flag reconcile of [folder] were due.
-Future<void> _makeFlagReconcileDue(AppDatabase db, String folder) =>
+Future<void> _expireFlagReconcile(AppDatabase db, String folder) =>
     (db.delete(db.syncStates)
           ..where(
             (t) => t.resourceType.equals('IMAP:FlagReconcile:$folder'),
@@ -682,7 +682,7 @@ class _FuzzRun {
     // As if the 15-minute flag reconcile were due.
     final reconcile = _hooksOn && _rnd.nextDouble() < 0.15;
     _trace.add('  sync $folder${reconcile ? ' (flag reconcile due)' : ''}');
-    if (reconcile) await _makeFlagReconcileDue(_db, folder);
+    if (reconcile) await _expireFlagReconcile(_db, folder);
     try {
       await _emails.syncEmails(_account.id, folder);
     } finally {
@@ -914,7 +914,7 @@ class _FuzzRun {
 
     // A due flag reconcile re-reads every flag: it must find nothing to fix.
     for (final folder in _folders) {
-      await _makeFlagReconcileDue(_db, folder);
+      await _expireFlagReconcile(_db, folder);
     }
     await _cycle();
     final before = last!.split('\n').toSet();
