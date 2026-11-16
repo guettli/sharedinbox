@@ -103,7 +103,7 @@ behaviour agreed for the feature.
 | Concern | File |
 | --- | --- |
 | Schema (`snoozed_until`, `snoozed_from_mailbox_path`) | `lib/data/db/database.dart` |
-| Snooze / unsnooze / wake-up logic | `lib/data/repositories/email_repository_impl.dart` — `snoozeEmail`, `wakeUpEmails`, `_applyPendingChangeImap`, JMAP branch under `case 'snooze'` |
+| Snooze / unsnooze / wake-up logic | `lib/data/repositories/email_repository_impl/` — `user_actions.dart` (`snoozeEmail`, `wakeUpEmails`), `flush_imap.dart` (`_applyPendingChangeImap`), `flush_jmap.dart` (JMAP branch under `case 'snooze'`) |
 | Repository interface | `lib/core/repositories/email_repository.dart` — `snoozeEmail`, `wakeUpEmails` |
 | UI trigger from a single message | `lib/ui/screens/email_detail_screen.dart` — `_snooze` |
 | UI trigger from a selection | `lib/ui/screens/email_action_helpers.dart` — `batchSnooze` |
