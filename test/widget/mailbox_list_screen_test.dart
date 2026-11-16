@@ -48,6 +48,32 @@ Future<void> _pumpMailboxList(
   await tester.pumpAndSettle();
 }
 
+/// Pumps the mailbox list for an account whose pending changes are
+/// [mutations], so the failed/stuck banner can be checked.
+Future<void> _pumpWithMutations(
+  WidgetTester tester,
+  List<FailedMutation> mutations,
+) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/mailboxes',
+      overrides: [
+        accountRepositoryProvider.overrideWithValue(
+          FakeAccountRepository([kTestAccount]),
+        ),
+        mailboxRepositoryProvider.overrideWithValue(
+          FakeMailboxRepository([kTestMailbox]),
+        ),
+        emailRepositoryProvider.overrideWithValue(
+          FakeEmailRepository(failedMutations: mutations),
+        ),
+        syncNowProvider.overrideWithValue((_) => false),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 /// Long-presses [folder] to open its action sheet and taps "Delete".
 Future<void> _tapDeleteAction(WidgetTester tester, String folder) async {
   await tester.longPress(find.text(folder).first);
@@ -361,46 +387,28 @@ void main() {
     testWidgets(
       'failed-mutation banner links to the Pending Changes view (#622)',
       (tester) async {
-        final emailRepo = FakeEmailRepository(
-          failedMutations: [
-            FailedMutation(
-              id: 1,
-              accountId: 'acc-1',
-              changeType: 'move',
-              resourceId: 'acc-1:42',
-              lastError: 'server said no',
-              attempts: 5,
-              createdAt: DateTime.utc(2026, 3, 4, 9),
-              failed: true,
-            ),
-            // Still retrying: not counted in the banner.
-            FailedMutation(
-              id: 2,
-              accountId: 'acc-1',
-              changeType: 'move',
-              resourceId: 'acc-1:43',
-              lastError: 'timeout',
-              attempts: 2,
-              createdAt: DateTime.utc(2026, 3, 4, 9),
-            ),
-          ],
-        );
-        await tester.pumpWidget(
-          buildApp(
-            initialLocation: '/accounts/acc-1/mailboxes',
-            overrides: [
-              accountRepositoryProvider.overrideWithValue(
-                FakeAccountRepository([kTestAccount]),
-              ),
-              mailboxRepositoryProvider.overrideWithValue(
-                FakeMailboxRepository([kTestMailbox]),
-              ),
-              emailRepositoryProvider.overrideWithValue(emailRepo),
-              syncNowProvider.overrideWithValue((_) => false),
-            ],
+        await _pumpWithMutations(tester, [
+          FailedMutation(
+            id: 1,
+            accountId: 'acc-1',
+            changeType: 'move',
+            resourceId: 'acc-1:42',
+            lastError: 'server said no',
+            attempts: 5,
+            createdAt: DateTime.utc(2026, 3, 4, 9),
+            failed: true,
           ),
-        );
-        await tester.pumpAndSettle();
+          // Still retrying: not counted in the banner.
+          FailedMutation(
+            id: 2,
+            accountId: 'acc-1',
+            changeType: 'move',
+            resourceId: 'acc-1:43',
+            lastError: 'timeout',
+            attempts: 2,
+            createdAt: DateTime.utc(2026, 3, 4, 9),
+          ),
+        ]);
 
         // The red banner surfaces the failed change and offers a View link.
         expect(find.text('1 pending move failed'), findsOneWidget);
@@ -416,35 +424,17 @@ void main() {
 
     testWidgets('no failed-mutation banner while changes are only retrying',
         (tester) async {
-      final emailRepo = FakeEmailRepository(
-        failedMutations: [
-          FailedMutation(
-            id: 1,
-            accountId: 'acc-1',
-            changeType: 'move',
-            resourceId: 'acc-1:42',
-            lastError: 'timeout',
-            attempts: 2,
-            createdAt: DateTime.utc(2026, 3, 4, 9),
-          ),
-        ],
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(emailRepo),
-            syncNowProvider.overrideWithValue((_) => false),
-          ],
+      await _pumpWithMutations(tester, [
+        FailedMutation(
+          id: 1,
+          accountId: 'acc-1',
+          changeType: 'move',
+          resourceId: 'acc-1:42',
+          lastError: 'timeout',
+          attempts: 2,
+          createdAt: DateTime.utc(2026, 3, 4, 9),
         ),
-      );
-      await tester.pumpAndSettle();
+      ]);
 
       expect(find.textContaining('failed'), findsNothing);
       expect(find.widgetWithText(TextButton, 'View'), findsNothing);
@@ -452,36 +442,18 @@ void main() {
 
     testWidgets('a banner for changes not synced yet after the retry limit',
         (tester) async {
-      final emailRepo = FakeEmailRepository(
-        failedMutations: [
-          FailedMutation(
-            id: 1,
-            accountId: 'acc-1',
-            changeType: 'move',
-            resourceId: 'acc-1:42',
-            lastError: 'timeout',
-            attempts: 5,
-            createdAt: DateTime.utc(2026, 3, 4, 9),
-            stuck: true,
-          ),
-        ],
-      );
-      await tester.pumpWidget(
-        buildApp(
-          initialLocation: '/accounts/acc-1/mailboxes',
-          overrides: [
-            accountRepositoryProvider.overrideWithValue(
-              FakeAccountRepository([kTestAccount]),
-            ),
-            mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([kTestMailbox]),
-            ),
-            emailRepositoryProvider.overrideWithValue(emailRepo),
-            syncNowProvider.overrideWithValue((_) => false),
-          ],
+      await _pumpWithMutations(tester, [
+        FailedMutation(
+          id: 1,
+          accountId: 'acc-1',
+          changeType: 'move',
+          resourceId: 'acc-1:42',
+          lastError: 'timeout',
+          attempts: 5,
+          createdAt: DateTime.utc(2026, 3, 4, 9),
+          stuck: true,
         ),
-      );
-      await tester.pumpAndSettle();
+      ]);
 
       expect(find.text('1 change not synced yet'), findsOneWidget);
       expect(find.widgetWithText(TextButton, 'View'), findsOneWidget);
