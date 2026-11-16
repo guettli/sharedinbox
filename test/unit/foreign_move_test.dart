@@ -4,14 +4,19 @@
 // sync stored at the new place is merged into it, never the other way round.
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
-import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
@@ -266,5 +271,270 @@ void main() {
       logs.rows.where((l) => l.event == 'email.duplicate_merged'),
       isEmpty,
     );
+  });
+
+  bool noMerge() => logs.rows.every((l) => l.event != 'email.duplicate_merged');
+
+  Future<void> setCopyChangeState(String copyId, String state) =>
+      (db.update(db.pendingChanges)..where((t) => t.resourceId.equals(copyId)))
+          .write(
+        PendingChangesCompanion(
+          state: Value(state),
+          leaseUntil: Value(now.add(const Duration(minutes: 5))),
+        ),
+      );
+
+  test('a copy stored before a UIDVALIDITY change is not carried over',
+      () async {
+    final id = (await rowOfA()).id;
+    final copyId = await moveElsewhereAndSync();
+    // The copy's UID is from an earlier epoch of Archive: it may name
+    // another mail now.
+    await (db.update(db.emails)..where((t) => t.id.equals(copyId)))
+        .write(const EmailsCompanion(srvUidValidity: Value(21)));
+
+    await syncInbox();
+
+    expect((await rowsOfA()).map((e) => e.id), [copyId]);
+    expect((await rowsOfA()).map((e) => e.id), isNot(contains(id)));
+    expect(noMerge(), isTrue);
+  });
+
+  test('a row whose own move left it with a stale UID carries over in place',
+      () async {
+    final id = (await rowOfA()).id;
+    // Our move reached the server, but its answer was never recorded: the
+    // row shows Archive with the UID it had in INBOX (7 here, so it names
+    // no mail in Archive).
+    server.moveElsewhere('a@test', 'Archive');
+    await (db.update(db.emails)..where((t) => t.id.equals(id))).write(
+      const EmailsCompanion(
+        mailboxPath: Value('Archive'),
+        uid: Value(7),
+        srvUid: Value(7),
+      ),
+    );
+
+    // Sync stores the mail in Archive a second time, and sees the stale
+    // UID vanish.
+    await emails.syncEmails(_account.id, 'Archive');
+
+    final e = await rowOfA();
+    expect(e.id, id);
+    expect((e.mailboxPath, e.uid), ('Archive', 2));
+    expect((e.srvMailboxPath, e.srvUid, e.srvUidValidity), ('Archive', 2, 22));
+    expect(noMerge(), isFalse);
+  });
+
+  group('Gmail labels (one EMAILID in several folders)', () {
+    test('a label removed: the row takes the only other label copy', () async {
+      final id = (await rowOfA()).id;
+      server.deliver('Spam', 'a@test');
+      await emails.syncEmails(_account.id, 'Spam');
+      expect(await rowsOfA(), hasLength(2));
+      server.expungeElsewhere('a@test'); // the INBOX copy
+
+      await syncInbox();
+
+      final e = await rowOfA();
+      expect((e.id, e.mailboxPath), (id, 'Spam'));
+    });
+
+    test('with two other label copies the row is removed', () async {
+      final id = (await rowOfA()).id;
+      server
+        ..deliver('Spam', 'a@test')
+        ..deliver('Archive', 'a@test');
+      await emails.syncEmails(_account.id, 'Spam');
+      await emails.syncEmails(_account.id, 'Archive');
+      server.expungeElsewhere('a@test'); // the INBOX copy
+
+      await syncInbox();
+
+      final rows = await rowsOfA();
+      expect(rows.map((e) => e.mailboxPath).toSet(), {'Spam', 'Archive'});
+      expect(rows.map((e) => e.id), isNot(contains(id)));
+      expect(noMerge(), isTrue);
+    });
+  });
+
+  test("the copy's queued move carries over and is sent", () async {
+    final id = (await rowOfA()).id;
+    final copyId = await moveElsewhereAndSync();
+    await emails.moveEmail(copyId, 'Spam');
+
+    await syncInbox();
+
+    var e = await rowOfA();
+    expect(e.id, id);
+    expect(e.mailboxPath, 'Spam');
+    expect((e.srvMailboxPath, e.srvUid), ('Archive', 2));
+    final move = await db.select(db.pendingChanges).getSingle();
+    expect((move.resourceId, move.changeType), (id, 'move'));
+
+    await emails.flushPendingChanges(_account.id, 'pw');
+
+    expect(server.find('a@test')!.folder.path, 'Spam');
+    e = await rowOfA();
+    expect((e.id, e.mailboxPath, e.srvMailboxPath), (id, 'Spam', 'Spam'));
+  });
+
+  test('no merge while a change of the copy is being sent', () async {
+    final id = (await rowOfA()).id;
+    final copyId = await moveElsewhereAndSync();
+    await emails.setFlag(copyId, flagged: true);
+    await setCopyChangeState(copyId, 'inflight');
+
+    await syncInbox();
+
+    // Both rows are kept; the next sync carries the row over.
+    expect((await rowsOfA()).map((e) => e.id).toSet(), {id, copyId});
+    expect(noMerge(), isTrue);
+
+    await setCopyChangeState(copyId, 'pending');
+    await syncInbox();
+
+    expect((await rowOfA()).id, id);
+  });
+
+  test('a row with a queued move of its own is left alone', () async {
+    final id = (await rowOfA()).id;
+    await emails.moveEmail(id, 'Spam');
+    final copyId = await moveElsewhereAndSync();
+
+    await syncInbox();
+
+    expect((await rowsOfA()).map((e) => e.id).toSet(), {id, copyId});
+    expect(noMerge(), isTrue);
+  });
+
+  test('a row of another account with the server id is no match', () async {
+    await AccountRepositoryImpl(db, FakeSecureStorage()).addAccount(
+      const Account(
+        id: 'acc-2',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'imap.example.com',
+        smtpHost: 'smtp.example.com',
+      ),
+      'pw',
+    );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'acc-2:x',
+            accountId: 'acc-2',
+            mailboxPath: 'Archive',
+            uid: 2,
+            receivedAt: DateTime(2024),
+            messageId: const Value('a@test'),
+            serverEmailId: const Value('E-a@test'),
+            srvMailboxPath: const Value('Archive'),
+            srvUid: const Value(2),
+          ),
+        );
+    server.expungeElsewhere('a@test');
+
+    await syncInbox();
+
+    expect((await rowsOfA()).map((e) => e.id), ['acc-2:x']);
+    expect(noMerge(), isTrue);
+  });
+
+  test('a local virtual row with the server id does not count', () async {
+    final id = (await rowOfA()).id;
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'acc-1:local',
+            accountId: _account.id,
+            mailboxPath: 'Sent',
+            uid: 0,
+            receivedAt: DateTime(2024),
+            messageId: const Value('local@test'),
+            serverEmailId: const Value('E-a@test'),
+            isLocal: const Value(true),
+          ),
+        );
+    await moveElsewhereAndSync();
+
+    await syncInbox();
+
+    expect((await rowOfA()).id, id);
+    final local = await (db.select(db.emails)
+          ..where((t) => t.id.equals('acc-1:local')))
+        .getSingleOrNull();
+    expect(local, isNotNull);
+  });
+
+  test('both rows changed the same flag: the newer change shows', () async {
+    final id = (await rowOfA()).id;
+    await emails.setFlag(id, seen: true);
+    server.moveElsewhere('a@test', 'Archive');
+    server.setFlagElsewhere('a@test', r'\Seen', on: true);
+    await emails.syncEmails(_account.id, 'Archive');
+    final copyId =
+        (await rowsOfA()).singleWhere((e) => e.mailboxPath == 'Archive').id;
+    await emails.setFlag(copyId, seen: false);
+
+    await syncInbox();
+
+    final e = await rowOfA();
+    expect((e.id, e.isSeen), (id, false));
+    final changes = await db.select(db.pendingChanges).get();
+    expect(changes.map((c) => c.resourceId).toSet(), {id});
+
+    await emails.flushPendingChanges(_account.id, 'pw');
+
+    expect(server.find('a@test')!.message.seen, isFalse);
+  });
+
+  group('downloaded attachments of the merged copy', () {
+    String dirOf(String emailId) => p.join(
+          rig.cacheDir.path,
+          'sharedinbox',
+          'attachments',
+          emailId.replaceAll(':', '_'),
+        );
+
+    Future<void> download(String emailId) async {
+      final file = File(p.join(dirOf(emailId), 'a.pdf'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync('pdf');
+      await db.into(db.attachmentFiles).insert(
+            AttachmentFilesCompanion.insert(
+              emailId: emailId,
+              filename: 'a.pdf',
+              size: file.lengthSync(),
+              downloadedAt: now,
+            ),
+          );
+    }
+
+    test('move to the kept row with the body', () async {
+      final id = (await rowOfA()).id;
+      final copyId = await moveElsewhereAndSync();
+      await addBody(copyId, 'copy body');
+      await download(copyId);
+
+      await syncInbox();
+
+      expect(File(p.join(dirOf(id), 'a.pdf')).existsSync(), isTrue);
+      expect(Directory(dirOf(copyId)).existsSync(), isFalse);
+      final files = await db.select(db.attachmentFiles).get();
+      expect(files.map((f) => f.emailId), [id]);
+    });
+
+    test('are deleted when the kept row has its own body', () async {
+      final id = (await rowOfA()).id;
+      await addBody(id, 'own body');
+      final copyId = await moveElsewhereAndSync();
+      await addBody(copyId, 'copy body');
+      await download(copyId);
+
+      await syncInbox();
+
+      expect(Directory(dirOf(copyId)).existsSync(), isFalse);
+      expect(Directory(dirOf(id)).existsSync(), isFalse);
+      expect(await db.select(db.attachmentFiles).get(), isEmpty);
+    });
   });
 }

@@ -1,0 +1,125 @@
+1   : connect
+1   : [0.0s] | cloud url=https://dagger.cloud/traces/setup
+2   : ┆ starting engine
+2   : ┆ starting engine DONE [0.0s]
+3   : ┆ connecting to engine
+3   : ┆ [0.0s] | [2m23:35:50[0m [92mINF[0m connected [2mname=[0mdagger-engine-6864df9769-7zbrh [2mclient-version=[0mv1.0.0-beta.27 [2mserver-version=[0mv1.0.0-beta.27+400b82d6
+3   : ┆ connecting to engine DONE [0.0s]
+4   : ┆ starting session
+4   : ┆ starting session DONE [0.0s]
+1   : connect DONE [0.0s]
+
+5   : load workspace: .
+6   : ┆ loading type definitions
+6   : ┆ loading type definitions DONE [0.4s]
+5   : load workspace: . DONE [0.4s]
+
+7   : parsing command line arguments
+7   : parsing command line arguments DONE [0.1s]
+
+8   : ci(
+8   : ┆ source: Address.directory: Directory!
+8   : ): Ci!
+9   : ┆ Directory.file(path: ".fvmrc"): File!
+9   : ┆ Directory.file DONE [0.0s]
+10  : ┆ File.contents: String!
+10  : ┆ File.contents CACHED [0.0s]
+11  : ┆ Directory.filter(
+11  : ┆ ┆ include: [".fvmrc", "lib/", "test/", "assets/", "scripts/", "pubspec.yaml", "pubspec.lock", "analysis_options.yaml", "linux/", "android/", "integration_test/", "drift_schemas/", "stalwart-dev/", "website/", "hooks/", "deploy_cron.py", "ci/", "server/", "go.mod", ".jscpd.json", "duplication-baseline.json"]
+11  : ┆ ): Directory!
+11  : ┆ Directory.filter DONE [0.1s]
+8   : ci DONE [0.1s]
+
+12  : Ci.setup: Container!
+13  : ┆ Directory.filter(include: ["lib/", "test/", "assets/", "pubspec.yaml", "pubspec.lock", "analysis_options.yaml", "scripts/"]): Directory!
+13  : ┆ Directory.filter CACHED [0.0s]
+14  : ┆ Directory.filter(exclude: ["**/*.g.dart", "**/*.mocks.dart"]): Directory!
+14  : ┆ Directory.filter CACHED [0.0s]
+15  : ┆ Directory.filter(exclude: ["**/*.g.dart", "**/*.mocks.dart"], include: ["lib/", "test/", "assets/", "pubspec.yaml", "pubspec.lock"]): Directory!
+15  : ┆ Directory.filter CACHED [0.0s]
+16  : ┆ Directory.filter(include: ["pubspec.yaml", "pubspec.lock"]): Directory!
+16  : ┆ Directory.filter CACHED [0.0s]
+17  : ┆ container(platform: "linux/amd64"): Container!
+17  : ┆ container CACHED [0.0s]
+18  : ┆ Container.from(address: "ubuntu:24.04"): Container!
+18  : ┆ Container.from DONE [0.0s]
+19  : ┆ withEnvVariable DEBIAN_FRONTEND=noninteractive
+19  : ┆ Container.withEnvVariable CACHED [0.0s]
+20  : ┆ withEnvVariable JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+20  : ┆ Container.withEnvVariable DONE [0.0s]
+21  : ┆ withEnvVariable ANDROID_HOME=/opt/android-sdk
+21  : ┆ Container.withEnvVariable DONE [0.0s]
+22  : ┆ withEnvVariable PATH=/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:${JAVA_HOME}/bin:${PATH} (expand: true)
+22  : ┆ Container.withEnvVariable CACHED [0.0s]
+23  : ┆ withExec /bin/sh -c 'apt-get -qq update && apt-get install -y -qq --no-install-recommends ca-certificates curl git unzip xz-utils zip openjdk-17-jdk-headless python3 clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libgcrypt20-dev libjsoncpp-dev sqlite3 iproute2 netcat-openbsd xvfb libosmesa6 libegl1 lld'
+23  : ┆ Container.withExec CACHED [0.0s]
+24  : ┆ withExec useradd -m -s /bin/bash ci
+24  : ┆ Container.withExec CACHED [0.0s]
+25  : ┆ withExec /bin/sh -c 'set -e; mkdir -p /opt/android-sdk/cmdline-tools; curl -fsSL -o /tmp/cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip; unzip -q /tmp/cmdline-tools.zip -d /opt/android-sdk/cmdline-tools; mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest; rm /tmp/cmdline-tools.zip; yes | sdkmanager --licenses >/dev/null; chown -R ci:ci /opt/android-sdk; mkdir -p /src && chown ci:ci /src'
+25  : ┆ Container.withExec CACHED [0.0s]
+26  : ┆ withEnvVariable PUB_CACHE=/home/ci/.pub-cache
+26  : ┆ Container.withEnvVariable DONE [0.0s]
+27  : ┆ withEnvVariable HOME=/home/ci
+27  : ┆ Container.withEnvVariable DONE [0.0s]
+28  : ┆ user ci
+28  : ┆ Container.withUser DONE [0.0s]
+29  : ┆ withExec /bin/sh -c 'tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; yes | sdkmanager "ndk;28.2.13676358" "cmake;3.22.1" "build-tools;35.0.0" "platforms;android-34" "platforms;android-35" >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }'
+29  : ┆ Container.withExec CACHED [0.0s]
+30  : ┆ user root
+30  : ┆ Container.withUser CACHED [0.0s]
+31  : ┆ withExec /bin/sh -c 'set -e; curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.8-stable.tar.xz" | tar -xJ -C /opt; git config --system --add safe.directory /opt/flutter; chown -R ci:ci /opt/flutter'
+31  : ┆ Container.withExec CACHED [0.0s]
+32  : ┆ user ci
+32  : ┆ Container.withUser CACHED [0.0s]
+33  : ┆ withExec flutter precache --linux --no-android --no-ios
+33  : ┆ Container.withExec CACHED [0.0s]
+34  : ┆ Container.withDirectory(
+34  : ┆ ┆ path: "/src"
+34  : ┆ ┆ source: Directory.filter(include: ["pubspec.yaml", "pubspec.lock"]): Directory!
+34  : ┆ ┆ owner: "ci"
+34  : ┆ ): Container!
+34  : ┆ Container.withDirectory CACHED [0.0s]
+35  : ┆ withWorkdir /src
+35  : ┆ Container.withWorkdir CACHED [0.0s]
+36  : ┆ withExec /bin/bash -c 'mkdir -p android; tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; flutter pub get >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; rm -rf android; grep -vE '\''^(\+|Downloading packages)'\'' "$tmp" || true'
+36  : ┆ Container.withExec CACHED [0.0s]
+37  : ┆ withExec python3 -c 'import json, os\nf='\''.dart_tool/package_config.json'\''; d=json.load(open(f)); [d.pop(k,None) for k in ('\''generated'\'','\''generatorVersion'\'')]; json.dump(d,open(f,'\''w'\''))\ng='\''.flutter-plugins-dependencies'\''\nif os.path.exists(g):\n  d=json.load(open(g)); d.pop('\''date_created'\'',None); json.dump(d,open(g,'\''w'\''))\n'
+37  : ┆ Container.withExec CACHED [0.0s]
+38  : ┆ Container.withDirectory(
+38  : ┆ ┆ path: "/src"
+38  : ┆ ┆ source: Directory.filter(exclude: ["**/*.g.dart", "**/*.mocks.dart"], include: ["lib/", "test/", "assets/", "pubspec.yaml", "pubspec.lock"]): Directory!
+38  : ┆ ┆ owner: "ci"
+38  : ┆ ): Container!
+38  : ┆ Container.withDirectory DONE [0.0s]
+39  : ┆ withWorkdir /src
+39  : ┆ Container.withWorkdir DONE [0.0s]
+40  : ┆ withExec /bin/bash -c 'tmp=$(mktemp); trap '\''rm -f "$tmp"'\'' EXIT; flutter pub run build_runner build --delete-conflicting-outputs >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; grep -vE '\''^\[.*s\] \|'\'' "$tmp" || true'
+40  : ┆ Container.withExec CACHED [0.0s]
+41  : ┆ Container.withDirectory(
+41  : ┆ ┆ path: "/src"
+41  : ┆ ┆ source: Directory.filter(exclude: ["**/*.g.dart", "**/*.mocks.dart"]): Directory!
+41  : ┆ ┆ owner: "ci"
+41  : ┆ ): Container!
+41  : ┆ Container.withDirectory CACHED [0.0s]
+12  : Ci.setup DONE [0.0s]
+
+42  : withExec sh -c 'echo Zmx1dHRlciB0ZXN0IHRlc3QvdW5pdC9mb3JlaWduX21vdmVfdGVzdC5kYXJ0IC0tcmVwb3J0ZXIgZXhwYW5kZWQgPiAvdG1wL291dC50eHQgMj4mMQpncmVwIC1FICdcW0VcXXxFeHBlY3RlZDp8QWN0dWFsOnxXaGljaDp8RXJyb3I6fGVycm9yOnx0ZXN0cyBwYXNzZWR8U29tZSB0ZXN0cyBmYWlsZWQnIC90bXAvb3V0LnR4dCB8IGhlYWQgLTYwCnRhaWwgLTMgL3RtcC9vdXQudHh0CmV4aXQgMA== | base64 -d | sh'
+
+43  : Container.stdout: String!
+
+42  : withExec sh -c 'echo Zmx1dHRlciB0ZXN0IHRlc3QvdW5pdC9mb3JlaWduX21vdmVfdGVzdC5kYXJ0IC0tcmVwb3J0ZXIgZXhwYW5kZWQgPiAvdG1wL291dC50eHQgMj4mMQpncmVwIC1FICdcW0VcXXxFeHBlY3RlZDp8QWN0dWFsOnxXaGljaDp8RXJyb3I6fGVycm9yOnx0ZXN0cyBwYXNzZWR8U29tZSB0ZXN0cyBmYWlsZWQnIC90bXAvb3V0LnR4dCB8IGhlYWQgLTYwCnRhaWwgLTMgL3RtcC9vdXQudHh0CmV4aXQgMA== | base64 -d | sh'
+42  : [18.2s] | 00:00 +6: All tests passed!
+42  : [18.2s] | 00:00 +5: a mail expunged elsewhere is removed, not carried over
+42  : [18.2s] | 00:00 +6: (tearDownAll)
+42  : [18.2s] | 00:00 +6: All tests passed!
+42  : Container.withExec DONE [18.2s]
+
+43  : Container.stdout DONE [0.0s, waited on sh -c echo Zmx1dHRlciB0ZXN0IHRlc3QvdW5pdC9mb3Jl…]
+
+
+Setup tracing by running "dagger cloud signup". To hide set DAGGER_NO_NAG=1
+
+00:00 +6: All tests passed!
+00:00 +5: a mail expunged elsewhere is removed, not carried over
+00:00 +6: (tearDownAll)
+00:00 +6: All tests passed!

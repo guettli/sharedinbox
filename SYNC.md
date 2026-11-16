@@ -120,7 +120,8 @@ notification marks, draft replies, an open detail view) stays valid. When two ro
 to hold the same mail, the second one is merged into the kept one and deleted
 (`_mergeDuplicateRow`, App Log warn `email.duplicate_merged`): its queued changes, thread
 entries, Undo history, App Log lines, notification marks and draft replies point at the
-kept row, and its body moves over if the kept row has none. That is the only place that
+kept row, and its body and downloaded attachments (folder and `attachment_files` rows)
+move over if the kept row has no body; otherwise its attachment folder is deleted. That is the only place that
 re-points references between rows; `check_email_ids.sh` also fails on any other write of
 `emails.id` after insert or re-pointing of references. Rows stored before schema v71 keep their old ids
 (`accountId:mailboxPath:uid`, `accountId:jmapId`, `accountId:__local__:…`); what those
@@ -154,17 +155,31 @@ wiped mid-flight.
 **Foreign move** — when another client moves a mail, its UID vanishes from the source
 folder and a new UID appears in the destination. On servers with a move-stable id (RFC 8474
 `EMAILID`, Gmail `X-GM-MSGID`, stored as `serverEmailId`), the deletion reconcile of the
-source looks for the row sync already stored in the destination with that id. When exactly
-one such row exists (#589), the vanished row carries over: it keeps its id and takes the
-other row's place (shown folder, UID, server location, flags, headers), and the other row
-is merged into it (see "Row identity"; App Log warn `email.duplicate_merged`). The vanished
-row survives because it is the one the user knows (an open detail view, Undo, notifications
-and drafts reference its id), while the other was stored by a recent sync. A flag change
-queued on the vanished row before the move follows the mail to its new UID, and the row
-keeps showing that flag until the change is sent. With no such row, or more than one, the
-vanished row is deleted. When the source folder is synced before the destination, the row
-is deleted and the destination's sync stores a new row (phase 4's absence rules address
-that order).
+source looks for the row sync already stored elsewhere with that id: a server row (not a
+local virtual one) of the same account, in another folder, or in the same folder at another
+UID that still exists (our own move whose answer was never recorded left the row with its
+old UID). When exactly one such row exists (#589), the vanished row carries over: it keeps
+its id and takes the other row's place (shown folder, UID, server location, headers, and
+the flags it has no queued change for), and the other row is merged into it (see "Row
+identity"; App Log warn `email.duplicate_merged`). The vanished row survives because it is
+the one the user knows (an open detail view, Undo, notifications and drafts reference its
+id), while the other was stored by a recent sync. A change queued on the vanished row before
+the move follows the mail to its new UID, stamped with the UIDVALIDITY that UID was learned
+under, and the row keeps showing its queued flag until the change is sent (a newer change
+of the same flag on the other row wins). With no such row, or more than one (e.g. a Gmail
+mail still under two other labels), the vanished row is deleted; so it is when the other
+row's location was recorded under an older UIDVALIDITY of its folder (its UID may name
+another mail). The carry-over waits for a later sync when the user moved the vanished row
+meanwhile or a change of the other row is being sent right now. When the source folder is
+synced before the destination, the row is deleted and the destination's sync stores a new
+row (phase 4's absence rules address that order).
+
+A shared move-stable id is taken as "the same mail". That holds for RFC 8474 `EMAILID` and
+Gmail's `X-GM-MSGID`; servers that derive it from a content GUID (Dovecot keeps the GUID on
+`COPY`) give a copy the id of its original, so a copy in another folder counts as the same
+mail too: if the original is deleted while exactly one copy exists, the original's row takes
+the copy's place. The mail is the same message either way; only the row's history (body,
+Undo, logs) is the original's.
 
 **No resurrection by a late FETCH answer** — the new-mail FETCH does not insert a row for
 a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -29,6 +31,11 @@ class StatefulImapRig {
   late final EmailRepositoryImpl emails;
   DateTime now = DateTime.utc(2026, 11, 16, 12);
 
+  /// The repository's cache folder (attachment downloads), a fresh temp
+  /// folder per rig, made when first asked for.
+  late final Directory cacheDir =
+      Directory.systemTemp.createTempSync('stateful_imap_rig');
+
   static Future<StatefulImapRig> open(
     StatefulFakeImapServer server, {
     required List<(String, String)> folders,
@@ -49,6 +56,7 @@ class StatefulImapRig {
       fetchPreviewSnippets: (_, __, ___) async => const {},
       now: () => rig.now,
       appLogger: appLogger,
+      getCacheDir: () async => rig.cacheDir,
     );
     await accounts.addAccount(statefulRigAccount, 'pw');
     for (final (path, role) in folders) {

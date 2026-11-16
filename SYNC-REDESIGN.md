@@ -544,16 +544,22 @@ As implemented, phase 2 is a series of PRs:
    because the user's references (open detail view, Undo, notifications,
    drafts) name it, while the other row was stored by a recent sync. It
    takes everything the other row recorded except the flags it has a
-   queued change for, and its queued IMAP changes follow the mail to the
-   new UID. No match or several matches delete the row, as before.
+   queued change for (unless the other row has one too), and its queued
+   IMAP changes follow the mail to the new UID, stamped with the other
+   row's UIDVALIDITY. A same-folder match counts when it records another,
+   existing UID (an own move whose answer was lost). No match, several
+   matches, or a match recorded under an older UIDVALIDITY delete the row,
+   as before; a vanished row the user moved meanwhile, or a match with a
+   change being sent, waits for the next sync.
    `_mergeDuplicateRow` (shared with the move remap's duplicate merge) is
    the only place that re-points references between rows: body, queued
-   changes, threads, Undo, App Log, and now also `notified_emails` and
-   `drafts.reply_to_email_id`; each merge logs `email.duplicate_merged`.
+   changes, threads, Undo, App Log, and now also `notified_emails`,
+   `drafts.reply_to_email_id` and downloaded attachments (moved with the
+   body, else deleted from disk); each merge logs `email.duplicate_merged`.
    `scripts/check_email_ids.sh` also fails on writes of `emails.id` after
    insert (`UPDATE emails SET id`, `id:` in an update `EmailsCompanion`,
-   `copyWith(id: Value(…))`) and on re-pointing references outside
-   `_mergeDuplicateRow`. Left for phase 4: when the source folder is synced
+   `copyWith(id: Value(…))`, also across lines and string literals) and
+   on re-pointing references outside `_mergeDuplicateRow`. Left for phase 4: when the source folder is synced
    before the destination, the row is still deleted and a new one stored.
 4. **2d (planned):** split `email_repository_impl.dart` along the writer
    roles of Appendix A.
