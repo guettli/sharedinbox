@@ -248,6 +248,202 @@
     },
     {
       "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/change_queue.dart",
+      "start_line": 383,
+      "end_line": 393,
+      "key": "d2d935e3629b2f25"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/change_queue.dart",
+      "start_line": 415,
+      "end_line": 425,
+      "key": "d2d935e3629b2f25"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/counterparts.dart",
+      "start_line": 27,
+      "end_line": 37,
+      "key": "d950fdabf634348d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/counterparts.dart",
+      "start_line": 219,
+      "end_line": 229,
+      "key": "d950fdabf634348d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 165,
+      "end_line": 176,
+      "key": "764c07680b6b5c98"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 184,
+      "end_line": 196,
+      "key": "0acec97abc6b4982"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 217,
+      "end_line": 230,
+      "key": "3f8f5efae7ec109a"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 249,
+      "end_line": 286,
+      "key": "4bd2ce0c8a6ae8e7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 304,
+      "end_line": 315,
+      "key": "764c07680b6b5c98"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 321,
+      "end_line": 333,
+      "key": "0acec97abc6b4982"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 362,
+      "end_line": 378,
+      "key": "5e38c8eeb9d37288"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 388,
+      "end_line": 401,
+      "key": "3f8f5efae7ec109a"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 399,
+      "end_line": 436,
+      "key": "4bd2ce0c8a6ae8e7"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/diagnostics.dart",
+      "start_line": 489,
+      "end_line": 504,
+      "key": "5e38c8eeb9d37288"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/flush_jmap.dart",
+      "start_line": 350,
+      "end_line": 361,
+      "key": "aa2556709c258134"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/flush_jmap.dart",
+      "start_line": 461,
+      "end_line": 472,
+      "key": "aa2556709c258134"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/queries.dart",
+      "start_line": 30,
+      "end_line": 42,
+      "key": "8caf1458085e8c5c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/queries.dart",
+      "start_line": 47,
+      "end_line": 59,
+      "key": "8caf1458085e8c5c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/queries.dart",
+      "start_line": 619,
+      "end_line": 631,
+      "key": "e1fd5ae6fab1ba9c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/queries.dart",
+      "start_line": 641,
+      "end_line": 652,
+      "key": "e1fd5ae6fab1ba9c"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/row_mapping.dart",
+      "start_line": 12,
+      "end_line": 25,
+      "key": "b5799820e20f87f0"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/row_mapping.dart",
+      "start_line": 22,
+      "end_line": 33,
+      "key": "6446bb8c11667e7d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/row_mapping.dart",
+      "start_line": 37,
+      "end_line": 50,
+      "key": "0367572d700b4f67"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/sieve.dart",
+      "start_line": 53,
+      "end_line": 64,
+      "key": "2da191e7b79df378"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/sieve.dart",
+      "start_line": 68,
+      "end_line": 79,
+      "key": "2da191e7b79df378"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/email_repository_impl/threads.dart",
+      "start_line": 128,
+      "end_line": 141,
+      "key": "b5799820e20f87f0"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/notification_rule_repository_impl.dart",
+      "start_line": 175,
+      "end_line": 186,
+      "key": "6446bb8c11667e7d"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/notification_rule_repository_impl.dart",
+      "start_line": 190,
+      "end_line": 203,
+      "key": "0367572d700b4f67"
+    },
+    {
+      "tool": "jscpd",
       "file": "lib/data/repositories/sync_log_repository_impl.dart",
       "start_line": 9,
       "end_line": 28,

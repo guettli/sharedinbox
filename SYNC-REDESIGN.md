@@ -7,7 +7,10 @@ sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
 handling stay.
 
 Line references are to `lib/data/repositories/email_repository_impl.dart`
-(**ERI**) unless another file is named, as of `33c67b4`.
+(**ERI**) unless another file is named, as of `33c67b4`. Since phase 2d
+that file is split into parts by writer role (see Appendix A), so the line
+numbers are stale: find the code by the member names, which the split kept
+(the body of a public method is now the private `_<name>` in its part).
 
 ## 1. Problem
 
@@ -561,8 +564,24 @@ As implemented, phase 2 is a series of PRs:
    `copyWith(id: Value(…))`, also across lines and string literals) and
    on re-pointing references outside `_mergeDuplicateRow`. Left for phase 4: when the source folder is synced
    before the destination, the row is still deleted and a new one stored.
-4. **2d (planned):** split `email_repository_impl.dart` along the writer
-   roles of Appendix A.
+4. **2d (done, no behaviour change):** `email_repository_impl.dart` is
+   split along the writer roles of Appendix A into part files under
+   `lib/data/repositories/email_repository_impl/` (the table at the start
+   of Appendix A). Each part holds one private extension on
+   `EmailRepositoryImpl`, so the moved members keep their names and their
+   library privacy and no call site changed. The class keeps the
+   constructor, every field (extensions cannot hold state) and the public
+   API: a public method of a role is a one-line forwarder to the private
+   `_<name>` in that role's part (an extension member cannot implement the
+   interface). Static members became private top-level declarations of
+   their part. Every moved member is byte-identical to before apart from
+   that (the forwarded ones lost `@override` and got the `_` name, three
+   statics were rewrapped by the formatter after dedenting), and every
+   identifier in the library resolves to the same declaration as before
+   (checked with the analyzer). Doc references to members now in another
+   part are qualified with that part's extension. The duplication check
+   now sees this code (jscpd skips files over 100 kB, which the old file
+   was), and its 14 existing clones are in `duplication-baseline.json`.
 
 **Phase 3 — the `keywords` overlay.** `ALTER TABLE ADD COLUMN` for the
 `srv_`/`local_` pairs of `is_seen`, `is_flagged` and `snoozed_until`, plus
@@ -648,6 +667,33 @@ calls.
   from ids. Inventory these first.
 
 ## Appendix A: every writer and where it goes
+
+Since phase 2d the code is split by role. The parts are in
+`lib/data/repositories/email_repository_impl/`; the class itself, its
+fields and the public API forwarders stay in `email_repository_impl.dart`.
+
+| Part | Role (groups below) |
+|---|---|
+| `sync.dart` | Sync: dispatch, `clearForResync` / `clearMailboxForResync`, `_backfillAddressHeaders` |
+| `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap`, UIDVALIDITY, the server flag read guard |
+| `sync_jmap.dart` | Sync: JMAP upsert, `notFound` / `destroyed`, prune, reconcile, sync state |
+| `jmap_push.dart` | Sync: the JMAP EventSource watch (no row writes) |
+| `row_identity.dart` | Sync and flush: rows by server location, `_relocateEmailRow`, `_carryOverMovedRow`, `_mergeDuplicateRow` |
+| `bodies.dart` | Sync: bodies, attachments, raw messages, `_healMismatchedImapBody` |
+| `change_queue.dart` | Flush and user actions: the op table (enqueue, claim, lease, Undo `captureOps` / `cancelOps`, `cancelPendingChange`, `retryMutation`) |
+| `change_failures.dart` | Flush: `_recordChangeError`, stuck and failed changes, reverting failed flag and location changes |
+| `flush_imap.dart` | Flush: `_applyPendingChangeImap`, `_settleImapChange`, `_remapEmailAfterImapMove`, `_retryImapMoveByMessageId` |
+| `flush_jmap.dart` | Flush: `_applyPendingChangeJmap`, `_repointSnoozedPlaceholder` |
+| `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, `restoreEmails` |
+| `counterparts.dart` | User actions: `_mirror*ToCounterparts`, `_dropStaleCounterpartRow`; sync: `_maybeDissolveLocalMessage` |
+| `sieve.dart` | User actions: Sieve `_enqueueSieveMove/Delete/Flags` |
+| `local_rows.dart` | Local row creation: `_storeSentCopyLocally`, `_createLocalSelfMessages` |
+| `send.dart` | Sending (SMTP, JMAP submission, outbox); its row writes go through `local_rows.dart` |
+| `threads.dart` | Derived: `_updateThread`, `_reconcileSourceThreads`, `_sweepOrphanThreads` |
+| `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes) |
+| `diagnostics.dart` | Diagnostics and the reliability probe (no row writes) |
+
+The line numbers below are from before the split (`33c67b4`).
 
 **Sync → `srv_*` and headers**
 - `_fetchAndUpsertImapGuarded` (1758), `_refreshFlagsImap` (1530),

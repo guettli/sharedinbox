@@ -15,7 +15,7 @@ For the database schema and protocol-level implementation details see [DB-SYNC.m
 | `AccountSyncManager` | `lib/core/sync/account_sync_manager.dart` | Owns one `_SyncLoop` per account; starts, stops, and wakes sync loops |
 | `_AccountSync` | same file | IMAP sync loop (IDLE + incremental fetch) |
 | `_JmapAccountSync` | same file | JMAP sync loop (SSE push + poll fallback) |
-| `EmailRepositoryImpl` | `lib/data/repositories/email_repository_impl.dart` | All DB reads/writes and network calls |
+| `EmailRepositoryImpl` | `lib/data/repositories/email_repository_impl.dart` (state and public API) and its parts in `email_repository_impl/`, one per writer role (SYNC-REDESIGN.md, Appendix A) | All DB reads/writes and network calls |
 | `pending_changes` table | `lib/data/db/database.dart` | Protocol-agnostic outbound mutation queue |
 | `UndoService` | `lib/core/services/undo_service.dart` | Persisted undo history; cancel-or-reverse logic |
 
