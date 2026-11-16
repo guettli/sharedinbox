@@ -262,7 +262,8 @@ retried with a growing backoff (15 minutes, doubling, at most 6 hours, kept in
 (`[CANNOT]`, `[NOPERM]`, `[CONTACTADMIN]`, `[PRIVACYREQUIRED]`, `[READ-ONLY]`),
 permanent per-item JMAP errors (`forbidden`, `notFound` for a flag or move), and an
 IMAP change whose message is gone (or cannot be found again after a UIDVALIDITY
-reset). A JMAP `notFound` for a delete, and an IMAP change whose
+reset; a delete for good of a mail no longer found by its Message-ID after a reset
+counts as applied instead: the mail is gone either way). A JMAP `notFound` for a delete, and an IMAP change whose
 source folder no longer exists, count as applied: the mail is already gone.
 
 **Claim** — a flush claims each change right before sending it: `state = 'inflight'`
