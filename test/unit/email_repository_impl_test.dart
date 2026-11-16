@@ -11183,8 +11183,8 @@ void main() {
     });
 
     test(
-        'a foreign move hands the cached body and undo refs to the '
-        'destination row instead of dropping them', () async {
+        'a foreign move carries the row over with its id, cached body and '
+        'undo refs; the destination row is merged into it', () async {
       final r = _makeRepos(
         imapConnect: (_, __, ___) async => _MovedAwayImapClient(),
       );
@@ -11254,30 +11254,29 @@ void main() {
 
       await r.emails.syncEmails('acc-1', 'INBOX');
 
-      // The vanished source row is gone…
-      final inbox = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:INBOX:1')))
-          .getSingleOrNull();
-      expect(inbox, isNull);
-      // …and the destination row now owns the cached body and undo reference.
+      // The source row carries over to the mail's new location, with its
+      // id; the destination row sync stored there is merged into it.
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows.map((e) => e.id), ['acc-1:INBOX:1']);
+      final moved = rows.single;
+      expect(
+        (moved.mailboxPath, moved.uid, moved.srvMailboxPath, moved.srvUid),
+        ('Archive', 100, 'Archive', 100),
+      );
       final body = await (r.db.select(r.db.emailBodies)
-            ..where((t) => t.emailId.equals('acc-1:Archive:100')))
-          .getSingleOrNull();
-      expect(body?.textBody, 'cached body');
-      final orphanBody = await (r.db.select(r.db.emailBodies)
             ..where((t) => t.emailId.equals('acc-1:INBOX:1')))
           .getSingleOrNull();
-      expect(orphanBody, isNull);
+      expect(body?.textBody, 'cached body');
       final undo = await (r.db.select(r.db.undoActions)
             ..where((t) => t.id.equals('undo-1')))
           .getSingle();
-      expect(undo.dataJson, contains('acc-1:Archive:100'));
-      expect(undo.dataJson, isNot(contains('acc-1:INBOX:1')));
-      // The per-message log follows too, instead of losing its email.
+      expect(undo.dataJson, contains('acc-1:INBOX:1'));
+      expect(undo.dataJson, isNot(contains('acc-1:Archive:100')));
+      // The per-message log keeps its email.
       final logs = await r.db.select(r.db.appLogs).get();
       expect(
         logs.where((l) => l.event == 'email.open').map((l) => l.emailId),
-        ['acc-1:Archive:100'],
+        ['acc-1:INBOX:1'],
       );
     });
 

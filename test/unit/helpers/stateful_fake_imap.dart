@@ -11,7 +11,9 @@ class FakeServerMessage {
     required this.messageId,
     required this.modSeq,
     Iterable<String> flags = const [],
-  }) : flags = {...flags};
+    String? emailId,
+  })  : flags = {...flags},
+        emailId = emailId ?? 'E-$messageId';
 
   int uid;
   int modSeq;
@@ -19,6 +21,10 @@ class FakeServerMessage {
   /// The bare Message-ID (no angle brackets), unique on the server.
   final String messageId;
   final Set<String> flags;
+
+  /// The move-stable EMAILID (RFC 8474) the server reports when it
+  /// advertises OBJECTID; Gmail gives each label folder's copy the same one.
+  final String emailId;
 
   bool get seen => flags.contains(r'\Seen');
   bool get flagged => flags.contains(r'\Flagged');
@@ -55,6 +61,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
   StatefulFakeImapServer({
     required Map<String, int> uidValidityByFolder,
     this.uidPlus = true,
+    this.objectIds = false,
   }) {
     for (final MapEntry(key: path, value: validity)
         in uidValidityByFolder.entries) {
@@ -64,6 +71,11 @@ class StatefulFakeImapServer with StaleAnswerHook {
 
   /// Whether connections advertise UIDPLUS (`COPYUID` on MOVE).
   final bool uidPlus;
+
+  /// Whether connections advertise OBJECTID (RFC 8474): each message then
+  /// has a move-stable EMAILID, by default `E-<Message-ID>`
+  /// ([FakeServerMessage.emailId], [StatefulFakeImapClient.emailIdsOf]).
+  final bool objectIds;
 
   final Map<String, FakeServerFolder> folders = {};
   final List<FakeServerHit> hits = [];
@@ -95,6 +107,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
     String path,
     String messageId, {
     Iterable<String> flags = const [],
+    String? emailId,
   }) {
     final folder = folders[path]!;
     final message = FakeServerMessage(
@@ -102,6 +115,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
       messageId: messageId,
       modSeq: _bump(folder),
       flags: flags,
+      emailId: emailId,
     );
     folder.messages[message.uid] = message;
     return message;
@@ -151,8 +165,16 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       const imap.Capability('CONDSTORE'),
       const imap.Capability('MOVE'),
       if (server.uidPlus) const imap.Capability('UIDPLUS'),
+      if (server.objectIds) const imap.Capability('OBJECTID'),
     ];
   }
+
+  /// The EMAILID of each message of the selected folder that [sequence]
+  /// names, by UID, as `FETCH (EMAILID)` would answer.
+  Future<Map<int, String>> emailIdsOf(imap.MessageSequence sequence) =>
+      _answer('FETCH EMAILID', {
+        for (final message in _named(sequence)) message.uid: message.emailId,
+      });
 
   final StatefulFakeImapServer server;
   FakeServerFolder? _selected;

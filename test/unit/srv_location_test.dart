@@ -227,12 +227,32 @@ void main() {
             leaseUntil: Value(now.add(const Duration(hours: 1))),
           ),
         );
+    // A notification shown for the copy, and a reply started to it.
+    await db.into(db.notifiedEmails).insert(
+          NotifiedEmailsCompanion.insert(
+            accountId: 'acc-1',
+            emailId: 'acc-1:copy',
+            notifiedAt: now,
+          ),
+        );
+    await db.into(db.drafts).insert(
+          DraftsCompanion.insert(
+            accountId: const Value('acc-1'),
+            replyToEmailId: const Value('acc-1:copy'),
+            updatedAt: now,
+          ),
+        );
     await emails.moveEmail(id, 'Archive');
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
     final queued = await db.select(db.pendingChanges).getSingle();
     expect((queued.resourceId, queued.changeType), (id, 'flag_flagged'));
+    expect(
+      (await db.select(db.notifiedEmails).get()).map((n) => n.emailId),
+      [id],
+    );
+    expect((await db.select(db.drafts).getSingle()).replyToEmailId, id);
     final byId = {for (final e in await rows()) e.id: e};
     expect(byId.keys, isNot(contains('acc-1:copy')));
     expect(location(byId[id]!), ('Archive', 2, 22));
