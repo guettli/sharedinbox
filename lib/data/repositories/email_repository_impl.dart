@@ -7799,6 +7799,8 @@ class EmailRepositoryImpl implements EmailRepository {
         'UIDVALIDITY of $mailboxPath changed ($stamped → '
         '$selectedUidValidity) and ${uids.isEmpty ? 'no' : 'more than one'} '
         'message matches its Message-ID',
+        // Only after a real search: none is made without a Message-ID.
+        noMatch: uids.isEmpty && messageId != null && messageId.isNotEmpty,
       );
     }
     log(
@@ -7911,6 +7913,30 @@ class EmailRepositoryImpl implements EmailRepository {
         await _recordChangeError(row, e);
         log('IMAP flush for ${account.id} stopped: connection lost ($e)');
         return (applied: 0, connectionLost: e);
+      }
+      if (e is _ImapUidValidityChangedException &&
+          e.noMatch &&
+          row.changeType == 'delete') {
+        // A delete for good of a mail that is not in the renumbered folder
+        // any more: its intent is satisfied (SYNC-REDESIGN.md §5). The stale
+        // UID was not touched.
+        final owned = await (_db.delete(_db.pendingChanges)
+                  ..where((t) => _ownsClaim(t, row)))
+                .go() >
+            0;
+        if (!owned) return (applied: 0, connectionLost: null);
+        log('IMAP change ${row.id} skipped: message already gone ($e)');
+        unawaited(
+          _appLogger?.info(
+            'pending_change.skipped_gone',
+            'Skipped ${_describeChange(row)} — message already gone on '
+                'the server',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+          ),
+        );
+        return (applied: 1, connectionLost: null);
       }
       if (e is _ImapUidValidityChangedException) {
         // The folder was renumbered and the message cannot be identified
@@ -11635,9 +11661,13 @@ class _ImapSourceMailboxGoneException implements Exception {
 /// A queued IMAP change whose folder's UIDVALIDITY changed, and whose
 /// message is not found exactly once again by Message-ID.
 class _ImapUidValidityChangedException implements Exception {
-  _ImapUidValidityChangedException(this.message);
+  _ImapUidValidityChangedException(this.message, {this.noMatch = false});
 
   final String message;
+
+  /// No message in the folder has the change's Message-ID: the mail is not
+  /// there any more.
+  final bool noMatch;
 
   @override
   String toString() => message;
