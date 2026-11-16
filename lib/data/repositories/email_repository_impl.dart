@@ -1617,7 +1617,11 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final key = 'IMAP:FlagReconcile:$mailboxPath';
     final last = await _loadSyncState(accountId, key);
-    if (last != null) {
+    final dueValue = await _loadSyncState(
+      accountId,
+      _flagReconcileDueKey(mailboxPath, jmap: false),
+    );
+    if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
           DateTime.now().difference(lastAt) < _imapFlagReconcileInterval) {
@@ -1699,6 +1703,12 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     }
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+    await _settleFlagReconcileDue(
+      accountId,
+      mailboxPath,
+      jmap: false,
+      dueValue: dueValue,
+    );
   }
 
   static const _imapSizeBackfillBatch = 500;
@@ -3685,7 +3695,11 @@ class EmailRepositoryImpl implements EmailRepository {
   ) async {
     final key = 'JMAP:Reconcile:$mailboxJmapId';
     final last = await _loadSyncState(accountId, key);
-    if (last != null) {
+    final dueValue = await _loadSyncState(
+      accountId,
+      _flagReconcileDueKey(mailboxJmapId, jmap: true),
+    );
+    if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
           DateTime.now().difference(lastAt) < _jmapReconcileInterval) {
@@ -3769,6 +3783,12 @@ class EmailRepositoryImpl implements EmailRepository {
     );
     await _sweepOrphanThreads(accountId, mailboxJmapId);
     await _saveSyncState(accountId, key, DateTime.now().toIso8601String());
+    await _settleFlagReconcileDue(
+      accountId,
+      mailboxJmapId,
+      jmap: true,
+      dueValue: dueValue,
+    );
   }
 
   /// Fetches `keywords` for every local row in [mailboxJmapId] whose JMAP id
@@ -4182,7 +4202,10 @@ class EmailRepositoryImpl implements EmailRepository {
           state: gaveUp ? const Value(_failedState) : const Value.absent(),
         ),
       );
-      if (gaveUp) dependents = await _afterLocationFailure(row, revert: true);
+      if (gaveUp) {
+        await _afterFlagFailure(row, revert: true);
+        dependents = await _afterLocationFailure(row, revert: true);
+      }
     });
     _logDependentFailures(row, dependents);
 
@@ -4255,7 +4278,158 @@ class EmailRepositoryImpl implements EmailRepository {
         state: const Value(_failedState),
       ),
     );
+    await _afterFlagFailure(row, revert: revert);
     return _afterLocationFailure(row, revert: revert);
+  }
+
+  /// Called (inside the transaction that marked [row] failed) when a read or
+  /// star change just became failed: it no longer protects the optimistic
+  /// value (#1264), but an unchanged mail is read again only by the
+  /// 15-minute flag reconcile (with IMAP CONDSTORE, and always with JMAP),
+  /// so the app would show the user's value as if it had applied (#1270).
+  ///
+  /// Makes the flag reconcile of the mail's folder due, so the next sync
+  /// reads server truth, and with [revert] also puts the flag back at once
+  /// to its value before the change: the opposite of the requested one,
+  /// queued only when the shown value differed. That guess is skipped when
+  /// another change of the same flag exists (see below) or something else
+  /// already changed the flag; the reconcile sets it right then. A failure
+  /// here is logged and rolled back on its own, never taking the failed
+  /// state with it.
+  Future<void> _afterFlagFailure(
+    PendingChangeRow row, {
+    required bool revert,
+  }) async {
+    if (row.changeType != 'flag_seen' && row.changeType != 'flag_flagged') {
+      return;
+    }
+    try {
+      await _db.transaction(() => _revertFailedFlag(row, revert: revert));
+    } catch (e) {
+      log('Could not revert failed change ${row.id}: $e');
+    }
+  }
+
+  Future<void> _revertFailedFlag(
+    PendingChangeRow row, {
+    required bool revert,
+  }) async {
+    final key = row.changeType == 'flag_seen' ? 'seen' : 'flagged';
+    final payload = _decodePayload(row);
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    final account = await _accounts.getAccount(row.accountId);
+    if (account == null) return;
+    final jmap = account.type == account_model.AccountType.jmap;
+    // The folder the mail is shown in, and for IMAP the one the change
+    // addressed (they differ behind a queued move).
+    final addressed = jmap ? null : payload?['mailboxPath'];
+    for (final folder in {
+      if (email != null) email.mailboxPath,
+      if (addressed is String) addressed,
+    }) {
+      await _makeFlagReconcileDue(row.accountId, folder, jmap: jmap);
+    }
+    if (!revert || email == null || !_sameMessage(row, email.messageId)) {
+      return;
+    }
+    final wanted = payload?[key];
+    if (wanted is! bool) return;
+    // The value before [row] is known only when no other change of this
+    // flag is queued: a later pending one owns the local value, and after
+    // an earlier one (pending or failed) the shown value was never server
+    // truth.
+    final other = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(row.resourceId) &
+                t.id.equals(row.id).not() &
+                t.changeType.equals(row.changeType) &
+                (t.id.isSmallerThanValue(row.id) |
+                    t.state.equals(_pendingState)),
+          )
+          ..limit(1))
+        .getSingleOrNull();
+    if (other != null) return;
+    final current = key == 'seen' ? email.isSeen : email.isFlagged;
+    if (current != wanted) return;
+    await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
+      EmailsCompanion(
+        isSeen: key == 'seen' ? Value(!wanted) : const Value.absent(),
+        isFlagged: key == 'flagged' ? Value(!wanted) : const Value.absent(),
+      ),
+    );
+    await _updateThread(
+      email.accountId,
+      email.mailboxPath,
+      email.threadId ?? email.id,
+    );
+  }
+
+  /// Sync-state key that makes the periodic flag reconcile of [folder] (an
+  /// IMAP path, or a JMAP mailbox id) run at its next chance. Separate from
+  /// the reconcile's own timestamp, so a reconcile already running cannot
+  /// overwrite it; see [_settleFlagReconcileDue] for when it is cleared.
+  static String _flagReconcileDueKey(String folder, {required bool jmap}) =>
+      jmap ? 'JMAP:ReconcileDue:$folder' : 'IMAP:FlagReconcileDue:$folder';
+
+  Future<void> _makeFlagReconcileDue(
+    String accountId,
+    String folder, {
+    required bool jmap,
+  }) =>
+      _saveSyncState(
+        accountId,
+        _flagReconcileDueKey(folder, jmap: jmap),
+        DateTime.now().toIso8601String(),
+      );
+
+  /// Called after a flag reconcile of [folder] that ran to the end, with
+  /// [dueValue], the due marker as it was when the pass started. Clears the
+  /// marker unless it was set again since (a change failed during the pass),
+  /// or the pass had to skip a mail with a failed read/star change because
+  /// another change of that mail is still queued: then the next sync tries
+  /// again. A pass that throws leaves the marker alone.
+  Future<void> _settleFlagReconcileDue(
+    String accountId,
+    String folder, {
+    required bool jmap,
+    required String? dueValue,
+  }) async {
+    if (dueValue == null) return;
+    final inFlight = await _inFlightFlagResourceIds(accountId);
+    if (inFlight.isNotEmpty) {
+      final failedFlags = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.state.equals(_failedState) &
+                  t.changeType.isIn(const ['flag_seen', 'flag_flagged']) &
+                  t.resourceId.isIn(inFlight),
+            ))
+          .get();
+      if (failedFlags.isNotEmpty) {
+        final skipped = await (_db.select(_db.emails)
+              ..where(
+                (t) =>
+                    t.id.isIn([for (final c in failedFlags) c.resourceId]) &
+                    t.mailboxPath.equals(folder),
+              )
+              ..limit(1))
+            .getSingleOrNull();
+        if (skipped != null) return;
+      }
+    }
+    await (_db.delete(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType
+                    .equals(_flagReconcileDueKey(folder, jmap: jmap)) &
+                t.state.equals(dueValue),
+          ))
+        .go();
   }
 
   /// Change types that change where a mail is.
@@ -4458,6 +4632,9 @@ class EmailRepositoryImpl implements EmailRepository {
       threadId,
     );
     await _updateThread(row.accountId, target, threadId);
+    // Read/star changes made while the mail was shown elsewhere may have
+    // failed as well, and the reconcile they made due was for that folder.
+    await _makeFlagReconcileDue(row.accountId, target, jmap: !isImap);
     log(
       'Pending change ${row.id} failed: ${email.id} back in $target '
       '(was shown in ${email.mailboxPath})',
