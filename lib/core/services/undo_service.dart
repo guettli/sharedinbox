@@ -40,10 +40,10 @@ class UndoService extends Notifier<List<UndoAction>> {
         .pushAndTrim(action, maxHistory: _maxHistory);
   }
 
-  /// Returns the persisted copy of [action]. When the original move reached
-  /// the server, the IMAP re-key rewrote the email ids in the stored action
-  /// (see `_rekeyEmailRow`) but not in [state], so the in-memory copy may
-  /// still reference the pre-move id (#1048).
+  /// Returns the persisted copy of [action]. Row ids are frozen, but when
+  /// sync merged a second row of a mail into the kept one, the stored action
+  /// names the kept row (`_mergeDuplicateRow`) while [state] may still name
+  /// the dropped one (#1048).
   Future<UndoAction> _reload(UndoAction action) async {
     final history =
         await ref.read(undoRepositoryProvider).getHistory(limit: _maxHistory);
@@ -67,7 +67,8 @@ class UndoService extends Notifier<List<UndoAction>> {
           if (a.id != current)
             a
           else
-            // Take the persisted copy's (possibly re-keyed) email ids.
+            // Take the persisted copy's email ids (a duplicate merge may
+            // have re-pointed them).
             (a.id == action.id ? action : a).withUndoneAt(m),
       ];
       if (!id.endsWith(UndoAction.inverseSuffix)) break;

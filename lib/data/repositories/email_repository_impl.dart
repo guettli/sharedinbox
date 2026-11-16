@@ -1047,11 +1047,9 @@ class EmailRepositoryImpl implements EmailRepository {
           'Relocate $id to UID $newUid in $newMailboxPath: dropping the copy '
           'sync already fetched (${existing.id})',
         );
-        final copyId = existing.id;
         // Its queued changes, logs, thread and Undo references (and its
-        // body, if this row has none) carry over to this row first.
-        await _adoptImapMovedRow(oldId: copyId, newId: id);
-        await (_db.delete(_db.emails)..where((t) => t.id.equals(copyId))).go();
+        // body, if this row has none) carry over to this row.
+        await _mergeDuplicateRow(dropId: existing.id, keepId: id);
         merged = existing;
         // The kept row has this app's view of the flags, the dropped one the
         // server's: read them again.
@@ -1140,12 +1138,14 @@ class EmailRepositoryImpl implements EmailRepository {
   /// optimistic move (e.g. Undo's reverse move Trash→INBOX) still carry the
   /// pre-move UID, which does not exist in the destination mailbox: the server
   /// would accept the `UID MOVE` as a no-op and the change would be lost
-  /// (#1048).
+  /// (#1048). With [fromMailboxPath], the changes that still address the
+  /// mail at [oldUid] there (another client moved it) follow it too.
   Future<void> _rewritePendingChangeUids({
     required String resourceId,
     required String mailboxPath,
     required int newUid,
     int? oldUid,
+    String? fromMailboxPath,
   }) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.resourceId.equals(resourceId)))
@@ -1158,10 +1158,20 @@ class EmailRepositoryImpl implements EmailRepository {
         continue;
       }
       if (payload['uid'] is! int) continue;
-      if (payload['uid'] == newUid && payload[_uidAfterMoveKey] == null) {
+      final addressed = payload['mailboxPath'] ?? payload['src'];
+      // Addresses the mail where it was before another client moved it.
+      final leftBehind = fromMailboxPath != null &&
+          fromMailboxPath != mailboxPath &&
+          addressed == fromMailboxPath &&
+          payload['uid'] == oldUid &&
+          payload[_uidAfterMoveKey] == null;
+      if (leftBehind) {
+        payload[payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src'] =
+            mailboxPath;
+      } else if (payload['uid'] == newUid &&
+          payload[_uidAfterMoveKey] == null) {
         continue;
-      }
-      if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) {
+      } else if (addressed != mailboxPath) {
         // Queued behind a later move that is not answered yet: it stays
         // marked, but carries the mail's current UID, as one queued now
         // would. Undoing or failing that move points it back here by
@@ -2487,16 +2497,20 @@ class EmailRepositoryImpl implements EmailRepository {
         if (inFlightSet.contains(row.id)) continue;
         // A message that vanished from this folder but reappeared under a
         // different folder with the same move-stable server id (RFC 8474
-        // EMAILID / Gmail X-GM-MSGID) was moved, not deleted. Hand its
-        // locally-cached body and undo/thread references to the destination
-        // row before dropping this one, so a foreign move preserves the same
-        // state as one we made ourselves (#589). Correct for Gmail/COPY too:
+        // EMAILID / Gmail X-GM-MSGID) was moved, not deleted. Its row
+        // carries over to the new location with its id, body and
+        // references, as after a move we made ourselves (#589); the row
+        // sync stored there is merged into it. Correct for Gmail/COPY too:
         // those keep the message in the source folder, so no vanish fires.
-        final destId = await _movedDestinationId(accountId, row);
-        if (destId != null) {
-          await _adoptImapMovedRow(oldId: row.id, newId: destId);
-        }
         affectedThreads.add(row.threadId ?? row.id);
+        final copy = await _movedCopyOf(row, mailboxPath);
+        if (copy != null) {
+          final dropped = await _carryOverMovedRow(row: row, copy: copy);
+          if (dropped != null) {
+            _logMovedRowCarriedOver(row, dropped);
+            continue;
+          }
+        }
         await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
       }
     }
@@ -2505,77 +2519,194 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  /// When [row] has just vanished from its folder, returns the id of another
-  /// locally cached row (in a different folder of the same account) that
-  /// carries the same move-stable server id — i.e. the destination of a folder
-  /// move. Returns null when [row] has no server id or no such sibling exists.
-  Future<String?> _movedDestinationId(String accountId, Email row) async {
+  /// When [row] has just vanished from [vanishedFrom], returns the row of
+  /// the same mail in another folder of the account: the only other row
+  /// with [row]'s move-stable server id (RFC 8474 EMAILID / X-GM-MSGID),
+  /// which sync stored at the mail's new location. Null when [row] has no
+  /// server id, or no such row or more than one exists (SYNC-REDESIGN.md
+  /// §6: a row carries over only on a unique match).
+  Future<Email?> _movedCopyOf(Email row, String vanishedFrom) async {
     final serverEmailId = row.serverEmailId;
     if (serverEmailId == null || serverEmailId.isEmpty) return null;
-    final dest = await (_db.select(_db.emails)
+    final copies = await (_db.select(_db.emails)
           ..where(
             (t) =>
-                t.accountId.equals(accountId) &
+                t.accountId.equals(row.accountId) &
                 t.serverEmailId.equals(serverEmailId) &
                 t.id.equals(row.id).not(),
           )
-          ..limit(1))
-        .getSingleOrNull();
-    return dest?.id;
+          ..limit(2))
+        .get();
+    if (copies.length != 1) return null;
+    final copy = copies.single;
+    if (copy.isLocal || copy.srvUid == null) return null;
+    final copyPath = copy.srvMailboxPath;
+    if (copyPath == null || copyPath == vanishedFrom) return null;
+    return copy;
   }
 
-  /// Migrates the locally-cached artifacts of a moved-away row [oldId] onto the
-  /// destination row [newId]: the cached body (only when the destination has
-  /// none, to avoid a primary-key clash) and every undo/thread/pending
-  /// reference. The [oldId] `emails` row itself is deleted by the caller.
-  Future<void> _adoptImapMovedRow({
-    required String oldId,
-    required String newId,
+  /// Another client moved the mail of [row] (it vanished from its folder)
+  /// to where sync already stored it as [copy]. [row] carries over: it keeps
+  /// its id and takes the copy's place, i.e. everything the copy recorded
+  /// (shown folder, UID, server location, headers, and the flags it has no
+  /// queued change for), and the copy is merged into it
+  /// ([_mergeDuplicateRow]). The vanished row survives, not
+  /// the copy, because it is the one the user knows: an open detail view,
+  /// Undo history, notifications and drafts reference its id, while the
+  /// copy was stored by a recent sync; whatever references the copy did
+  /// collect are re-pointed. Its queued IMAP changes that address the old
+  /// location follow the mail to the new one. Returns the dropped copy for
+  /// the App Log, or null when [row] or [copy] is gone by now.
+  Future<Email?> _carryOverMovedRow({
+    required Email row,
+    required Email copy,
+  }) async {
+    return _db.transaction(() async {
+      final current = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(row.id)))
+          .getSingleOrNull();
+      final dup = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(copy.id)))
+          .getSingleOrNull();
+      if (current == null || dup == null) return null;
+      final newPath = dup.srvMailboxPath;
+      final newUid = dup.srvUid;
+      if (newPath == null || newUid == null) return null;
+      // A flag the user changed on [row] before the move, not changed on
+      // the copy since: the server's value there does not have the change
+      // yet, so the row keeps showing it until the queued change is sent.
+      final rowFlagChanges = await _liveChangeTypes(current.id);
+      final copyFlagChanges = await _liveChangeTypes(dup.id);
+      bool keepOwn(String type) =>
+          rowFlagChanges.contains(type) && !copyFlagChanges.contains(type);
+      await _mergeDuplicateRow(dropId: dup.id, keepId: current.id);
+      await (_db.update(_db.emails)..where((t) => t.id.equals(current.id)))
+          .write(
+        dup.toCompanion(false).copyWith(
+              id: const Value.absent(),
+              isSeen: keepOwn('flag_seen')
+                  ? Value(current.isSeen)
+                  : Value(dup.isSeen),
+              isFlagged: keepOwn('flag_flagged')
+                  ? Value(current.isFlagged)
+                  : Value(dup.isFlagged),
+            ),
+      );
+      await _rewritePendingChangeUids(
+        resourceId: current.id,
+        mailboxPath: newPath,
+        newUid: newUid,
+        oldUid: current.srvUid ?? current.uid,
+        fromMailboxPath: current.srvMailboxPath ?? current.mailboxPath,
+      );
+      // The copy's thread in the new folder lists this row now.
+      for (final threadId in {dup.threadId ?? dup.id, dup.threadId ?? row.id}) {
+        await _updateThread(dup.accountId, dup.mailboxPath, threadId);
+      }
+      return dup;
+    });
+  }
+
+  /// The change types queued (pending, inflight or stuck) for row [id].
+  Future<Set<String>> _liveChangeTypes(String id) async {
+    final rows = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.resourceId.equals(id) & t.state.isIn(_liveStates)))
+        .get();
+    return {for (final r in rows) r.changeType};
+  }
+
+  /// App Log line for a copy [_carryOverMovedRow] merged into [kept].
+  void _logMovedRowCarriedOver(Email kept, Email dropped) {
+    unawaited(
+      _appLogger?.warn(
+        'email.duplicate_merged',
+        '"${dropped.subject ?? '(no subject)'}" was moved from '
+            '${kept.mailboxPath} to ${dropped.mailboxPath} by another '
+            'client: its row follows it there, and the second row sync had '
+            'stored there was merged into it.',
+        accountId: kept.accountId,
+        mailboxPath: dropped.mailboxPath,
+        emailId: kept.id,
+        data: {
+          'droppedEmailId': dropped.id,
+          'from': kept.mailboxPath,
+          'to': dropped.mailboxPath,
+        },
+      ),
+    );
+  }
+
+  /// Merges [dropId], a second row of the mail of [keepId], into [keepId]
+  /// and deletes it. Row ids are frozen (SYNC-REDESIGN.md §6): this is the
+  /// only place that points references from one email row to another, and
+  /// only for a duplicate about to be deleted. Its cached body moves over
+  /// when [keepId] has none, and its queued changes, thread entries, Undo
+  /// history, App Log lines, notification marks and draft replies point at
+  /// [keepId]. The caller logs the merge once its transaction committed.
+  Future<void> _mergeDuplicateRow({
+    required String dropId,
+    required String keepId,
   }) async {
     await _db.transaction(() async {
-      final destHasBody = await (_db.select(_db.emailBodies)
-                ..where((t) => t.emailId.equals(newId))
+      final keepHasBody = await (_db.select(_db.emailBodies)
+                ..where((t) => t.emailId.equals(keepId))
                 ..limit(1))
               .getSingleOrNull() !=
           null;
-      if (destHasBody) {
-        // Keep the destination's own body; drop the now-orphaned source copy.
-        await (_db.delete(_db.emailBodies)
-              ..where((t) => t.emailId.equals(oldId)))
-            .go();
-      } else {
+      if (!keepHasBody) {
         await _db.customStatement(
           'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
-          [newId, oldId],
+          [keepId, dropId],
         );
       }
 
       await (_db.update(_db.pendingChanges)
-            ..where((t) => t.resourceId.equals(oldId)))
-          .write(PendingChangesCompanion(resourceId: Value(newId)));
+            ..where((t) => t.resourceId.equals(dropId)))
+          .write(PendingChangesCompanion(resourceId: Value(keepId)));
 
       // threads.latest_email_id / threads.email_ids_json and undo_actions
       // embed email ids as unique opaque strings — safe to rewrite by REPLACE.
       await _db.customStatement(
         'UPDATE threads SET latest_email_id = ?1 WHERE latest_email_id = ?2',
-        [newId, oldId],
+        [keepId, dropId],
       );
       await _db.customStatement(
         'UPDATE threads SET email_ids_json = REPLACE(email_ids_json, ?1, ?2) '
         'WHERE email_ids_json LIKE ?3',
-        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+        ['"$dropId"', '"$keepId"', '%"$dropId"%'],
       );
       await _db.customStatement(
         'UPDATE undo_actions SET data_json = REPLACE(data_json, ?1, ?2) '
         'WHERE data_json LIKE ?3',
-        ['"$oldId"', '"$newId"', '%"$oldId"%'],
+        ['"$dropId"', '"$keepId"', '%"$dropId"%'],
       );
       // The per-message logs follow the message;
-      // dropping the source row would set their email_id to null.
+      // deleting the row would set their email_id to null.
       await _db.customStatement(
         'UPDATE app_logs SET email_id = ?1 WHERE email_id = ?2',
-        [newId, oldId],
+        [keepId, dropId],
       );
+      // A notification shown for the copy counts for the kept row, so the
+      // mail is not announced twice.
+      await _db.customStatement(
+        'INSERT OR IGNORE INTO notified_emails '
+        '(account_id, email_id, notified_at) '
+        'SELECT account_id, ?1, notified_at FROM notified_emails '
+        'WHERE email_id = ?2',
+        [keepId, dropId],
+      );
+      await _db.customStatement(
+        'DELETE FROM notified_emails WHERE email_id = ?1',
+        [dropId],
+      );
+      await _db.customStatement(
+        'UPDATE drafts SET reply_to_email_id = ?1 '
+        'WHERE reply_to_email_id = ?2',
+        [keepId, dropId],
+      );
+      // Its own body (when the kept row has one) and attachment files go
+      // with it.
+      await (_db.delete(_db.emails)..where((t) => t.id.equals(dropId))).go();
     });
   }
 

@@ -5,8 +5,9 @@ abstract class UndoRepository {
   Future<void> deleteAction(String id);
 
   /// Sets (or clears) [UndoAction.undoneAt] on the stored row [id], keeping
-  /// the rest of the row as it is now (a flush may have re-keyed its email
-  /// ids meanwhile). Does nothing when the row no longer exists.
+  /// the rest of the row as it is now (sync may have re-pointed its email
+  /// ids to the kept row of a merged duplicate meanwhile). Does nothing
+  /// when the row no longer exists.
   Future<void> setUndoneAt(String id, DateTime? undoneAt);
   Future<List<UndoAction>> getHistory({int limit = 10});
   Future<void> clearHistory();

@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -31,6 +32,7 @@ class StatefulImapRig {
   static Future<StatefulImapRig> open(
     StatefulFakeImapServer server, {
     required List<(String, String)> folders,
+    AppLogger? appLogger,
   }) async {
     final rig = StatefulImapRig._(server, openTestDatabase());
     final db = rig.db;
@@ -41,9 +43,12 @@ class StatefulImapRig {
       imapConnect: (_, __, ___) async => server.connect(),
       smtpConnect: (_, __, ___) =>
           Future.error(UnsupportedError('no SMTP in this test')),
-      fetchObjectIds: (_, __, ___) async => const {},
+      // Asked only when the server advertises OBJECTID.
+      fetchObjectIds: (client, sequence, _) =>
+          (client as StatefulFakeImapClient).emailIdsOf(sequence),
       fetchPreviewSnippets: (_, __, ___) async => const {},
       now: () => rig.now,
+      appLogger: appLogger,
     );
     await accounts.addAccount(statefulRigAccount, 'pw');
     for (final (path, role) in folders) {

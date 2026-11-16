@@ -536,10 +536,27 @@ As implemented, phase 2 is a series of PRs:
    email id, and the foreground dispatcher counts the row stored later at
    that location as notified. `scripts/check_email_ids.sh` (in
    `check-layers`) bans the old id shapes in `lib/`, migrations excepted.
-3. **2c (planned):** frozen ids: the remaining re-keys (foreign-move
-   adoption `_adoptImapMovedRow`) become updates of the `srv_` columns.
+3. **2c (done, no schema change):** frozen ids. The foreign-move adoption
+   no longer re-keys: when a row vanishes from its folder and exactly one
+   other row of the account has its move-stable server id, the vanished
+   row carries over to that row's place (`_carryOverMovedRow`) and keeps
+   its id; the other row is merged into it. The vanished row survives
+   because the user's references (open detail view, Undo, notifications,
+   drafts) name it, while the other row was stored by a recent sync. It
+   takes everything the other row recorded except the flags it has a
+   queued change for, and its queued IMAP changes follow the mail to the
+   new UID. No match or several matches delete the row, as before.
+   `_mergeDuplicateRow` (shared with the move remap's duplicate merge) is
+   the only place that re-points references between rows: body, queued
+   changes, threads, Undo, App Log, and now also `notified_emails` and
+   `drafts.reply_to_email_id`; each merge logs `email.duplicate_merged`.
+   `scripts/check_email_ids.sh` also fails on writes of `emails.id` after
+   insert (`UPDATE emails SET id`, `id:` in an update `EmailsCompanion`,
+   `copyWith(id: Value(…))`) and on re-pointing references outside
+   `_mergeDuplicateRow`. Left for phase 4: when the source folder is synced
+   before the destination, the row is still deleted and a new one stored.
 4. **2d (planned):** split `email_repository_impl.dart` along the writer
-   roles.
+   roles of Appendix A.
 
 **Phase 3 — the `keywords` overlay.** `ALTER TABLE ADD COLUMN` for the
 `srv_`/`local_` pairs of `is_seen`, `is_flagged` and `snoozed_until`, plus

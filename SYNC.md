@@ -110,7 +110,19 @@ The row id is **opaque**: a new row (fetch, JMAP upsert, Sent copy, virtual row)
 `accountId:~` plus 32 random hex digits (`newEmailId`, `lib/data/repositories/email_ids.dart`),
 so a reused UID can never name another mail's row. No code builds an id from a location
 or reads anything out of one; `scripts/check_email_ids.sh` (part of `check-layers`, run by
-`check-fast`) fails on the old shapes. Rows stored before schema v71 keep their old ids
+`check-fast`) fails on the old shapes.
+
+Row ids are also **frozen**: a row keeps the id it was inserted with for its whole life.
+A row that carries over to a new location (a move, the body-fetch healing, a move made by
+another client) changes only its UID, shown `mailbox_path` and `srv_` columns, so
+everything that references it (body, attachments, queued changes, App Log, threads, Undo,
+notification marks, draft replies, an open detail view) stays valid. When two rows turn out
+to hold the same mail, the second one is merged into the kept one and deleted
+(`_mergeDuplicateRow`, App Log warn `email.duplicate_merged`): its queued changes, thread
+entries, Undo history, App Log lines, notification marks and draft replies point at the
+kept row, and its body moves over if the kept row has none. That is the only place that
+re-points references between rows; `check_email_ids.sh` also fails on any other write of
+`emails.id` after insert or re-pointing of references. Rows stored before schema v71 keep their old ids
 (`accountId:mailboxPath:uid`, `accountId:jmapId`, `accountId:__local__:…`); what those
 said was moved into columns once, by the v70/v71 migrations: the server location, the
 `jmapId` stamped on each queued JMAP change, and `is_virtual_sent_copy`. Undo snapshots
@@ -138,6 +150,21 @@ mail where the user's last move put it (#1276). The body-fetch identity guard (#
 relocates a row the same way. Deletion reconciliation
 also skips rows whose move is still queued, so the optimistic local move never gets
 wiped mid-flight.
+
+**Foreign move** — when another client moves a mail, its UID vanishes from the source
+folder and a new UID appears in the destination. On servers with a move-stable id (RFC 8474
+`EMAILID`, Gmail `X-GM-MSGID`, stored as `serverEmailId`), the deletion reconcile of the
+source looks for the row sync already stored in the destination with that id. When exactly
+one such row exists (#589), the vanished row carries over: it keeps its id and takes the
+other row's place (shown folder, UID, server location, flags, headers), and the other row
+is merged into it (see "Row identity"; App Log warn `email.duplicate_merged`). The vanished
+row survives because it is the one the user knows (an open detail view, Undo, notifications
+and drafts reference its id), while the other was stored by a recent sync. A flag change
+queued on the vanished row before the move follows the mail to its new UID, and the row
+keeps showing that flag until the change is sent. With no such row, or more than one, the
+vanished row is deleted. When the source folder is synced before the destination, the row
+is deleted and the destination's sync stores a new row (phase 4's absence rules address
+that order).
 
 **No resurrection by a late FETCH answer** — the new-mail FETCH does not insert a row for
 a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is

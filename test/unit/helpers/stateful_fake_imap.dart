@@ -55,6 +55,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
   StatefulFakeImapServer({
     required Map<String, int> uidValidityByFolder,
     this.uidPlus = true,
+    this.objectIds = false,
   }) {
     for (final MapEntry(key: path, value: validity)
         in uidValidityByFolder.entries) {
@@ -64,6 +65,11 @@ class StatefulFakeImapServer with StaleAnswerHook {
 
   /// Whether connections advertise UIDPLUS (`COPYUID` on MOVE).
   final bool uidPlus;
+
+  /// Whether connections advertise OBJECTID (RFC 8474): each message then
+  /// has a move-stable EMAILID, `E-<Message-ID>`
+  /// ([StatefulFakeImapClient.emailIdsOf]).
+  final bool objectIds;
 
   final Map<String, FakeServerFolder> folders = {};
   final List<FakeServerHit> hits = [];
@@ -151,8 +157,17 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       const imap.Capability('CONDSTORE'),
       const imap.Capability('MOVE'),
       if (server.uidPlus) const imap.Capability('UIDPLUS'),
+      if (server.objectIds) const imap.Capability('OBJECTID'),
     ];
   }
+
+  /// The EMAILID of each message of the selected folder that [sequence]
+  /// names, by UID, as `FETCH (EMAILID)` would answer.
+  Future<Map<int, String>> emailIdsOf(imap.MessageSequence sequence) =>
+      _answer('FETCH EMAILID', {
+        for (final message in _named(sequence))
+          message.uid: 'E-${message.messageId}',
+      });
 
   final StatefulFakeImapServer server;
   FakeServerFolder? _selected;
