@@ -4598,7 +4598,14 @@ void main() {
         expect(removed.level, AppLogLevel.warn);
         expect(removed.emailId, isNull);
         expect(removed.mailboxPath, 'INBOX');
-        expect(removed.message, contains('in neither folder'));
+        expect(
+          removed.message,
+          contains('neither its source nor its destination folder'),
+        );
+        final data = jsonDecode(removed.dataJson!) as Map<String, dynamic>;
+        expect(data['removedEmailId'], oldId);
+        expect(data['messageId'], messageId);
+        expect(data['changeType'], 'move');
       });
     });
 
@@ -10737,6 +10744,56 @@ void main() {
       final skipped = recorder.entries
           .singleWhere((e) => e.event == 'pending_change.skipped_gone');
       expect(skipped.emailId, isNull);
+    });
+
+    // The row now holds another mail (its Message-ID differs from the one
+    // the move was queued for): it is kept, and nothing says it was removed.
+    test('a move whose source folder is gone keeps a row of another mail',
+        () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _NonExistentSelectImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Old:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              messageId: const Value('other@example.com'),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Old:1',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 1,
+                'mailboxPath': 'Old',
+                'dest': 'Archive',
+                'messageId': 'm1@example.com',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+      expect(await r.db.select(r.db.emails).get(), hasLength(1));
+      expect(
+        recorder.entries.where(
+          (e) => e.event == 'pending_change.local_row_removed',
+        ),
+        isEmpty,
+      );
+      final skipped = recorder.entries
+          .singleWhere((e) => e.event == 'pending_change.skipped_gone');
+      expect(skipped.emailId, 'acc-1:Old:1');
     });
   });
 

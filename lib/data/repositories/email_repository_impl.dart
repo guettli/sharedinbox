@@ -4176,18 +4176,29 @@ class EmailRepositoryImpl implements EmailRepository {
     Object error, {
     bool revert = true,
   }) async {
-    final dependents = await _db.transaction(() async {
-      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
-          .write(
-        PendingChangesCompanion(
-          attempts: Value(row.attempts + 1),
-          lastError: Value(error.toString()),
-          state: const Value(_failedState),
-        ),
-      );
-      return _afterLocationFailure(row, revert: revert);
-    });
+    final dependents = await _db.transaction(
+      () => _markChangeFailedInTransaction(row, error, revert: revert),
+    );
     _logDependentFailures(row, dependents);
+  }
+
+  /// The database part of [_markChangeFailed], for a caller that runs it in
+  /// its own transaction: returns the dependents, to log with
+  /// [_logDependentFailures] once that transaction has committed.
+  Future<List<PendingChangeRow>> _markChangeFailedInTransaction(
+    PendingChangeRow row,
+    Object error, {
+    required bool revert,
+  }) async {
+    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+        .write(
+      PendingChangesCompanion(
+        attempts: Value(row.attempts + 1),
+        lastError: Value(error.toString()),
+        state: const Value(_failedState),
+      ),
+    );
+    return _afterLocationFailure(row, revert: revert);
   }
 
   /// Change types that change where a mail is.
@@ -4267,8 +4278,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
   /// App Log line for a row [_dropGoneRow] removed: the mail vanishes from
   /// the list, so the user must be able to find out why.
-  /// [why] says what the server showed, e.g. "the message is in neither
-  /// folder on the server".
+  /// [why] says what happened, e.g. "a failed move: the message is in
+  /// neither its source nor its destination folder on the server".
   void _logGoneRowDropped(
     PendingChangeRow failed,
     Email? dropped, {
@@ -4279,9 +4290,8 @@ class EmailRepositoryImpl implements EmailRepository {
       _appLogger?.warn(
         'pending_change.local_row_removed',
         'Removed "${dropped.subject ?? '(no subject)'}" from '
-            '${dropped.mailboxPath} on this device — after '
-            '${_describeChange(failed)}: $why; if another client moved it, '
-            'it shows up there on the next sync',
+            '${dropped.mailboxPath} on this device after $why; if another '
+            'client moved it, it shows up there on the next sync',
         accountId: dropped.accountId,
         mailboxPath: dropped.mailboxPath,
         // The row is gone; a log row must not reference it.
@@ -7340,15 +7350,12 @@ class EmailRepositoryImpl implements EmailRepository {
         // (e.g. an Undo's reverse move, #1048) did not happen: mark the
         // change failed and say so in the App Log at warn level.
         // One transaction: a phantom row must not outlive a crash here.
-        final dropped = await _db.transaction(() async {
-          await _markChangeFailed(row, e, revert: false);
-          return e.inNeitherMailbox ? await _dropGoneRow(row) : null;
+        final (:dependents, :dropped) = await _db.transaction(() async {
+          final dependents =
+              await _markChangeFailedInTransaction(row, e, revert: false);
+          final dropped = e.inNeitherMailbox ? await _dropGoneRow(row) : null;
+          return (dependents: dependents, dropped: dropped);
         });
-        _logGoneRowDropped(
-          row,
-          dropped,
-          why: 'the message is in neither folder on the server',
-        );
         log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
@@ -7362,6 +7369,13 @@ class EmailRepositoryImpl implements EmailRepository {
             data: {'changeType': row.changeType},
             error: e,
           ),
+        );
+        _logDependentFailures(row, dependents);
+        _logGoneRowDropped(
+          row,
+          dropped,
+          why: 'a failed ${_describeChange(row)}: the message is in neither '
+              'its source nor its destination folder on the server',
         );
         return (applied: 0, connectionLost: null);
       }
@@ -7398,11 +7412,6 @@ class EmailRepositoryImpl implements EmailRepository {
           // UID, naming whichever mail has that UID there (#1268).
           return sourceGone ? await _dropGoneRow(row) : null;
         });
-        _logGoneRowDropped(
-          row,
-          dropped,
-          why: 'its source folder no longer exists on the server',
-        );
         log('IMAP change ${row.id} skipped: message already gone ($e)');
         unawaited(
           _appLogger?.info(
@@ -7413,6 +7422,12 @@ class EmailRepositoryImpl implements EmailRepository {
             emailId: dropped != null ? null : row.resourceId,
             data: {'changeType': row.changeType},
           ),
+        );
+        _logGoneRowDropped(
+          row,
+          dropped,
+          why: 'a skipped ${_describeChange(row)}: its source folder no '
+              'longer exists on the server',
         );
         return (applied: 1, connectionLost: null);
       }
