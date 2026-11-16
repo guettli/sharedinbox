@@ -263,10 +263,17 @@ not charged further; re-sending it is safe.
 
 A failed change is never flushed again and protects nothing from sync (the guards
 only count `pending` rows), so the next server read shows server truth again. A failed
-move, snooze or unsnooze is also undone locally at once: the mail goes back to its
+read or star change makes the flag reconcile of the mail's folder due, so the next sync
+reads that folder's flags (with CONDSTORE, and with JMAP, an unchanged mail is otherwise
+read again only every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker
+keeps a reconcile already running from overwriting that. It also puts the flag back at
+once to its value before the change, unless another change of the same flag exists for
+the mail (then that value is not known locally).
+A failed move, snooze or unsnooze is also undone locally at once: the mail goes back to its
 source folder with its earlier snooze state (payloads carry `prevSnoozedUntil` /
 `prevSnoozedFrom` for that), and later IMAP flag changes queued for it in the
-destination are pointed back at the source UID. This is skipped when the mail is
+destination are pointed back at the source UID, and the flag reconcile of the source is
+made due (read/star changes made meanwhile may have failed too). This is skipped when the mail is
 gone (message gone, UIDVALIDITY reset, JMAP `notFound`), when it is no longer where
 the change put it, or when its source folder was renumbered since. The mail's later
 queued moves, snoozes, unsnoozes and deletes address it where the failed change
@@ -433,8 +440,10 @@ the server the user did not ask for, and no change is left `pending` or
 away). A failure prints the seed and the action trace. A seed reproduces
 the run only against the same code (any change in the IMAP commands the app
 sends shifts the random choices), so the trace is the durable record. Bugs it
-found and not yet fixed are kept as skipped regression tests in the same
-file (#1270), and the driver avoids exactly their triggers.
+finds and that are not fixed yet are kept as skipped regression tests in the
+same file, and the driver avoids exactly their triggers; the regression tests
+of fixed ones (#1266–#1271) run. The driver still avoids moving a mail again
+while its earlier move is queued (#1276).
 Longer or focused runs (locally, with a
 Flutter SDK):
 

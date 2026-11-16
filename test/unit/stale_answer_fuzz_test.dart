@@ -69,7 +69,9 @@ void main() {
   _knownBugs();
 }
 
-/// STALE_FUZZ_KNOWN_BUGS=1 runs the skipped regression tests below.
+/// STALE_FUZZ_KNOWN_BUGS=1 runs the skipped regression tests below. Kept
+/// while no known bug is open, for the next one the fuzz finds.
+// ignore: unused_element
 String? _knownBug(String reason) =>
     Platform.environment['STALE_FUZZ_KNOWN_BUGS'] == '1' ? null : reason;
 
@@ -386,12 +388,83 @@ void _knownBugs() {
         expect(failed, hasLength(1));
         expect((await row('a@test')).isSeen, isFalse);
       },
-      skip: _knownBug(
-        'known bug #1270: a failed IMAP flag change is not undone '
-        'locally, and with CONDSTORE the unchanged mail is read again only by '
-        'the 15-minute flag reconcile (SYNC.md §6: "the next server read '
-        'shows server truth again")',
-      ),
+    );
+
+    test(
+      'a failed IMAP flag change is undone as soon as it fails',
+      () async {
+        server.deliver('INBOX', 'a@test');
+        server.refuses = (messageId) => messageId == 'a@test';
+        await open();
+
+        await emails.setFlag((await row('a@test')).id, seen: true);
+        // Flushes only: no sync reads the server meanwhile.
+        for (var i = 0; i < 6; i++) {
+          await emails.flushPendingChanges(_account.id, 'pw');
+        }
+
+        final failed = await (db.select(db.pendingChanges)
+              ..where((t) => t.state.equals('failed')))
+            .get();
+        expect(failed, hasLength(1));
+        expect((await row('a@test')).isSeen, isFalse);
+      },
+    );
+
+    test(
+      'two failed changes of one flag do not guess the value before them',
+      () async {
+        server.deliver('INBOX', 'a@test');
+        server.refuses = (messageId) => messageId == 'a@test';
+        await open();
+        final id = (await row('a@test')).id;
+
+        // Star, then unstar: both refused. Undoing the unstar must not star
+        // the mail, since the star never reached the server either.
+        await emails.setFlag(id, flagged: true);
+        await emails.setFlag(id, flagged: false);
+        for (var i = 0; i < 6; i++) {
+          await emails.flushPendingChanges(_account.id, 'pw');
+        }
+
+        final failed = await (db.select(db.pendingChanges)
+              ..where((t) => t.state.equals('failed')))
+            .get();
+        expect(failed, hasLength(2));
+        expect((await row('a@test')).isFlagged, isFalse);
+        await _syncCycle(emails);
+        expect((await row('a@test')).isFlagged, isFalse);
+      },
+    );
+
+    test(
+      'when failed flag changes cannot be undone, the next sync reads the '
+      'server',
+      () async {
+        server.deliver('INBOX', 'a@test');
+        server.refuses = (messageId) => messageId == 'a@test';
+        await open();
+        final id = (await row('a@test')).id;
+
+        // Star, unstar, star: all refused. The last one fails after an
+        // earlier one, so the value before it is not known locally.
+        await emails.setFlag(id, flagged: true);
+        await emails.setFlag(id, flagged: false);
+        await emails.setFlag(id, flagged: true);
+        for (var i = 0; i < 6; i++) {
+          await emails.flushPendingChanges(_account.id, 'pw');
+        }
+        expect(
+          await (db.select(db.pendingChanges)
+                ..where((t) => t.state.equals('pending')))
+              .get(),
+          isEmpty,
+        );
+
+        // One sync, well within the 15-minute reconcile interval.
+        await emails.syncEmails(_account.id, 'INBOX');
+        expect((await row('a@test')).isFlagged, isFalse);
+      },
     );
   });
 }
@@ -839,29 +912,15 @@ class _FuzzRun {
     }
     if (stable < 2) return ['sync did not settle within 15 cycles'];
 
-    // A due flag reconcile re-reads every flag: it must find nothing to fix,
-    // except the flags of a mail whose flag change failed. That one keeps its
-    // optimistic flags until the reconcile (known bug #1270), so it is
-    // checked after it.
+    // A due flag reconcile re-reads every flag: it must find nothing to fix.
     for (final folder in _folders) {
       await _makeFlagReconcileDue(_db, folder);
     }
     await _cycle();
-    final failedFlags = {
-      for (final change in await _pendingRows(failed: true))
-        if (change.changeType.startsWith('flag_')) await _messageIdOf(change),
-    };
-    // Snapshot line: `<id> <Message-ID> <seen> <starred>`.
-    String withoutFailedFlags(String line) {
-      final parts = line.split(' ');
-      if (parts.length != 4 || !failedFlags.contains(parts[1])) return line;
-      return parts.take(2).join(' ');
-    }
-
-    final before = last!.split('\n').map(withoutFailedFlags).toSet();
+    final before = last!.split('\n').toSet();
     final changed = [
       for (final line in (await _snapshot()).split('\n'))
-        if (!before.contains(withoutFailedFlags(line))) line,
+        if (!before.contains(line)) line,
     ];
     final problems = await _check();
     if (changed.isNotEmpty) {
