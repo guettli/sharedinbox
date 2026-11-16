@@ -1,5 +1,7 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
+import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 
@@ -105,6 +107,44 @@ void main() {
       await repo.markNotified('acc', ['acc:INBOX:1']);
       pending = await repo.unnotifiedInboxEmails('acc');
       expect(pending.map((e) => e.id), ['acc:INBOX:2']);
+    });
+
+    test(
+        'mail the background check considered by its location counts as '
+        'notified once sync stores it', () async {
+      final db = await openTestDatabaseWithAccounts(const ['acc']);
+      addTearDown(db.close);
+      final repo = NotificationRuleRepositoryImpl(db);
+      await seedInboxMailbox(db, 'acc');
+      // Before sync stored a row, the background check saw UID 7.
+      await repo.markNotified('acc', [notifiedImapLocationKey('INBOX', 7)]);
+
+      final t0 = DateTime.utc(2026, 1, 1, 9);
+      for (final (id, uid) in [('acc:~a', 7), ('acc:~b', 8)]) {
+        await db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: 'acc',
+                mailboxPath: 'INBOX',
+                uid: uid,
+                receivedAt: t0,
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: Value(uid),
+              ),
+            );
+      }
+
+      final pending = await repo.unnotifiedInboxEmails('acc');
+      expect(pending.map((e) => e.id), ['acc:~b']);
+
+      // Its own id is recorded too: a later change of its location (e.g.
+      // a UIDVALIDITY reset) does not make it notify.
+      await (db.update(db.emails)..where((t) => t.id.equals('acc:~a')))
+          .write(const EmailsCompanion(srvUid: Value(70)));
+      expect(
+        (await repo.unnotifiedInboxEmails('acc')).map((e) => e.id),
+        ['acc:~b'],
+      );
     });
 
     test('markBaseline silences the whole current inbox', () async {

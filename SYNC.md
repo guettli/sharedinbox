@@ -104,28 +104,38 @@ columns, never by building or parsing the row id, and never by the shown
 re-fetch of the source would otherwise insert a second row. Server calls about a row
 (body fetch, attachment download, raw message, JMAP flush) use them too. A row whose
 location is unknown matches a known UIDVALIDITY as well; a row stamped with another
-UIDVALIDITY is another message. Local virtual rows (§8a) have none. The row id is
-still built as `accountId:mailboxPath:uid` / `accountId:jmapId` for a new row and
-rewritten by the move remap below (opaque, frozen ids are SYNC-REDESIGN.md phase 2);
-a folder rename only rewrites `mailbox_path` and `srv_mailbox_path`, so the id of
-such a row names the old path. When the server gives a location to another row's
-mail (a re-key), a stale row still recording it gives it up, with an App Log line.
-When a new row's id (or a re-key's) already belongs to another mail's row, the new
-one gets `id#2`, `#3`, … and an App Log line, so the other mail keeps its body,
-flags and queued changes.
+UIDVALIDITY is another message. Local virtual rows (§8a) have none.
+
+The row id is **opaque**: a new row (fetch, JMAP upsert, Sent copy, virtual row) gets
+`accountId:~` plus 32 random hex digits (`newEmailId`, `lib/data/repositories/email_ids.dart`),
+so a reused UID can never name another mail's row. No code builds an id from a location
+or reads anything out of one; `scripts/check_email_ids.sh` (part of `check-layers`, run by
+`check-fast`) fails on the old shapes. Rows stored before schema v71 keep their old ids
+(`accountId:mailboxPath:uid`, `accountId:jmapId`, `accountId:__local__:…`); what those
+said was moved into columns once, by the v70/v71 migrations: the server location, the
+`jmapId` stamped on each queued JMAP change, and `is_virtual_sent_copy`. Undo snapshots
+older than v70 were completed the same way (path and UIDVALIDITY by the v70 rules), and
+the background new-mail check's `accountId:INBOX:uid` marks in `notified_emails` got their
+location key (`notifiedImapLocationKey`). A JMAP row without a recorded server id queues
+no server change (App Log warn `pending_change.no_server_id`), and Undo does not restore a
+JMAP row whose server id another row holds by then: sync stored that mail again. When the server gives a location to another
+row's mail, a stale row still recording it gives it up, with an App Log line.
 
 **IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
-its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the local row
-id (`accountId:mailboxPath:uid`) is rewritten in place to point at the new UID, and the
-row's server location follows. The new
+its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the row keeps
+its id; its UID and server location follow the server (`_relocateEmailRow`), and so do the
+UIDs in its queued IMAP changes. The new
 UID is taken from the RFC 4315 `COPYUID` response code returned by `MOVE`; if the server
 does not advertise `UIDPLUS`, a `UID SEARCH HEADER Message-ID …` in the destination
-mailbox is used as a fallback. `email_bodies`, `threads`, `pending_changes`, and
-`undo_actions` rows that reference the old id are updated atomically so cached bodies and
-pending undo operations keep tracking the same physical message. When a later move,
+mailbox is used as a fallback. Cached bodies, downloaded attachments, queued changes,
+logs, threads and Undo history reference the id, so they keep tracking the same physical
+message without a rewrite. A copy sync already stored at the new location with the same
+Message-ID is dropped (App Log warn `email.duplicate_merged`); its queued changes, logs,
+thread and Undo references (and its body, if the kept row has none) move to the kept row. When a later move,
 snooze or unsnooze of the mail is still queued (it starts in this move's destination),
-only the row's id, UID and server location follow the server: the row keeps showing the
-mail where the user's last move put it (#1276). Deletion reconciliation
+only the row's UID and server location follow the server: the row keeps showing the
+mail where the user's last move put it (#1276). The body-fetch identity guard (#616)
+relocates a row the same way. Deletion reconciliation
 also skips rows whose move is still queued, so the optimistic local move never gets
 wiped mid-flight.
 
@@ -133,8 +143,10 @@ wiped mid-flight.
 a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is
 sent and after its answer arrived. A row the user moved or deleted *while* the answer was
 on its way (and a flush may already have sent) is skipped too, via the in-memory edit
-sequence of `_ServerFlagRead`: the answer predates the change and would bring the mail
-back as a duplicate in its old folder (#1269). A change that is `failed` by the time the
+sequence of `_ServerFlagRead`, which also remembers the server location (account, folder,
+UID) each edited mail had: its row is gone or relocated by then, and a new row would get a
+new id. The answer predates the change and would bring the mail back as a duplicate in
+its old folder (#1269). A change that is `failed` by the time the
 answer is processed hides nothing (a failed move's revert has already put the row back;
 for a failed delete the answer's copy is inserted again), and neither does one stamped
 with an older UIDVALIDITY.
@@ -221,8 +233,8 @@ The rule mirrors the classic JWZ algorithm, in order:
    bounds the time window so a subject that gets reused a year later
    starts a new thread instead of resurrecting an old one.
 5. **Emailless singleton** — if every input is missing (no headers, no
-   subject) the caller uses the per-message `accountId:mailboxPath:uid` so
-   the message still has a stable, unique thread id.
+   subject) the caller uses the row id so the message still has a stable,
+   unique thread id.
 
 The helper lives at `EmailRepositoryImpl._computeThreadId` (exposed via
 `computeThreadIdForTest` for the unit tests in
@@ -433,8 +445,11 @@ a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
   offline appears once it is actually sent, not at queue time.
 - **Already arrived**: the row is skipped when the real message (non-local, same
   Message-ID, in a known folder whose role is not `sent`) is already stored, since its
-  arrival had nothing to dissolve. Check and insert run in one transaction, and the
-  insert is `insertOrIgnore` so a repeated send never resets the user's edits.
+  arrival had nothing to dissolve. Check and insert run in one transaction, and a
+  note that already exists for the Message-ID is kept, so a repeated send never resets
+  the user's edits. The Sent-folder copy of a send without `APPENDUID` (#918) is a
+  virtual row as well, marked `is_virtual_sent_copy`, so the two never dissolve against
+  each other's arrival.
 - **Best-effort**: a failure to write the row is logged, never rethrown — the message is
   already sent and must not be sent again.
 

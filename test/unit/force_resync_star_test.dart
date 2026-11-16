@@ -60,6 +60,7 @@ Future<String> _seedEmail(_Repos r) async {
           receivedAt: DateTime(2024, 6),
           subject: const Value('hello'),
           isFlagged: const Value(false),
+          srvJmapId: const Value('M42'),
         ),
       );
   return id;

@@ -376,7 +376,7 @@ class _EmailThreadListState extends ConsumerState<EmailThreadList> {
     // it reflects the current selection: a swipe while multi-selecting drives
     // the batch handlers on every selected thread, otherwise just this row.
     return SwipeActionMenu(
-      key: ValueKey('swipe:${t.accountId}:${t.threadId}'),
+      key: ValueKey('swipe:${t.accountId}:${t.threadId}'), // not an email id
       buildRoot: () => _buildActionTree(t),
       child: tile,
     );

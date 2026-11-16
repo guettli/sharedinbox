@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
+import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/core/services/body_cache_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
@@ -235,26 +236,28 @@ Future<void> _notifyForNewMail(
     '(UID ENVELOPE RFC822.SIZE)',
   );
 
-  final consideredIds = <String>[];
+  // No row exists for these yet, so no email id either: they are recorded
+  // by where the server has them, and the sync that stores them later
+  // finds them considered by that location.
+  final considered = <String>[];
   for (final msg in fetch.messages) {
     final uid = msg.uid;
     final envelope = msg.envelope;
     if (uid == null || envelope == null) continue;
-    final emailId = '${account.id}:INBOX:$uid';
-    consideredIds.add(emailId);
+    final key = notifiedImapLocationKey('INBOX', uid);
+    considered.add(key);
     if (rules
         .any((r) => matchesFilter(r.filter, _matchableFromEnvelope(msg)))) {
       await showNewMailNotification(
         title: _envelopeTitle(msg),
         body: _envelopeBody(msg),
-        id: emailId.hashCode & 0x7FFFFFFF,
-        payload: '${account.id}|$emailId',
+        id: '${account.id}|$key'.hashCode & 0x7FFFFFFF,
+        payload: account.id,
         accountId: account.id,
-        emailId: emailId,
       );
     }
   }
-  await ruleRepo.markNotified(account.id, consideredIds);
+  await ruleRepo.markNotified(account.id, considered);
 }
 
 MatchableMessage _matchableFromEnvelope(imap.MimeMessage msg) {

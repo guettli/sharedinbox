@@ -88,3 +88,21 @@ Future<void> seedInboxMailbox(AppDatabase db, String accountId) =>
             role: const Value('inbox'),
           ),
         );
+
+/// The id of the email row that records UID [uid] in [mailboxPath] as where
+/// the server has the mail. Row ids are opaque (SYNC.md "Row identity"), so
+/// a test finds a row sync stored by its server location.
+Future<String> emailIdAt(AppDatabase db, String mailboxPath, int uid) async =>
+    (await (db.select(db.emails)
+              ..where(
+                (t) =>
+                    t.srvMailboxPath.equals(mailboxPath) & t.srvUid.equals(uid),
+              ))
+            .getSingle())
+        .id;
+
+/// The id of the email row that records the JMAP Email id [jmapId].
+Future<String> emailIdOfJmap(AppDatabase db, String jmapId) async =>
+    (await (db.select(db.emails)..where((t) => t.srvJmapId.equals(jmapId)))
+            .getSingle())
+        .id;

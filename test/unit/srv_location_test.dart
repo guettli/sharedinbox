@@ -1,9 +1,11 @@
 // Every email row records where the server has the message (schema v70,
 // SYNC-REDESIGN.md phase 2a), and sync finds rows by that, never by
-// building an id or by the folder a row is shown in.
+// building an id or by the folder a row is shown in. Row ids are opaque and
+// a row keeps its id when the server moves the mail (phase 2b).
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/data/db/database.dart';
 
 import 'db_test_helper.dart';
@@ -32,12 +34,10 @@ void main() {
 
   Future<List<Email>> rows() => db.select(db.emails).get();
   Future<Email> mail() async => (await rows()).single;
-  Future<Email> mail2(String id) async =>
-      (await rows()).singleWhere((e) => e.id == id);
 
   /// The row of a@test once Archive (with its filler) is synced too.
   Future<Email> mailA() async =>
-      (await rows()).singleWhere((e) => e.id != 'acc-1:Archive:1');
+      (await rows()).singleWhere((e) => e.messageId != 'filler@test');
   _Location location(Email e) => (e.srvMailboxPath, e.srvUid, e.srvUidValidity);
 
   /// Re-reads the whole of INBOX, as after a lost checkpoint.
@@ -55,7 +55,7 @@ void main() {
 
   test('a fetched mail records where the server has it', () async {
     final e = await mail();
-    expect(e.id, 'acc-1:INBOX:1');
+    expect(e.id, matches(RegExp(r'^acc-1:~[0-9a-f]{32}$')));
     expect(location(e), ('INBOX', 1, 11));
     expect(e.srvJmapId, isNull);
   });
@@ -104,27 +104,29 @@ void main() {
     expect((await mail()).isSeen, isTrue);
   });
 
-  test('the move remap moves the location with the id', () async {
+  test('the move remap moves the location and keeps the id', () async {
+    final id = (await mail()).id;
     await emails.syncEmails(_account.id, 'Archive'); // knows its UIDVALIDITY
-    await emails.moveEmail('acc-1:INBOX:1', 'Archive');
+    await emails.moveEmail(id, 'Archive');
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
     final e = await mailA();
-    expect(e.id, 'acc-1:Archive:2');
+    expect(e.id, id);
     expect(e.mailboxPath, 'Archive');
     expect(location(e), ('Archive', 2, 22));
   });
 
   test('behind a later queued move the location still follows the server',
       () async {
+    final id = (await mail()).id;
     await emails.syncEmails(_account.id, 'Archive');
-    await emails.moveEmail('acc-1:INBOX:1', 'Archive');
+    await emails.moveEmail(id, 'Archive');
     // While the MOVE's answer is on its way the user moves the mail on;
     // that second move waits (backoff), so it is not sent in this flush.
     server.beforeAnswer = (command) async {
       if (command != 'MOVE (INBOX)') return;
-      await emails.moveEmail('acc-1:INBOX:1', 'Spam');
+      await emails.moveEmail(id, 'Spam');
       await (db.update(db.pendingChanges)
             ..where((t) => t.state.equals('pending')))
           .write(
@@ -144,9 +146,12 @@ void main() {
     expect(location(e), ('Archive', 2, 22));
   });
 
-  test('a new mail does not take over the id of another mail', () async {
-    // The row of today's id records another location: its folder was
-    // renamed INBOX → New, and a new INBOX got the old name.
+  test('a new mail gets a row of its own, even where an old id points',
+      () async {
+    // A row stored before v71 has an id that names INBOX/1, but records
+    // another location: its folder was renamed INBOX → New, and a new INBOX
+    // got the old name.
+    await giveStaleId('acc-1:INBOX:1');
     await db.update(db.emails).write(
           const EmailsCompanion(
             mailboxPath: Value('New'),
@@ -162,20 +167,26 @@ void main() {
 
     await refetchInbox();
 
-    final byId = {for (final e in await rows()) e.id: e};
-    expect(location(byId['acc-1:INBOX:1']!), ('New', 1, 11));
-    expect(byId['acc-1:INBOX:1']!.mailboxPath, 'New');
-    expect(location(byId['acc-1:INBOX:1#2']!), ('INBOX', 1, 11));
-    expect(byId['acc-1:INBOX:1#2']!.mailboxPath, 'INBOX');
+    final all = await rows();
+    final old = all.singleWhere((e) => e.id == 'acc-1:INBOX:1');
+    expect(location(old), ('New', 1, 11));
+    expect(old.mailboxPath, 'New');
+    final fresh = all.singleWhere((e) => e.id != 'acc-1:INBOX:1');
+    expect(fresh.id, startsWith('acc-1:~'));
+    expect(location(fresh), ('INBOX', 1, 11));
+    expect(fresh.mailboxPath, 'INBOX');
     final body = await db.select(db.emailBodies).getSingle();
     expect((body.emailId, body.textBody), ('acc-1:INBOX:1', 'the other mail'));
   });
 
-  test('a re-key whose id another mail has picks a free one', () async {
+  test('the move remap merges the copy sync stored at the destination',
+      () async {
     await emails.syncEmails(_account.id, 'Archive');
-    final mid = (await mail2('acc-1:INBOX:1')).messageId;
+    final row = await mailA();
+    final id = row.id;
+    final mid = row.messageId;
     // Sync already stored the moved mail at its new place, under another
-    // id; and the id the re-key wants belongs to a different mail.
+    // id; and a row stored before v71 has the id that names that place.
     await db.into(db.emails).insert(
           EmailsCompanion.insert(
             id: 'acc-1:copy',
@@ -201,20 +212,36 @@ void main() {
             srvUid: const Value(2),
           ),
         );
-    await emails.moveEmail('acc-1:INBOX:1', 'Archive');
+    // A change the user made on the copy waits (backoff): it must survive
+    // the merge, on the kept row.
+    await db.into(db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: 'acc-1',
+            resourceType: 'Email',
+            resourceId: 'acc-1:copy',
+            changeType: 'flag_flagged',
+            payload: '{"uid":2,"mailboxPath":"Archive","flagged":true}',
+            createdAt: now,
+            state: const Value('stuck'),
+            attempts: const Value(1),
+            leaseUntil: Value(now.add(const Duration(hours: 1))),
+          ),
+        );
+    await emails.moveEmail(id, 'Archive');
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    final queued = await db.select(db.pendingChanges).getSingle();
+    expect((queued.resourceId, queued.changeType), (id, 'flag_flagged'));
     final byId = {for (final e in await rows()) e.id: e};
     expect(byId.keys, isNot(contains('acc-1:copy')));
-    expect(location(byId['acc-1:Archive:2#2']!), ('Archive', 2, 22));
-    expect(byId['acc-1:Archive:2#2']!.messageId, mid);
+    expect(location(byId[id]!), ('Archive', 2, 22));
+    expect(byId[id]!.messageId, mid);
     expect(location(byId['acc-1:Archive:2']!), ('Old', 2, null));
   });
 
   test('Undo restores a row with its location', () async {
-    final before = (await emails.getEmail('acc-1:INBOX:1'))!;
+    final before = (await emails.getEmail((await mail()).id))!;
     await db.delete(db.emails).go();
 
     await emails.restoreEmails([before]);
@@ -222,8 +249,27 @@ void main() {
     expect(location(await mail()), ('INBOX', 1, 11));
   });
 
+  test(
+      'Undo restores no location another row holds under another '
+      'UIDVALIDITY, when the snapshot knows none', () async {
+    final row = await mail();
+    // A snapshot without a UIDVALIDITY (completed from an old id).
+    final before = model.Email.fromJson({
+      ...(await emails.getEmail(row.id))!.toJson(),
+      'id': 'acc-1:old',
+      'srvUidValidity': null,
+    });
+
+    await emails.restoreEmails([before]);
+
+    final restored = (await rows()).singleWhere((e) => e.id == 'acc-1:old');
+    expect(location(restored), (null, null, null));
+    final kept = (await rows()).singleWhere((e) => e.id == row.id);
+    expect(location(kept), ('INBOX', 1, 11));
+  });
+
   test('Undo restores no location another row holds by now', () async {
-    final before = (await emails.getEmail('acc-1:INBOX:1'))!;
+    final before = (await emails.getEmail((await mail()).id))!;
     await giveStaleId('acc-1:other');
 
     await emails.restoreEmails([before]);

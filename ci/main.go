@@ -673,12 +673,14 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// CheckLayers enforces that ui/ does not import data/.
+// CheckLayers enforces that ui/ does not import data/, and that no code
+// builds or parses email ids (scripts/check_email_ids.sh).
 func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 	return m.Base().
-		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/"}}), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/", "scripts/check_email_ids.sh"}}), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "VIOLATIONS=$(grep -rn \"package:sharedinbox/data/\" lib/ui/ 2>/dev/null || true); if [ -n \"$VIOLATIONS\" ]; then echo \"ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):\"; echo \"$VIOLATIONS\"; exit 1; fi; echo \"Layer check passed.\""}).
+		WithExec([]string{"/bin/bash", "scripts/check_email_ids.sh"}).
 		Stdout(ctx)
 }
 
