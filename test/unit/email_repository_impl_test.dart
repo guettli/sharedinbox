@@ -442,10 +442,17 @@ class _QpDanglingBodyImapClient extends FakeImapClient {
 /// Fake IMAP client whose move op always fails with a non-"gone" error, so the
 /// pending change is retried and its failure recorded/logged (#579).
 class _MoveFailsImapClient extends FakeImapClient {
-  _MoveFailsImapClient([this.error = 'server said no']);
+  _MoveFailsImapClient([this.error = 'server said no']) : refused = false;
+
+  /// Every `UID MOVE` is refused for good (`NO [CANNOT]`): the change fails
+  /// at once instead of being retried.
+  _MoveFailsImapClient.refusing()
+      : error = 'NO [CANNOT] server said no',
+        refused = true;
 
   /// The text of the exception every `UID MOVE` throws.
   final String error;
+  final bool refused;
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(
@@ -461,7 +468,9 @@ class _MoveFailsImapClient extends FakeImapClient {
     imap.Mailbox? targetMailbox,
     String? targetMailboxPath,
   }) async =>
-      throw Exception(error);
+      throw refused
+          ? imap.ImapException(imap.ImapClient(), error)
+          : Exception(error);
 }
 
 /// Fake IMAP client that records the Sent-copy APPEND so the send path can be
@@ -4045,7 +4054,8 @@ void main() {
       expect(changes.first.lastError, isNotNull);
     });
 
-    test('marks IMAP change failed after max attempts (5)', () async {
+    test('an IMAP change is stuck after max attempts (5) and backs off',
+        () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       // Pre-seed a flag_seen at attempts=4
@@ -4073,16 +4083,18 @@ void main() {
 
       await failingEmails.flushPendingChanges(_account.id, 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → kept, but failed.
+      // 4+1 = 5 = _maxChangeAttempts → stuck: kept, retried after a backoff.
       final change = (await r.db.select(r.db.pendingChanges).get()).single;
-      expect(change.state, 'failed');
+      expect(change.state, 'stuck');
       expect(change.attempts, 5);
       expect(change.lastError, contains('forced failure'));
+      expect(change.leaseUntil, isNotNull);
       final mutations =
           await failingEmails.observeFailedMutations(_account.id).first;
-      expect(mutations.single.failed, isTrue);
+      expect(mutations.single.stuck, isTrue);
+      expect(mutations.single.failed, isFalse);
 
-      // A failed change is not flushed again.
+      // A stuck change is not flushed again before its next try.
       final spy = SnoozeSpyImapClient();
       final next = EmailRepositoryImpl(
         r.db,
@@ -4146,7 +4158,7 @@ void main() {
       expect(warn.dataJson, contains('move'));
     });
 
-    test('logs a final error when a change fails after max attempts', () async {
+    test('logs a warning when a change is stuck after max attempts', () async {
       final recorder = _PushStatusRecorder();
       final r = _makeRepos(
         imapConnect: (_, __, ___) async => _MoveFailsImapClient(),
@@ -4181,16 +4193,18 @@ void main() {
 
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → failed, and logged at error level.
+      // 4+1 = 5 = _maxChangeAttempts → stuck, logged at warn level; the
+      // mail stays where the user put it.
       expect(
         (await r.db.select(r.db.pendingChanges).get()).single.state,
-        'failed',
+        'stuck',
       );
-      final err = recorder.entries
-          .firstWhere((e) => e.event == 'pending_change.failed');
-      expect(err.level, AppLogLevel.error);
-      expect(err.emailId, resourceId);
-      expect(err.message, contains('kept on the Pending Changes screen'));
+      expect((await r.emails.getEmail(resourceId))!.mailboxPath, 'Archive');
+      final warn =
+          recorder.entries.firstWhere((e) => e.event == 'pending_change.stuck');
+      expect(warn.level, AppLogLevel.warn);
+      expect(warn.emailId, resourceId);
+      expect(warn.message, contains('not synced yet, next try at'));
     });
 
     test(
@@ -8329,7 +8343,7 @@ void main() {
       );
     });
 
-    test('marks change failed after max attempts (5)', () async {
+    test('a change is stuck after max attempts (5)', () async {
       final r = _makeRepos(httpClient: mockFlush(500));
       await r.accounts.addAccount(_jmapAccount, 'pw');
       // Seed a change already at attempts=4 (one below the eviction threshold)
@@ -8347,9 +8361,9 @@ void main() {
 
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-      // 4+1 = 5 = _maxChangeAttempts → kept, but failed.
+      // 4+1 = 5 = _maxChangeAttempts → stuck: kept and retried later.
       final change = (await r.db.select(r.db.pendingChanges).get()).single;
-      expect(change.state, 'failed');
+      expect(change.state, 'stuck');
       expect(change.attempts, 5);
     });
 
@@ -9775,7 +9789,10 @@ void main() {
     test('after the retry limit, with later flag changes pointed back',
         () async {
       final spy = SnoozeSpyImapClient(
-        onUidMove: () async => throw Exception('server said no'),
+        onUidMove: () async => throw imap.ImapException(
+          imap.ImapClient(),
+          'NO [CANNOT] server said no',
+        ),
       );
       final r = await rig(spy);
       await r.emails.moveEmail(id, 'Archive');
@@ -9842,7 +9859,7 @@ void main() {
         () async {
       // Archive → INBOX → Archive: the mail is back at the first move's
       // destination, but on the server it never left INBOX.
-      final r = await rig(_MoveFailsImapClient());
+      final r = await rig(_MoveFailsImapClient.refusing());
       await r.emails.moveEmail(id, 'Archive');
       await r.emails.moveEmail(id, 'INBOX');
       await r.emails.moveEmail(id, 'Archive');
@@ -9870,8 +9887,14 @@ void main() {
       // Move INBOX → Trash, then delete for good from Trash: the delete
       // names UID 5 in Trash, which is someone else's mail while the move
       // has not happened.
+      var refused = false;
       final spy = SnoozeSpyImapClient(
-        onUidMove: () async => throw Exception('server said no'),
+        onUidMove: () async => throw refused
+            ? imap.ImapException(
+                imap.ImapClient(),
+                'NO [CANNOT] server said no',
+              )
+            : Exception('server said no'),
       );
       final r = await rig(spy);
       await r.db.into(r.db.mailboxes).insert(
@@ -9895,10 +9918,20 @@ void main() {
       expect(rows.map((c) => c.attempts), [1, 0]);
       expect(rows.map((c) => c.state), ['pending', 'pending']);
 
-      // The move gives up: the delete fails with it.
+      // The move reaches the retry limit: stuck, and the delete still waits.
       await (r.db.update(r.db.pendingChanges)
             ..where((t) => t.id.equals(rows.first.id)))
           .write(const PendingChangesCompanion(attempts: Value(4)));
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(spy.calls, isEmpty);
+      rows = await queue(r);
+      expect(rows.map((c) => c.state), ['stuck', 'pending']);
+      await r.emails.flushPendingChanges('acc-1', 'pw');
+      expect(spy.calls, isEmpty, reason: 'not due yet; the delete waits');
+
+      // Retried now, the server refuses it: the delete fails with it.
+      refused = true;
+      await r.emails.retryMutation(rows.first.id);
       await r.emails.flushPendingChanges('acc-1', 'pw');
       expect(spy.calls, isEmpty);
       rows = await queue(r);
@@ -9924,7 +9957,7 @@ void main() {
     });
 
     test('wake-up keeps the failed change and the mail where it is', () async {
-      final r = await rig(_MoveFailsImapClient());
+      final r = await rig(_MoveFailsImapClient.refusing());
       final past = DateTime(2024);
       Future<void> snoozed(String rowId) async {
         await r.db.into(r.db.emails).insert(
@@ -9990,7 +10023,14 @@ void main() {
     test('a failed move of a snoozed mail brings the snooze back', () async {
       const snoozedId = 'acc-1:Snoozed:5';
       final until = DateTime(2030, 1, 2, 9);
-      final r = await rig(_MoveFailsImapClient());
+      final r = await rig(
+        SnoozeSpyImapClient(
+          onUidMove: () async => throw imap.ImapException(
+            imap.ImapClient(),
+            'NO [CANNOT] server said no',
+          ),
+        ),
+      );
       await r.db.into(r.db.emails).insert(
             EmailsCompanion.insert(
               id: snoozedId,
@@ -10015,7 +10055,7 @@ void main() {
     });
 
     test('Retry shows the move again and queues it last', () async {
-      final r = await rig(_MoveFailsImapClient());
+      final r = await rig(_MoveFailsImapClient.refusing());
       await r.emails.moveEmail(id, 'Archive');
       await giveUp(r);
       final failed = await change(r, 'move');
@@ -10032,7 +10072,7 @@ void main() {
     });
 
     test('Retry of a failed flag change shows the flag again', () async {
-      final r = await rig(_MoveFailsImapClient());
+      final r = await rig(_MoveFailsImapClient.refusing());
       final rowId = await r.db.into(r.db.pendingChanges).insert(
             PendingChangesCompanion.insert(
               accountId: 'acc-1',

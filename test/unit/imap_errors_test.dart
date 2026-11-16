@@ -39,4 +39,39 @@ void main() {
       });
     }
   });
+
+  group('isImapPermanentRefusal', () {
+    for (final (name, error, expected) in <(String, Object, bool)>[
+      (
+        'NO [CANNOT]',
+        imap.ImapException(imap.ImapClient(), 'NO [CANNOT] not allowed'),
+        true,
+      ),
+      (
+        'NO [NOPERM]',
+        imap.ImapException(imap.ImapClient(), 'NO [NOPERM] access denied'),
+        true,
+      ),
+      (
+        'NO [READ-ONLY]',
+        imap.ImapException(imap.ImapClient(), 'NO [READ-ONLY] mailbox'),
+        true,
+      ),
+      (
+        'plain NO',
+        imap.ImapException(imap.ImapClient(), 'NO server busy'),
+        false,
+      ),
+      (
+        'NO [INUSE]',
+        imap.ImapException(imap.ImapClient(), 'NO [INUSE] try later'),
+        false,
+      ),
+      ('not an IMAP error', Exception('[CANNOT]'), false),
+    ]) {
+      test('$name → $expected', () {
+        expect(isImapPermanentRefusal(error), expected);
+      });
+    }
+  });
 }

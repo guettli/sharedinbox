@@ -24,6 +24,21 @@ bool isImapMailboxNotFound(Object error) {
       s.contains('not found');
 }
 
+/// Returns true when [error] is a `NO` with a response code saying the
+/// command can never succeed as sent (RFC 5530): `[CANNOT]`, `[NOPERM]`,
+/// `[CONTACTADMIN]`, `[PRIVACYREQUIRED]`, or `[READ-ONLY]` for a write to a
+/// mailbox opened read-only. Retrying cannot help, so a queued change that
+/// gets one is refused at once (SYNC.md §6). Other `NO`s may pass later.
+bool isImapPermanentRefusal(Object error) {
+  if (error is! ImapException) return false;
+  final s = error.toString().toUpperCase();
+  return s.contains('[CANNOT]') ||
+      s.contains('[NOPERM]') ||
+      s.contains('[CONTACTADMIN]') ||
+      s.contains('[PRIVACYREQUIRED]') ||
+      s.contains('[READ-ONLY]');
+}
+
 /// Returns true when [error] means the IMAP connection itself is gone or no
 /// longer trustworthy, so every further command on the same client is doomed:
 ///   * an [IOException] such as a `SocketException` ("Software caused

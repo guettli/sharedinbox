@@ -1,5 +1,6 @@
-/// Failed attempts after which a queued change is no longer retried and is
-/// kept as [PendingChange.failed] until the user retries or discards it.
+/// Failed attempts after which a queued change counts as
+/// [PendingChange.stuck]: still retried, with a growing backoff, and shown as
+/// "not synced yet" (SYNC.md §6).
 const int maxPendingChangeAttempts = 5;
 
 /// A single row in the outbound `pending_changes` queue.
@@ -25,6 +26,8 @@ class PendingChange {
     this.lastError,
     this.failed = false,
     this.sending = false,
+    this.stuck = false,
+    this.nextTry,
   });
 
   final int id;
@@ -56,6 +59,11 @@ class PendingChange {
   /// A flush claimed this change and may be sending it right now. It can no
   /// longer be cancelled; Undo queues a reverse change instead.
   final bool sending;
+
+  /// It failed [maxPendingChangeAttempts] times in a way that may pass: it
+  /// keeps the user's value locally and is retried at [nextTry].
+  final bool stuck;
+  final DateTime? nextTry;
 
   bool get hasError => lastError != null;
 }

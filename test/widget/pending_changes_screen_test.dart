@@ -47,6 +47,8 @@ PendingChange _pc({
   String? lastError,
   bool failed = false,
   bool sending = false,
+  bool stuck = false,
+  DateTime? nextTry,
 }) =>
     PendingChange(
       id: id,
@@ -60,6 +62,8 @@ PendingChange _pc({
       lastError: lastError,
       failed: failed,
       sending: sending,
+      stuck: stuck,
+      nextTry: nextTry,
     );
 
 Email _email({
@@ -182,6 +186,20 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('attempts 0'), findsOneWidget);
+  });
+
+  testWidgets('shows a change not synced yet with its next try',
+      (tester) async {
+    final next = DateTime(2026, 3, 4, 14, 30);
+    final repo = _StubbedQueue([
+      _pc(attempts: 5, lastError: 'timeout', stuck: true, nextTry: next),
+    ]);
+    await pump(tester, repo: repo);
+
+    expect(
+      find.textContaining('not synced yet – next try 14:30'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('shows a change a flush is sending', (tester) async {

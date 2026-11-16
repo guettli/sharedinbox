@@ -396,19 +396,21 @@ void _knownBugs() {
         await emails.moveEmail((await row('a@test')).id, 'Trash');
         await emails.setFlag((await row('a@test')).id, flagged: true);
 
-        // The first move lands; the server then refuses a's second move.
+        // The first move lands; the server then refuses a's second move
+        // (once: the star is allowed).
         server.beforeAnswer = (command) async {
           if (command == 'MOVE (INBOX)') {
-            server.refuses = (messageId) => messageId == 'a@test';
+            var once = true;
+            server.refuses = (messageId) {
+              if (messageId != 'a@test' || !once) return false;
+              once = false;
+              return true;
+            };
           }
         };
-        for (var i = 0; i < 6; i++) {
+        for (var i = 0; i < 3; i++) {
           await emails.flushPendingChanges(_account.id, 'pw');
         }
-        server
-          ..beforeAnswer = null
-          ..refuses = null;
-        await emails.flushPendingChanges(_account.id, 'pw');
 
         expect(server.find('a@test')?.folder.path, 'Archive');
         expect(server.find('a@test')!.message.flagged, isTrue);
@@ -422,6 +424,31 @@ void _knownBugs() {
           [for (final c in left) '${c.changeType} ${c.state}'],
           ['move failed'],
         );
+      },
+    );
+
+    test(
+      'moving a mail another client already moved there leaves one row',
+      () async {
+        server.deliver('Trash', 'a@test');
+        await open();
+        final inTrash = (await row('a@test')).id;
+        // Another client files it; this app sees it arrive in Archive before
+        // it notices it left Trash.
+        server.moveElsewhere('a@test', 'Archive');
+        await emails.syncEmails(_account.id, 'Archive');
+        expect(await _rowsOf(db, 'a@test'), hasLength(2));
+        // The user files the Trash copy too.
+        await emails.moveEmail(inTrash, 'Archive');
+
+        await _syncCycle(emails);
+
+        expect(server.find('a@test')?.folder.path, 'Archive');
+        expect(
+          [for (final r in await _rowsOf(db, 'a@test')) r.mailboxPath],
+          ['Archive'],
+        );
+        expect(await db.select(db.pendingChanges).get(), isEmpty);
       },
     );
 

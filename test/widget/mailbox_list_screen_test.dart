@@ -450,6 +450,43 @@ void main() {
       expect(find.widgetWithText(TextButton, 'View'), findsNothing);
     });
 
+    testWidgets('a banner for changes not synced yet after the retry limit',
+        (tester) async {
+      final emailRepo = FakeEmailRepository(
+        failedMutations: [
+          FailedMutation(
+            id: 1,
+            accountId: 'acc-1',
+            changeType: 'move',
+            resourceId: 'acc-1:42',
+            lastError: 'timeout',
+            attempts: 5,
+            createdAt: DateTime.utc(2026, 3, 4, 9),
+            stuck: true,
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository([kTestMailbox]),
+            ),
+            emailRepositoryProvider.overrideWithValue(emailRepo),
+            syncNowProvider.overrideWithValue((_) => false),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 change not synced yet'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'View'), findsOneWidget);
+    });
+
     testWidgets('shows a bare 0 when totalCount is zero', (tester) async {
       const emptyMailbox = Mailbox(
         id: 'acc-1:Empty',
