@@ -189,7 +189,10 @@ abstract class EmailRepository {
   /// the global Pending Changes screen and the drawer badge.
   Stream<List<PendingChange>> observeAllPendingChanges();
 
-  /// Permanently removes the pending mutation with [id] from the queue.
+  /// Permanently removes the pending mutation with [id] from the queue. A
+  /// change still queued or stuck is first undone locally like a failure
+  /// (the mail's later moves and deletes fail with it); a change being sent
+  /// is left to its flush.
   Future<void> discardMutation(int id);
 
   /// Queues mutation [id] again as a fresh change at the end of the queue

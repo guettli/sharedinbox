@@ -30,8 +30,9 @@ void main() {
 
   setUp(() async {
     now = DateTime.utc(2026, 11, 16, 12);
-    server = StatefulFakeImapServer(uidValidityByFolder: {'INBOX': 11})
-      ..deliver('INBOX', 'a@test');
+    server = StatefulFakeImapServer(
+      uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
+    )..deliver('INBOX', 'a@test');
     db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
     emails = EmailRepositoryImpl(
@@ -45,15 +46,17 @@ void main() {
       now: () => now,
     );
     await accounts.addAccount(_account, 'pw');
-    await db.into(db.mailboxes).insert(
-          MailboxesCompanion.insert(
-            id: '${_account.id}:INBOX',
-            accountId: _account.id,
-            path: 'INBOX',
-            name: 'INBOX',
-            role: const Value('inbox'),
-          ),
-        );
+    for (final (path, role) in [('INBOX', 'inbox'), ('Archive', 'archive')]) {
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: '${_account.id}:$path',
+              accountId: _account.id,
+              path: path,
+              name: path,
+              role: Value(role),
+            ),
+          );
+    }
     await emails.syncEmails(_account.id, 'INBOX');
   });
   tearDown(() => db.close());
@@ -61,6 +64,18 @@ void main() {
   Future<Email> mail() async => (await db.select(db.emails).get()).single;
   Future<PendingChangeRow> change() async =>
       (await db.select(db.pendingChanges).get()).single;
+
+  /// As if the queued change had failed up to the retry limit in a way that
+  /// may pass: stuck, next try at [nextTry].
+  Future<void> makeStuck(DateTime nextTry) =>
+      db.update(db.pendingChanges).write(
+            PendingChangesCompanion(
+              state: const Value('stuck'),
+              attempts: const Value(5),
+              lastError: const Value('timeout'),
+              leaseUntil: Value(nextTry),
+            ),
+          );
 
   /// As if a flush claimed the queued change and is sending it, its lease
   /// running until [leaseUntil].
@@ -115,7 +130,7 @@ void main() {
     expect(await db.select(db.pendingChanges).get(), isEmpty);
   });
 
-  test('a change whose flush died at the retry limit is sent once more',
+  test('a change whose flush died at the retry limit is stuck, then resent',
       () async {
     await emails.setFlag((await mail()).id, seen: true);
     await db.update(db.pendingChanges).write(
@@ -123,9 +138,14 @@ void main() {
         );
     await claimAsAnotherFlush(now.subtract(const Duration(seconds: 1)));
 
-    // It probably reached the server: not given up on unseen.
-    expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
+    // Charged as a try: at the limit it is stuck, still protecting the
+    // value, and sent again after its backoff.
+    expect(await emails.flushPendingChanges(_account.id, 'pw'), 0);
+    expect((await change()).state, 'stuck');
+    expect((await mail()).isSeen, isTrue);
 
+    now = now.add(const Duration(minutes: 16));
+    expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
     expect(server.find('a@test')!.message.seen, isTrue);
     expect(await db.select(db.pendingChanges).get(), isEmpty);
   });
@@ -192,9 +212,108 @@ void main() {
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
+    // Refused (`NO [CANNOT]`): failed at once, claim cleared.
     final c = await change();
-    expect(c.state, 'pending');
+    expect(c.state, 'failed');
     expect(c.leaseUntil, isNull);
+    expect(c.claimToken, isNull);
     expect(c.attempts, 1);
+  });
+
+  group('a stuck change', () {
+    test('waits for its next try, keeping the value it protects', () async {
+      await emails.setFlag((await mail()).id, seen: true);
+      await makeStuck(now.add(const Duration(minutes: 15)));
+      await db.delete(db.syncStates).go();
+
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 0);
+      await emails.syncEmails(_account.id, 'INBOX');
+      expect((await mail()).isSeen, isTrue, reason: 'still protected');
+      expect(server.find('a@test')!.message.seen, isFalse);
+
+      now = now.add(const Duration(minutes: 16));
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
+      expect(server.find('a@test')!.message.seen, isTrue);
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+    });
+
+    test('is sent at the next flush when the user retries it', () async {
+      await emails.setFlag((await mail()).id, seen: true);
+      await makeStuck(now.add(const Duration(hours: 1)));
+
+      await emails.retryMutation((await change()).id);
+
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
+      expect(server.find('a@test')!.message.seen, isTrue);
+    });
+
+    test('is undone locally when the user discards it', () async {
+      final id = (await mail()).id;
+      await emails.moveEmail(id, 'Archive');
+      expect((await mail()).mailboxPath, 'Archive');
+      await makeStuck(now.add(const Duration(hours: 1)));
+
+      await emails.discardMutation((await change()).id);
+
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+      expect((await mail()).mailboxPath, 'INBOX');
+    });
+
+    test("holds back the mail's later changes until it is sent", () async {
+      final id = (await mail()).id;
+      await emails.setFlag(id, seen: true);
+      await makeStuck(now.add(const Duration(minutes: 15)));
+      await emails.setFlag(id, flagged: true);
+
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 0);
+      expect(server.find('a@test')!.message.flagged, isFalse);
+
+      now = now.add(const Duration(minutes: 16));
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 2);
+      expect(server.find('a@test')!.message.seen, isTrue);
+      expect(server.find('a@test')!.message.flagged, isTrue);
+    });
+
+    test('whose flush died stays stuck, with its backoff', () async {
+      await emails.setFlag((await mail()).id, seen: true);
+      await db.update(db.pendingChanges).write(
+            PendingChangesCompanion(
+              state: const Value('inflight'),
+              attempts: const Value(5),
+              leaseUntil: Value(now.subtract(const Duration(seconds: 1))),
+              claimToken: const Value('dead-flush'),
+            ),
+          );
+
+      expect(await emails.flushPendingChanges(_account.id, 'pw'), 0);
+
+      final c = await change();
+      expect(c.state, 'stuck');
+      expect(c.attempts, 6);
+      expect(c.leaseUntil!.isAfter(now), isTrue);
+      expect(server.find('a@test')!.message.seen, isFalse);
+    });
+
+    test('being sent is not discarded', () async {
+      await emails.setFlag((await mail()).id, seen: true);
+      await claimAsAnotherFlush(now.add(const Duration(minutes: 5)));
+
+      await emails.discardMutation((await change()).id);
+
+      expect((await change()).state, 'inflight');
+      expect((await mail()).isSeen, isTrue);
+    });
+
+    test('is replaced by a newer change of the same flag', () async {
+      final id = (await mail()).id;
+      await emails.setFlag(id, flagged: true);
+      await makeStuck(now.add(const Duration(hours: 1)));
+
+      await emails.setFlag(id, flagged: false);
+
+      final c = await change();
+      expect(c.state, 'pending');
+      expect(c.payload, contains('"flagged":false'));
+    });
   });
 }

@@ -79,11 +79,12 @@ class MailboxListScreen extends ConsumerWidget {
           StreamBuilder<List<FailedMutation>>(
             stream: emailRepo.observeFailedMutations(accountId),
             builder: (ctx, snap) {
-              // Only changes the app gave up on; ones still retrying are
-              // listed on the Pending Changes screen.
+              // Changes the app gave up on, or that are not synced yet after
+              // the retry limit; ones still retrying normally are listed on
+              // the Pending Changes screen.
               final mutations = [
                 for (final m in snap.data ?? const <FailedMutation>[])
-                  if (m.failed) m,
+                  if (m.failed || m.stuck) m,
               ];
               if (mutations.isEmpty) return const SizedBox.shrink();
               return _FailedMutationBanner(
@@ -521,14 +522,23 @@ class _FailedMutationBanner extends StatelessWidget {
   final List<FailedMutation> mutations;
   final EmailRepository emailRepo;
 
-  String _label(FailedMutation m) {
-    final noun = switch (m.changeType) {
+  String _label() {
+    final failed = [
+      for (final m in mutations)
+        if (m.failed) m,
+    ];
+    final stuck = mutations.length - failed.length;
+    final notSynced = '$stuck change${stuck > 1 ? 's' : ''} not synced yet';
+    if (failed.isEmpty) return notSynced;
+    final noun = switch (failed.first.changeType) {
       'flag_seen' || 'flag_flagged' || 'add_keywords' => 'flag change',
       'move' => 'move',
       'delete' => 'deletion',
       _ => 'change',
     };
-    return '${mutations.length} pending $noun${mutations.length > 1 ? 's' : ''} failed';
+    final label =
+        '${failed.length} pending $noun${failed.length > 1 ? 's' : ''} failed';
+    return stuck == 0 ? label : '$label · $notSynced';
   }
 
   @override
@@ -550,7 +560,7 @@ class _FailedMutationBanner extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
-                _label(mutations.first),
+                _label(),
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onErrorContainer,
                 ),

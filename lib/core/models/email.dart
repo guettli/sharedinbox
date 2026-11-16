@@ -388,6 +388,11 @@ class FailedMutation {
   /// False while it is still being retried.
   final bool failed;
 
+  /// True when the change failed up to the retry limit in a way
+  /// that may pass: it keeps the user's value locally, is retried with a
+  /// growing backoff and shows as "not synced yet".
+  final bool stuck;
+
   const FailedMutation({
     required this.id,
     required this.accountId,
@@ -397,6 +402,7 @@ class FailedMutation {
     required this.attempts,
     required this.createdAt,
     this.failed = false,
+    this.stuck = false,
   });
 }
 

@@ -1443,7 +1443,9 @@ Future<void> removeLocalMailbox(
     // row referring to the gone path so the queue doesn't keep retrying.
     final pending = await (db.select(db.pendingChanges)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.state.equals('pending'),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.state.isIn(const ['pending', 'stuck']),
           ))
         .get();
     for (final row in pending) {

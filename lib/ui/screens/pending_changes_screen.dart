@@ -239,6 +239,13 @@ String attemptsLabel(PendingChange change) {
   }
   if (change.failed) return 'failed after $n attempts';
   if (change.sending) return 'sending…';
+  if (change.stuck) {
+    final next = change.nextTry?.toLocal();
+    if (next == null) return 'not synced yet';
+    final hhmm = '${next.hour.toString().padLeft(2, '0')}:'
+        '${next.minute.toString().padLeft(2, '0')}';
+    return 'not synced yet – next try $hhmm';
+  }
   if (change.hasError) {
     return '$n of $maxPendingChangeAttempts attempts failed – retrying';
   }
@@ -294,7 +301,7 @@ String changeReport(PendingChange change) {
         ..writeln('Attempts:   ${change.attempts}')
         ..writeln(
           'State:      '
-          '${change.failed ? 'failed' : change.sending ? 'inflight' : 'pending'}',
+          '${change.failed ? 'failed' : change.sending ? 'inflight' : change.stuck ? 'stuck' : 'pending'}',
         )
         ..writeln('Payload:    ${_prettyPayload(change.payload)}')
         ..write('Last error: ${change.lastError ?? '(none)'}'))

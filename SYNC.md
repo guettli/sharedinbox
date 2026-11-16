@@ -244,7 +244,7 @@ reaches the server:
 | `payload` | JSON-encoded protocol-specific arguments |
 | `attempts` | Incremented on each failed try that may have reached the server; 0 means never sent |
 | `created_at` | For debug; the flush runs in `id` order |
-| `state` | `pending` (queued or retrying), `inflight` (claimed by a flush) or `failed` (given up on) |
+| `state` | `pending` (queued or retrying), `inflight` (claimed by a flush), `stuck` (retry limit reached, still retried with backoff) or `failed` (refused, given up on) |
 | `lease_until`, `claim_token` | While `inflight`: until when the claim holds, and which flush holds it |
 
 **Optimistic UI** — every mutation writes the local change first, then inserts into
@@ -252,11 +252,17 @@ reaches the server:
 the network round-trip completes.
 
 **Conflict resolution** — the server always wins. On the next sync cycle the server's
-state overwrites local rows. Outbound mutations are retried up to 5 times; after that
-they are marked `state = 'failed'`, not deleted. Permanent per-item JMAP errors
-(`forbidden`, `notFound` for a flag or move) and an IMAP change whose message is gone
-(or cannot be found again after a UIDVALIDITY reset) skip the retry counter and are
-marked failed at once. A JMAP `notFound` for a delete, and an IMAP change whose
+state overwrites local rows. A failure that may pass (a plain IMAP `NO`, a timeout, a
+JMAP request error) is retried; after 5 attempts the change is `stuck`: it keeps
+protecting the user's local value (the mail stays where the user put it), shows as
+"not synced yet" on the Pending Changes screen and the mailbox-list banner, and is
+retried with a growing backoff (15 minutes, doubling, at most 6 hours, kept in
+`lease_until`) until it applies or the user discards it. Only a refusal becomes
+`state = 'failed'`, at once: an IMAP `NO` with a permanent response code
+(`[CANNOT]`, `[NOPERM]`, `[CONTACTADMIN]`, `[PRIVACYREQUIRED]`, `[READ-ONLY]`),
+permanent per-item JMAP errors (`forbidden`, `notFound` for a flag or move), and an
+IMAP change whose message is gone (or cannot be found again after a UIDVALIDITY
+reset). A JMAP `notFound` for a delete, and an IMAP change whose
 source folder no longer exists, count as applied: the mail is already gone.
 
 **Claim** — a flush claims each change right before sending it: `state = 'inflight'`
@@ -308,10 +314,15 @@ whose destination folder is missing (`NO [TRYCREATE]`) fails this way too; a cha
 naming a folder removed on the server is marked failed (`folder removed on the
 server`) instead of deleted.
 
-Failed changes are listed on the Pending Changes screen and the mailbox-list banner,
-with **Retry** (queues a fresh copy at the end of the queue, so it cannot jump ahead
-of newer changes, and shows its effect locally again; a change still queued keeps
-its place and is only flushed sooner) and **Discard** (deletes it). Queueing the same
+Failed and stuck changes are listed on the Pending Changes screen and the
+mailbox-list banner, with **Retry** (a failed change: queues a fresh copy at the end
+of the queue, so it cannot jump ahead of newer changes, and shows its effect locally
+again; a stuck or queued change keeps its place and is only flushed sooner) and
+**Discard** (deletes it; a stuck or queued one is first undone locally like a
+failure, so the mail does not keep a state the server never gets). A change that did
+not apply in a flush, or a stuck one not due yet, holds back the mail's later changes,
+so they reach the server in order; a newer read/star change replaces a stuck one of
+the same flag. Queueing the same
 action again (or an Undo) deletes the failed change it replaces; changes the app
 queues on its own (snooze wake-up, local Sieve filters, the #545 replay) never do,
 and the wake-up skips a mail whose move, snooze or unsnooze failed.

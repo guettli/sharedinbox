@@ -414,8 +414,13 @@ void main() {
       },
     );
 
-    testWidgets('no failed-mutation banner while changes are only retrying',
-        (tester) async {
+    /// The folder list with one change of the queue that has failed
+    /// [attempts] times, [stuck] or still retrying.
+    Future<void> pumpWithQueuedMove(
+      WidgetTester tester, {
+      required int attempts,
+      bool stuck = false,
+    }) async {
       final emailRepo = FakeEmailRepository(
         failedMutations: [
           FailedMutation(
@@ -424,8 +429,9 @@ void main() {
             changeType: 'move',
             resourceId: 'acc-1:42',
             lastError: 'timeout',
-            attempts: 2,
+            attempts: attempts,
             createdAt: DateTime.utc(2026, 3, 4, 9),
+            stuck: stuck,
           ),
         ],
       );
@@ -445,9 +451,22 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+    }
+
+    testWidgets('no failed-mutation banner while changes are only retrying',
+        (tester) async {
+      await pumpWithQueuedMove(tester, attempts: 2);
 
       expect(find.textContaining('failed'), findsNothing);
       expect(find.widgetWithText(TextButton, 'View'), findsNothing);
+    });
+
+    testWidgets('a banner for changes not synced yet after the retry limit',
+        (tester) async {
+      await pumpWithQueuedMove(tester, attempts: 5, stuck: true);
+
+      expect(find.text('1 change not synced yet'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'View'), findsOneWidget);
     });
 
     testWidgets('shows a bare 0 when totalCount is zero', (tester) async {

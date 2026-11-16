@@ -456,9 +456,12 @@ behaviour stays as it is apart from failure handling.
 As implemented, phase 1 is narrower, in this order:
 1. `inflight` + `lease_until` replace "attempts raised" as the claim
    marker; an expired lease is the ambiguous outcome (done, schema v69).
-2. The outcome table as one settle function, without behaviour change.
+2. (Dropped: the outcome table as one settle function, without behaviour
+   change, would reshuffle the most delicate code for no gain; the
+   outcomes stay with their branches.)
 3. `stuck` instead of `failed` at the retry limit, with backoff in
-   `lease_until`.
+   `lease_until`; IMAP `NO` with a permanent response code is a refusal
+   (done).
 4. The satisfied/refused corrections of §5.
 5. Undo stores op seqs.
 6. `origin` (may slip to phase 4, where counterpart ops need it).
