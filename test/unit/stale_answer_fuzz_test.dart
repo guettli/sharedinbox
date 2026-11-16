@@ -274,12 +274,40 @@ void _knownBugs() {
         expect(server.find('a@test')?.folder.path, 'Archive');
         expect(rowsBeforeReconcile, ['${_account.id}:Archive:2']);
       },
-      skip: _knownBug(
-        'known bug #1269: the upsert checks for a queued move only '
-        'after the answer arrived, when the move is already sent, and inserts '
-        'a second row for the mail in its old folder; a change made on that '
-        'copy fails (UNIQUE constraint when its move re-keys it)',
-      ),
+    );
+
+    test(
+      'a stale FETCH answer does not bring back a mail whose queued move was '
+      'sent while the answer was on its way',
+      () async {
+        server.deliver('Archive', 'a@test');
+        await open();
+        await emails.moveEmail((await row('a@test')).id, 'INBOX');
+        await emails.flushPendingChanges(_account.id, 'pw');
+        // Queued before the sync starts, sent while its answer is held.
+        await emails.moveEmail((await row('a@test')).id, 'Archive');
+
+        List<String>? rowsBeforeReconcile;
+        server.beforeAnswer = (command) async {
+          if (command == 'FETCH headers (INBOX)') {
+            await emails.flushPendingChanges(_account.id, 'pw');
+          }
+          if (command == 'SEARCH ALL (INBOX)') {
+            rowsBeforeReconcile = [
+              for (final r in await _rowsOf(db, 'a@test')) r.id,
+            ];
+          }
+        };
+        await emails.syncEmails(_account.id, 'INBOX');
+
+        expect(
+          rowsBeforeReconcile,
+          isNotNull,
+          reason: 'race not exercised: no SEARCH ALL after the FETCH',
+        );
+        expect(server.find('a@test')?.folder.path, 'Archive');
+        expect(rowsBeforeReconcile, ['${_account.id}:Archive:2']);
+      },
     );
 
     test(
@@ -591,13 +619,6 @@ class _FuzzRun {
     final r = _rnd.nextDouble();
     if (r < 0.7) return _userAction();
     if (r >= 0.85 || _phase.startsWith('flush')) return _otherClient();
-    if (command.startsWith('FETCH headers') && await _hasQueuedMove()) {
-      // Excluded, known bug #1269: sending a move while a FETCH answer that
-      // still lists the mail is held back brings it back as a second row.
-      // Flushing other changes here stays covered.
-      _trace.add('  (no flush while a move is queued: known bug #1269)');
-      return _otherClient();
-    }
     // The queued change reaches the server while the read's answer is in
     // flight (another flush, e.g. the background isolate's).
     return _flush();

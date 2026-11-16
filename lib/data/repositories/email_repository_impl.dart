@@ -1784,6 +1784,14 @@ class EmailRepositoryImpl implements EmailRepository {
     _ServerFlagRead flagRead, {
     ObjectIdKind? objectIdKind,
   }) async {
+    // Taken before the FETCH as well as after it: a move or delete queued
+    // before the FETCH and sent by a flush while its answer was on the way
+    // is no longer queued afterwards, yet the answer still lists the mail
+    // here (#1269).
+    final pendingBeforeFetch = await _pendingDeleteOrMoveUids(
+      account.id,
+      mailboxPath,
+    );
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -1799,10 +1807,10 @@ class EmailRepositoryImpl implements EmailRepository {
       client,
       sequence,
     );
-    final pendingByUid = await _pendingDeleteOrMoveUids(
-      account.id,
-      mailboxPath,
-    );
+    final pendingByUid = {
+      ...pendingBeforeFetch,
+      ...await _pendingDeleteOrMoveUids(account.id, mailboxPath),
+    };
     var bytes = 0;
     final affectedThreads = <String>{};
     // (realEmailId, messageId) of each row we just wrote — checked afterwards
@@ -1881,6 +1889,18 @@ class EmailRepositoryImpl implements EmailRepository {
                   ..where(_db.emails.id.equals(emailId)))
                 .getSingleOrNull() ==
             null;
+        // No row, but the user changed it since the FETCH was sent: it was
+        // moved or deleted here meanwhile, and maybe already sent, so the
+        // answer predates that. Inserting it would duplicate the mail in its
+        // old folder (#1269). If a move fails, its revert brings the row
+        // back.
+        if (isNew && flagRead.editedSince(emailId)) {
+          log(
+            'IMAP: skipping insert for uid=$uid in $mailboxPath '
+            '(changed locally while the FETCH ran)',
+          );
+          continue;
+        }
         final keepLocalFlags = !isNew && flagRead.protects(emailId, queuedNow);
         await _db.into(_db.emails).insertOnConflictUpdate(
               EmailsCompanion.insert(
@@ -2026,7 +2046,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.accountId.equals(accountId) &
                 t.state.equals(_pendingState) &
                 t.resourceType.equals('Email') &
-                (t.changeType.equals('delete') | t.changeType.equals('move')),
+                t.changeType.isIn(_placementChangeTypes),
           ))
         .get();
     final result = <int, String>{};
@@ -10912,7 +10932,11 @@ class _ServerFlagRead {
   bool protects(String emailId, Set<String> queuedNow) =>
       _queuedAtStart.contains(emailId) ||
       queuedNow.contains(emailId) ||
-      (_editSeqById[emailId] ?? 0) > _seq;
+      editedSince(emailId);
+
+  /// Whether a change for [emailId] was queued (or retried) after the read
+  /// started.
+  bool editedSince(String emailId) => (_editSeqById[emailId] ?? 0) > _seq;
 }
 
 /// State shared by every mutation running inside one bulk operation.

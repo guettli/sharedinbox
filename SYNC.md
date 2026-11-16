@@ -107,6 +107,14 @@ pending undo operations keep tracking the same physical message. Deletion reconc
 also skips rows whose move is still queued, so the optimistic local move never gets
 wiped mid-flight.
 
+**No resurrection by a late FETCH answer** — the new-mail FETCH does not insert a row for
+a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is
+sent and after its answer arrived. A row the user moved or deleted *while* the answer was
+on its way (and a flush may already have sent) is skipped too, via the in-memory edit
+sequence of `_ServerFlagRead`: the answer predates the change and would bring the mail
+back as a duplicate in its old folder (#1269). If such a move fails, its revert puts the
+row back; a failed delete stays on the Pending Changes screen like any other.
+
 **IDLE cap** — IDLE sessions are limited to 25 minutes per the RFC. The loop also wakes
 immediately if `syncNow()` is called (e.g. user pulls-to-refresh).
 
@@ -424,7 +432,7 @@ away). A failure prints the seed and the action trace. A seed reproduces
 the run only against the same code (any change in the IMAP commands the app
 sends shifts the random choices), so the trace is the durable record. Bugs it
 found and not yet fixed are kept as skipped regression tests in the same
-file (#1269, #1270), and the driver avoids exactly their triggers.
+file (#1270), and the driver avoids exactly their triggers.
 Longer or focused runs (locally, with a
 Flutter SDK):
 
