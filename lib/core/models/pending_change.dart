@@ -24,6 +24,7 @@ class PendingChange {
     required this.attempts,
     this.lastError,
     this.failed = false,
+    this.sending = false,
   });
 
   final int id;
@@ -51,6 +52,10 @@ class PendingChange {
   /// server). It is not flushed again until the user retries it. A change
   /// with a [lastError] that is not [failed] is still being retried.
   final bool failed;
+
+  /// A flush claimed this change and may be sending it right now. It can no
+  /// longer be cancelled; Undo queues a reverse change instead.
+  final bool sending;
 
   bool get hasError => lastError != null;
 }

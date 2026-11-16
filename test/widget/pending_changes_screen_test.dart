@@ -46,6 +46,7 @@ PendingChange _pc({
   int attempts = 0,
   String? lastError,
   bool failed = false,
+  bool sending = false,
 }) =>
     PendingChange(
       id: id,
@@ -58,6 +59,7 @@ PendingChange _pc({
       attempts: attempts,
       lastError: lastError,
       failed: failed,
+      sending: sending,
     );
 
 Email _email({
@@ -180,6 +182,13 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('attempts 0'), findsOneWidget);
+  });
+
+  testWidgets('shows a change a flush is sending', (tester) async {
+    final repo = _StubbedQueue([_pc(sending: true)]);
+    await pump(tester, repo: repo);
+
+    expect(find.textContaining('sending…'), findsOneWidget);
   });
 
   testWidgets('renders the concrete mutation for each change kind',

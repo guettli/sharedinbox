@@ -242,9 +242,10 @@ reaches the server:
 | `email_id` | The email being mutated |
 | `type` | `flag_seen`, `flag_flagged`, `move`, `delete`, `snooze` |
 | `payload` | JSON-encoded protocol-specific arguments |
-| `retry_count` | Incremented on each failed flush attempt |
+| `attempts` | Incremented on each failed try that may have reached the server; 0 means never sent |
 | `created_at` | For debug; the flush runs in `id` order |
-| `state` | `pending` (queued or retrying) or `failed` (given up on) |
+| `state` | `pending` (queued or retrying), `inflight` (claimed by a flush) or `failed` (given up on) |
+| `lease_until`, `claim_token` | While `inflight`: until when the claim holds, and which flush holds it |
 
 **Optimistic UI** — every mutation writes the local change first, then inserts into
 `pending_changes`. The Drift reactive stream delivers the update to the UI before
@@ -258,14 +259,31 @@ they are marked `state = 'failed'`, not deleted. Permanent per-item JMAP errors
 marked failed at once. A JMAP `notFound` for a delete, and an IMAP change whose
 source folder no longer exists, count as applied: the mail is already gone.
 
+**Claim** — a flush claims each change right before sending it: `state = 'inflight'`
+with `lease_until` = now + 5 minutes and the flush's random `claim_token`, as one
+compare-and-set, so no other flush (another isolate, a second desktop process on the
+same database, a force resync racing the sync loop) takes it, and Undo cannot cancel
+it (it queues a reverse change instead). A flush also leaves every change of a mail
+that another flush is sending, so a mail's changes reach the server in order. Every
+outcome settles the claim, and only while the flush still owns it (same token): the
+row is deleted when applied, goes back to `pending` (not sent: nothing charged; maybe
+sent: one attempt charged) or becomes `failed`. A claim the flush left unsettled (an
+unexpected error) is released at the end of that flush with one attempt charged. A
+claim whose lease ran out means the app died mid-send: the next flush of the account
+puts it back to `pending` with one attempt charged and sends it again; every apply
+path first checks whether the change is already done (a move finds the mail in its
+destination, a flag STORE is idempotent, a delete of a gone mail counts as applied).
+`inflight` rows protect their local value from sync like `pending` ones; the Pending
+Changes screen shows them as "sending…".
+
 A network error charges no attempt: a failed IMAP connect, or a JMAP request that got
 no answer (socket, TLS, `http` client error, timeout), stops the flush for the next
-cycle. A JMAP request may still have landed, so its change keeps the claim marker
-(attempts at least 1: Undo queues a reverse change instead of cancelling it) but is
-not charged further; re-sending it is safe.
+cycle. A JMAP request may still have landed, so its change goes back to `pending`
+marked as maybe sent (attempts at least 1: Undo queues a reverse change instead of
+cancelling it) but is not charged further; re-sending it is safe.
 
 A failed change is never flushed again and protects nothing from sync (the guards
-only count `pending` rows), so the next server read shows server truth again. A failed
+only count `pending` and `inflight` rows), so the next server read shows server truth again. A failed
 read or star change makes the flag reconcile of the mail's folder due, so the next sync
 reads that folder's flags (with CONDSTORE, and with JMAP, an unchanged mail is otherwise
 read again only every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker
@@ -320,8 +338,10 @@ When the user taps Undo, `UndoService.undo()` executes this sequence for each af
 
 ```
 1. cancelPendingChange(id, originalType)
-      └─ Deletes the pending_changes row if it has not been flushed yet.
-         Returns true if cancelled, false if the server already processed it.
+      └─ Deletes the pending_changes row if nothing was sent for it yet
+         (`state = 'pending'`, `attempts = 0`). Returns false when a flush has
+         claimed it (`inflight`), it may have reached the server, or the
+         server already processed it.
 
 2. If the email row was hard-deleted (DELETE action):
       restoreEmails([original])

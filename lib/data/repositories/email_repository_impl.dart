@@ -110,7 +110,9 @@ class EmailRepositoryImpl implements EmailRepository {
     OutboxRepository? outbox,
     AppLogger? appLogger,
     Duration sendOperationTimeout = const Duration(seconds: 50),
+    DateTime Function() now = DateTime.now,
   })  : _db = db,
+        _now = now,
         _imapConnect = imapConnect,
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
@@ -123,6 +125,9 @@ class EmailRepositoryImpl implements EmailRepository {
 
   final AppDatabase _db;
   final AccountRepository _accounts;
+
+  /// The clock for change leases; injectable for tests.
+  final DateTime Function() _now;
   final ImapConnectFn _imapConnect;
   final FetchObjectIdsFn _fetchObjectIds;
   final FetchPreviewSnippetsFn _fetchPreviewSnippets;
@@ -1007,7 +1012,7 @@ class EmailRepositoryImpl implements EmailRepository {
               ..where(
                 (t) =>
                     t.resourceId.equals(oldId) &
-                    t.state.equals(_pendingState) &
+                    t.state.isIn(_liveStates) &
                     t.changeType.isIn(_locationChangeTypes),
               ))
             .get();
@@ -1524,7 +1529,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..addColumns([_db.pendingChanges.resourceId])
           ..where(
             _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.state.equals(_pendingState) &
+                _db.pendingChanges.state.isIn(_liveStates) &
                 _db.pendingChanges.changeType.isIn(
                   const [
                     'flag_seen',
@@ -2129,7 +2134,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.state.equals(_pendingState) &
+                t.state.isIn(_liveStates) &
                 t.resourceType.equals('Email') &
                 t.changeType.isIn(_placementChangeTypes),
           ))
@@ -2874,8 +2879,27 @@ class EmailRepositoryImpl implements EmailRepository {
   static const _maxChangeAttempts = model.maxPendingChangeAttempts;
 
   /// `pending_changes.state` of a change that is queued or still retrying.
-  /// Only these rows are flushed and protect a local value from sync.
+  /// Only these rows are flushed.
   static const _pendingState = 'pending';
+
+  /// `pending_changes.state` of a change a flush claimed and may be sending
+  /// right now ([_claimPendingChange]), until [PendingChangeRow.leaseUntil].
+  /// It cannot be cancelled (Undo queues a reverse change instead) and is
+  /// not claimed by another flush while the lease holds.
+  static const _inflightState = 'inflight';
+
+  /// States of a change that still protects its local value from sync and
+  /// that later changes of the mail depend on: queued, retrying or being
+  /// sent.
+  static const _liveStates = [_pendingState, _inflightState];
+
+  /// How long a claim holds. Longer than any single apply: a claim is taken
+  /// right before its apply, and a batch's one-by-one fallback renews it
+  /// ([_renewClaim]), so a second process flushing the same database does
+  /// not take over a change being sent. An expired lease means the app died
+  /// mid-send ([_recoverExpiredLeases]); short enough that a change killed
+  /// with the app is sent again soon after the restart.
+  static const _leaseDuration = Duration(minutes: 5);
 
   /// `pending_changes.state` of a change the app gave up on (retry limit or
   /// a permanent refusal). Never flushed and protects nothing, so the next
@@ -3672,7 +3696,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..addColumns([_db.pendingChanges.resourceId])
           ..where(
             _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.state.equals(_pendingState) &
+                _db.pendingChanges.state.isIn(_liveStates) &
                 _db.pendingChanges.changeType.isIn(
                   const ['move', 'snooze', 'unsnooze'],
                 ),
@@ -4236,22 +4260,29 @@ class EmailRepositoryImpl implements EmailRepository {
     final next = row.attempts + 1;
     final gaveUp = next >= _maxChangeAttempts;
     var dependents = const <PendingChangeRow>[];
+    var owned = false;
     await _db.transaction(() async {
-      await (_db.update(
-        _db.pendingChanges,
-      )..where((t) => t.id.equals(row.id)))
+      final count = await (_db.update(_db.pendingChanges)
+            ..where((t) => _ownsClaim(t, row)))
           .write(
         PendingChangesCompanion(
           attempts: Value(next),
           lastError: Value(error.toString()),
-          state: gaveUp ? const Value(_failedState) : const Value.absent(),
+          state: Value(gaveUp ? _failedState : _pendingState),
+          leaseUntil: const Value(null),
+          claimToken: const Value(null),
         ),
       );
-      if (gaveUp) {
+      owned = count > 0;
+      if (owned && gaveUp) {
         await _afterFlagFailure(row, revert: true);
         dependents = await _afterLocationFailure(row, revert: true);
       }
     });
+    if (!owned) {
+      log('Pending change ${row.id}: claim lost meanwhile, outcome dropped');
+      return;
+    }
     _logDependentFailures(row, dependents);
 
     // Mirror the failure into the App Log so a failed delete/move/flag is
@@ -4296,7 +4327,7 @@ class EmailRepositoryImpl implements EmailRepository {
   /// With [revert], a move's optimistic location is undone as well
   /// ([_revertFailedLocation]); pass false when the message is gone and there
   /// is nothing to go back to.
-  Future<void> _markChangeFailed(
+  Future<bool> _markChangeFailed(
     PendingChangeRow row,
     Object error, {
     bool revert = true,
@@ -4304,25 +4335,35 @@ class EmailRepositoryImpl implements EmailRepository {
     final dependents = await _db.transaction(
       () => _markChangeFailedInTransaction(row, error, revert: revert),
     );
+    if (dependents == null) return false;
     _logDependentFailures(row, dependents);
+    return true;
   }
 
   /// The database part of [_markChangeFailed], for a caller that runs it in
   /// its own transaction: returns the dependents, to log with
-  /// [_logDependentFailures] once that transaction has committed.
-  Future<List<PendingChangeRow>> _markChangeFailedInTransaction(
+  /// [_logDependentFailures] once that transaction has committed, or null
+  /// when the flush no longer owns the claim (nothing written then).
+  Future<List<PendingChangeRow>?> _markChangeFailedInTransaction(
     PendingChangeRow row,
     Object error, {
     required bool revert,
   }) async {
-    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+    final count = await (_db.update(_db.pendingChanges)
+          ..where((t) => _ownsClaim(t, row)))
         .write(
       PendingChangesCompanion(
         attempts: Value(row.attempts + 1),
         lastError: Value(error.toString()),
         state: const Value(_failedState),
+        leaseUntil: const Value(null),
+        claimToken: const Value(null),
       ),
     );
+    if (count == 0) {
+      log('Pending change ${row.id}: claim lost meanwhile, outcome dropped');
+      return null;
+    }
     await _afterFlagFailure(row, revert: revert);
     return _afterLocationFailure(row, revert: revert);
   }
@@ -4391,8 +4432,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.resourceId.equals(row.resourceId) &
                 t.id.equals(row.id).not() &
                 t.changeType.equals(row.changeType) &
-                (t.id.isSmallerThanValue(row.id) |
-                    t.state.equals(_pendingState)),
+                (t.id.isSmallerThanValue(row.id) | t.state.isIn(_liveStates)),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -4747,7 +4787,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) =>
                 t.resourceId.equals(failed.resourceId) &
-                t.state.equals(_pendingState) &
+                t.state.isIn(_liveStates) &
                 t.id.isBiggerThanValue(failed.id) &
                 t.changeType.isNotIn(_placementChangeTypes),
           ))
@@ -5919,7 +5959,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) =>
                 t.resourceId.equals(resourceId) &
-                t.state.equals(_pendingState) &
+                t.state.isIn(_liveStates) &
                 t.changeType.isIn(_locationChangeTypes),
           ))
         .get();
@@ -5945,19 +5985,23 @@ class EmailRepositoryImpl implements EmailRepository {
     return row?.read(_db.emails.isLocal) ?? false;
   }
 
-  /// Atomically marks [snapshot] as picked up by a flush by bumping its
-  /// attempt counter, so [cancelPendingChange] (which only removes rows still
-  /// at `attempts == 0`) can no longer delete a change that is being applied.
-  /// Otherwise an Undo racing the flush would "cancel" a MOVE that still lands
-  /// on the server and skip its reverse move (#1048).
+  /// Atomically claims [snapshot] for a flush: `inflight` with a lease
+  /// ([_leaseDuration]), so [cancelPendingChange] (which only removes
+  /// `pending` rows nothing was sent for) can no longer delete a change that
+  /// is being applied, and no other flush (another isolate or process on
+  /// the same database) takes it. Otherwise an Undo racing the flush would
+  /// "cancel" a MOVE that still lands on the server and skip its reverse
+  /// move (#1048). Every outcome then settles the row: deleted when applied,
+  /// back to `pending` ([_unclaimPendingChange], [_keepClaimWithoutCharge],
+  /// [_recordChangeError]) or `failed`.
   ///
-  /// Returns null when the row was cancelled, claimed by another isolate or
+  /// Returns null when the row was cancelled, claimed by another flush or
   /// marked failed since the flush took its snapshot — the caller must then
   /// skip it.
   /// Otherwise returns the row as currently stored: an earlier change in the
   /// same flush may have re-keyed it ([_rekeyEmailRow] rewrites `resourceId`
-  /// and the payload UID). The attempt count is the pre-claim one, so a failed
-  /// apply is not double-counted by [_recordChangeError].
+  /// and the payload UID). Claiming charges no attempt; [_recordChangeError]
+  /// does, from the row's attempts.
   Future<PendingChangeRow?> _claimPendingChange(
     PendingChangeRow snapshot,
   ) async {
@@ -5969,13 +6013,134 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.attempts.equals(snapshot.attempts),
           ))
         .write(
-      PendingChangesCompanion(attempts: Value(snapshot.attempts + 1)),
+      PendingChangesCompanion(
+        state: const Value(_inflightState),
+        leaseUntil: Value(_now().add(_leaseDuration)),
+        claimToken: Value(_flushToken()),
+      ),
     );
     if (count == 0) return null;
-    final current = await (_db.select(_db.pendingChanges)
+    return (_db.select(_db.pendingChanges)
           ..where((t) => t.id.equals(snapshot.id)))
         .getSingleOrNull();
-    return current?.copyWith(attempts: snapshot.attempts);
+  }
+
+  /// This flush's claim token (set by [flushPendingChanges] under
+  /// [_flushTokenKey]); a fresh one outside a flush.
+  static String _flushToken() =>
+      Zone.current[_flushTokenKey] as String? ?? _newClaimToken();
+
+  static final _claimRandom = math.Random.secure();
+
+  static String _newClaimToken() => List.generate(
+        16,
+        (_) => _claimRandom.nextInt(16).toRadixString(16),
+      ).join();
+
+  /// Whether the stored row of [row], a change claimed by a flush, is still
+  /// that flush's claim: `inflight` under the claim token [row] was claimed
+  /// with. Every outcome write checks it, so a flush whose lease ran out
+  /// (e.g. suspended by laptop sleep) and was taken over cannot overwrite
+  /// the new claim.
+  Expression<bool> _ownsClaim($PendingChangesTable t, PendingChangeRow row) {
+    final token = row.claimToken;
+    return t.id.equals(row.id) &
+        t.state.equals(_inflightState) &
+        (token == null ? t.claimToken.isNull() : t.claimToken.equals(token));
+  }
+
+  /// Extends the claim of [row] before a slow apply (the one-by-one
+  /// fallback of a batch claimed up front). Null when the claim was lost.
+  Future<PendingChangeRow?> _renewClaim(PendingChangeRow row) async {
+    final count = await (_db.update(_db.pendingChanges)
+          ..where((t) => _ownsClaim(t, row)))
+        .write(
+      PendingChangesCompanion(leaseUntil: Value(_now().add(_leaseDuration))),
+    );
+    if (count == 0) return null;
+    return (_db.select(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+        .getSingleOrNull();
+  }
+
+  /// Settles the changes this flush claimed (claim token [token]) but left
+  /// `inflight` (an unexpected error between claim and outcome): back to
+  /// `pending`, one attempt charged, since they may have reached the server.
+  Future<void> _releaseUnsettledClaims(String accountId, String token) async {
+    final left = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.state.equals(_inflightState) &
+                t.claimToken.equals(token),
+          ))
+        .get();
+    for (final row in left) {
+      final count = await (_db.update(_db.pendingChanges)
+            ..where((t) => _ownsClaim(t, row)))
+          .write(
+        PendingChangesCompanion(
+          state: const Value(_pendingState),
+          leaseUntil: const Value(null),
+          claimToken: const Value(null),
+          attempts: Value(row.attempts + 1),
+        ),
+      );
+      if (count > 0) {
+        log('Pending change ${row.id} left in flight by its flush; released');
+      }
+    }
+  }
+
+  /// Changes of [accountId] still `inflight` after their lease ran out: the
+  /// app (or a second process) died while sending them, so they may or may
+  /// not have reached the server. Each goes back to `pending` with one
+  /// attempt charged, as the old claim marker did, and is sent again; the
+  /// retry limit is applied by that resend, not here, so a change that
+  /// probably landed is not given up on unseen. Every apply path first
+  /// checks whether the change is already done (a move finds the mail in its
+  /// destination, a flag STORE is idempotent, a delete of a gone mail counts
+  /// as applied). Compare-and-set, so two flushes recovering at once charge
+  /// it once.
+  Future<void> _recoverExpiredLeases(String accountId) async {
+    final expired = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.state.equals(_inflightState) &
+                (t.leaseUntil.isNull() |
+                    t.leaseUntil.isSmallerOrEqualValue(_now())),
+          ))
+        .get();
+    for (final row in expired) {
+      final count = await (_db.update(_db.pendingChanges)
+            ..where((t) => _ownsClaim(t, row)))
+          .write(
+        PendingChangesCompanion(
+          state: const Value(_pendingState),
+          leaseUntil: const Value(null),
+          claimToken: const Value(null),
+          attempts: Value(row.attempts + 1),
+          lastError: const Value('interrupted while sending (app closed?)'),
+        ),
+      );
+      if (count > 0) {
+        log('Pending change ${row.id}: lease expired, will be sent again');
+      }
+    }
+  }
+
+  /// Mails with a change some other flush is sending now: this flush leaves
+  /// all their changes alone, so a mail's changes reach the server in order.
+  Future<Set<String>> _mailsInFlightElsewhere(String accountId) async {
+    final ids = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.state.equals(_inflightState),
+          ))
+        .map((r) => r.read(_db.pendingChanges.resourceId)!)
+        .get();
+    return ids.toSet();
   }
 
   @override
@@ -6020,7 +6185,7 @@ class EmailRepositoryImpl implements EmailRepository {
           ..where(
             (t) =>
                 t.resourceId.equals(cancelled.resourceId) &
-                t.state.equals(_pendingState),
+                t.state.isIn(_liveStates),
           )
           ..orderBy([(t) => OrderingTerm.asc(t.id)]))
         .get();
@@ -7065,6 +7230,7 @@ class EmailRepositoryImpl implements EmailRepository {
   /// Called at the start of each sync cycle. Returns count of applied changes.
   @override
   Future<int> flushPendingChanges(String accountId, String password) async {
+    await _recoverExpiredLeases(accountId);
     final rows = await (_db.select(_db.pendingChanges)
           // A failed change waits for the user's Retry or Discard.
           ..where(
@@ -7079,11 +7245,21 @@ class EmailRepositoryImpl implements EmailRepository {
     if (rows.isEmpty) return 0;
 
     final account = (await _accounts.getAccount(accountId))!;
-    switch (account.type) {
-      case account_model.AccountType.imap:
-        return _flushPendingChangesImap(account, password, rows);
-      case account_model.AccountType.jmap:
-        return _flushPendingChangesJmap(account, password, rows);
+    final token = _newClaimToken();
+    try {
+      return await runZoned(
+        () async {
+          switch (account.type) {
+            case account_model.AccountType.imap:
+              return _flushPendingChangesImap(account, password, rows);
+            case account_model.AccountType.jmap:
+              return _flushPendingChangesJmap(account, password, rows);
+          }
+        },
+        zoneValues: {_flushTokenKey: token},
+      );
+    } finally {
+      await _releaseUnsettledClaims(accountId, token);
     }
   }
 
@@ -7106,12 +7282,17 @@ class EmailRepositoryImpl implements EmailRepository {
     // Mails whose move/snooze/unsnooze/delete did not apply in this flush:
     // their later changes address the mail where that change would have put
     // it, so they wait (unclaimed, uncharged) for the next flush.
-    final blocked = <String>{};
+    final blocked = await _mailsInFlightElsewhere(account.id);
 
     for (final snapshot in rows) {
       if (blocked.contains(snapshot.resourceId)) continue;
       final row = await _claimPendingChange(snapshot);
-      if (row == null) continue;
+      if (row == null) {
+        // Cancelled, failed or claimed by another flush since the snapshot:
+        // the mail's later changes wait for the next flush.
+        blocked.add(snapshot.resourceId);
+        continue;
+      }
       if (_placementChangeTypes.contains(row.changeType)) {
         // Unblocked again below once it applied.
         blocked.add(row.resourceId);
@@ -7154,7 +7335,9 @@ class EmailRepositoryImpl implements EmailRepository {
         // Permanent per-item rejection (e.g. notFound, forbidden): retrying
         // cannot help, so mark it failed at once and keep it for the user.
         // `notFound`: the mail is gone, there is no place to go back to.
-        await _markChangeFailed(row, e, revert: e.type != 'notFound');
+        if (!await _markChangeFailed(row, e, revert: e.type != 'notFound')) {
+          continue;
+        }
         log('JMAP permanent error for change ${row.id}: $e');
         unawaited(
           _appLogger?.error(
@@ -7211,7 +7394,7 @@ class EmailRepositoryImpl implements EmailRepository {
     // Mails whose move/snooze/unsnooze/delete did not apply in this flush:
     // their later changes address the mail where that change would have put
     // it, so they wait (unclaimed, uncharged) for the next flush.
-    final blocked = <String>{};
+    final blocked = await _mailsInFlightElsewhere(account.id);
     try {
       var next = 0;
       while (next < rows.length) {
@@ -7313,7 +7496,12 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final snapshot in snapshots) {
       if (blocked.contains(snapshot.resourceId)) continue;
       final row = await _claimPendingChange(snapshot);
-      if (row == null) continue;
+      if (row == null) {
+        // Cancelled, failed or claimed by another flush since the snapshot:
+        // the mail's later changes wait for the next flush.
+        blocked.add(snapshot.resourceId);
+        continue;
+      }
       claimed.add(row);
     }
     if (claimed.isEmpty) return (applied: 0, connectionLost: false);
@@ -7353,10 +7541,20 @@ class EmailRepositoryImpl implements EmailRepository {
     }
 
     for (var i = 0; i < pending.length; i++) {
-      final row = pending[i];
+      var row = pending[i];
       if (blocked.contains(row.resourceId)) {
         await _unclaimPendingChange(row);
         continue;
+      }
+      if (claimed.length > 1) {
+        // Claimed with the whole batch: the one-by-one applies before this
+        // one may have taken a while.
+        final renewed = await _renewClaim(row);
+        if (renewed == null) {
+          blocked.add(row.resourceId);
+          continue;
+        }
+        row = renewed;
       }
       final outcome = await _settleImapChange(account, client, row);
       if (outcome.connectionLost != null) {
@@ -7375,27 +7573,33 @@ class EmailRepositoryImpl implements EmailRepository {
     return (applied: applied, connectionLost: false);
   }
 
-  /// Settles a claimed [row] whose request got no answer: keeps the claim
-  /// marker (attempts at least 1, so [cancelPendingChange] leaves it alone)
-  /// but charges nothing beyond it, and records [error].
+  /// Settles a claimed [row] whose request got no answer: back to
+  /// `pending`, marked as maybe sent (attempts at least 1, so
+  /// [cancelPendingChange] leaves it alone) but charged nothing beyond
+  /// that, with [error] recorded.
   Future<void> _keepClaimWithoutCharge(PendingChangeRow row, Object error) =>
-      (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id))).write(
+      (_db.update(_db.pendingChanges)..where((t) => _ownsClaim(t, row))).write(
         PendingChangesCompanion(
+          state: const Value(_pendingState),
+          leaseUntil: const Value(null),
+          claimToken: const Value(null),
           attempts: Value(math.max(row.attempts, 1)),
           lastError: Value(error.toString()),
         ),
       );
 
-  /// Returns a row claimed by [_claimPendingChange] to its pre-claim
-  /// attempts, for a change the flush never sent.
+  /// Returns a row claimed by [_claimPendingChange] to `pending`, for a
+  /// change the flush never sent: no attempt charged, so Undo can still
+  /// cancel it.
   Future<void> _unclaimPendingChange(PendingChangeRow claimed) =>
-      (_db.update(_db.pendingChanges)
-            ..where(
-              (t) =>
-                  t.id.equals(claimed.id) &
-                  t.attempts.equals(claimed.attempts + 1),
-            ))
-          .write(PendingChangesCompanion(attempts: Value(claimed.attempts)));
+      (_db.update(_db.pendingChanges)..where((t) => _ownsClaim(t, claimed)))
+          .write(
+        const PendingChangesCompanion(
+          state: Value(_pendingState),
+          leaseUntil: Value(null),
+          claimToken: Value(null),
+        ),
+      );
 
   /// Sends one `UID MOVE` for all [rows] (same source and destination) and
   /// re-keys every row the `COPYUID` response maps. Returns those rows, the
@@ -7608,7 +7812,9 @@ class EmailRepositoryImpl implements EmailRepository {
         // The folder was renumbered and the message cannot be identified
         // safely: mark the change failed rather than act on someone else's
         // mail. Nothing to go back to: the mail is not known there.
-        await _markChangeFailed(row, e, revert: false);
+        if (!await _markChangeFailed(row, e, revert: false)) {
+          return (applied: 0, connectionLost: null);
+        }
         log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
@@ -7632,9 +7838,12 @@ class EmailRepositoryImpl implements EmailRepository {
         final (:dependents, :dropped) = await _db.transaction(() async {
           final dependents =
               await _markChangeFailedInTransaction(row, e, revert: false);
+          // A lost claim's outcome is not ours to act on.
+          if (dependents == null) return (dependents: null, dropped: null);
           final dropped = e.inNeitherMailbox ? await _dropGoneRow(row) : null;
           return (dependents: dependents, dropped: dropped);
         });
+        if (dependents == null) return (applied: 0, connectionLost: null);
         log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
@@ -7665,7 +7874,9 @@ class EmailRepositoryImpl implements EmailRepository {
         // The source folder was selected, so the mail is still there: a
         // missing destination (`NO [TRYCREATE]` from the MOVE) means the
         // move did not happen. Mark it failed and show the mail where it is.
-        await _markChangeFailed(row, e);
+        if (!await _markChangeFailed(row, e)) {
+          return (applied: 0, connectionLost: null);
+        }
         log('IMAP change ${row.id} failed: destination missing ($e)');
         unawaited(
           _appLogger?.warn(
@@ -7685,12 +7896,18 @@ class EmailRepositoryImpl implements EmailRepository {
         // The mail's folder is gone on the server, and the mail with it
         // (or, for a flag change or delete, the target is gone): treat as
         // success so the change doesn't accumulate or block future changes.
-        final dropped = await _db.transaction(() async {
-          await _deletePendingChange(row);
+        final (:owned, :dropped) = await _db.transaction(() async {
+          final owned = await (_db.delete(_db.pendingChanges)
+                    ..where((t) => _ownsClaim(t, row)))
+                  .go() >
+              0;
           // A moved row sits in its destination with the deleted folder's
-          // UID, naming whichever mail has that UID there (#1268).
-          return sourceGone ? await _dropGoneRow(row) : null;
+          // UID, naming whichever mail has that UID there (#1268). Only
+          // while this flush still owns the change.
+          final dropped = owned && sourceGone ? await _dropGoneRow(row) : null;
+          return (owned: owned, dropped: dropped);
         });
+        if (!owned) return (applied: 0, connectionLost: null);
         log('IMAP change ${row.id} skipped: message already gone ($e)');
         unawaited(
           _appLogger?.info(
@@ -11049,6 +11266,7 @@ class EmailRepositoryImpl implements EmailRepository {
         attempts: r.attempts,
         lastError: r.lastError,
         failed: r.state == _failedState,
+        sending: r.state == _inflightState,
       );
 
   @override
@@ -11172,6 +11390,11 @@ Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
 /// Zone key under which [EmailRepositoryImpl.deleteEmails] publishes its
 /// [_BulkScope].
 final _bulkScopeKey = Object();
+
+/// Zone key under which [EmailRepositoryImpl.flushPendingChanges] publishes
+/// its claim token, which every change it claims carries, so it can release
+/// exactly those if it ends without settling one.
+final _flushTokenKey = Object();
 
 /// A server flag read in progress (see
 /// [EmailRepositoryImpl._startServerFlagRead]). The server's answer reflects

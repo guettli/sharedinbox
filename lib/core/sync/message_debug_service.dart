@@ -153,9 +153,13 @@ class MessageDebugPending {
     required this.createdAt,
     required this.lastError,
     required this.payload,
+    this.state = 'pending',
   });
 
   final String changeType;
+
+  /// `pending`, `inflight` or `failed` (SYNC.md §6).
+  final String state;
   final int attempts;
   final DateTime createdAt;
   final String? lastError;
@@ -239,6 +243,7 @@ Future<MessageDebugSnapshot> loadMessageDebugSnapshot(
       for (final p in pending)
         MessageDebugPending(
           changeType: p.changeType,
+          state: p.state,
           attempts: p.attempts,
           createdAt: p.createdAt,
           lastError: p.lastError,
@@ -366,6 +371,7 @@ String buildMessageDebugMarkdown(
     for (final p in snapshot.pending) {
       _writeTable(buf, [
         ('changeType', p.changeType),
+        ('state', p.state),
         ('attempts', p.attempts.toString()),
         ('createdAt', _fmtTime(p.createdAt)),
         if (p.lastError != null) ('lastError', p.lastError!),
