@@ -4592,6 +4592,13 @@ void main() {
         // warning does not point at it.
         expect(await r.db.select(r.db.emails).get(), isEmpty);
         expect(warning.emailId, isNull);
+        // The mail vanished from the list: the App Log says so.
+        final removed = recorder.entries
+            .singleWhere((e) => e.event == 'pending_change.local_row_removed');
+        expect(removed.level, AppLogLevel.warn);
+        expect(removed.emailId, isNull);
+        expect(removed.mailboxPath, 'INBOX');
+        expect(removed.message, contains('in neither folder'));
       });
     });
 
@@ -10678,6 +10685,58 @@ void main() {
 
       expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    // The moved row sits in Archive with the gone folder's UID (#1268): it
+    // is removed, and the App Log says why the mail vanished.
+    test('a move whose source folder is gone removes the row and logs it',
+        () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async =>
+            _NonExistentSelectImapClient(),
+        appLogger: AppLogger(recorder),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'acc-1:Old:1',
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: 1,
+              receivedAt: DateTime(2024),
+              subject: const Value('Quarterly report'),
+              messageId: const Value('m1@example.com'),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: 'acc-1:Old:1',
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': 1,
+                'mailboxPath': 'Old',
+                'dest': 'Archive',
+                'messageId': 'm1@example.com',
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
+      expect(await r.db.select(r.db.emails).get(), isEmpty);
+      final removed = recorder.entries
+          .singleWhere((e) => e.event == 'pending_change.local_row_removed');
+      expect(removed.level, AppLogLevel.warn);
+      expect(removed.emailId, isNull);
+      expect(removed.mailboxPath, 'Archive');
+      expect(removed.message, contains('Quarterly report'));
+      expect(removed.message, contains('source folder no longer exists'));
+      final skipped = recorder.entries
+          .singleWhere((e) => e.event == 'pending_change.skipped_gone');
+      expect(skipped.emailId, isNull);
     });
   });
 

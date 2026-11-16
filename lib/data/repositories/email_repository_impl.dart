@@ -4247,21 +4247,51 @@ class EmailRepositoryImpl implements EmailRepository {
   /// copy that mail's flags onto it, and the user's changes would act on
   /// it (#1268). If the mail is in a third folder, sync shows it there.
   /// The failed change itself stays on the Pending Changes screen; changes
-  /// queued behind it find no mail and fail there too. Returns whether a
-  /// row was dropped.
-  Future<bool> _dropGoneRow(PendingChangeRow failed) async {
-    if (!_locationChangeTypes.contains(failed.changeType)) return false;
+  /// queued behind it find no mail and fail there too. Returns the dropped
+  /// row, or null; the caller logs it with [_logGoneRowDropped] once the
+  /// transaction has committed.
+  Future<Email?> _dropGoneRow(PendingChangeRow failed) async {
+    if (!_locationChangeTypes.contains(failed.changeType)) return null;
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(failed.resourceId)))
         .getSingleOrNull();
-    if (email == null || !_sameMessage(failed, email.messageId)) return false;
+    if (email == null || !_sameMessage(failed, email.messageId)) return null;
     await (_db.delete(_db.emails)..where((t) => t.id.equals(email.id))).go();
     await _updateThread(
       email.accountId,
       email.mailboxPath,
       email.threadId ?? email.id,
     );
-    return true;
+    return email;
+  }
+
+  /// App Log line for a row [_dropGoneRow] removed: the mail vanishes from
+  /// the list, so the user must be able to find out why.
+  /// [why] says what the server showed, e.g. "the message is in neither
+  /// folder on the server".
+  void _logGoneRowDropped(
+    PendingChangeRow failed,
+    Email? dropped, {
+    required String why,
+  }) {
+    if (dropped == null) return;
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.local_row_removed',
+        'Removed "${dropped.subject ?? '(no subject)'}" from '
+            '${dropped.mailboxPath} on this device — after '
+            '${_describeChange(failed)}: $why; if another client moved it, '
+            'it shows up there on the next sync',
+        accountId: dropped.accountId,
+        mailboxPath: dropped.mailboxPath,
+        // The row is gone; a log row must not reference it.
+        data: {
+          'changeType': failed.changeType,
+          'removedEmailId': dropped.id,
+          'messageId': dropped.messageId,
+        },
+      ),
+    );
   }
 
   /// App Log warnings for the [dependents] failed together with [row].
@@ -7312,8 +7342,13 @@ class EmailRepositoryImpl implements EmailRepository {
         // One transaction: a phantom row must not outlive a crash here.
         final dropped = await _db.transaction(() async {
           await _markChangeFailed(row, e, revert: false);
-          return e.inNeitherMailbox && await _dropGoneRow(row);
+          return e.inNeitherMailbox ? await _dropGoneRow(row) : null;
         });
+        _logGoneRowDropped(
+          row,
+          dropped,
+          why: 'the message is in neither folder on the server',
+        );
         log('IMAP change ${row.id} failed: $e');
         unawaited(
           _appLogger?.warn(
@@ -7323,7 +7358,7 @@ class EmailRepositoryImpl implements EmailRepository {
                 'kept on the Pending Changes screen',
             accountId: account.id,
             // A log row must not reference the email row just dropped.
-            emailId: dropped ? null : row.resourceId,
+            emailId: dropped != null ? null : row.resourceId,
             data: {'changeType': row.changeType},
             error: e,
           ),
@@ -7357,12 +7392,17 @@ class EmailRepositoryImpl implements EmailRepository {
         // The mail's folder is gone on the server, and the mail with it
         // (or, for a flag change or delete, the target is gone): treat as
         // success so the change doesn't accumulate or block future changes.
-        await _db.transaction(() async {
+        final dropped = await _db.transaction(() async {
           await _deletePendingChange(row);
           // A moved row sits in its destination with the deleted folder's
           // UID, naming whichever mail has that UID there (#1268).
-          if (sourceGone) await _dropGoneRow(row);
+          return sourceGone ? await _dropGoneRow(row) : null;
         });
+        _logGoneRowDropped(
+          row,
+          dropped,
+          why: 'its source folder no longer exists on the server',
+        );
         log('IMAP change ${row.id} skipped: message already gone ($e)');
         unawaited(
           _appLogger?.info(
@@ -7370,7 +7410,7 @@ class EmailRepositoryImpl implements EmailRepository {
             'Skipped ${_describeChange(row)} — message already gone on '
                 'the server',
             accountId: account.id,
-            emailId: row.resourceId,
+            emailId: dropped != null ? null : row.resourceId,
             data: {'changeType': row.changeType},
           ),
         );
