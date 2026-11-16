@@ -50,12 +50,13 @@
     },
     {
       "description": [
-        "Dagger is lock-stepped with the engine, which Renovate cannot reach: the engine tag is pinned by Ansible in guettli/gitops (ansible/p16/systemd/system/dagger-engine.service) and CI talks to it over an SSH tunnel. A Dagger PR therefore stays red until that host is bumped and dagger-engine restarted.",
-        "The 1.0.0 betas are tags, not GitHub releases, so this datasource does not see them: Renovate stays quiet until 1.0.0 (or later) is released and then proposes it over the beta. Beta-to-beta bumps are by hand. The currentValue regexes include the -beta.N suffix so that proposal replaces the whole version.",
-        "Never automerge, and keep every in-repo CLI pin in ONE PR so it is at least internally consistent. Landing it is a two-repo operation: merge the engine bump in gitops first, then this. See DAGGER.md and guettli/gitops#112."
+        "Dagger is lock-stepped with the shared engine, which gitops pins and Renovate bumps there in its own \"dagger lock-step\" PR. Merge that one FIRST (Flux restarts the engine), then re-run this PR's CI: it passes on the old runner image because setup_dagger_remote.sh fetches the CLI the engine runs (#1273). Until the engine moves, check_dagger_versions.sh --engine fails this PR (pin != engine) -- that is what the blocked-on-engine label means.",
+        "The 1.0 betas are git tags, not GitHub releases, hence the github-tags datasource; versioning semver because the regex default (semver-coerced) drops the -beta.N suffix. With a prerelease pinned, Renovate offers newer prereleases of the same x.y.z and any newer stable release. allowedVersions keeps out every other tag shape.",
+        "Never automerge, and keep every in-repo pin in ONE PR so it is internally consistent. ci/dagger.json engineVersion is a floor and deliberately not managed (#445)."
       ],
       "matchDepNames": ["dagger/dagger"],
       "groupName": "dagger lock-step",
+      "allowedVersions": "/^[0-9]+\\.[0-9]+\\.[0-9]+(-(beta|rc)\\.[0-9]+)?$/",
       "automerge": false,
       "platformAutomerge": false,
       "addLabels": ["blocked-on-engine"]
@@ -76,7 +77,8 @@
       "fileMatch": ["^Dockerfile\\.dev$"],
       "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)"],
       "depNameTemplate": "dagger/dagger",
-      "datasourceTemplate": "github-releases",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
@@ -85,16 +87,18 @@
       "fileMatch": ["^arc-runner-image/Dockerfile$"],
       "matchStrings": ["DAGGER_VERSION=(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)"],
       "depNameTemplate": "dagger/dagger",
-      "datasourceTemplate": "github-releases",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
-      "description": "Engine tag in the example systemd unit in DAGGER.md. A deployment pin: must equal the engine version.",
+      "description": "Engine image tag in DAGGER.md. A deployment pin: must equal the engine version. (It used to match a github:dagger/nix line that no longer exists, so Renovate left DAGGER.md behind and its PR failed check_dagger_versions.sh.)",
       "customType": "regex",
       "fileMatch": ["^DAGGER\\.md$"],
-      "matchStrings": ["github:dagger/nix/v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)#dagger"],
+      "matchStrings": ["registry\\.dagger\\.io/engine:v(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)"],
       "depNameTemplate": "dagger/dagger",
-      "datasourceTemplate": "github-releases",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver",
       "extractVersionTemplate": "^v(?<version>.*)$"
     },
     {
