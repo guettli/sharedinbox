@@ -1018,7 +1018,9 @@ class EmailRepositoryImpl implements EmailRepository {
       final row = await (_db.select(_db.emails)..where((t) => t.id.equals(id)))
           .getSingleOrNull();
       if (row == null) return;
-      if (row.imapServerUid == newUid && row.imapServerPath == newMailboxPath) {
+      // Compared with what is recorded, so a row whose location was
+      // released (or never recorded) gets it recorded.
+      if (row.srvUid == newUid && row.srvMailboxPath == newMailboxPath) {
         return;
       }
       final newUidValidity =
@@ -1046,6 +1048,9 @@ class EmailRepositoryImpl implements EmailRepository {
           'sync already fetched (${existing.id})',
         );
         final copyId = existing.id;
+        // Its queued changes, logs, thread and Undo references (and its
+        // body, if this row has none) carry over to this row first.
+        await _adoptImapMovedRow(oldId: copyId, newId: id);
         await (_db.delete(_db.emails)..where((t) => t.id.equals(copyId))).go();
         merged = existing;
         // The kept row has this app's view of the flags, the dropped one the
@@ -6067,6 +6072,24 @@ class EmailRepositoryImpl implements EmailRepository {
     // is instead applied locally and carried over to the real message when it
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (email?.isLocal ?? false) return;
+    // A JMAP mail whose server id is not known cannot be changed on the
+    // server: queued, the change would fail at every flush.
+    if (email?.srvJmapId == null &&
+        email?.srvUid == null &&
+        (await _bulkAccount(accountId))?.type ==
+            account_model.AccountType.jmap) {
+      unawaited(
+        _appLogger?.warn(
+          'pending_change.no_server_id',
+          'Did not send $changeType to the server: the server id of this '
+              'message is not known. The change stays on this device.',
+          accountId: accountId,
+          emailId: email?.id,
+          mailboxPath: email?.mailboxPath,
+        ),
+      );
+      return;
+    }
     final at = _imapLocationOf(email);
     _noteLocalEdit(resourceId, at: at);
     payload = _stampJmapId(payload, email?.srvJmapId);
@@ -7207,23 +7230,45 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> _restoreEmail(model.Email e) async {
     var srvPath = e.srvMailboxPath;
     var srvUid = e.srvUid;
-    var srvJmapId = e.srvJmapId;
-    if (srvPath != null &&
-        srvUid != null &&
-        await _rowAtImapLocation(
+    final srvJmapId = e.srvJmapId;
+    if (srvPath != null && srvUid != null) {
+      final path = srvPath;
+      final uid = srvUid;
+      final validity = e.srvUidValidity;
+      // A snapshot without a UIDVALIDITY yields to a row at that folder
+      // and UID under any UIDVALIDITY: which one is newer is unknown.
+      final holder = validity == null
+          ? await (_db.select(_db.emails)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(e.accountId) &
+                      t.srvMailboxPath.equals(path) &
+                      t.srvUid.equals(uid) &
+                      t.id.equals(e.id).not(),
+                )
+                ..limit(1))
+              .getSingleOrNull()
+          : await _rowAtImapLocation(
               e.accountId,
-              srvPath,
-              srvUid,
-              uidValidity: e.srvUidValidity,
+              path,
+              uid,
+              uidValidity: validity,
               exceptId: e.id,
-            ) !=
-            null) {
-      srvPath = null;
-      srvUid = null;
+            );
+      if (holder != null) {
+        srvPath = null;
+        srvUid = null;
+      }
     }
     if (srvJmapId != null) {
       final holder = await _rowByJmapId(e.accountId, srvJmapId);
-      if (holder != null && holder.id != e.id) srvJmapId = null;
+      // A JMAP id names one mail of the account: sync stored it again
+      // meanwhile, so it is back already. A second row without a server id
+      // could never be synced or changed on the server.
+      if (holder != null && holder.id != e.id) {
+        log('restoreEmails: ${e.id} is back as ${holder.id} already');
+        return;
+      }
     }
     final imapKnown = srvPath != null && srvUid != null;
     await _db.into(_db.emails).insertOnConflictUpdate(
@@ -9015,7 +9060,7 @@ class EmailRepositoryImpl implements EmailRepository {
       accountId,
       id,
       mailbox: MailboxesCompanion.insert(
-        id: '$accountId:$id',
+        id: '$accountId:$id', // not an email id
         accountId: accountId,
         path: id,
         name: _snoozedPlaceholder,
@@ -9386,65 +9431,69 @@ class EmailRepositoryImpl implements EmailRepository {
     if (isLocal && mid == null) return;
     final uidValidity =
         uid == null ? null : await _knownUidValidity(accountId, mailboxPath);
-    // A row a sync already stored there, or the virtual copy of an earlier
-    // send of this message, is reused.
-    final known = uid != null
-        ? await _rowAtImapLocation(
-            accountId,
-            mailboxPath,
-            uid,
-            uidValidity: uidValidity,
-          )
-        : (jmapId != null
-            ? await _rowByJmapId(accountId, jmapId)
-            : await _localRowFor(accountId, mid!, sentCopy: true));
-    final emailId = known?.id ?? _newId(accountId);
+    // One transaction: a sync storing the mail, or another send of it,
+    // must not insert a row between the lookup and the write.
+    await _db.transaction(() async {
+      // A row a sync already stored there, or the virtual copy of an earlier
+      // send of this message, is reused.
+      final known = uid != null
+          ? await _rowAtImapLocation(
+              accountId,
+              mailboxPath,
+              uid,
+              uidValidity: uidValidity,
+            )
+          : (jmapId != null
+              ? await _rowByJmapId(accountId, jmapId)
+              : await _localRowFor(accountId, mid!, sentCopy: true));
+      final emailId = known?.id ?? _newId(accountId);
 
-    final now = DateTime.now();
-    final threadId =
-        _computeThreadId(messageId: mid, inReplyTo: null, references: null) ??
-            emailId;
-    final body = draft.body;
-    final preview = body.length > 200 ? body.substring(0, 200) : body;
+      final now = DateTime.now();
+      final threadId =
+          _computeThreadId(messageId: mid, inReplyTo: null, references: null) ??
+              emailId;
+      final body = draft.body;
+      final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-    await _db.into(_db.emails).insertOnConflictUpdate(
-          EmailsCompanion.insert(
-            id: emailId,
-            accountId: accountId,
-            mailboxPath: mailboxPath,
-            uid: uid ?? 0,
-            subject: Value(draft.subject),
-            sentAt: Value(now),
-            receivedAt: now,
-            fromJson: Value(_encodeModelAddresses([draft.from])),
-            toAddresses: Value(_encodeModelAddresses(draft.to)),
-            ccJson: Value(_encodeModelAddresses(draft.cc)),
-            bccJson: Value(_encodeModelAddresses(draft.bcc)),
-            preview: Value(preview),
-            // You wrote it — mirrors the \Seen flag the APPEND sets, and never
-            // nags with an unread badge on your own mail.
-            isSeen: const Value(true),
-            isFlagged: const Value(false),
-            hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-            threadId: Value(threadId),
-            messageId: Value(mid),
-            isLocal: Value(isLocal),
-            isVirtualSentCopy: Value(isLocal),
-            srvMailboxPath: Value(uid == null ? null : mailboxPath),
-            srvUid: Value(uid),
-            srvUidValidity: Value(uidValidity),
-            srvJmapId: Value(uid == null ? jmapId : null),
-          ),
-        );
-    await _db.into(_db.emailBodies).insertOnConflictUpdate(
-          EmailBodiesCompanion.insert(
-            emailId: emailId,
-            textBody: Value(body),
-            cachedAt: Value(now),
-            bodySize: Value(_bodySize(body, null)),
-          ),
-        );
-    await _updateThread(accountId, mailboxPath, threadId);
+      await _db.into(_db.emails).insertOnConflictUpdate(
+            EmailsCompanion.insert(
+              id: emailId,
+              accountId: accountId,
+              mailboxPath: mailboxPath,
+              uid: uid ?? 0,
+              subject: Value(draft.subject),
+              sentAt: Value(now),
+              receivedAt: now,
+              fromJson: Value(_encodeModelAddresses([draft.from])),
+              toAddresses: Value(_encodeModelAddresses(draft.to)),
+              ccJson: Value(_encodeModelAddresses(draft.cc)),
+              bccJson: Value(_encodeModelAddresses(draft.bcc)),
+              preview: Value(preview),
+              // You wrote it — mirrors the \Seen flag the APPEND sets, and never
+              // nags with an unread badge on your own mail.
+              isSeen: const Value(true),
+              isFlagged: const Value(false),
+              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+              threadId: Value(threadId),
+              messageId: Value(mid),
+              isLocal: Value(isLocal),
+              isVirtualSentCopy: Value(isLocal),
+              srvMailboxPath: Value(uid == null ? null : mailboxPath),
+              srvUid: Value(uid),
+              srvUidValidity: Value(uidValidity),
+              srvJmapId: Value(uid == null ? jmapId : null),
+            ),
+          );
+      await _db.into(_db.emailBodies).insertOnConflictUpdate(
+            EmailBodiesCompanion.insert(
+              emailId: emailId,
+              textBody: Value(body),
+              cachedAt: Value(now),
+              bodySize: Value(_bodySize(body, null)),
+            ),
+          );
+      await _updateThread(accountId, mailboxPath, threadId);
+    });
   }
 
   /// For every configured account whose address is among [draft]'s recipients,

@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
+import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
@@ -861,18 +862,49 @@ void main() {
       email('acc-i:__local__:<m@x>', 'acc-i', local: true);
       email('acc-j:Mrow', 'acc-j');
       var changeId = 0;
-      void change(String account, String resourceId, String payload) =>
+      void change(
+        String account,
+        String resourceId,
+        String payload, {
+        String type = 'flag_seen',
+      }) =>
           rawDb.execute(
             'INSERT INTO pending_changes (id, account_id, resource_type, '
             'resource_id, change_type, payload, created_at, attempts, state) '
-            "VALUES (?, ?, 'Email', ?, 'flag_seen', ?, 0, 0, 'pending')",
-            [++changeId, account, resourceId, payload],
+            "VALUES (?, ?, 'Email', ?, ?, ?, 0, 0, 'pending')",
+            [++changeId, account, resourceId, type, payload],
           );
       // The row records the server id; a gone row's id names it.
       change('acc-j', 'acc-j:Mrow', '{"seen":true}');
       change('acc-j', 'acc-j:Mgone', '{"seen":true}');
       change('acc-j', 'acc-j:Mrow', '{"seen":true,"jmapId":"Mkept"}');
       change('acc-i', 'acc-i:INBOX:5', '{"uid":5,"mailboxPath":"INBOX"}');
+      // A queued move: the id, not the shown folder, names the server's.
+      change(
+        'acc-i',
+        'acc-i:My:Folder:6',
+        '{"uid":6,"mailboxPath":"My:Folder","dest":"Archive"}',
+        type: 'move',
+      );
+      for (final (path, validity) in [('Archive', 55), ('My:Folder', 66)]) {
+        rawDb.execute(
+          'INSERT INTO sync_states (account_id, resource_type, state, '
+          "synced_at) VALUES ('acc-i', ?, ?, 0)",
+          ['IMAP:$path', '{"uidValidity":$validity,"lastUid":9}'],
+        );
+      }
+      // The background check recorded these by an id built from INBOX/9.
+      for (final (account, id) in [
+        ('acc-i', 'acc-i:INBOX:9'),
+        ('acc-i', 'acc-i:~z'),
+        ('acc-j', 'acc-j:Mx'),
+      ]) {
+        rawDb.execute(
+          'INSERT INTO notified_emails (account_id, email_id, notified_at) '
+          'VALUES (?, ?, 0)',
+          [account, id],
+        );
+      }
       Map<String, Object?> snapshot(
         String id,
         String account,
@@ -933,19 +965,36 @@ void main() {
         {'seen': true, 'jmapId': 'Mgone'},
         {'seen': true, 'jmapId': 'Mkept'},
         {'uid': 5, 'mailboxPath': 'INBOX'},
+        {'uid': 6, 'mailboxPath': 'My:Folder', 'dest': 'Archive'},
       ]);
+
+      final notified = await (db.select(db.notifiedEmails)
+            ..orderBy([(t) => OrderingTerm.asc(t.emailId)]))
+          .get();
+      expect(
+        [for (final n in notified) (n.accountId, n.emailId)],
+        [
+          ('acc-i', 'acc-i:INBOX:9'),
+          ('acc-i', 'acc-i:~z'),
+          ('acc-i', notifiedImapLocationKey('INBOX', 9)),
+          ('acc-j', 'acc-j:Mx'),
+        ]..sort((a, b) => a.$2.compareTo(b.$2)),
+      );
 
       final undo = await db.select(db.undoActions).getSingle();
       final emails = (jsonDecode(undo.dataJson)
           as Map<String, dynamic>)['originalEmails'] as List<dynamic>;
       Object? field(int i, String key) =>
           (emails[i] as Map<String, dynamic>)[key];
-      expect([field(0, 'srvMailboxPath'), field(0, 'srvUid')], ['INBOX', 5]);
-      expect(
-        [field(1, 'srvMailboxPath'), field(1, 'srvUid')],
-        ['My:Folder', 6],
-      );
-      expect([field(2, 'srvMailboxPath'), field(2, 'srvUid')], [null, null]);
+      Object? location(int i) => [
+            field(i, 'srvMailboxPath'),
+            field(i, 'srvUid'),
+            field(i, 'srvUidValidity'),
+          ];
+      // No move queued: the shown folder (the id may name a renamed one).
+      expect(location(0), ['Archive', 5, 55]);
+      expect(location(1), ['My:Folder', 6, 66]);
+      expect(location(2), ['Archive', 7, 55]);
       expect(field(3, 'srvJmapId'), 'Msnap');
       expect(field(4, 'srvJmapId'), 'Mnew');
       expect(field(5, 'isVirtualSentCopy'), isTrue);
@@ -974,6 +1023,7 @@ void main() {
       });
       expect(action.originalEmails[5].isVirtualSentCopy, isTrue);
       expect(action.originalEmails[0].srvUid, 5);
+      expect(action.originalEmails[0].srvUidValidity, 55);
 
       final version = await db.customSelect('PRAGMA user_version').getSingle();
       expect(version.read<int>('user_version'), 71);

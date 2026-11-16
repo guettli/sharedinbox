@@ -114,7 +114,11 @@ or reads anything out of one; `scripts/check_email_ids.sh` (part of `check-layer
 (`accountId:mailboxPath:uid`, `accountId:jmapId`, `accountId:__local__:…`); what those
 said was moved into columns once, by the v70/v71 migrations: the server location, the
 `jmapId` stamped on each queued JMAP change, and `is_virtual_sent_copy`. Undo snapshots
-older than v70 were completed the same way. When the server gives a location to another
+older than v70 were completed the same way (path and UIDVALIDITY by the v70 rules), and
+the background new-mail check's `accountId:INBOX:uid` marks in `notified_emails` got their
+location key (`notifiedImapLocationKey`). A JMAP row without a recorded server id queues
+no server change (App Log warn `pending_change.no_server_id`), and Undo does not restore a
+JMAP row whose server id another row holds by then: sync stored that mail again. When the server gives a location to another
 row's mail, a stale row still recording it gives it up, with an App Log line.
 
 **IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
@@ -126,7 +130,8 @@ does not advertise `UIDPLUS`, a `UID SEARCH HEADER Message-ID …` in the destin
 mailbox is used as a fallback. Cached bodies, downloaded attachments, queued changes,
 logs, threads and Undo history reference the id, so they keep tracking the same physical
 message without a rewrite. A copy sync already stored at the new location with the same
-Message-ID is dropped (App Log warn `email.duplicate_merged`). When a later move,
+Message-ID is dropped (App Log warn `email.duplicate_merged`); its queued changes, logs,
+thread and Undo references (and its body, if the kept row has none) move to the kept row. When a later move,
 snooze or unsnooze of the mail is still queued (it starts in this move's destination),
 only the row's UID and server location follow the server: the row keeps showing the
 mail where the user's last move put it (#1276). The body-fetch identity guard (#616)

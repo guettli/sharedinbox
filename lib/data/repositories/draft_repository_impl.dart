@@ -859,7 +859,8 @@ class DraftRepositoryImpl extends DraftRepository {
       });
     } catch (e, stack) {
       // Retried every sync; a draft that keeps failing is logged once.
-      if (!_reportedPullSkips.add('$accountId:$serverId')) return;
+      final skipKey = '$accountId:$serverId'; // not an email id
+      if (!_reportedPullSkips.add(skipKey)) return;
       unawaited(
         _appLogger?.warn(
           'draft.pull.skipped',

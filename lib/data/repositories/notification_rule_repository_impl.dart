@@ -100,19 +100,29 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
           ..where((t) => t.accountId.equals(accountId)))
         .get();
     final notifiedIds = notified.map((r) => r.emailId).toSet();
+    // Considered by the background check before sync stored them: recorded
+    // by location only. Their ids are recorded too, so a later change of
+    // the location (body healing, a UIDVALIDITY reset) does not undo that.
+    final byLocation = <String>[];
     bool isNotified(Email row) {
       if (notifiedIds.contains(row.id)) return true;
       final path = row.srvMailboxPath;
       final uid = row.srvUid;
-      return path != null &&
-          uid != null &&
-          notifiedIds.contains(notifiedImapLocationKey(path, uid));
+      if (path == null ||
+          uid == null ||
+          !notifiedIds.contains(notifiedImapLocationKey(path, uid))) {
+        return false;
+      }
+      byLocation.add(row.id);
+      return true;
     }
 
-    return [
+    final unnotified = [
       for (final row in rows)
         if (!isNotified(row)) _emailToModel(row),
     ];
+    await markNotified(accountId, byLocation);
+    return unnotified;
   }
 
   @override

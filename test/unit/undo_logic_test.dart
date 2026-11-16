@@ -492,6 +492,7 @@ void main() {
                   mailboxPath: 'INBOX',
                   uid: 0,
                   receivedAt: DateTime.now(),
+                  srvJmapId: const Value('e101'),
                 ),
               );
         }
@@ -703,6 +704,7 @@ void main() {
               uid: id == 'imap-p:5' ? 5 : 0,
               receivedAt: DateTime(2024),
               messageId: Value(mid),
+              srvJmapId: Value(id == 'jmap-p:e1' ? 'e1' : null),
             ),
           );
     }

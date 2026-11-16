@@ -5,6 +5,7 @@
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/email.dart' as model;
 import 'package:sharedinbox/data/db/database.dart';
 
 import 'db_test_helper.dart';
@@ -211,11 +212,27 @@ void main() {
             srvUid: const Value(2),
           ),
         );
+    // A change the user made on the copy waits (backoff): it must survive
+    // the merge, on the kept row.
+    await db.into(db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: 'acc-1',
+            resourceType: 'Email',
+            resourceId: 'acc-1:copy',
+            changeType: 'flag_flagged',
+            payload: '{"uid":2,"mailboxPath":"Archive","flagged":true}',
+            createdAt: now,
+            state: const Value('stuck'),
+            attempts: const Value(1),
+            leaseUntil: Value(now.add(const Duration(hours: 1))),
+          ),
+        );
     await emails.moveEmail(id, 'Archive');
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    final queued = await db.select(db.pendingChanges).getSingle();
+    expect((queued.resourceId, queued.changeType), (id, 'flag_flagged'));
     final byId = {for (final e in await rows()) e.id: e};
     expect(byId.keys, isNot(contains('acc-1:copy')));
     expect(location(byId[id]!), ('Archive', 2, 22));
@@ -230,6 +247,25 @@ void main() {
     await emails.restoreEmails([before]);
 
     expect(location(await mail()), ('INBOX', 1, 11));
+  });
+
+  test(
+      'Undo restores no location another row holds under another '
+      'UIDVALIDITY, when the snapshot knows none', () async {
+    final row = await mail();
+    // A snapshot without a UIDVALIDITY (completed from an old id).
+    final before = model.Email.fromJson({
+      ...(await emails.getEmail(row.id))!.toJson(),
+      'id': 'acc-1:old',
+      'srvUidValidity': null,
+    });
+
+    await emails.restoreEmails([before]);
+
+    final restored = (await rows()).singleWhere((e) => e.id == 'acc-1:old');
+    expect(location(restored), (null, null, null));
+    final kept = (await rows()).singleWhere((e) => e.id == row.id);
+    expect(location(kept), ('INBOX', 1, 11));
   });
 
   test('Undo restores no location another row holds by now', () async {

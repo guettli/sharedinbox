@@ -5019,6 +5019,7 @@ void main() {
                 uid: 0,
                 receivedAt: DateTime(2024),
                 snoozedUntil: Value(past),
+                srvJmapId: Value(id.substring('jmap-1:'.length)),
               ),
             );
       }
@@ -6105,6 +6106,7 @@ void main() {
                 uid: 0,
                 receivedAt: DateTime(2024),
                 messageId: Value(messageId),
+                srvJmapId: Value(accountId == 'jmap-p' ? 'e1' : null),
               ),
             );
 
@@ -6205,7 +6207,7 @@ void main() {
       expect(changes, hasLength(1));
       expect(
         jsonDecode(changes.first.payload),
-        {'src': 'mbx-inbox', 'dest': 'mbx-b-deleted'},
+        {'src': 'mbx-inbox', 'dest': 'mbx-b-deleted', 'jmapId': 'e1'},
       );
     });
 
@@ -7940,6 +7942,55 @@ void main() {
       await r.accounts.addAccount(_jmapAccount, 'pw');
       await r.emails.flushPendingChanges('jmap-1', 'pw');
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    });
+
+    test(
+        'a change with no JMAP id stamped whose row is gone is not sent and '
+        'stays queued with its error', () async {
+      final calls = <String>[];
+      final r = _makeRepos(httpClient: mockSetResult({}, calls: calls));
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'jmap-1',
+              resourceType: 'Email',
+              resourceId: 'jmap-1:~gone',
+              changeType: 'flag_seen',
+              payload: '{"seen":true}',
+              createdAt: DateTime.now(),
+            ),
+          );
+
+      await r.emails.flushPendingChanges('jmap-1', 'pw');
+
+      expect(calls, isEmpty);
+      final change = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(change.lastError, contains('No server id'));
+    });
+
+    test('a JMAP row without a server id queues no change', () async {
+      final recorder = _PushStatusRecorder();
+      final r = _makeRepos(appLogger: AppLogger(recorder));
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:~x',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+            ),
+          );
+
+      await r.emails.setFlag('jmap-1:~x', seen: true);
+      await pumpEventQueue();
+
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect((await r.emails.getEmail('jmap-1:~x'))!.isSeen, isTrue);
+      expect(
+        recorder.entries.map((e) => e.event),
+        contains('pending_change.no_server_id'),
+      );
     });
 
     test('sends flag_seen and removes change on success', () async {
@@ -10640,6 +10691,33 @@ void main() {
       expect(body.textBody, 'Body');
     });
 
+    test('a second send of the message reuses its virtual Sent copy', () async {
+      final r = _makeRepos(
+        smtpConnect: (Account _, String __, String ___) async =>
+            _NoOpSmtpClient(),
+        imapConnect: (Account _, String __, String ___) async =>
+            _AppendCapturingImapClient(),
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      await seedMailbox(r.db, 'INBOX.Sent', role: 'sent');
+      final again = EmailDraft(
+        from: draft.from,
+        to: draft.to,
+        cc: const [],
+        subject: 'Test',
+        body: 'Body',
+        messageId: '<resend-1@example.com>',
+      );
+
+      await r.emails.sendEmail('acc-1', again);
+      final first = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      await r.emails.sendEmail('acc-1', again);
+
+      final sent = await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
+      expect(sent.map((e) => e.id), [first.single.id]);
+      expect(sent.single.isVirtualSentCopy, isTrue);
+    });
+
     test(
       'the virtual Sent copy dissolves against the Sent arrival, and the '
       'inbox note against the inbox arrival',
@@ -12082,8 +12160,9 @@ void main() {
       expect(restored.replyTo.single.email, 'help@example.com');
     });
 
-    test('restoreEmails restores the server id unless another row holds it',
-        () async {
+    test(
+        'restoreEmails restores the server id; a mail sync stored again '
+        'meanwhile is not restored twice', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_jmapAccount, 'pw');
       Email snapshot(String id, String jmapId) => Email(
@@ -12115,7 +12194,8 @@ void main() {
             ),
           );
       await r.emails.restoreEmails([snapshot('jmap-1:~2', 'e2')]);
-      expect((await r.emails.getEmail('jmap-1:~2'))!.srvJmapId, isNull);
+      expect(await r.emails.getEmail('jmap-1:~2'), isNull);
+      expect(await r.emails.getEmail('jmap-1:copy'), isNotNull);
     });
   });
 

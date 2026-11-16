@@ -315,6 +315,45 @@ void _knownBugs() {
     );
 
     test(
+      'a stale FETCH answer does not bring back a mail deleted for good '
+      'while it was on its way',
+      () async {
+        server.deliver('Archive', 'a@test');
+        await open();
+        await emails.moveEmail((await row('a@test')).id, 'Trash');
+        await emails.flushPendingChanges(_account.id, 'pw');
+        // Queued before the sync starts, sent while its answer is held: the
+        // row is gone by then, so only where it was can tell (#1269).
+        await emails.deleteEmail((await row('a@test')).id);
+
+        List<String>? rowsBeforeReconcile;
+        server.beforeAnswer = (command) async {
+          if (command == 'FETCH headers (Trash)') {
+            await emails.flushPendingChanges(_account.id, 'pw');
+          }
+          if (command == 'SEARCH ALL (Trash)') {
+            rowsBeforeReconcile = [
+              for (final r in await _rowsOf(db, 'a@test')) r.id,
+            ];
+          }
+        };
+        await emails.syncEmails(_account.id, 'Trash');
+
+        expect(
+          server.find('a@test'),
+          isNull,
+          reason: 'race not exercised: the delete was not sent meanwhile',
+        );
+        expect(
+          rowsBeforeReconcile,
+          isNotNull,
+          reason: 'race not exercised: no SEARCH ALL after the FETCH',
+        );
+        expect(rowsBeforeReconcile, isEmpty);
+      },
+    );
+
+    test(
       'a mail whose delete fails while a FETCH answer is on its way is shown '
       'again',
       () async {

@@ -137,9 +137,10 @@ class UndoService extends Notifier<List<UndoAction>> {
             : action.originalEmails.where((e) => e.id == id).firstOrNull;
 
         // 2. Resolve the current DB row for the email.
-        // For IMAP, after a server-applied move the email gets a new UID, so
-        // the original id ('accountId:oldUid') no longer exists. Look it up by
-        // Message-ID so we use the correct UID in the pending change.
+        // A row keeps its id when its move is applied on the server (only
+        // its UID changes), but it can be gone: deleted for good, or merged
+        // into the row sync stored for the same mail. Then look it up by
+        // Message-ID so the pending change names the mail's current row.
         var currentEmail = await repo.getEmail(id);
         if (currentEmail == null && original?.messageId != null) {
           // Prefer the copy where the email should be now, so a Sent copy
@@ -154,7 +155,7 @@ class UndoService extends Notifier<List<UndoAction>> {
         }
         final currentId = currentEmail?.id ?? id;
 
-        // 3. If the row is absent (hard delete or UID changed after sync),
+        // 3. If the row is absent (deleted for good, or merged away),
         // restore it from the saved snapshot so moveEmail can find it. When
         // not cancelled, the snapshot's UID is the pre-move one; the reverse
         // move carries the Message-ID so the flush re-resolves the real UID.

@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sharedinbox/core/db_schema_version.dart';
+import 'package:sharedinbox/core/repositories/notification_rule_repository.dart'
+    show notifiedImapLocationKey;
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
@@ -901,24 +903,7 @@ class AppDatabase extends _$AppDatabase {
     ''');
     // UIDVALIDITY from each folder's sync checkpoint (JSON), when known.
     if (await _tableExists(this, 'sync_states')) {
-      final validities = <(String, String, int)>[];
-      for (final c in await customSelect(
-        'SELECT account_id, resource_type, state FROM sync_states '
-        "WHERE resource_type LIKE 'IMAP:%'",
-      ).get()) {
-        final Object? decoded;
-        try {
-          decoded = jsonDecode(c.read<String>('state'));
-        } catch (_) {
-          continue; // Not a folder checkpoint (e.g. a reconcile timestamp).
-        }
-        if (decoded is! Map) continue;
-        final validity = decoded['uidValidity'];
-        if (validity is! int || validity == 0) continue;
-        final type = c.read<String>('resource_type');
-        final path = type.substring('IMAP:'.length);
-        validities.add((c.read<String>('account_id'), path, validity));
-      }
+      final validities = await _checkpointUidValidities();
       if (validities.isNotEmpty) {
         // One pass over emails instead of one per folder.
         await customStatement(
@@ -1869,7 +1854,65 @@ class AppDatabase extends _$AppDatabase {
       if (await _tableExists(this, 'accounts')) {
         await _stampJmapIdOnQueuedChanges();
         await _completeUndoSnapshots();
+        await _notifiedByLocation();
       }
+    }
+  }
+
+  /// (account, folder, UIDVALIDITY) of every IMAP folder whose sync
+  /// checkpoint knows its UIDVALIDITY.
+  Future<List<(String, String, int)>> _checkpointUidValidities() async {
+    final validities = <(String, String, int)>[];
+    for (final c in await customSelect(
+      'SELECT account_id, resource_type, state FROM sync_states '
+      "WHERE resource_type LIKE 'IMAP:%'",
+    ).get()) {
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(c.read<String>('state'));
+      } catch (_) {
+        continue; // Not a folder checkpoint (e.g. a reconcile timestamp).
+      }
+      if (decoded is! Map) continue;
+      final validity = decoded['uidValidity'];
+      if (validity is! int || validity == 0) continue;
+      final type = c.read<String>('resource_type');
+      final path = type.substring('IMAP:'.length);
+      validities.add((c.read<String>('account_id'), path, validity));
+    }
+    return validities;
+  }
+
+  /// Schema v71: the background new-mail check recorded the mail it
+  /// considered as `account:INBOX:uid`, an id sync no longer gives the row
+  /// it stores. Each such entry of an IMAP account is recorded again in the
+  /// form the dispatcher matches by location
+  /// ([notifiedImapLocationKey]), so the mail does not notify twice.
+  Future<void> _notifiedByLocation() async {
+    if (!await _tableExists(this, 'notified_emails')) return;
+    final rows = await customSelect('''
+      SELECT n.account_id, n.email_id, n.notified_at FROM notified_emails n
+      WHERE n.account_id IN (SELECT id FROM accounts WHERE account_type = 'imap')
+    ''').get();
+    for (final r in rows) {
+      final account = r.read<String>('account_id');
+      final id = r.read<String>('email_id');
+      final prefix = '$account:';
+      if (!id.startsWith(prefix)) continue;
+      final rest = id.substring(prefix.length);
+      final colon = rest.lastIndexOf(':');
+      if (colon <= 0) continue;
+      final uid = int.tryParse(rest.substring(colon + 1));
+      if (uid == null) continue;
+      await customStatement(
+        'INSERT OR IGNORE INTO notified_emails '
+        '(account_id, email_id, notified_at) VALUES (?1, ?2, ?3)',
+        [
+          account,
+          notifiedImapLocationKey(rest.substring(0, colon), uid),
+          r.read<int>('notified_at'),
+        ],
+      );
     }
   }
 
@@ -1921,6 +1964,25 @@ class AppDatabase extends _$AppDatabase {
       ).get())
         r.read<String>('id'): r.read<String>('account_type'),
     };
+    // As the v70 backfill: the id names where the server has the mail only
+    // while a move, snooze or unsnooze of it is queued; otherwise the shown
+    // folder does (the id may name a folder renamed since).
+    final moveQueued = !await _tableExists(this, 'pending_changes')
+        ? const <String>{}
+        : {
+            for (final r in await customSelect('''
+              SELECT DISTINCT resource_id FROM pending_changes
+              WHERE state IN ('pending', 'inflight', 'stuck')
+                AND change_type IN ('move', 'snooze', 'unsnooze')
+            ''').get()) r.read<String>('resource_id'),
+          };
+    final validities = !await _tableExists(this, 'sync_states')
+        ? const <(String, String), int>{}
+        : {
+            for (final (account, path, validity)
+                in await _checkpointUidValidities())
+              (account, path): validity,
+          };
     final rows =
         await customSelect('SELECT id, data_json FROM undo_actions').get();
     for (final r in rows) {
@@ -1936,7 +1998,14 @@ class AppDatabase extends _$AppDatabase {
       var changed = false;
       for (final e in emails) {
         if (e is! Map<String, dynamic>) continue;
-        if (_completeEmailSnapshot(e, types[e['accountId']])) changed = true;
+        if (_completeEmailSnapshot(
+          e,
+          types[e['accountId']],
+          moveQueued: moveQueued.contains(e['id']),
+          validities: validities,
+        )) {
+          changed = true;
+        }
       }
       if (!changed) continue;
       await customStatement(
@@ -1951,8 +2020,10 @@ class AppDatabase extends _$AppDatabase {
   /// whether it changed anything.
   static bool _completeEmailSnapshot(
     Map<String, dynamic> e,
-    String? accountType,
-  ) {
+    String? accountType, {
+    required bool moveQueued,
+    required Map<(String, String), int> validities,
+  }) {
     final id = e['id'];
     final accountId = e['accountId'];
     if (id is! String || accountId is! String) return false;
@@ -1970,11 +2041,18 @@ class AppDatabase extends _$AppDatabase {
       return true;
     }
     final uid = e['uid'];
-    if (accountType != 'imap' || uid is! int) return false;
+    final shown = e['mailboxPath'];
+    if (accountType != 'imap' || uid is! int || shown is! String) {
+      return false;
+    }
     final tail = ':$uid';
-    if (!rest.endsWith(tail) || rest.length == tail.length) return false;
-    e['srvMailboxPath'] = rest.substring(0, rest.length - tail.length);
+    final idShaped = rest.endsWith(tail) && rest.length > tail.length;
+    final path = moveQueued && idShaped
+        ? rest.substring(0, rest.length - tail.length)
+        : shown;
+    e['srvMailboxPath'] = path;
     e['srvUid'] = uid;
+    e['srvUidValidity'] = validities[(accountId, path)];
     return true;
   }
 

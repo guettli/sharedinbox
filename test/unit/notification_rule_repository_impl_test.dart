@@ -136,6 +136,15 @@ void main() {
 
       final pending = await repo.unnotifiedInboxEmails('acc');
       expect(pending.map((e) => e.id), ['acc:~b']);
+
+      // Its own id is recorded too: a later change of its location (e.g.
+      // a UIDVALIDITY reset) does not make it notify.
+      await (db.update(db.emails)..where((t) => t.id.equals('acc:~a')))
+          .write(const EmailsCompanion(srvUid: Value(70)));
+      expect(
+        (await repo.unnotifiedInboxEmails('acc')).map((e) => e.id),
+        ['acc:~b'],
+      );
     });
 
     test('markBaseline silences the whole current inbox', () async {

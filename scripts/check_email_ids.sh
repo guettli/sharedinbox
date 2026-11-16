@@ -11,6 +11,11 @@
 #   - splitting or searching an id at ':'             (id.split(':'), …)
 #   - an id checked for an account prefix             (id.startsWith('$accountId:'),
 #                                                      prefix = '$accountId:')
+#   - an account prefix cut off an id                 (id.substring(accountId.length + 1))
+#   - parts joined with ':'                           (parts.join(':'))
+#   - `$accountId:$anything`                          ('acc:$x'); not checked in
+#     lib/data/repositories/mailbox_repository_impl.dart, which builds
+#     mailbox ids (`account:path`) of that shape
 #
 # Allowed: the schema migrations in lib/data/db/database.dart (they convert
 # what old ids said into columns, once) and lib/data/repositories/email_ids.dart.
@@ -28,7 +33,11 @@ patterns=(
   "[Ii]ds?\\??\\.(split|indexOf|lastIndexOf)\\(\\s*':'"
   "[Ii]d\\??\\.startsWith\\(\\s*'\\\$\\{?[A-Za-z_.]*[Aa]ccount"
   "'\\\$\\{?[A-Za-z_.]*[Aa]ccount[A-Za-z_.]*\\}?:'"
+  "substring\\([^)]*[Aa]ccount(Id|\\.id)\\.length"
+  "join\\(\\s*':'\\s*\\)"
 )
+# Checked everywhere but in the mailbox repository (see above).
+outside_mailboxes="\\\$\\{?([A-Za-z_]+\\.)?[Aa]ccount(Id|\\.id)\\}?:\\\$"
 
 found=""
 for pattern in "${patterns[@]}"; do
@@ -41,6 +50,14 @@ for pattern in "${patterns[@]}"; do
     found+="$hits"$'\n'
   fi
 done
+hits=$(grep -rnE --include='*.dart' "$outside_mailboxes" "$dir" \
+  | grep -v '\.g\.dart:' \
+  | grep -v '^[^:]*lib/data/db/database\.dart:' \
+  | grep -v '^[^:]*lib/data/repositories/mailbox_repository_impl\.dart:' \
+  | grep -v '// not an email id' || true)
+if [ -n "$hits" ]; then
+  found+="$hits"$'\n'
+fi
 
 if [ -n "$found" ]; then
   echo "ERROR: email ids must not be built from or parsed for a server location"
