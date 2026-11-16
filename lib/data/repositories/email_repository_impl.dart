@@ -988,9 +988,34 @@ class EmailRepositoryImpl implements EmailRepository {
     required String newId,
     required int newUid,
     required String newMailboxPath,
+    bool keepShownWhileMovedOn = false,
   }) async {
     if (newId == oldId) return;
     await _db.transaction(() async {
+      final oldUid = (await (_db.select(_db.emails)
+                ..where((t) => t.id.equals(oldId)))
+              .getSingleOrNull())
+          ?.uid;
+      // After a move: when a later move, snooze or unsnooze of the mail is
+      // still queued (it starts in this move's destination), the row
+      // already shows the mail where that one puts it and keeps doing so;
+      // only its identity follows the server (#1276). Read in this
+      // transaction, so an Undo or another move made meanwhile is kept.
+      var movedOn = false;
+      if (keepShownWhileMovedOn) {
+        final queued = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(oldId) &
+                    t.state.equals(_pendingState) &
+                    t.changeType.isIn(_locationChangeTypes),
+              ))
+            .get();
+        movedOn = queued.any((c) {
+          final p = _decodePayload(c);
+          return (p?['mailboxPath'] ?? p?['src']) == newMailboxPath;
+        });
+      }
       await _db.customStatement('PRAGMA defer_foreign_keys = ON');
 
       await _db.customStatement(
@@ -1008,7 +1033,7 @@ class EmailRepositoryImpl implements EmailRepository {
         EmailsCompanion(
           id: Value(newId),
           uid: Value(newUid),
-          mailboxPath: Value(newMailboxPath),
+          mailboxPath: movedOn ? const Value.absent() : Value(newMailboxPath),
         ),
       );
 
@@ -1019,6 +1044,7 @@ class EmailRepositoryImpl implements EmailRepository {
         resourceId: newId,
         mailboxPath: newMailboxPath,
         newUid: newUid,
+        oldUid: oldUid,
       );
 
       // app_logs.emailId references emails.id with onDelete:setNull but no
@@ -1066,6 +1092,7 @@ class EmailRepositoryImpl implements EmailRepository {
     required String resourceId,
     required String mailboxPath,
     required int newUid,
+    int? oldUid,
   }) async {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.resourceId.equals(resourceId)))
@@ -1081,7 +1108,25 @@ class EmailRepositoryImpl implements EmailRepository {
       if (payload['uid'] == newUid && payload[_uidAfterMoveKey] == null) {
         continue;
       }
-      if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) continue;
+      if ((payload['mailboxPath'] ?? payload['src']) != mailboxPath) {
+        // Queued behind a later move that is not answered yet: it stays
+        // marked, but carries the mail's current UID, as one queued now
+        // would. Undoing or failing that move points it back here by
+        // this UID (`_unmarkAfterCancelledMove`,
+        // `_pointLaterChangesAtSource`); before, it kept a UID from two
+        // folders back and named whichever mail has it here (#1276).
+        if (payload[_uidAfterMoveKey] == true &&
+            oldUid != null &&
+            payload['uid'] == oldUid) {
+          payload['uid'] = newUid;
+          await (_db.update(_db.pendingChanges)
+                ..where((t) => t.id.equals(row.id)))
+              .write(
+            PendingChangesCompanion(payload: Value(jsonEncode(payload))),
+          );
+        }
+        continue;
+      }
       payload['uid'] = newUid;
       payload.remove(_uidAfterMoveKey);
       // The new UID was learned under the folder's current UIDVALIDITY.
@@ -8074,6 +8119,7 @@ class EmailRepositoryImpl implements EmailRepository {
       newId: newId,
       newUid: newUid,
       newMailboxPath: destMailboxPath,
+      keepShownWhileMovedOn: true,
     );
 
     // Rebuild thread aggregates in both mailboxes from the now-updated emails.

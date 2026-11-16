@@ -351,6 +351,81 @@ void _knownBugs() {
     );
 
     test(
+      'a mail moved twice stays where the second move put it while that one '
+      'is sent',
+      () async {
+        server.deliver('INBOX', 'a@test');
+        await open();
+        await emails.moveEmail((await row('a@test')).id, 'Archive');
+        await emails.moveEmail((await row('a@test')).id, 'Trash');
+
+        List<String>? shownWhileSecondMoveRuns;
+        server.beforeAnswer = (command) async {
+          if (command == 'MOVE (Archive)') {
+            shownWhileSecondMoveRuns = [
+              for (final r in await _rowsOf(db, 'a@test')) r.mailboxPath,
+            ];
+          }
+        };
+        await emails.flushPendingChanges(_account.id, 'pw');
+
+        expect(
+          shownWhileSecondMoveRuns,
+          ['Trash'],
+          reason: 'the first move landing must not show the mail in Archive',
+        );
+        expect(server.find('a@test')?.folder.path, 'Trash');
+        expect(
+          [for (final r in await _rowsOf(db, 'a@test')) r.mailboxPath],
+          ['Trash'],
+        );
+        expect(await db.select(db.pendingChanges).get(), isEmpty);
+      },
+    );
+
+    test(
+      'when the second of two moves fails, a star queued behind it lands on '
+      'the mail',
+      () async {
+        // b has UID 1 in Archive, the UID a has in INBOX.
+        server
+          ..deliver('Archive', 'b@test')
+          ..deliver('INBOX', 'a@test');
+        await open();
+        await emails.moveEmail((await row('a@test')).id, 'Archive');
+        await emails.moveEmail((await row('a@test')).id, 'Trash');
+        await emails.setFlag((await row('a@test')).id, flagged: true);
+
+        // The first move lands; the server then refuses a's second move.
+        server.beforeAnswer = (command) async {
+          if (command == 'MOVE (INBOX)') {
+            server.refuses = (messageId) => messageId == 'a@test';
+          }
+        };
+        for (var i = 0; i < 6; i++) {
+          await emails.flushPendingChanges(_account.id, 'pw');
+        }
+        server
+          ..beforeAnswer = null
+          ..refuses = null;
+        await emails.flushPendingChanges(_account.id, 'pw');
+
+        expect(server.find('a@test')?.folder.path, 'Archive');
+        expect(server.find('a@test')!.message.flagged, isTrue);
+        expect(
+          server.find('b@test')!.message.flagged,
+          isFalse,
+          reason: 'only a was starred',
+        );
+        final left = await db.select(db.pendingChanges).get();
+        expect(
+          [for (final c in left) '${c.changeType} ${c.state}'],
+          ['move failed'],
+        );
+      },
+    );
+
+    test(
       'a delete for good works on a server without UIDPLUS',
       () async {
         server = StatefulFakeImapServer(
@@ -797,14 +872,6 @@ class _FuzzRun {
         ..touchedFlagged = true;
       return;
     }
-    final deleteForGood = r >= 0.9 && row.mailboxPath == 'Trash';
-    if (!deleteForGood && await _hasQueuedMove(emailId: row.id)) {
-      // Excluded: a second move while the mail's first move is still
-      // queued. The case of #1267 is fixed (its test above runs), but
-      // chains of moves still trip the fuzz's checks (see #1276).
-      _trace.add('  user: (not moving $what again: #1276)');
-      return;
-    }
     if (r < 0.9) {
       final dest = _pick(_folders.where((f) => f != row.mailboxPath).toList());
       _trace.add('  user: move $what to $dest');
@@ -821,22 +888,6 @@ class _FuzzRun {
       ..location = dest ?? _expunged
       ..touchedExpunge |= dest == null
       ..touchedLocation |= dest != null;
-  }
-
-  /// Whether a move is queued: of the row [emailId], of the mail
-  /// [messageId], or (with neither) of any mail.
-  Future<bool> _hasQueuedMove({String? emailId, String? messageId}) async {
-    final moves = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) => t.state.equals('pending') & t.changeType.equals('move'),
-          ))
-        .get();
-    for (final move in moves) {
-      if (emailId != null && move.resourceId != emailId) continue;
-      if (messageId != null && await _messageIdOf(move) != messageId) continue;
-      return true;
-    }
-    return false;
   }
 
   /// The pending (or [failed]) changes of the mail [messageId].
