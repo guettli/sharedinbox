@@ -100,9 +100,18 @@ class NotificationRuleRepositoryImpl implements NotificationRuleRepository {
           ..where((t) => t.accountId.equals(accountId)))
         .get();
     final notifiedIds = notified.map((r) => r.emailId).toSet();
+    bool isNotified(Email row) {
+      if (notifiedIds.contains(row.id)) return true;
+      final path = row.srvMailboxPath;
+      final uid = row.srvUid;
+      return path != null &&
+          uid != null &&
+          notifiedIds.contains(notifiedImapLocationKey(path, uid));
+    }
+
     return [
       for (final row in rows)
-        if (!notifiedIds.contains(row.id)) _emailToModel(row),
+        if (!isNotified(row)) _emailToModel(row),
     ];
   }
 

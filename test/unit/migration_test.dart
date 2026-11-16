@@ -1,6 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
@@ -16,7 +19,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 70);
+      expect(db.schemaVersion, 71);
       await db.close();
     });
 
@@ -190,6 +193,10 @@ void main() {
           'srv_uid_validity',
           'srv_jmap_id',
         ]), // v70
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        contains('is_virtual_sent_copy'), // v71
       );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
@@ -389,7 +396,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -430,7 +437,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -461,7 +468,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -499,7 +506,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -540,7 +547,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -588,7 +595,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -635,7 +642,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -685,7 +692,7 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -818,7 +825,158 @@ void main() {
         throwsA(anything),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
+      await db.close();
+    });
+
+    test(
+        'v70→v71 stores what the ids said: Sent copies, JMAP ids, '
+        'old Undo snapshots', () async {
+      final dbFile = File('test_migration_v70_opaque_ids.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('ALTER TABLE emails DROP COLUMN is_virtual_sent_copy;');
+      void email(String id, String account, {bool local = false}) =>
+          rawDb.execute(
+            'INSERT INTO emails (id, account_id, mailbox_path, uid, '
+            'received_at, is_local, srv_jmap_id) VALUES (?, ?, ?, 0, 0, ?, ?)',
+            [
+              id,
+              account,
+              'INBOX',
+              local ? 1 : 0,
+              account == 'acc-j' && !local ? 'Mrow' : null,
+            ],
+          );
+      email('acc-i:__local_sent__:<m@x>', 'acc-i', local: true);
+      email('acc-i:__local__:<m@x>', 'acc-i', local: true);
+      email('acc-j:Mrow', 'acc-j');
+      var changeId = 0;
+      void change(String account, String resourceId, String payload) =>
+          rawDb.execute(
+            'INSERT INTO pending_changes (id, account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, attempts, state) '
+            "VALUES (?, ?, 'Email', ?, 'flag_seen', ?, 0, 0, 'pending')",
+            [++changeId, account, resourceId, payload],
+          );
+      // The row records the server id; a gone row's id names it.
+      change('acc-j', 'acc-j:Mrow', '{"seen":true}');
+      change('acc-j', 'acc-j:Mgone', '{"seen":true}');
+      change('acc-j', 'acc-j:Mrow', '{"seen":true,"jmapId":"Mkept"}');
+      change('acc-i', 'acc-i:INBOX:5', '{"uid":5,"mailboxPath":"INBOX"}');
+      Map<String, Object?> snapshot(
+        String id,
+        String account,
+        int uid, {
+        bool local = false,
+        String? srvJmapId,
+      }) =>
+          {
+            'id': id,
+            'accountId': account,
+            'mailboxPath': 'Archive',
+            'uid': uid,
+            'isLocal': local,
+            if (srvJmapId != null) 'srvJmapId': srvJmapId,
+          };
+      rawDb.execute(
+        'INSERT INTO undo_actions (id, account_id, data_json, created_at) '
+        "VALUES ('u1', 'acc-i', ?, 0)",
+        [
+          jsonEncode({
+            'originalEmails': [
+              snapshot('acc-i:INBOX:5', 'acc-i', 5),
+              snapshot('acc-i:My:Folder:6', 'acc-i', 6),
+              snapshot('acc-i:odd', 'acc-i', 7),
+              snapshot('acc-j:Msnap', 'acc-j', 0),
+              snapshot('acc-j:Mold', 'acc-j', 0, srvJmapId: 'Mnew'),
+              snapshot('acc-i:__local_sent__:<m@x>', 'acc-i', 0, local: true),
+              snapshot('acc-i:__local__:<m@x>', 'acc-i', 0, local: true),
+            ],
+          }),
+        ],
+      );
+      rawDb
+        ..execute('PRAGMA user_version = 70;')
+        ..close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      final sentCopy = {
+        for (final r in await db
+            .customSelect('SELECT id, is_virtual_sent_copy FROM emails')
+            .get())
+          r.read<String>('id'): r.read<bool>('is_virtual_sent_copy'),
+      };
+      expect(sentCopy, {
+        'acc-i:__local_sent__:<m@x>': true,
+        'acc-i:__local__:<m@x>': false,
+        'acc-j:Mrow': false,
+      });
+
+      final payloads = [
+        for (final r in await (db.select(db.pendingChanges)
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get())
+          jsonDecode(r.payload),
+      ];
+      expect(payloads, [
+        {'seen': true, 'jmapId': 'Mrow'},
+        {'seen': true, 'jmapId': 'Mgone'},
+        {'seen': true, 'jmapId': 'Mkept'},
+        {'uid': 5, 'mailboxPath': 'INBOX'},
+      ]);
+
+      final undo = await db.select(db.undoActions).getSingle();
+      final emails = (jsonDecode(undo.dataJson)
+          as Map<String, dynamic>)['originalEmails'] as List<dynamic>;
+      Object? field(int i, String key) =>
+          (emails[i] as Map<String, dynamic>)[key];
+      expect([field(0, 'srvMailboxPath'), field(0, 'srvUid')], ['INBOX', 5]);
+      expect(
+        [field(1, 'srvMailboxPath'), field(1, 'srvUid')],
+        ['My:Folder', 6],
+      );
+      expect([field(2, 'srvMailboxPath'), field(2, 'srvUid')], [null, null]);
+      expect(field(3, 'srvJmapId'), 'Msnap');
+      expect(field(4, 'srvJmapId'), 'Mnew');
+      expect(field(5, 'isVirtualSentCopy'), isTrue);
+      expect(field(6, 'isVirtualSentCopy'), isNull);
+      // Undo still reads the completed snapshots.
+      final action = UndoAction.fromJson({
+        'id': 'u1',
+        'accountId': 'acc-i',
+        'type': 'delete',
+        'emailIds': const <String>[],
+        'sourceMailboxPath': 'INBOX',
+        'timestamp': DateTime(2026).toIso8601String(),
+        'originalEmails': [
+          for (final e in emails)
+            {
+              ...(e as Map<String, dynamic>),
+              'receivedAt': DateTime(2026).toIso8601String(),
+              'from': const <Object>[],
+              'to': const <Object>[],
+              'cc': const <Object>[],
+              'isSeen': false,
+              'isFlagged': false,
+              'hasAttachment': false,
+            },
+        ],
+      });
+      expect(action.originalEmails[5].isVirtualSentCopy, isTrue);
+      expect(action.originalEmails[0].srvUid, 5);
+
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 71);
       await db.close();
     });
 
@@ -929,7 +1087,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 70);
+      expect(version.read<int>('user_version'), 71);
     });
 
     test(
@@ -1476,6 +1634,10 @@ void main() {
           'srv_uid_validity',
           'srv_jmap_id',
         ]), // v70
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        contains('is_virtual_sent_copy'), // v71
       );
 
       // v30: duration_ms column on sync_log_mailboxes.

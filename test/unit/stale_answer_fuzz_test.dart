@@ -274,7 +274,8 @@ void _knownBugs() {
           reason: 'race not exercised: no SEARCH ALL after the FETCH',
         );
         expect(server.find('a@test')?.folder.path, 'Archive');
-        expect(rowsBeforeReconcile, ['${_account.id}:Archive:2']);
+        // One row, and it is still the mail's own: moves keep the id.
+        expect(rowsBeforeReconcile, [inInbox]);
       },
     );
 
@@ -287,7 +288,8 @@ void _knownBugs() {
         await emails.moveEmail((await row('a@test')).id, 'INBOX');
         await emails.flushPendingChanges(_account.id, 'pw');
         // Queued before the sync starts, sent while its answer is held.
-        await emails.moveEmail((await row('a@test')).id, 'Archive');
+        final id = (await row('a@test')).id;
+        await emails.moveEmail(id, 'Archive');
 
         List<String>? rowsBeforeReconcile;
         server.beforeAnswer = (command) async {
@@ -308,7 +310,7 @@ void _knownBugs() {
           reason: 'race not exercised: no SEARCH ALL after the FETCH',
         );
         expect(server.find('a@test')?.folder.path, 'Archive');
-        expect(rowsBeforeReconcile, ['${_account.id}:Archive:2']);
+        expect(rowsBeforeReconcile, [id]);
       },
     );
 
@@ -1120,13 +1122,14 @@ class _FuzzRun {
       ];
     }
     final row = rows.single;
-    final expectedId = '${_account.id}:${folder.path}:${message.uid}';
     return [
-      if (row.id != expectedId ||
+      if (row.srvMailboxPath != folder.path ||
+          row.srvUid != message.uid ||
           row.mailboxPath != folder.path ||
           row.uid != message.uid)
-        '$messageId is $expectedId on the server but ${row.id} '
-            '(mailboxPath ${row.mailboxPath}, uid ${row.uid}) locally',
+        '$messageId is ${folder.path}/${message.uid} on the server but '
+            '${row.srvMailboxPath}/${row.srvUid} (mailboxPath '
+            '${row.mailboxPath}, uid ${row.uid}) locally',
       if (row.isSeen != message.seen)
         '$messageId: read is ${row.isSeen} locally, ${message.seen} on the '
             'server',

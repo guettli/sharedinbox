@@ -33,6 +33,9 @@ class Email {
   // own accounts. It appears in the inbox immediately for note-taking and is
   // dissolved into the real message once it arrives via sync (see #545).
   final bool isLocal;
+  // A local virtual copy ([isLocal]) of a sent message in the Sent folder
+  // (#918), as opposed to the self-send note in the inbox (#545).
+  final bool isVirtualSentCopy;
   // The message size in bytes as the server reports it (IMAP RFC822.SIZE,
   // JMAP `size`); null when not known yet, e.g. mail cached before it was
   // stored or a local virtual copy.
@@ -75,6 +78,7 @@ class Email {
     this.snoozedFromMailboxPath,
     this.listUnsubscribeHeader,
     this.isLocal = false,
+    this.isVirtualSentCopy = false,
     this.size,
     this.srvMailboxPath,
     this.srvUid,
@@ -122,6 +126,7 @@ class Email {
       snoozedFromMailboxPath: json['snoozedFromMailboxPath'] as String?,
       listUnsubscribeHeader: json['listUnsubscribeHeader'] as String?,
       isLocal: (json['isLocal'] as bool?) ?? false,
+      isVirtualSentCopy: (json['isVirtualSentCopy'] as bool?) ?? false,
       size: json['size'] as int?,
       srvMailboxPath: json['srvMailboxPath'] as String?,
       srvUid: json['srvUid'] as int?,
@@ -156,6 +161,7 @@ class Email {
       'snoozedFromMailboxPath': snoozedFromMailboxPath,
       'listUnsubscribeHeader': listUnsubscribeHeader,
       'isLocal': isLocal,
+      'isVirtualSentCopy': isVirtualSentCopy,
       'size': size,
       'srvMailboxPath': srvMailboxPath,
       'srvUid': srvUid,
@@ -189,6 +195,7 @@ class Email {
     String? snoozedFromMailboxPath,
     String? listUnsubscribeHeader,
     bool? isLocal,
+    bool? isVirtualSentCopy,
     int? size,
     String? srvMailboxPath,
     int? srvUid,
@@ -222,6 +229,7 @@ class Email {
       listUnsubscribeHeader:
           listUnsubscribeHeader ?? this.listUnsubscribeHeader,
       isLocal: isLocal ?? this.isLocal,
+      isVirtualSentCopy: isVirtualSentCopy ?? this.isVirtualSentCopy,
       size: size ?? this.size,
       srvMailboxPath: srvMailboxPath ?? this.srvMailboxPath,
       srvUid: srvUid ?? this.srvUid,

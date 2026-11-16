@@ -233,11 +233,8 @@ class DraftRepositoryImpl extends DraftRepository {
   Future<SavedDraft?> findDraftForEmail(model.Email email) async {
     if (email.isLocal) return null;
     final accountId = email.accountId;
-    // A JMAP message row is "<accountId>:<email id>". An IMAP row is
-    // "<accountId>:<mailbox>:<uid>", which never equals a JMAP email id.
-    final prefix = '$accountId:';
-    if (email.id.startsWith(prefix)) {
-      final jmapId = email.id.substring(prefix.length);
+    final jmapId = email.srvJmapId;
+    if (jmapId != null) {
       final row = await (_db.select(_db.drafts)
             ..where(
               (t) =>

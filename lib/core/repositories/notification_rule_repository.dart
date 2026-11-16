@@ -23,6 +23,8 @@ abstract class NotificationRuleRepository {
   Future<List<Email>> unnotifiedInboxEmails(String accountId);
 
   /// Records [emailIds] as already considered so they never notify again.
+  /// An entry may also be a [notifiedImapLocationKey]: the background check
+  /// notifies about new mail before sync has stored a row for it.
   Future<void> markNotified(String accountId, List<String> emailIds);
 
   /// Marks every inbox message currently on [accountId] as already notified.
@@ -30,3 +32,11 @@ abstract class NotificationRuleRepository {
   /// silent and only future arrivals pop up.
   Future<void> markBaseline(String accountId);
 }
+
+/// What [NotificationRuleRepository.markNotified] records for a message the
+/// background check considered at [uid] in [mailboxPath], before sync stored
+/// a row for it. Not an email id (those are opaque, SYNC-REDESIGN.md §6):
+/// [NotificationRuleRepository.unnotifiedInboxEmails] counts the row that
+/// sync later stores with that server location as considered.
+String notifiedImapLocationKey(String mailboxPath, int uid) =>
+    'imap-location/$uid/$mailboxPath';

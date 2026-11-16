@@ -365,9 +365,11 @@ void main() {
       String id = 'acc-1:Drafts:17',
       String mailboxPath = 'Drafts',
       int uid = 17,
+      String? srvJmapId,
     }) =>
         Email(
           id: id,
+          srvJmapId: srvJmapId,
           accountId: 'acc-1',
           mailboxPath: mailboxPath,
           uid: uid,
@@ -441,11 +443,22 @@ void main() {
         const DraftsCompanion(jmapServerId: Value('Mabc')),
       );
 
-      final email = serverCopy(id: 'acc-1:Mabc', mailboxPath: 'mb-d', uid: 0);
+      // The row id names nothing; the server id is recorded on the row.
+      final email = serverCopy(
+        id: 'acc-1:~1',
+        mailboxPath: 'mb-d',
+        uid: 0,
+        srvJmapId: 'Mabc',
+      );
       expect((await repo.findDraftForEmail(email))?.id, draft.id);
       expect(
         await repo.findDraftForEmail(
-          serverCopy(id: 'acc-1:Mother', mailboxPath: 'mb-d', uid: 0),
+          serverCopy(
+            id: 'acc-1:~2',
+            mailboxPath: 'mb-d',
+            uid: 0,
+            srvJmapId: 'Mother',
+          ),
         ),
         isNull,
       );

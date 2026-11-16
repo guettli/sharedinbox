@@ -34,6 +34,7 @@ Email _row({
       hasAttachment: false,
       messageId: messageId,
       isLocal: false,
+      isVirtualSentCopy: false,
     );
 
 AccountComparisonResult _resultWith(List<EmailDiff> emails) =>

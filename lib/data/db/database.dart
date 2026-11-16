@@ -140,6 +140,12 @@ class Emails extends Table {
   // outbound mutations must not be queued against them.
   BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
 
+  // Added in schema v71: a local row ([isLocal]) that is the Sent-folder copy
+  // of a message we sent (#918), not the self-send note in the inbox (#545).
+  // Until v71 the row id said so; ids are opaque now.
+  BoolColumn get isVirtualSentCopy =>
+      boolean().withDefault(const Constant(false))();
+
   // Added in schema v53: a server-assigned, mailbox-independent message
   // identifier that survives IMAP MOVE/COPY (RFC 8474 OBJECTID `EMAILID`, or
   // Gmail's `X-GM-MSGID`). Null when the server doesn't advertise either
@@ -1852,6 +1858,124 @@ class AppDatabase extends _$AppDatabase {
       await _backfillSrvLocation();
       await _createSrvLocationIndexes();
     }
+    if (from < 71 && await _tableExists(this, 'emails')) {
+      // New email rows get opaque ids (phase 2b of SYNC-REDESIGN.md): what
+      // was read from an id until now is stored, once, here.
+      await _addColumnIfMissing(m, emails, emails.isVirtualSentCopy);
+      await customStatement(
+        'UPDATE emails SET is_virtual_sent_copy = 1 '
+        "WHERE is_local = 1 AND instr(id, ':__local_sent__:') > 0",
+      );
+      if (await _tableExists(this, 'accounts')) {
+        await _stampJmapIdOnQueuedChanges();
+        await _completeUndoSnapshots();
+      }
+    }
+  }
+
+  /// Schema v71: each queued change of a JMAP account carries the server's
+  /// Email id (`jmapId`), so the flush needs no row and no id to find it.
+  /// The id of a row that is gone by now names it as `account:jmapId`.
+  Future<void> _stampJmapIdOnQueuedChanges() async {
+    if (!await _tableExists(this, 'pending_changes')) return;
+    final rows = await customSelect('''
+      SELECT p.id, p.account_id, p.resource_id, p.payload, e.srv_jmap_id
+      FROM pending_changes p LEFT JOIN emails e ON e.id = p.resource_id
+      WHERE p.resource_type = 'Email'
+        AND p.account_id IN (SELECT id FROM accounts WHERE account_type = 'jmap')
+    ''').get();
+    for (final r in rows) {
+      final Object? payload;
+      try {
+        payload = jsonDecode(r.read<String>('payload'));
+      } catch (_) {
+        continue;
+      }
+      if (payload is! Map<String, dynamic> || payload['jmapId'] != null) {
+        continue;
+      }
+      final prefix = '${r.read<String>('account_id')}:';
+      final resourceId = r.read<String>('resource_id');
+      final jmapId = r.readNullable<String>('srv_jmap_id') ??
+          (resourceId.startsWith(prefix) && resourceId.length > prefix.length
+              ? resourceId.substring(prefix.length)
+              : null);
+      if (jmapId == null) continue;
+      payload['jmapId'] = jmapId;
+      await customStatement(
+        'UPDATE pending_changes SET payload = ?1 WHERE id = ?2',
+        [jsonEncode(payload), r.read<int>('id')],
+      );
+    }
+  }
+
+  /// Schema v71: Undo snapshots taken before v70 have no server location,
+  /// and none says which local row is a Sent copy. Both were read from the
+  /// row id, which is opaque from now on, so they are stored here instead,
+  /// as the v70 backfill did for the rows.
+  Future<void> _completeUndoSnapshots() async {
+    if (!await _tableExists(this, 'undo_actions')) return;
+    final types = {
+      for (final r in await customSelect(
+        'SELECT id, account_type FROM accounts',
+      ).get())
+        r.read<String>('id'): r.read<String>('account_type'),
+    };
+    final rows =
+        await customSelect('SELECT id, data_json FROM undo_actions').get();
+    for (final r in rows) {
+      final Object? data;
+      try {
+        data = jsonDecode(r.read<String>('data_json'));
+      } catch (_) {
+        continue;
+      }
+      if (data is! Map<String, dynamic>) continue;
+      final emails = data['originalEmails'];
+      if (emails is! List) continue;
+      var changed = false;
+      for (final e in emails) {
+        if (e is! Map<String, dynamic>) continue;
+        if (_completeEmailSnapshot(e, types[e['accountId']])) changed = true;
+      }
+      if (!changed) continue;
+      await customStatement(
+        'UPDATE undo_actions SET data_json = ?1 WHERE id = ?2',
+        [jsonEncode(data), r.read<String>('id')],
+      );
+    }
+  }
+
+  /// Fills [e] (an Undo snapshot of an email) from its pre-v71 id: the
+  /// Sent-copy marker of a local row, else the server location. Returns
+  /// whether it changed anything.
+  static bool _completeEmailSnapshot(
+    Map<String, dynamic> e,
+    String? accountType,
+  ) {
+    final id = e['id'];
+    final accountId = e['accountId'];
+    if (id is! String || accountId is! String) return false;
+    if (e['isLocal'] == true) {
+      if (!id.contains(':__local_sent__:')) return false;
+      e['isVirtualSentCopy'] = true;
+      return true;
+    }
+    if (e['srvJmapId'] != null || e['srvUid'] != null) return false;
+    final prefix = '$accountId:';
+    if (!id.startsWith(prefix) || id.length == prefix.length) return false;
+    final rest = id.substring(prefix.length);
+    if (accountType == 'jmap') {
+      e['srvJmapId'] = rest;
+      return true;
+    }
+    final uid = e['uid'];
+    if (accountType != 'imap' || uid is! int) return false;
+    final tail = ':$uid';
+    if (!rest.endsWith(tail) || rest.length == tail.length) return false;
+    e['srvMailboxPath'] = rest.substring(0, rest.length - tail.length);
+    e['srvUid'] = uid;
+    return true;
   }
 
   /// Inserts a row for [gitHash] the first time that version is seen.

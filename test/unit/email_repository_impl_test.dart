@@ -3653,9 +3653,9 @@ void main() {
 
     test('an IMAP move flush re-keys the log so it follows the message',
         () async {
-      // On IMAP a move is delete+copy: the local id changes from the source
-      // (mailbox, UID) to the destination's. The per-message log must follow,
-      // or "Show Logs" would come up empty in Trash after the next sync (#562).
+      // On IMAP a move is delete+copy: the mail gets a new UID in the
+      // destination. The row keeps its id, so the per-message log stays with
+      // it and "Show Logs" still lists it in Trash after the next sync (#562).
       final spy = SnoozeSpyImapClient(
         copyUidValidity: 1,
         copyUidSourceToTarget: const {5: 42},
@@ -3664,7 +3664,6 @@ void main() {
       await r.accounts.addAccount(_account, 'pw');
 
       const oldId = 'acc-1:INBOX:5';
-      const newId = 'acc-1:Archive:42';
       await r.db.into(r.db.emails).insert(
             EmailsCompanion.insert(
               id: oldId,
@@ -3698,9 +3697,8 @@ void main() {
 
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
-      // The row is gone under the old id but reachable under the new one.
-      expect(await logsFor(r.logs, oldId), isEmpty);
-      final moved = await logsFor(r.logs, newId);
+      expect(await emailIdAt(r.db, 'Archive', 42), oldId);
+      final moved = await logsFor(r.logs, oldId);
       expect(moved.single.event, 'email.move');
     });
 
@@ -3720,10 +3718,10 @@ void main() {
               _PreviewSyncImapClient(messages: messages),
         );
         await r.accounts.addAccount(_account, 'pw');
-        const emailId = 'acc-1:INBOX:42';
 
         await r.emails.syncEmails('acc-1', 'INBOX');
 
+        final emailId = await emailIdAt(r.db, 'INBOX', 42);
         final fetched = await logsFor(r.logs, emailId);
         expect(fetched.single.event, 'email.fetched');
         expect(fetched.single.level, AppLogLevel.info);
@@ -3790,7 +3788,7 @@ void main() {
         await r.emails.syncEmails('jmap-1', 'mbx1');
 
         expect(await logsFor(r.logs, 'jmap-1:e1'), isEmpty);
-        final created = await logsFor(r.logs, 'jmap-1:e3');
+        final created = await logsFor(r.logs, await emailIdOfJmap(r.db, 'e3'));
         expect(created.single.event, 'email.fetched');
         expect(created.single.accountId, 'jmap-1');
         expect(created.single.mailboxPath, 'mbx1');
@@ -4260,7 +4258,8 @@ void main() {
     );
 
     test(
-      'move flush remaps local id/uid from COPYUID and rewrites cached bodies',
+      'move flush records the UID from COPYUID; the row keeps its id, body '
+      'and attachments',
       () async {
         final spy = SnoozeSpyImapClient(
           copyUidValidity: 1,
@@ -4287,7 +4286,7 @@ void main() {
                 textBody: const Value('cached body'),
               ),
             );
-        // A downloaded attachment: its folder is named after the old id.
+        // A downloaded attachment: its folder is named after the id.
         await r.db.into(r.db.attachmentFiles).insert(
               AttachmentFilesCompanion.insert(
                 emailId: oldId,
@@ -4316,22 +4315,18 @@ void main() {
         // Pending change drained.
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
-        // Old id is gone; new id reflects destination mailbox + new UID.
-        expect(await r.emails.getEmail(oldId), isNull);
-        const newId = 'acc-1:Archive:42';
-        final moved = await r.emails.getEmail(newId);
-        expect(moved, isNotNull);
+        // Same row, now at the destination's UID.
+        expect(await emailIdAt(r.db, 'Archive', 42), oldId);
+        final moved = await r.emails.getEmail(oldId);
         expect(moved!.uid, 42);
         expect(moved.mailboxPath, 'Archive');
 
-        // Body cache follows the new id.
+        // Body cache and downloaded attachment stay with the row.
         final bodies = await r.db.select(r.db.emailBodies).get();
         expect(bodies, hasLength(1));
-        expect(bodies.first.emailId, newId);
+        expect(bodies.first.emailId, oldId);
         expect(bodies.first.textBody, 'cached body');
-        // With foreign keys on, the attachment row of the old id would fail
-        // the re-key at COMMIT; it is dropped instead.
-        expect(await r.db.select(r.db.attachmentFiles).get(), isEmpty);
+        expect(await r.db.select(r.db.attachmentFiles).get(), hasLength(1));
       },
     );
 
@@ -4378,9 +4373,8 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(spy.lastSearchCriteria, criteria);
-        const newId = 'acc-1:Archive:99';
-        final moved = await r.emails.getEmail(newId);
-        expect(moved, isNotNull);
+        expect(await emailIdAt(r.db, 'Archive', 99), oldId);
+        final moved = await r.emails.getEmail(oldId);
         expect(moved!.uid, 99);
       },
     );
@@ -4473,7 +4467,7 @@ void main() {
         // The cancel must fail so Undo enqueues a real reverse move.
         expect(cancelled, isFalse);
         expect(spy.moves, ['INBOX:5->Trash']);
-        expect(await r.emails.getEmail('acc-1:Trash:42'), isNotNull);
+        expect(await emailIdAt(r.db, 'Trash', 42), oldId);
       });
 
       test(
@@ -4499,7 +4493,8 @@ void main() {
 
         expect(spy.moves, ['INBOX:5->Trash', 'Trash:42->INBOX']);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        final restored = await r.emails.getEmail('acc-1:INBOX:7');
+        final restored =
+            await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 7));
         expect(restored, isNotNull);
         expect(restored!.mailboxPath, 'INBOX');
       });
@@ -4524,7 +4519,7 @@ void main() {
 
         expect(spy.moves, ['Trash:5->INBOX', 'Trash:205->INBOX']);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        expect(await r.emails.getEmail('acc-1:INBOX:7'), isNotNull);
+        expect(await emailIdAt(r.db, 'INBOX', 7), oldId);
       });
 
       test(
@@ -4550,8 +4545,8 @@ void main() {
 
         expect(spy.moves, ['INBOX:5->Deleted Items']);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        expect(await r.emails.getEmail(oldId), isNull);
-        final moved = await r.emails.getEmail('acc-1:Deleted Items:77');
+        expect(await emailIdAt(r.db, 'Deleted Items', 77), oldId);
+        final moved = await r.emails.getEmail(oldId);
         expect(moved, isNotNull);
         expect(moved!.mailboxPath, 'Deleted Items');
       });
@@ -4582,7 +4577,10 @@ void main() {
 
         expect(spy.moves, ['INBOX:5->Trash']);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        expect(await r.emails.getEmail('acc-1:Trash:42'), isNotNull);
+        expect(
+          await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 42)),
+          isNotNull,
+        );
       });
 
       // The message is in neither mailbox (e.g. purged from Trash by another
@@ -4634,7 +4632,7 @@ void main() {
     });
 
     test(
-      'move flush rewrites pending undo_actions referencing the old id',
+      'move flush leaves undo_actions referencing the row as they are',
       () async {
         final spy = SnoozeSpyImapClient(
           copyUidValidity: 1,
@@ -4703,13 +4701,14 @@ void main() {
 
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
-        const newId = 'acc-1:Archive:42';
+        // The row keeps its id, so Undo still finds it.
+        expect(await emailIdAt(r.db, 'Archive', 42), oldId);
         final stored = await r.db.select(r.db.undoActions).getSingle();
         final json = jsonDecode(stored.dataJson) as Map<String, dynamic>;
-        expect(json['emailIds'], [newId]);
+        expect(json['emailIds'], [oldId]);
         expect(
           (json['originalEmails'] as List).first as Map<String, dynamic>,
-          containsPair('id', newId),
+          containsPair('id', oldId),
         );
       },
     );
@@ -5089,7 +5088,7 @@ void main() {
                 resourceType: 'Email',
                 resourceId: 'jmap-1:e1',
                 changeType: changeType,
-                payload: jsonEncode(payload),
+                payload: jsonEncode({...payload, 'jmapId': 'e1'}),
                 createdAt: DateTime.now(),
               ),
             );
@@ -5362,8 +5361,8 @@ void main() {
         expect(spy.selects, ['INBOX']);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
         for (final (oldUid, newUid) in [(1, 11), (2, 12), (3, 13)]) {
-          expect(await r.emails.getEmail('acc-1:INBOX:$oldUid'), isNull);
-          expect(await r.emails.getEmail('acc-1:Trash:$newUid'), isNotNull);
+          // The row keeps its id and records the mail's new UID.
+          expect(await emailIdAt(r.db, 'Trash', newUid), 'acc-1:INBOX:$oldUid');
         }
       });
 
@@ -5387,7 +5386,10 @@ void main() {
           'move INBOX:2->Trash',
         ]);
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        expect(await r.emails.getEmail('acc-1:Trash:12'), isNotNull);
+        expect(
+          await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 12)),
+          isNotNull,
+        );
       });
 
       test('a batch never jumps over a change in between, or mixes targets',
@@ -5479,7 +5481,10 @@ void main() {
 
         expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
 
-        expect(await r.emails.getEmail('acc-1:Trash:11'), isNotNull);
+        expect(
+          await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 11)),
+          isNotNull,
+        );
         final pending = await pendingInOrder(r.db);
         expect(pending.map((p) => p.resourceId), [
           'acc-1:INBOX:2',
@@ -5553,7 +5558,10 @@ void main() {
         // The source search needs no SELECT; the destination is checked
         // before moving another copy.
         expect(spy.selects, ['INBOX', 'Trash', 'INBOX']);
-        expect(await r.emails.getEmail('acc-1:Trash:7'), isNotNull);
+        expect(
+          await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 7)),
+          isNotNull,
+        );
       });
 
       test('a message an earlier attempt already moved is re-keyed', () async {
@@ -5569,7 +5577,10 @@ void main() {
         expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
 
         expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-        expect(await r.emails.getEmail('acc-1:Trash:77'), isNotNull);
+        expect(
+          await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 77)),
+          isNotNull,
+        );
       });
     });
 
@@ -5692,7 +5703,8 @@ void main() {
         'move Archive:300->Snoozed',
       ]);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-      final snoozed = await r.emails.getEmail('acc-1:Snoozed:9');
+      final snoozed =
+          await r.emails.getEmail(await emailIdAt(r.db, 'Snoozed', 9));
       expect(snoozed!.snoozedUntil, DateTime(2030));
     });
 
@@ -5730,7 +5742,8 @@ void main() {
         'store add 9 snz:20300101T000000.000',
       ]);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-      final snoozed = await r.emails.getEmail('acc-1:Snoozed:9');
+      final snoozed =
+          await r.emails.getEmail(await emailIdAt(r.db, 'Snoozed', 9));
       expect(snoozed!.snoozedUntil, DateTime(2030));
     });
 
@@ -5871,7 +5884,8 @@ void main() {
         'move Snoozed:42->Archive',
       ]);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
-      final archived = await r.emails.getEmail('acc-1:Archive:7');
+      final archived =
+          await r.emails.getEmail(await emailIdAt(r.db, 'Archive', 7));
       expect(archived!.snoozedUntil, isNull);
     });
 
@@ -6922,10 +6936,12 @@ void main() {
       final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
       expect(emails.map((e) => e.subject).toSet(), {'First updated', 'Third'});
       // Each row records its server id; sync finds it by that.
+      // The stored row keeps its id; the new one gets an opaque id.
       expect(
         {for (final e in emails) e.id: e.srvJmapId},
-        {'jmap-1:e1': 'e1', 'jmap-1:e3': 'e3'},
+        {'jmap-1:e1': 'e1', await emailIdOfJmap(r.db, 'e3'): 'e3'},
       );
+      expect(await emailIdOfJmap(r.db, 'e3'), startsWith('jmap-1:~'));
 
       final emailState = await (r.db.select(r.db.syncStates)
             ..where((t) => t.resourceType.equals('Email')))
@@ -7912,7 +7928,8 @@ void main() {
               resourceType: 'Email',
               resourceId: 'jmap-1:e1',
               changeType: changeType,
-              payload: payload,
+              payload:
+                  jsonEncode({...jsonDecode(payload) as Map, 'jmapId': 'e1'}),
               createdAt: DateTime.now(),
             ),
           );
@@ -8094,7 +8111,7 @@ void main() {
               resourceType: 'Email',
               resourceId: 'jmap-1:e1',
               changeType: 'flag_seen',
-              payload: '{"seen":true}',
+              payload: '{"seen":true,"jmapId":"e1"}',
               createdAt: DateTime.now(),
             ),
           );
@@ -8173,7 +8190,7 @@ void main() {
                 resourceType: 'Email',
                 resourceId: 'jmap-1:e1',
                 changeType: 'move',
-                payload: '{"src":"mbx1","dest":"mbxJunk"}',
+                payload: '{"src":"mbx1","dest":"mbxJunk","jmapId":"e1"}',
                 createdAt: DateTime.now(),
               ),
             );
@@ -8243,7 +8260,7 @@ void main() {
                 resourceType: 'Email',
                 resourceId: 'jmap-1:e1',
                 changeType: 'flag_seen',
-                payload: '{"seen":true}',
+                payload: '{"seen":true,"jmapId":"e1"}',
                 createdAt: DateTime.now(),
               ),
             );
@@ -8309,7 +8326,7 @@ void main() {
               resourceType: 'Email',
               resourceId: 'jmap-1:e2',
               changeType: 'flag_seen',
-              payload: '{"seen":true}',
+              payload: '{"seen":true,"jmapId":"e2"}',
               createdAt: DateTime.now(),
             ),
           );
@@ -8417,7 +8434,7 @@ void main() {
               resourceType: 'Email',
               resourceId: 'jmap-1:e1',
               changeType: 'flag_seen',
-              payload: '{"seen":true}',
+              payload: '{"seen":true,"jmapId":"e1"}',
               createdAt: DateTime.now(),
               attempts: const Value(4),
             ),
@@ -9682,10 +9699,13 @@ void main() {
       await r.emails.syncEmails('acc-1', 'INBOX');
       // Marked read locally; the change is queued, the server still says
       // unread.
-      await r.emails.setFlag('acc-1:INBOX:42', seen: true);
+      await r.emails.setFlag(await emailIdAt(r.db, 'INBOX', 42), seen: true);
       client.modSeq = 2;
       await r.emails.syncEmails('acc-1', 'INBOX');
-      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isTrue);
+      expect(
+        (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+        isTrue,
+      );
 
       // The change failed: the next server read reverts the optimistic value,
       // and the failure stays listed.
@@ -9699,7 +9719,10 @@ void main() {
       client.modSeq = 3;
       await r.emails.syncEmails('acc-1', 'INBOX');
 
-      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+      expect(
+        (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+        isFalse,
+      );
       final failed = await r.emails.observeFailedMutations('acc-1').first;
       expect(failed.single.failed, isTrue);
     });
@@ -10492,9 +10515,14 @@ void main() {
       expect(sent.single.subject, 'Test');
       expect(sent.single.to.single.email, 'bob@example.com');
       expect(sent.single.isSeen, isTrue, reason: 'you wrote it');
-      // APPENDUID told us the UID, so the row carries the id a later sync of
-      // this folder writes — that sync updates it instead of duplicating it.
-      expect(sent.single.id, 'acc-1:INBOX.Sent:11');
+      // APPENDUID told us the UID, so the row records the location a later
+      // sync of this folder finds it by — that sync updates it instead of
+      // duplicating it.
+      expect(sent.single.id, startsWith('acc-1:~'));
+      expect(
+        (sent.single.srvMailboxPath, sent.single.srvUid),
+        ('INBOX.Sent', 11),
+      );
       expect(sent.single.uid, 11);
       expect(sent.single.isLocal, isFalse);
 
@@ -11071,10 +11099,9 @@ void main() {
       await r.emails.syncEmails('acc-1', 'INBOX');
 
       final row = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:INBOX:1')))
-          .getSingleOrNull();
-      expect(row, isNotNull);
-      expect(row!.serverEmailId, 'E-stable-1');
+            ..where((t) => t.srvUid.equals(1)))
+          .getSingle();
+      expect(row.serverEmailId, 'E-stable-1');
     });
 
     test(
@@ -11405,7 +11432,7 @@ void main() {
       await r.emails.syncEmails('acc-1', 'INBOX');
 
       final emailRow = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:INBOX:42')))
+            ..where((t) => t.srvUid.equals(42)))
           .getSingle();
       expect(
         emailRow.preview,
@@ -11444,8 +11471,8 @@ void main() {
       // The checkpoint used to jump to 43 from SEARCH ALL, so 43 was never
       // fetched.
       expect(next.fetched, 1);
-      final ids = (await r.db.select(r.db.emails).get()).map((e) => e.id);
-      expect(ids, contains('acc-1:INBOX:43'));
+      final uids = (await r.db.select(r.db.emails).get()).map((e) => e.srvUid);
+      expect(uids, contains(43));
     });
 
     test('a sync with nothing new fetches nothing', () async {
@@ -11536,12 +11563,16 @@ void main() {
         );
         await r.accounts.addAccount(_account, 'pw');
         await r.emails.syncEmails('acc-1', 'INBOX');
-        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+        expect(
+          (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+          isFalse,
+        );
         client.beforeAnswer = (command) async {
           // Once, inside the next FLAGS fetch.
           if (command != 'FLAGS') return;
           client.beforeAnswer = null;
-          await r.emails.setFlag('acc-1:INBOX:42', seen: true);
+          await r.emails
+              .setFlag(await emailIdAt(r.db, 'INBOX', 42), seen: true);
           // Flushed: the STORE reached the server after it built the answer.
           await r.db.delete(r.db.pendingChanges).go();
         };
@@ -11591,7 +11622,10 @@ void main() {
           ..modSeq = 3;
         await r.emails.syncEmails('acc-1', 'INBOX');
 
-        expect((await r.emails.getEmail('acc-1:INBOX:42'))!.isSeen, isFalse);
+        expect(
+          (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+          isFalse,
+        );
       });
     });
 
@@ -11624,7 +11658,8 @@ void main() {
 
       await r.emails.syncEmails('acc-1', 'INBOX');
 
-      final undated = await r.emails.getEmail('acc-1:INBOX:42');
+      final undated =
+          await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42));
       expect(undated!.sentAt, isNull);
       final arrived = DateTime.utc(2026, 10, 15, 12, 22, 10);
       expect(undated.receivedAt.toUtc(), arrived);
@@ -11633,7 +11668,7 @@ void main() {
       expect(thread.latestDate.toUtc(), arrived);
 
       // receivedAt is the server's arrival time; the Date header stays sentAt.
-      final dated = await r.emails.getEmail('acc-1:INBOX:43');
+      final dated = await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 43));
       expect(dated!.sentAt!.toUtc(), DateTime.utc(2024, 6, 15, 12));
       expect(dated.receivedAt.toUtc(), DateTime.utc(2024, 6, 16, 8));
     });
@@ -11672,7 +11707,7 @@ void main() {
       final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
       final thread = threads.single;
       expect(thread.messageCount, 2);
-      expect(thread.latestEmailId, 'acc-1:INBOX:43');
+      expect(thread.latestEmailId, await emailIdAt(r.db, 'INBOX', 43));
       expect(thread.latestDate.toUtc(), DateTime.utc(2024, 6, 17, 9));
     });
 
@@ -11702,7 +11737,8 @@ void main() {
 
       await r.emails.syncEmails('acc-1', 'INBOX');
 
-      final withReplyTo = await r.emails.getEmail('acc-1:INBOX:42');
+      final withReplyTo =
+          await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42));
       expect(
         withReplyTo!.replyTo.map((a) => a.email),
         ['support@example.com'],
@@ -11710,7 +11746,8 @@ void main() {
       expect(withReplyTo.bcc.map((a) => a.email), ['boss@example.com']);
       // RFC822.SIZE (the fake answers the raw message length).
       expect(withReplyTo.size, messages[42]!._rawMime().length);
-      final withoutReplyTo = await r.emails.getEmail('acc-1:INBOX:43');
+      final withoutReplyTo =
+          await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 43));
       expect(withoutReplyTo!.replyTo, isEmpty);
       expect(withoutReplyTo.bcc, isEmpty);
     });
@@ -11742,12 +11779,15 @@ void main() {
               (t) => t.resourceType.equals('IMAP:FlagReconcile:INBOX'),
             ))
           .go();
-      expect((await r.emails.getEmail('acc-1:INBOX:42'))!.size, isNull);
+      expect(
+        (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.size,
+        isNull,
+      );
 
       await r.emails.syncEmails('acc-1', 'INBOX');
 
       expect(
-        (await r.emails.getEmail('acc-1:INBOX:42'))!.size,
+        (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.size,
         messages[42]!._rawMime().length,
       );
     });
@@ -11772,7 +11812,7 @@ void main() {
       await r.emails.syncEmails('acc-1', 'INBOX');
 
       final emailRow = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:INBOX:7')))
+            ..where((t) => t.srvUid.equals(7)))
           .getSingle();
       expect(emailRow.preview, 'Hello world');
     });
@@ -12042,12 +12082,13 @@ void main() {
       expect(restored.replyTo.single.email, 'help@example.com');
     });
 
-    test('restoreEmails gives a JMAP snapshot without one its server id',
+    test('restoreEmails restores the server id unless another row holds it',
         () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_jmapAccount, 'pw');
-      Email snapshot(String id) => Email(
+      Email snapshot(String id, String jmapId) => Email(
             id: id,
+            srvJmapId: jmapId,
             accountId: 'jmap-1',
             mailboxPath: 'mbx1',
             uid: 0,
@@ -12059,9 +12100,8 @@ void main() {
             isFlagged: false,
             hasAttachment: false,
           );
-      // Taken before schema v70: no server id in the snapshot.
-      await r.emails.restoreEmails([snapshot('jmap-1:e1')]);
-      expect((await r.emails.getEmail('jmap-1:e1'))!.srvJmapId, 'e1');
+      await r.emails.restoreEmails([snapshot('jmap-1:~1', 'e1')]);
+      expect((await r.emails.getEmail('jmap-1:~1'))!.srvJmapId, 'e1');
 
       // Another row holds that server id by now: none is recorded.
       await r.db.into(r.db.emails).insert(
@@ -12074,8 +12114,8 @@ void main() {
               srvJmapId: const Value('e2'),
             ),
           );
-      await r.emails.restoreEmails([snapshot('jmap-1:e2')]);
-      expect((await r.emails.getEmail('jmap-1:e2'))!.srvJmapId, isNull);
+      await r.emails.restoreEmails([snapshot('jmap-1:~2', 'e2')]);
+      expect((await r.emails.getEmail('jmap-1:~2'))!.srvJmapId, isNull);
     });
   });
 
@@ -12172,8 +12212,9 @@ void main() {
       expect(body.loadError, isNotNull);
     });
 
-    test('re-keys the row and caches the correct body when the UID is found',
-        () async {
+    test(
+        'records the found UID on the row and caches the correct body for '
+        'it', () async {
       final client = _MismatchedBodyImapClient(
         correctMessageId: rowMessageId,
         wrongMessageId: packageMessageId,
@@ -12214,29 +12255,24 @@ void main() {
 
       final body = await r.emails.getEmailBody('acc-1:Snoozed:6');
 
-      // The thread row follows the re-key, its same-second tiebreaker too.
+      // The row keeps its id; the thread's same-second tiebreaker follows
+      // the UID.
       final thread = await r.db.select(r.db.threads).getSingle();
-      expect(thread.latestEmailId, 'acc-1:INBOX:42');
+      expect(thread.latestEmailId, 'acc-1:Snoozed:6');
       expect(thread.latestUid, 42);
 
-      // The correct body is returned and cached under the re-keyed id — a
-      // healed mismatch is not a load failure, so no loadError is set (#837).
+      // The correct body is returned and cached for the row — a healed
+      // mismatch is not a load failure, so no loadError is set (#837).
       expect(body.textBody, 'Rentenversicherung body');
       expect(body.loadError, isNull);
-      final newRow = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:INBOX:42')))
-          .getSingleOrNull();
-      expect(newRow, isNotNull);
-      expect(newRow!.uid, 42);
-      expect(newRow.messageId, rowMessageId);
-
-      final staleRow = await (r.db.select(r.db.emails)
-            ..where((t) => t.id.equals('acc-1:Snoozed:6')))
-          .getSingleOrNull();
-      expect(staleRow, isNull);
+      final row = await r.db.select(r.db.emails).getSingle();
+      expect(row.id, 'acc-1:Snoozed:6');
+      expect(row.uid, 42);
+      expect((row.srvMailboxPath, row.srvUid), ('INBOX', 42));
+      expect(row.messageId, rowMessageId);
 
       final cachedBody = await (r.db.select(r.db.emailBodies)
-            ..where((t) => t.emailId.equals('acc-1:INBOX:42')))
+            ..where((t) => t.emailId.equals('acc-1:Snoozed:6')))
           .getSingle();
       expect(cachedBody.textBody, 'Rentenversicherung body');
     });
@@ -12320,12 +12356,12 @@ void main() {
 
       expect(body.textBody, 'Rentenversicherung body');
       final row = await r.db.select(r.db.emails).getSingle();
-      expect(row.id, 'acc-1:INBOX:42');
+      expect(row.id, 'acc-1:INBOX:6');
       expect(row.mailboxPath, 'Archive');
       expect((row.srvMailboxPath, row.srvUid), ('INBOX', 42));
       // The queued move now names the right UID.
       final move = await r.db.select(r.db.pendingChanges).getSingle();
-      expect(move.resourceId, 'acc-1:INBOX:42');
+      expect(move.resourceId, 'acc-1:INBOX:6');
       expect((jsonDecode(move.payload) as Map)['uid'], 42);
     });
   });
@@ -12517,19 +12553,16 @@ void main() {
 
       await r.emails.syncEmails('acc-1', 'INBOX');
 
-      const newestFirst = [
-        'acc-1:INBOX:5',
-        'acc-1:INBOX:4',
-        'acc-1:INBOX:3',
-        'acc-1:INBOX:2',
-        'acc-1:INBOX:1',
-      ];
+      final uidOf = {
+        for (final e in await r.db.select(r.db.emails).get()) e.id: e.uid,
+      };
+      const newestFirst = [5, 4, 3, 2, 1];
       final emails = await r.emails.observeEmails('acc-1', 'INBOX').first;
-      expect(emails.map((e) => e.id), newestFirst);
+      expect(emails.map((e) => e.uid), newestFirst);
       final threads = await r.emails.observeThreads('acc-1', 'INBOX').first;
-      expect(threads.map((t) => t.latestEmailId), newestFirst);
+      expect(threads.map((t) => uidOf[t.latestEmailId]), newestFirst);
       final inbox = await r.emails.observeAllInboxThreads().first;
-      expect(inbox.map((t) => t.latestEmailId), newestFirst);
+      expect(inbox.map((t) => uidOf[t.latestEmailId]), newestFirst);
     });
 
     test(
@@ -12550,17 +12583,17 @@ void main() {
       final thread =
           (await r.emails.observeThreads('acc-1', 'INBOX').first).single;
       expect(thread.messageCount, 3);
-      expect(thread.latestEmailId, 'acc-1:INBOX:3');
+      expect(thread.latestEmailId, await emailIdAt(r.db, 'INBOX', 3));
       expect(thread.preview, contains('Body 3'));
-      const oldestFirst = ['acc-1:INBOX:1', 'acc-1:INBOX:2', 'acc-1:INBOX:3'];
+      const oldestFirst = [1, 2, 3];
       final inThread = await r.emails
           .observeEmailsInThread('acc-1', 'INBOX', thread.threadId)
           .first;
-      expect(inThread.map((e) => e.id), oldestFirst);
+      expect(inThread.map((e) => e.uid), oldestFirst);
       final across = await r.emails
           .observeThreadAcrossFolders('acc-1', thread.threadId)
           .first;
-      expect(across.map((e) => e.id), oldestFirst);
+      expect(across.map((e) => e.uid), oldestFirst);
     });
 
     test('search results show the newest arrival first', () async {

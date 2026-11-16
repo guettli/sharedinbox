@@ -511,20 +511,33 @@ As implemented, phase 2 is a series of PRs:
    and server calls about a row use them (body fetch and its healing,
    attachment download, raw message, JMAP flush, the debug probe). The
    periodic IMAP flag reconcile and size backfill already scan by
-   `srv_mailbox_path`. New rows still get today's ids, and re-keys still
-   happen. When another mail's row already has that id (it outlived a
-   UIDVALIDITY reset, or a renamed folder's old name came back), the new
-   row or the re-key gets `id#2`, `#3`, … instead of overwriting it; a row
-   of that id without a recorded location is taken over. A JMAP row without
-   a recorded id is never pruned as gone. Left for later: the other
-   folder-scoped scans still filter by `mailbox_path` (phase 4); the JMAP
-   flush parses the resource id when the row is gone, and Undo's restore of
-   a pre-v70 JMAP snapshot takes the id from the row id; background
-   notifications build `account:INBOX:uid`.
-2. **2b (planned):** an opaque id generator for new rows, and a check that
-   bans building and parsing ids.
-3. **2c (planned):** frozen ids: every re-key becomes an update of the
-   `srv_` columns.
+   `srv_mailbox_path`. New rows still got today's ids (with `id#2`, `#3`,
+   … when another mail's row had that id), and re-keys still happened
+   (both replaced in 2b). A JMAP row without a recorded id is never pruned
+   as gone. Left for later: the other folder-scoped scans still filter by
+   `mailbox_path` (phase 4).
+2. **2b (done, schema v71):** new rows get opaque ids from `newEmailId`
+   (`accountId:~` + 32 random hex digits; the account prefix keeps the
+   attachment cache folders per account): the IMAP fetch, the JMAP upsert,
+   the Sent copy and the virtual self-send rows. The `id#n` free-id logic
+   and the 2a insert fallback by id are gone. The IMAP move remap and the
+   body-fetch healing keep the row's id and update its UID, shown folder and
+   `srv_` location (`_relocateEmailRow`); keeping the id was smaller than
+   generating a fresh one, as nothing referencing it (body, attachments,
+   queued changes, logs, threads, Undo) needs a rewrite. The #1269 guard
+   against a late FETCH answer remembers the server location of each edited
+   mail, since a new row no longer gets the id the edit was noted under.
+   Nothing parses ids any more: the v71 migration stamps the JMAP id on each
+   queued JMAP change (new changes get it when queued), completes Undo
+   snapshots taken before v70 with their server location, and marks the
+   virtual Sent copies (`is_virtual_sent_copy`, also carried by Undo
+   snapshots); drafts are matched by `srv_jmap_id`. The background new-mail
+   check records `notifiedImapLocationKey('INBOX', uid)` instead of an
+   email id, and the foreground dispatcher counts the row stored later at
+   that location as notified. `scripts/check_email_ids.sh` (in
+   `check-layers`) bans the old id shapes in `lib/`, migrations excepted.
+3. **2c (planned):** frozen ids: the remaining re-keys (foreign-move
+   adoption `_adoptImapMovedRow`) become updates of the `srv_` columns.
 4. **2d (planned):** split `email_repository_impl.dart` along the writer
    roles.
 

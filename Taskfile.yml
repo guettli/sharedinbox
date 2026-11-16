@@ -789,7 +789,7 @@ tasks:
       - dagger call --progress=plain -q -m ci --source=. check-fast
 
   check-layers:
-    desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed)
+    desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed); no code builds or parses email ids
     cmds:
       - |
         VIOLATIONS=$(grep -rn "package:sharedinbox/data/" lib/ui/ 2>/dev/null || true)
@@ -798,6 +798,7 @@ tasks:
           echo "$VIOLATIONS"
           exit 1
         fi
+      - scripts/check_email_ids.sh
 
   check-hygiene:
     desc: Verify that no forbidden files (like home dir config) are tracked

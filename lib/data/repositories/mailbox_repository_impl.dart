@@ -407,7 +407,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     for (final mb in mailboxes) {
       final m = mb as Map<String, dynamic>;
       final jmapId = m['id'] as String;
-      final dbId = '$accountId:$jmapId';
+      final dbId = '$accountId:$jmapId'; // not an email id
       final name = m['name'] as String? ?? jmapId;
       final role = m['role'] as String? ?? _fallbackJmapRole(name);
       final displayPath = buildDisplayPath(jmapId);

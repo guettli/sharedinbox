@@ -421,9 +421,13 @@ Future<JmapTestRepos> openJmapTestReposOnIncrementalPath({
   return repos;
 }
 
-/// Every cached email row id, for asserting on what a sync kept or removed.
-Future<Set<String>> jmapLocalEmailIds(AppDatabase db) async =>
-    (await db.select(db.emails).get()).map((e) => e.id).toSet();
+/// Every cached email row as `account:jmapId` of the server mail it records
+/// (its id when it records none), for asserting on what a sync kept or
+/// removed. Row ids are opaque, so a row is named by its server id.
+Future<Set<String>> jmapLocalEmailIds(AppDatabase db) async => {
+      for (final e in await db.select(db.emails).get())
+        e.srvJmapId == null ? e.id : '${e.accountId}:${e.srvJmapId}',
+    };
 
 /// Resolves one `Email/query` page from [sortedIds] against [args], honouring
 /// either `position` or `anchor`+`anchorOffset` the way a real server does.
