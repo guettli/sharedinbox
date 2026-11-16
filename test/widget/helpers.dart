@@ -576,6 +576,15 @@ class FakeEmailRepository implements EmailRepository {
   Future<bool> cancelPendingChange(String id, String type) async => false;
 
   @override
+  Future<(T, Map<String, List<int>>)> captureOps<T>(
+    Future<T> Function() apply,
+  ) async =>
+      (await apply(), const <String, List<int>>{});
+
+  @override
+  Future<Set<int>> cancelOps(Iterable<int> ids) async => const {};
+
+  @override
   Future<void> snoozeEmail(String emailId, DateTime until) async {}
 
   @override

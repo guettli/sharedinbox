@@ -458,10 +458,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               onPressed: () async {
                 unawaited(HapticFeedback.heavyImpact());
                 final nextEmail = await _getNextEmailIfNeeded(header);
-                final destPath = await _runDimmed(
-                  'Deleting…',
-                  () => repo.deleteEmail(widget.emailId),
-                );
+                var ops = const <String, List<int>>{};
+                final destPath = await _runDimmed('Deleting…', () async {
+                  final (dest, queued) = await repo.captureOps(
+                    () => repo.deleteEmail(widget.emailId),
+                  );
+                  ops = queued;
+                  return dest;
+                });
 
                 if (header != null) {
                   // Fire-and-forget so the state update (which is applied
@@ -478,6 +482,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                             sourceMailboxPath: header.mailboxPath,
                             destinationMailboxPath: destPath,
                             originalEmails: [header],
+                            opSeqs: ops,
                           ),
                         ),
                   );
@@ -1640,12 +1645,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await _runDimmed(
-      'Archiving…',
-      () => ref
-          .read(emailRepositoryProvider)
-          .moveEmail(widget.emailId, mailbox.path),
-    );
+    final ops = await _moveCapturingOps('Archiving…', mailbox.path);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1658,6 +1658,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'archive',
               originalEmails: [header],
+              opSeqs: ops,
             ),
           ),
     );
@@ -1681,12 +1682,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await _runDimmed(
-      'Marking as spam…',
-      () => ref
-          .read(emailRepositoryProvider)
-          .moveEmail(widget.emailId, mailbox.path),
-    );
+    final ops = await _moveCapturingOps('Marking as spam…', mailbox.path);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1699,6 +1695,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'junk',
               originalEmails: [header],
+              opSeqs: ops,
             ),
           ),
     );
@@ -1725,12 +1722,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
     if (mailbox == null || !context.mounted) return;
 
-    await _runDimmed(
-      'Moving to Inbox…',
-      () => ref
-          .read(emailRepositoryProvider)
-          .moveEmail(widget.emailId, mailbox.path),
-    );
+    final ops = await _moveCapturingOps('Moving to Inbox…', mailbox.path);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1743,6 +1735,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               destinationMailboxPath: mailbox.path,
               destinationMailboxRole: 'inbox',
               originalEmails: [header],
+              opSeqs: ops,
             ),
           ),
     );
@@ -1950,12 +1943,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       }
     }
 
-    await _runDimmed(
-      'Moving…',
-      () => ref
-          .read(emailRepositoryProvider)
-          .moveEmail(widget.emailId, destination),
-    );
+    final ops = await _moveCapturingOps('Moving…', destination);
 
     unawaited(
       ref.read(undoServiceProvider.notifier).pushAction(
@@ -1967,6 +1955,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               sourceMailboxPath: header.mailboxPath,
               destinationMailboxPath: destination,
               originalEmails: [header],
+              opSeqs: ops,
             ),
           ),
     );
@@ -2010,6 +1999,23 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// Moves the open message to [dest] behind the dimmed [label], returning
+  /// the queued changes for its undo action ([UndoAction.opSeqs]).
+  Future<Map<String, List<int>>> _moveCapturingOps(
+    String label,
+    String dest,
+  ) async {
+    var ops = const <String, List<int>>{};
+    await _runDimmed(label, () async {
+      final repo = ref.read(emailRepositoryProvider);
+      ops = (await repo.captureOps(
+        () => repo.moveEmail(widget.emailId, dest),
+      ))
+          .$2;
+    });
+    return ops;
+  }
+
   Future<void> _snooze(BuildContext context, Email header) async {
     final nextEmail = await _getNextEmailIfNeeded(header);
     if (!context.mounted) return;
@@ -2021,6 +2027,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (until == null || !context.mounted) return;
 
     final repo = ref.read(emailRepositoryProvider);
+    // Read before the await: the screen may be gone when it returns.
+    final undo = ref.read(undoServiceProvider.notifier);
+    var ops = const <String, List<int>>{};
+    await _runDimmed('Snoozing…', () async {
+      ops = (await repo.captureOps(
+        () => repo.snoozeEmail(widget.emailId, until),
+      ))
+          .$2;
+    });
     final action = UndoAction(
       id: DateTime.now().toIso8601String(),
       accountId: header.accountId,
@@ -2028,12 +2043,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       emailIds: [widget.emailId],
       sourceMailboxPath: header.mailboxPath,
       originalEmails: [header],
+      opSeqs: ops,
     );
-    unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
-    await _runDimmed(
-      'Snoozing…',
-      () => repo.snoozeEmail(widget.emailId, until),
-    );
+    unawaited(undo.pushAction(action));
 
     if (context.mounted) {
       context.showAppSnackBar(

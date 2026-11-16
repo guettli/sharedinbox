@@ -262,8 +262,7 @@ retried with a growing backoff (15 minutes, doubling, at most 6 hours, kept in
 (`[CANNOT]`, `[NOPERM]`, `[CONTACTADMIN]`, `[PRIVACYREQUIRED]`, `[READ-ONLY]`),
 permanent per-item JMAP errors (`forbidden`, `notFound` for a flag or move), and an
 IMAP change whose message is gone (or cannot be found again after a UIDVALIDITY
-reset; a delete for good of a mail no longer found by its Message-ID after a reset
-counts as applied instead: the mail is gone either way). A JMAP `notFound` for a delete, and an IMAP change whose
+reset). A JMAP `notFound` for a delete, and an IMAP change whose
 source folder no longer exists, count as applied: the mail is already gone.
 
 **Claim** — a flush claims each change right before sending it: `state = 'inflight'`
@@ -348,12 +347,21 @@ A `SnackBar` with an **Undo** button appears for a few seconds.
 
 When the user taps Undo, `UndoService.undo()` executes this sequence for each affected email:
 
+The UI applies the action inside `EmailRepository.captureOps`, which records the
+`pending_changes` ids it queued per email; the `UndoAction` stores them (`opSeqs`).
+
 ```
-1. cancelPendingChange(id, originalType)
-      └─ Deletes the pending_changes row if nothing was sent for it yet
-         (`state = 'pending'`, `attempts = 0`). Returns false when a flush has
-         claimed it (`inflight`), it may have reached the server, or the
-         server already processed it.
+1. cancelOps(opSeqs[id])
+      └─ Deletes exactly the action's queued changes if nothing was sent for
+         them yet (`state = 'pending'`, `attempts = 0`). The action counts as
+         cancelled only if all of them were; an id that is gone (applied,
+         superseded, discarded, or retried after failing, which queues a
+         fresh row), claimed by a flush (`inflight`) or may have reached the
+         server is not. An email the action queued nothing for (a local-only
+         mail) counts as cancelled. Changes mirrored to a counterpart in a
+         paired account are cancelled with it, forward and reverse. An action stored before the ids were
+         recorded falls back to cancelPendingChange(id, 'delete' | 'move' |
+         'snooze'), the latest queued change of that type.
 
 2. If the email row was hard-deleted (DELETE action):
       restoreEmails([original])
@@ -365,9 +373,9 @@ When the user taps Undo, `UndoService.undo()` executes this sequence for each af
          If step 1 returned false (already sent to server), this enqueues
          a reverse-move in pending_changes so the server move is undone too.
 
-4. If step 1 returned true (cancelled before flush):
-      cancelPendingChange(id, 'move')
-         └─ The reverse-move from step 3 is redundant; remove it.
+4. If step 1 cancelled the action:
+      cancelOps(<ids step 3 queued>)
+         └─ The reverse-move from step 3 is redundant; remove exactly it.
 ```
 
 The net result is: if the mutation was still in the queue it is silently cancelled with no

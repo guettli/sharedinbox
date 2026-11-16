@@ -448,7 +448,8 @@ Future<void> _pushGroupedUndo(
     final allEmailIds = [for (final t in sourceThreads) ...t.emailIds];
     final originalEmails = await _fetchOriginals(repo, allEmailIds);
 
-    final destPath = await apply(repo, allEmailIds);
+    final (destPath, ops) =
+        await repo.captureOps(() => apply(repo, allEmailIds));
 
     final action = UndoAction(
       id: DateTime.now().toIso8601String(),
@@ -459,6 +460,7 @@ Future<void> _pushGroupedUndo(
       destinationMailboxPath: destPath,
       destinationMailboxRole: destinationMailboxRole,
       originalEmails: originalEmails,
+      opSeqs: ops,
     );
     unawaited(ref.read(undoServiceProvider.notifier).pushAction(action));
   }

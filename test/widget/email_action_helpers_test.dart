@@ -34,6 +34,12 @@ void main() {
     when(mockEmailRepo.deleteEmails(any)).thenAnswer((_) async => 'Trash');
     when(mockEmailRepo.snoozeEmail(any, any)).thenAnswer((_) async {});
     when(mockEmailRepo.moveEmail(any, any)).thenAnswer((_) async {});
+    // Runs the action; records no queued changes.
+    when(mockEmailRepo.captureOps<String?>(any)).thenAnswer((inv) async {
+      final apply =
+          inv.positionalArguments.single as Future<String?> Function();
+      return (await apply(), const <String, List<int>>{});
+    });
   });
 
   EmailThread thread({

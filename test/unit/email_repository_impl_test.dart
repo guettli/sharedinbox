@@ -3968,34 +3968,16 @@ void main() {
         () async {
       final client = _UidValiditySpyImapClient(uidValidity: 2);
       final r = await rig(client);
-      await r.emails.setFlag(resourceId, seen: true);
+      await r.emails.deleteEmail(resourceId);
 
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
       expect(client.calls, isEmpty);
+      expect(client.expunged, isFalse);
       // Failed, not retried against a UID that may be someone else's mail.
       final change = (await r.db.select(r.db.pendingChanges).get()).single;
       expect(change.state, 'failed');
       expect(change.lastError, contains('UIDVALIDITY'));
-      expect(client.lastSearchCriteria, contains('m@example.com'));
-    });
-
-    test('changed UIDVALIDITY and no match satisfies a delete for good',
-        () async {
-      final client = _UidValiditySpyImapClient(uidValidity: 2);
-      final r = await rig(client);
-      await r.emails.deleteEmail(resourceId);
-      expect(
-        (await r.db.select(r.db.pendingChanges).get()).single.changeType,
-        'delete',
-      );
-
-      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
-
-      // The mail is gone either way; the stale UID was never touched.
-      expect(client.calls, isEmpty);
-      expect(client.expunged, isFalse);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
       expect(client.lastSearchCriteria, contains('m@example.com'));
     });
 
@@ -4044,25 +4026,6 @@ void main() {
       await r.emails.flushPendingChanges('acc-1', 'pw');
 
       expect(client.calls, isEmpty);
-    });
-
-    test('changed UIDVALIDITY and two matches fails a delete for good',
-        () async {
-      final client = _UidValiditySpyImapClient(
-        uidValidity: 2,
-        searchResultsByMailbox: {
-          'INBOX': [9, 11],
-        },
-      );
-      final r = await rig(client);
-      await r.emails.deleteEmail(resourceId);
-
-      expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 0);
-
-      expect(client.calls, isEmpty);
-      expect(client.expunged, isFalse);
-      final change = (await r.db.select(r.db.pendingChanges).get()).single;
-      expect(change.state, 'failed');
     });
   });
 

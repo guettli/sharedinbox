@@ -12,6 +12,7 @@ class UndoAction {
     this.destinationMailboxPath,
     this.destinationMailboxRole,
     this.originalEmails = const [],
+    this.opSeqs = const {},
     DateTime? timestamp,
     this.undoneAt,
   }) : timestamp = timestamp ?? DateTime.now();
@@ -39,6 +40,12 @@ class UndoAction {
   /// Full email data for restoring hard-deleted rows (e.g. IMAP move/delete).
   final List<Email> originalEmails;
 
+  /// The queued changes the action created, as `pending_changes` ids per
+  /// email id (`EmailRepository.captureOps`). Undo cancels exactly these
+  /// while nothing was sent for them; empty for actions stored before they
+  /// were recorded, which fall back to cancelling by change type.
+  final Map<String, List<int>> opSeqs;
+
   factory UndoAction.fromJson(Map<String, dynamic> json) {
     return UndoAction(
       id: json['id'] as String,
@@ -53,6 +60,11 @@ class UndoAction {
       originalEmails: (json['originalEmails'] as List<dynamic>)
           .map((e) => Email.fromJson(e as Map<String, dynamic>))
           .toList(),
+      opSeqs: {
+        for (final MapEntry(:key, :value)
+            in ((json['opSeqs'] as Map<String, dynamic>?) ?? const {}).entries)
+          key: [for (final v in value as List<dynamic>) v as int],
+      },
     );
   }
 
@@ -68,6 +80,7 @@ class UndoAction {
       'timestamp': timestamp.toIso8601String(),
       if (undoneAt != null) 'undoneAt': undoneAt!.toIso8601String(),
       'originalEmails': originalEmails.map((e) => e.toJson()).toList(),
+      if (opSeqs.isNotEmpty) 'opSeqs': opSeqs,
     };
   }
 
@@ -81,6 +94,7 @@ class UndoAction {
         destinationMailboxPath: destinationMailboxPath,
         destinationMailboxRole: destinationMailboxRole,
         originalEmails: originalEmails,
+        opSeqs: opSeqs,
         timestamp: timestamp,
         undoneAt: undoneAt,
       );

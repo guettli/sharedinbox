@@ -462,10 +462,9 @@ As implemented, phase 1 is narrower, in this order:
 3. `stuck` instead of `failed` at the retry limit, with backoff in
    `lease_until`; IMAP `NO` with a permanent response code is a refusal
    (done).
-4. The satisfied/refused corrections of §5: a hard delete whose mail is not
-   found again after a UIDVALIDITY reset is satisfied (done; the other §5
-   cases already matched).
-5. Undo stores op seqs.
+4. The satisfied/refused corrections of §5.
+5. Undo stores op seqs (done: `captureOps` / `cancelOps`,
+   `UndoAction.opSeqs`).
 6. `origin` (may slip to phase 4, where counterpart ops need it).
 
 The table and the Dart names stay `pending_changes` / `PendingChangeRow`,

@@ -110,11 +110,26 @@ class UndoService extends Notifier<List<UndoAction>> {
 
     final repo = ref.read(emailRepositoryProvider);
 
+    // Whether the action recorded the changes it queued (the UI does since
+    // undo by change id); one stored before that has none at all.
+    final recorded = action.opSeqs.isNotEmpty;
+
     for (final id in action.emailIds) {
-      // 1. Try to cancel the original change (if not started yet).
-      final cancelled = await repo.cancelPendingChange(id, 'delete') ||
-          await repo.cancelPendingChange(id, 'move') ||
-          await repo.cancelPendingChange(id, 'snooze');
+      // 1. Try to cancel the original change (if nothing was sent for it
+      // yet): exactly the changes the action queued when it recorded them,
+      // otherwise (an action stored before that) the latest of each type.
+      // An email the action queued nothing for (a local-only mail, one
+      // already in the destination) has nothing on the server to undo.
+      final seqs = action.opSeqs[id] ?? const <int>[];
+      final bool cancelled;
+      if (recorded) {
+        cancelled =
+            seqs.isEmpty || (await repo.cancelOps(seqs)).length == seqs.length;
+      } else {
+        cancelled = await repo.cancelPendingChange(id, 'delete') ||
+            await repo.cancelPendingChange(id, 'move') ||
+            await repo.cancelPendingChange(id, 'snooze');
+      }
 
       try {
         final original = action.originalEmails.isEmpty
@@ -166,6 +181,10 @@ class UndoService extends Notifier<List<UndoAction>> {
               action.sourceMailboxPath,
             );
 
+        // Changes the reverse step queued, per email id (the mail's own and
+        // its counterparts' in paired accounts), to cancel when the
+        // original was.
+        var reverseOps = const <String, List<int>>{};
         if (restoreSnooze && !cancelled) {
           // The move reached the server: snoozing again moves the mail back
           // to Snoozed and re-adds the keyword.
@@ -174,13 +193,37 @@ class UndoService extends Notifier<List<UndoAction>> {
           // 4. Move it back to source.
           // This updates local DB optimistically and (if not cancelled)
           // enqueues a reverse move on the server using the correct UID.
-          await repo.moveEmail(currentId, action.sourceMailboxPath);
+          if (recorded) {
+            final (_, ops) = await repo.captureOps(
+              () => repo.moveEmail(currentId, action.sourceMailboxPath),
+            );
+            reverseOps = ops;
+          } else {
+            await repo.moveEmail(currentId, action.sourceMailboxPath);
+          }
         }
 
         if (cancelled) {
           // 5. If we successfully cancelled the original, the reverse move
           // we just enqueued is redundant.
-          await repo.cancelPendingChange(currentId, 'move');
+          if (recorded) {
+            await repo.cancelOps(reverseOps[currentId] ?? const []);
+            // A counterpart's change (the same mail seen through a paired
+            // account) was mirrored with the original and again with the
+            // reverse step: both go when the original one is cancelled;
+            // otherwise its reverse must stay to undo it on the server.
+            for (final MapEntry(key: twin, value: reverse)
+                in reverseOps.entries) {
+              if (twin == currentId || action.emailIds.contains(twin)) continue;
+              final forward = action.opSeqs[twin] ?? const <int>[];
+              if (forward.isNotEmpty &&
+                  (await repo.cancelOps(forward)).length == forward.length) {
+                await repo.cancelOps(reverse);
+              }
+            }
+          } else {
+            await repo.cancelPendingChange(currentId, 'move');
+          }
           // The server never saw the move, so it still holds the snooze;
           // only the optimistic local clear needs undoing.
           if (restoreSnooze) {
