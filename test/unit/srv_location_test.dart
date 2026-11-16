@@ -32,6 +32,8 @@ void main() {
 
   Future<List<Email>> rows() => db.select(db.emails).get();
   Future<Email> mail() async => (await rows()).single;
+  Future<Email> mail2(String id) async =>
+      (await rows()).singleWhere((e) => e.id == id);
 
   /// The row of a@test once Archive (with its filler) is synced too.
   Future<Email> mailA() async =>
@@ -68,8 +70,10 @@ void main() {
     expect(location(e), ('INBOX', 1, 11));
   });
 
-  test('a refetch during a queued move updates the row, adds no second one',
-      () async {
+  // Not discriminating on its own: the FETCH skips a UID whose move is
+  // queued (#1269) before any lookup. It pins the outcome the location
+  // lookup must keep; the tests around it need the lookup.
+  test('a refetch during a queued move adds no second row', () async {
     await giveStaleId('acc-1:Old:1');
     await emails.moveEmail('acc-1:Old:1', 'Archive');
 
@@ -83,8 +87,10 @@ void main() {
 
   test('a read flag set elsewhere reaches a row shown elsewhere', () async {
     // The row is shown in Archive (its move refused for good), but the
-    // server still has it in INBOX: the flag refresh finds it there.
-    await emails.moveEmail('acc-1:INBOX:1', 'Archive');
+    // server still has it in INBOX: the flag refresh finds it there. Its id
+    // names neither, so neither the id nor the shown folder could find it.
+    await giveStaleId('acc-1:Old:1');
+    await emails.moveEmail('acc-1:Old:1', 'Archive');
     await db.update(db.pendingChanges).write(
           const PendingChangesCompanion(state: Value('failed')),
         );
@@ -136,6 +142,75 @@ void main() {
     expect(server.find('a@test')!.folder.path, 'Archive');
     expect(e.mailboxPath, 'Spam');
     expect(location(e), ('Archive', 2, 22));
+  });
+
+  test('a new mail does not take over the id of another mail', () async {
+    // The row of today's id records another location: its folder was
+    // renamed INBOX → New, and a new INBOX got the old name.
+    await db.update(db.emails).write(
+          const EmailsCompanion(
+            mailboxPath: Value('New'),
+            srvMailboxPath: Value('New'),
+          ),
+        );
+    await db.into(db.emailBodies).insert(
+          EmailBodiesCompanion.insert(
+            emailId: 'acc-1:INBOX:1',
+            textBody: const Value('the other mail'),
+          ),
+        );
+
+    await refetchInbox();
+
+    final byId = {for (final e in await rows()) e.id: e};
+    expect(location(byId['acc-1:INBOX:1']!), ('New', 1, 11));
+    expect(byId['acc-1:INBOX:1']!.mailboxPath, 'New');
+    expect(location(byId['acc-1:INBOX:1#2']!), ('INBOX', 1, 11));
+    expect(byId['acc-1:INBOX:1#2']!.mailboxPath, 'INBOX');
+    final body = await db.select(db.emailBodies).getSingle();
+    expect((body.emailId, body.textBody), ('acc-1:INBOX:1', 'the other mail'));
+  });
+
+  test('a re-key whose id another mail has picks a free one', () async {
+    await emails.syncEmails(_account.id, 'Archive');
+    final mid = (await mail2('acc-1:INBOX:1')).messageId;
+    // Sync already stored the moved mail at its new place, under another
+    // id; and the id the re-key wants belongs to a different mail.
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'acc-1:copy',
+            accountId: 'acc-1',
+            mailboxPath: 'Archive',
+            uid: 2,
+            receivedAt: DateTime(2024),
+            messageId: Value(mid),
+            srvMailboxPath: const Value('Archive'),
+            srvUid: const Value(2),
+            srvUidValidity: const Value(22),
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'acc-1:Archive:2',
+            accountId: 'acc-1',
+            mailboxPath: 'Old',
+            uid: 2,
+            receivedAt: DateTime(2024),
+            messageId: const Value('other@test'),
+            srvMailboxPath: const Value('Old'),
+            srvUid: const Value(2),
+          ),
+        );
+    await emails.moveEmail('acc-1:INBOX:1', 'Archive');
+
+    await emails.flushPendingChanges(_account.id, 'pw');
+
+    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    final byId = {for (final e in await rows()) e.id: e};
+    expect(byId.keys, isNot(contains('acc-1:copy')));
+    expect(location(byId['acc-1:Archive:2#2']!), ('Archive', 2, 22));
+    expect(byId['acc-1:Archive:2#2']!.messageId, mid);
+    expect(location(byId['acc-1:Archive:2']!), ('Old', 2, null));
   });
 
   test('Undo restores a row with its location', () async {

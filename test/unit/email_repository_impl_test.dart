@@ -7545,6 +7545,16 @@ void main() {
                 syncedAt: DateTime.now(),
               ),
             );
+        // No recorded server id: unknown, not missing, so it is kept.
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e-unknown',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+              ),
+            );
         // No JMAP:Reconcile:mbx1 row → reconcile pass runs.
 
         await r.emails.syncEmails('jmap-1', 'mbx1');
@@ -7561,6 +7571,7 @@ void main() {
               .getSingleOrNull(),
           isNotNull,
         );
+        expect(await r.emails.getEmail('jmap-1:e-unknown'), isNotNull);
         // The row cached without a size (before schema v64) gets one.
         final live = await r.emails.getEmail('jmap-1:e-live');
         expect(live!.size, 4321);
@@ -12030,6 +12041,42 @@ void main() {
       expect(restored.bcc.single.name, 'Boss');
       expect(restored.replyTo.single.email, 'help@example.com');
     });
+
+    test('restoreEmails gives a JMAP snapshot without one its server id',
+        () async {
+      final r = _makeRepos();
+      await r.accounts.addAccount(_jmapAccount, 'pw');
+      Email snapshot(String id) => Email(
+            id: id,
+            accountId: 'jmap-1',
+            mailboxPath: 'mbx1',
+            uid: 0,
+            receivedAt: DateTime(2024),
+            from: const [],
+            to: const [],
+            cc: const [],
+            isSeen: false,
+            isFlagged: false,
+            hasAttachment: false,
+          );
+      // Taken before schema v70: no server id in the snapshot.
+      await r.emails.restoreEmails([snapshot('jmap-1:e1')]);
+      expect((await r.emails.getEmail('jmap-1:e1'))!.srvJmapId, 'e1');
+
+      // Another row holds that server id by now: none is recorded.
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:copy',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbx1',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              srvJmapId: const Value('e2'),
+            ),
+          );
+      await r.emails.restoreEmails([snapshot('jmap-1:e2')]);
+      expect((await r.emails.getEmail('jmap-1:e2'))!.srvJmapId, isNull);
+    });
   });
 
   group('getEmailBody identity guard (#616)', () {
@@ -12192,6 +12239,94 @@ void main() {
             ..where((t) => t.emailId.equals('acc-1:INBOX:42')))
           .getSingle();
       expect(cachedBody.textBody, 'Rentenversicherung body');
+    });
+
+    // Behind a queued move the row shows the destination, but the server
+    // still has the mail in the source: that is where it is asked for.
+    Future<_Repos> rigQueuedMove(
+      _MismatchedBodyImapClient client,
+      int uid,
+    ) async {
+      final r = _makeRepos(
+        imapConnect: (Account _, String __, String ___) async => client,
+      );
+      await r.accounts.addAccount(_account, 'pw');
+      final id = 'acc-1:INBOX:$uid';
+      await r.db.into(r.db.emails).insert(
+            EmailsCompanion.insert(
+              id: id,
+              accountId: 'acc-1',
+              mailboxPath: 'Archive',
+              uid: uid,
+              receivedAt: DateTime(2024),
+              messageId: const Value(rowMessageId),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: Value(uid),
+            ),
+          );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: 'acc-1',
+              resourceType: 'Email',
+              resourceId: id,
+              changeType: 'move',
+              payload: jsonEncode({
+                'uid': uid,
+                'mailboxPath': 'INBOX',
+                'dest': 'Archive',
+                'messageId': rowMessageId,
+              }),
+              createdAt: DateTime.now(),
+            ),
+          );
+      return r;
+    }
+
+    test('a mail with a queued move is fetched where the server has it',
+        () async {
+      final client = _MismatchedBodyImapClient(
+        correctMessageId: rowMessageId,
+        wrongMessageId: packageMessageId,
+        correctUid: 42,
+      );
+      final r = await rigQueuedMove(client, 42);
+
+      final body = await r.emails.getEmailBody('acc-1:INBOX:42');
+
+      expect(body.textBody, 'Rentenversicherung body');
+      expect(client.selects, everyElement('INBOX'));
+      expect(client.fetchedUids, [42]);
+
+      client.selects.clear();
+      final raw = await r.emails.fetchRawRfc822('acc-1:INBOX:42');
+      expect(raw, contains('Rentenversicherung body'));
+      expect(client.selects, everyElement('INBOX'));
+      expect(client.selects, isNotEmpty);
+    });
+
+    test('healing a queued-move row keeps it shown where the user put it',
+        () async {
+      final client = _MismatchedBodyImapClient(
+        correctMessageId: rowMessageId,
+        wrongMessageId: packageMessageId,
+        correctUid: 42,
+        searchResults: {
+          'HEADER Message-ID "$rowMessageId"': const [42],
+        },
+      );
+      final r = await rigQueuedMove(client, 6);
+
+      final body = await r.emails.getEmailBody('acc-1:INBOX:6');
+
+      expect(body.textBody, 'Rentenversicherung body');
+      final row = await r.db.select(r.db.emails).getSingle();
+      expect(row.id, 'acc-1:INBOX:42');
+      expect(row.mailboxPath, 'Archive');
+      expect((row.srvMailboxPath, row.srvUid), ('INBOX', 42));
+      // The queued move now names the right UID.
+      final move = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(move.resourceId, 'acc-1:INBOX:42');
+      expect((jsonDecode(move.payload) as Map)['uid'], 42);
     });
   });
 

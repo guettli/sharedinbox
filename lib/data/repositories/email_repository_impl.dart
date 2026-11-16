@@ -915,12 +915,14 @@ class EmailRepositoryImpl implements EmailRepository {
       emailRow.messageId,
     );
     if (resolvedUid != null && resolvedUid != emailRow.imapServerUid) {
-      final newId = '${emailRow.accountId}:$serverPath:$resolvedUid';
-      await _rekeyEmailRow(
+      final newId = await _rekeyEmailRow(
         oldId: emailId,
-        newId: newId,
+        newId: '${emailRow.accountId}:$serverPath:$resolvedUid',
         newUid: resolvedUid,
         newMailboxPath: serverPath,
+        // Behind a queued move the row keeps showing the mail where the
+        // user put it; only its server identity is corrected.
+        keepShownWhileMovedOn: true,
       );
       log(
         'getEmailBody: re-keyed mis-bound row $emailId → $newId after '
@@ -996,7 +998,10 @@ class EmailRepositoryImpl implements EmailRepository {
   /// changes, per-message logs, thread aggregates and undo history — in one
   /// transaction. [newMailboxPath] is where the server has the mail now.
   /// Shared by [_remapEmailAfterImapMove] and the body-fetch identity guard.
-  Future<void> _rekeyEmailRow({
+  ///
+  /// Returns the row's id afterwards: [newId], or a free variant of it
+  /// when another mail's row already has that id.
+  Future<String> _rekeyEmailRow({
     required String oldId,
     required String newId,
     required int newUid,
@@ -1004,8 +1009,10 @@ class EmailRepositoryImpl implements EmailRepository {
     bool keepShownWhileMovedOn = false,
     bool mergeDuplicate = false,
   }) async {
-    if (newId == oldId) return;
+    if (newId == oldId) return oldId;
+    final wantedId = newId;
     var displaced = const <Email>[];
+    Email? idHolder;
     await _db.transaction(() async {
       final oldRow = await (_db.select(_db.emails)
             ..where((t) => t.id.equals(oldId)))
@@ -1021,8 +1028,9 @@ class EmailRepositoryImpl implements EmailRepository {
       // and attachments go with it. Not with [mergeDuplicate] false: the
       // UID was found by Message-ID while a copy with that Message-ID is
       // still in the source, so it may be another copy (cross-posted mail).
-      // Found by the server location, like sync finds it.
-      var existing = oldRow == null
+      // Such a copy is found by the server location, like sync finds it,
+      // and by the id the re-key wants; they can be two rows.
+      final atLocation = oldRow == null
           ? null
           : await _rowAtImapLocation(
               oldRow.accountId,
@@ -1031,20 +1039,27 @@ class EmailRepositoryImpl implements EmailRepository {
               uidValidity: newUidValidity,
               exceptId: oldId,
             );
-      existing ??= await (_db.select(_db.emails)
-            ..where((t) => t.id.equals(newId)))
+      final withId = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(wantedId)))
           .getSingleOrNull();
-      if (mergeDuplicate &&
-          existing != null &&
-          oldRow != null &&
-          existing.messageId != null &&
-          existing.messageId == oldRow.messageId) {
+      var withIdDropped = false;
+      for (final existing in {
+        if (atLocation != null) atLocation.id: atLocation,
+        if (withId != null) withId.id: withId,
+      }.values) {
+        if (!mergeDuplicate ||
+            oldRow == null ||
+            existing.messageId == null ||
+            existing.messageId != oldRow.messageId) {
+          continue;
+        }
         log(
-          'Re-key $oldId → $newId: dropping the copy sync already fetched '
+          'Re-key $oldId → $wantedId: dropping the copy sync already fetched '
           '(${existing.id})',
         );
         final copyId = existing.id;
         await (_db.delete(_db.emails)..where((t) => t.id.equals(copyId))).go();
+        if (copyId == wantedId) withIdDropped = true;
         // The kept row has this app's view of the flags, the dropped one the
         // server's: read them again.
         await _makeFlagReconcileDue(
@@ -1057,6 +1072,12 @@ class EmailRepositoryImpl implements EmailRepository {
           existing.mailboxPath,
           existing.threadId ?? existing.id,
         );
+      }
+      // Another mail's row has the wanted id (e.g. a mail that took over
+      // the id after a folder rename): this row gets a free variant of it.
+      if (oldRow != null && withId != null && !withIdDropped) {
+        idHolder = withId;
+        newId = await _freeEmailId(wantedId);
       }
       // After a move: when a later move, snooze or unsnooze of the mail is
       // still queued (it starts in this move's destination), the row
@@ -1161,6 +1182,8 @@ class EmailRepositoryImpl implements EmailRepository {
       );
     });
     _logLocationReleased(displaced, takenBy: newId);
+    _logIdTaken(idHolder, wanted: wantedId, given: newId);
+    return newId;
   }
 
   /// Points the IMAP payloads of [resourceId]'s queued changes that address
@@ -1758,7 +1781,8 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final byUid = <int, ({bool seen, bool flagged})>{};
     final List<Email> localRows;
-    final affectedThreads = <String>{};
+    // (shown folder, thread id) of each corrected row.
+    final affectedThreads = <(String, String)>{};
     var corrected = 0;
     final flagRead = await _startServerFlagRead(accountId);
     try {
@@ -1775,18 +1799,21 @@ class EmailRepositoryImpl implements EmailRepository {
         );
       }
 
+      // The rows the server has in this folder, wherever they are shown:
+      // a UID names a message only in its server folder.
       localRows = await (_db.select(_db.emails)
             ..where(
               (t) =>
                   t.accountId.equals(accountId) &
-                  t.mailboxPath.equals(mailboxPath),
+                  t.srvMailboxPath.equals(mailboxPath) &
+                  t.srvUid.isNotNull(),
             ))
           .get();
 
       final queuedNow = await _inFlightFlagResourceIds(accountId);
 
       for (final row in localRows) {
-        final serverFlags = byUid[row.uid];
+        final serverFlags = byUid[row.srvUid];
         if (serverFlags == null) continue; // handled by _reconcileDeletedImap
         if (serverFlags.seen == row.isSeen &&
             serverFlags.flagged == row.isFlagged) {
@@ -1801,25 +1828,21 @@ class EmailRepositoryImpl implements EmailRepository {
             isFlagged: Value(serverFlags.flagged),
           ),
         );
-        affectedThreads.add(row.threadId ?? row.id);
+        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
         corrected++;
       }
     } finally {
       _endServerFlagRead();
     }
 
-    for (final tid in affectedThreads) {
-      await _updateThread(accountId, mailboxPath, tid);
+    for (final (shownIn, tid) in affectedThreads) {
+      await _updateThread(accountId, shownIn, tid);
     }
     await _backfillImapSizes(
       client,
       [
         for (final row in localRows)
-          if (row.sizeBytes == null &&
-              !row.isLocal &&
-              row.uid > 0 &&
-              byUid.containsKey(row.uid))
-            row,
+          if (row.sizeBytes == null && byUid.containsKey(row.srvUid)) row,
       ],
     );
 
@@ -1847,7 +1870,8 @@ class EmailRepositoryImpl implements EmailRepository {
     imap.ImapClient client,
     List<Email> rows,
   ) async {
-    final idByUid = {for (final r in rows) r.uid: r.id};
+    // Rows of the selected folder, by the UID the server has them under.
+    final idByUid = {for (final r in rows) r.srvUid!: r.id};
     final uids = idByUid.keys.toList();
     for (var i = 0; i < uids.length; i += _imapSizeBackfillBatch) {
       final batch =
@@ -1980,6 +2004,8 @@ class EmailRepositoryImpl implements EmailRepository {
     // (emailId, subject, size) of each row stored for the first time — logged
     // after the transaction so "Show Logs" starts with the fetch (#920).
     final newlyStored = <(String, String?, int?)>[];
+    // New rows that got a variant of today's id (see [_newImapRowId]).
+    final idsTaken = <(String, String)>[];
     await _db.transaction(() async {
       final queuedNow = await _inFlightFlagResourceIds(account.id);
       for (final msg in fetch.messages) {
@@ -2018,7 +2044,12 @@ class EmailRepositoryImpl implements EmailRepository {
           uid,
           uidValidity: uidValidity,
         );
-        final emailId = known?.id ?? '${account.id}:$mailboxPath:$uid';
+        final emailId =
+            known?.id ?? await _newImapRowId(account.id, mailboxPath, uid);
+        final todaysId = '${account.id}:$mailboxPath:$uid';
+        if (emailId != todaysId && known == null) {
+          idsTaken.add((todaysId, emailId));
+        }
         final serverEmailId = serverEmailIdByUid[uid];
         final msgId = normaliseMessageId(envelope.messageId);
         final inReplyTo = normaliseMessageId(envelope.inReplyTo);
@@ -2055,8 +2086,8 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
-        // Without a known row the insert can still hit a row of that id
-        // whose location is not recorded (e.g. restored by an Undo).
+        // Without a known row the insert can still take over a row of that
+        // id whose location is not recorded (e.g. restored by an Undo).
         final isNew = known == null &&
             await (_db.selectOnly(_db.emails)
                       ..addColumns([_db.emails.id])
@@ -2137,6 +2168,12 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     });
     // Outside the transaction: the app log writes through the same database.
+    for (final (wanted, given) in idsTaken) {
+      final holder = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(wanted)))
+          .getSingleOrNull();
+      _logIdTaken(holder, wanted: wanted, given: given);
+    }
     for (final (emailId, subject, size) in newlyStored) {
       _logEmailFetched(
         emailId: emailId,
@@ -2332,6 +2369,64 @@ class EmailRepositoryImpl implements EmailRepository {
             )
             ..limit(1))
           .getSingleOrNull();
+
+  /// [base] when no row has that id (or [takeOver] accepts the row that
+  /// has it), else the first of `base#2`, `base#3`, … that no row has. A
+  /// row whose id another mail's row already has gets such a variant
+  /// (SYNC-REDESIGN.md phase 2b replaces this with opaque ids).
+  Future<String> _freeEmailId(
+    String base, {
+    bool Function(Email row)? takeOver,
+  }) async {
+    var id = base;
+    for (var n = 2;; n++) {
+      final candidate = id;
+      final row = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(candidate)))
+          .getSingleOrNull();
+      if (row == null || (takeOver?.call(row) ?? false)) return id;
+      id = '$base#$n';
+    }
+  }
+
+  /// For a new IMAP row: [_freeEmailId] of today's id. A row of that id
+  /// without a recorded location (e.g. restored from a pre-v70 Undo
+  /// snapshot) is the same mail and taken over; one recording another
+  /// location is another mail (it outlived a UIDVALIDITY reset, or its
+  /// folder was renamed and a new folder got the old name) and keeps its
+  /// id, body and flags.
+  Future<String> _newImapRowId(
+    String accountId,
+    String mailboxPath,
+    int uid,
+  ) =>
+      _freeEmailId(
+        '$accountId:$mailboxPath:$uid',
+        takeOver: (row) =>
+            !row.isLocal && row.srvUid == null && row.srvJmapId == null,
+      );
+
+  /// App Log line when a mail got a variant of the id it would have had,
+  /// because another mail's row ([holder]) has that id.
+  void _logIdTaken(
+    Email? holder, {
+    required String wanted,
+    required String given,
+  }) {
+    if (holder == null || wanted == given) return;
+    unawaited(
+      _appLogger?.warn(
+        'email.id_taken',
+        'Stored a message as $given: $wanted already belongs to '
+            '"${holder.subject ?? '(no subject)'}", which the server had at '
+            'UID ${holder.srvUid} in ${holder.srvMailboxPath}.',
+        accountId: holder.accountId,
+        mailboxPath: holder.mailboxPath,
+        emailId: given,
+        data: {'otherEmailId': holder.id},
+      ),
+    );
+  }
 
   /// Clears the recorded server location of the rows other than [exceptId]
   /// that hold this IMAP location, because the server just gave it to
@@ -4026,7 +4121,9 @@ class EmailRepositoryImpl implements EmailRepository {
       // Local self-sent "virtual" rows have no server counterpart and must
       // survive until the real message arrives and dissolves them (#545).
       if (row.isLocal) continue;
-      if (serverIds.contains(row.srvJmapId)) continue;
+      // No recorded server id: unknown is not missing.
+      final jmapId = row.srvJmapId;
+      if (jmapId == null || serverIds.contains(jmapId)) continue;
       if (inFlightSet.contains(row.id)) continue;
       affectedThreads.add(row.threadId ?? row.id);
       await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
@@ -7203,67 +7300,86 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<void> restoreEmails(List<model.Email> emails) async {
+    final accountTypes = <String, account_model.AccountType?>{};
     for (final e in emails) {
-      // The snapshot's server location, unless another row holds it by now
-      // (a sync stored the mail again meanwhile): one location, one row.
-      // A snapshot without one (taken before schema v70) leaves the stored
-      // location alone; the next sync records it.
-      var srvPath = e.srvMailboxPath;
-      var srvUid = e.srvUid;
-      var srvJmapId = e.srvJmapId;
-      if (srvPath != null &&
-          srvUid != null &&
-          await _rowAtImapLocation(
-                e.accountId,
-                srvPath,
-                srvUid,
-                uidValidity: e.srvUidValidity,
-                exceptId: e.id,
-              ) !=
-              null) {
-        srvPath = null;
-        srvUid = null;
-      }
-      if (srvJmapId != null) {
-        final holder = await _rowByJmapId(e.accountId, srvJmapId);
-        if (holder != null && holder.id != e.id) srvJmapId = null;
-      }
-      final imapKnown = srvPath != null && srvUid != null;
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: e.id,
-              accountId: e.accountId,
-              mailboxPath: e.mailboxPath,
-              uid: e.uid,
-              subject: Value(e.subject),
-              sentAt: Value(e.sentAt),
-              receivedAt: e.receivedAt,
-              fromJson: Value(jsonEncode(e.from)),
-              toAddresses: Value(jsonEncode(e.to)),
-              ccJson: Value(jsonEncode(e.cc)),
-              replyToJson: Value(jsonEncode(e.replyTo)),
-              bccJson: Value(jsonEncode(e.bcc)),
-              sizeBytes: Value(e.size),
-              preview: Value(e.preview),
-              isSeen: Value(e.isSeen),
-              isFlagged: Value(e.isFlagged),
-              hasAttachment: Value(e.hasAttachment),
-              threadId: Value(e.threadId),
-              messageId: Value(e.messageId),
-              inReplyTo: Value(e.inReplyTo),
-              references: Value(e.references),
-              snoozedUntil: Value(e.snoozedUntil),
-              snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
-              srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
-              srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
-              srvUidValidity:
-                  imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
-              srvJmapId:
-                  srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
-            ),
-          );
-      await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
+      final type = accountTypes[e.accountId] ??=
+          (await _accounts.getAccount(e.accountId))?.type;
+      // One transaction: a sync storing the mail meanwhile must not take
+      // the location between the check and the write.
+      await _db.transaction(() => _restoreEmail(e, type));
     }
+  }
+
+  /// [restoreEmails] for one row, with the snapshot's server location
+  /// unless another row holds it by now (a sync stored the mail again
+  /// meanwhile): one location, one row. A snapshot taken before schema v70
+  /// has none: a JMAP row's server id is then the one in its id; an IMAP
+  /// row keeps what is stored and the next sync records it.
+  Future<void> _restoreEmail(
+    model.Email e,
+    account_model.AccountType? type,
+  ) async {
+    var srvPath = e.srvMailboxPath;
+    var srvUid = e.srvUid;
+    var srvJmapId = e.srvJmapId;
+    if (srvJmapId == null &&
+        !e.isLocal &&
+        type == account_model.AccountType.jmap &&
+        e.id.startsWith('${e.accountId}:')) {
+      srvJmapId = e.id.substring(e.accountId.length + 1);
+    }
+    if (srvPath != null &&
+        srvUid != null &&
+        await _rowAtImapLocation(
+              e.accountId,
+              srvPath,
+              srvUid,
+              uidValidity: e.srvUidValidity,
+              exceptId: e.id,
+            ) !=
+            null) {
+      srvPath = null;
+      srvUid = null;
+    }
+    if (srvJmapId != null) {
+      final holder = await _rowByJmapId(e.accountId, srvJmapId);
+      if (holder != null && holder.id != e.id) srvJmapId = null;
+    }
+    final imapKnown = srvPath != null && srvUid != null;
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          EmailsCompanion.insert(
+            id: e.id,
+            accountId: e.accountId,
+            mailboxPath: e.mailboxPath,
+            uid: e.uid,
+            subject: Value(e.subject),
+            sentAt: Value(e.sentAt),
+            receivedAt: e.receivedAt,
+            fromJson: Value(jsonEncode(e.from)),
+            toAddresses: Value(jsonEncode(e.to)),
+            ccJson: Value(jsonEncode(e.cc)),
+            replyToJson: Value(jsonEncode(e.replyTo)),
+            bccJson: Value(jsonEncode(e.bcc)),
+            sizeBytes: Value(e.size),
+            preview: Value(e.preview),
+            isSeen: Value(e.isSeen),
+            isFlagged: Value(e.isFlagged),
+            hasAttachment: Value(e.hasAttachment),
+            threadId: Value(e.threadId),
+            messageId: Value(e.messageId),
+            inReplyTo: Value(e.inReplyTo),
+            references: Value(e.references),
+            snoozedUntil: Value(e.snoozedUntil),
+            snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
+            srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
+            srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
+            srvUidValidity:
+                imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
+            srvJmapId:
+                srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
+          ),
+        );
+    await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
   }
 
   /// Applies locally stored active Sieve rules to INBOX emails that have not
@@ -8765,7 +8881,7 @@ class EmailRepositoryImpl implements EmailRepository {
     final newId = '${row.accountId}:$destMailboxPath:$newUid';
     if (newId == oldId) return;
 
-    await _rekeyEmailRow(
+    final rekeyedId = await _rekeyEmailRow(
       oldId: oldId,
       newId: newId,
       newUid: newUid,
@@ -8775,7 +8891,7 @@ class EmailRepositoryImpl implements EmailRepository {
     );
 
     // Rebuild thread aggregates in both mailboxes from the now-updated emails.
-    final threadId = row.threadId ?? newId;
+    final threadId = row.threadId ?? rekeyedId;
     await _updateThread(row.accountId, row.mailboxPath, threadId);
     await _updateThread(row.accountId, destMailboxPath, threadId);
   }
@@ -9435,7 +9551,7 @@ class EmailRepositoryImpl implements EmailRepository {
         : (jmapId != null ? await _rowByJmapId(accountId, jmapId) : null);
     final serverId = known?.id ??
         (uid != null
-            ? '$accountId:$mailboxPath:$uid'
+            ? await _newImapRowId(accountId, mailboxPath, uid)
             : (jmapId != null ? '$accountId:$jmapId' : null));
     if (serverId == null && mid == null) return;
     final emailId = serverId ?? '$accountId:$_localSentIdMarker:$mid';

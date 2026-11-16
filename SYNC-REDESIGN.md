@@ -509,12 +509,18 @@ As implemented, phase 2 is a series of PRs:
    (fetch upsert, CONDSTORE flag refresh, JMAP upsert, disclaimed and
    destroyed ids, JMAP prune and flag reconcile, the failed-move revert),
    and server calls about a row use them (body fetch and its healing,
-   attachment download, raw message, JMAP flush, the debug probe). New rows
-   still get today's ids, and re-keys still happen. Left for later: the
-   folder-scoped scans still filter by `mailbox_path` (phase 4); a new row's
-   insert still builds today's id and so also hits a row of that id whose
-   location is not recorded; the JMAP flush parses the resource id when the
-   row is gone; background notifications build `account:INBOX:uid`.
+   attachment download, raw message, JMAP flush, the debug probe). The
+   periodic IMAP flag reconcile and size backfill already scan by
+   `srv_mailbox_path`. New rows still get today's ids, and re-keys still
+   happen. When another mail's row already has that id (it outlived a
+   UIDVALIDITY reset, or a renamed folder's old name came back), the new
+   row or the re-key gets `id#2`, `#3`, … instead of overwriting it; a row
+   of that id without a recorded location is taken over. A JMAP row without
+   a recorded id is never pruned as gone. Left for later: the other
+   folder-scoped scans still filter by `mailbox_path` (phase 4); the JMAP
+   flush parses the resource id when the row is gone, and Undo's restore of
+   a pre-v70 JMAP snapshot takes the id from the row id; background
+   notifications build `account:INBOX:uid`.
 2. **2b (planned):** an opaque id generator for new rows, and a check that
    bans building and parsing ids.
 3. **2c (planned):** frozen ids: every re-key becomes an update of the

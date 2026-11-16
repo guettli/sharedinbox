@@ -110,6 +110,9 @@ rewritten by the move remap below (opaque, frozen ids are SYNC-REDESIGN.md phase
 a folder rename only rewrites `mailbox_path` and `srv_mailbox_path`, so the id of
 such a row names the old path. When the server gives a location to another row's
 mail (a re-key), a stale row still recording it gives it up, with an App Log line.
+When a new row's id (or a re-key's) already belongs to another mail's row, the new
+one gets `id#2`, `#3`, … and an App Log line, so the other mail keeps its body,
+flags and queued changes.
 
 **IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
 its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the local row
