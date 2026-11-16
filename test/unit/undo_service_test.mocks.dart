@@ -609,6 +609,35 @@ class MockEmailRepository extends _i1.Mock implements _i3.EmailRepository {
       ) as _i4.Future<bool>);
 
   @override
+  _i4.Future<(T, Map<String, List<int>>)> captureOps<T>(
+          _i4.Future<T> Function()? apply) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #captureOps,
+          [apply],
+        ),
+        returnValue: _i4.Future<(T, Map<String, List<int>>)>.value((
+          _i5.dummyValue<T>(
+            this,
+            Invocation.method(
+              #captureOps,
+              [apply],
+            ),
+          ),
+          <String, List<int>>{}
+        )),
+      ) as _i4.Future<(T, Map<String, List<int>>)>);
+
+  @override
+  _i4.Future<Set<int>> cancelOps(Iterable<int>? ids) => (super.noSuchMethod(
+        Invocation.method(
+          #cancelOps,
+          [ids],
+        ),
+        returnValue: _i4.Future<Set<int>>.value(<int>{}),
+      ) as _i4.Future<Set<int>>);
+
+  @override
   _i4.Future<void> snoozeEmail(
     String? emailId,
     DateTime? until,

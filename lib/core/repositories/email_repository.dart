@@ -204,6 +204,17 @@ abstract class EmailRepository {
   /// queue. Returns true if a pending change was found and removed.
   Future<bool> cancelPendingChange(String emailId, String changeType);
 
+  /// Runs [apply] and returns its result with the queued changes it created,
+  /// as ids (in queue order) per email id. Undo stores them to cancel exactly
+  /// those changes later ([cancelOps]).
+  Future<(T, Map<String, List<int>>)> captureOps<T>(Future<T> Function() apply);
+
+  /// Cancels the queued changes [ids] that nothing was sent for yet (not
+  /// claimed by a flush, no attempt), latest first, as [cancelPendingChange]
+  /// does. Returns the ids it cancelled; an id that is gone (applied,
+  /// superseded, discarded) or may have reached the server is not.
+  Future<Set<int>> cancelOps(Iterable<int> ids);
+
   /// Snoozes the email until [until]. It will be moved to a "Snoozed" mailbox.
   Future<void> snoozeEmail(String emailId, DateTime until);
 

@@ -5896,7 +5896,7 @@ class EmailRepositoryImpl implements EmailRepository {
       }
     }
 
-    await _db.into(_db.pendingChanges).insert(
+    final seq = await _db.into(_db.pendingChanges).insert(
           PendingChangesCompanion.insert(
             accountId: accountId,
             resourceType: 'Email',
@@ -5906,6 +5906,9 @@ class EmailRepositoryImpl implements EmailRepository {
             createdAt: DateTime.now(),
           ),
         );
+    (Zone.current[_captureOpsKey] as Map<String, List<int>>?)
+        ?.putIfAbsent(resourceId, () => [])
+        .add(seq);
     // Again after the insert: a read that started during the awaits above
     // took its sequence after the first note and read the queue before this
     // row existed, so without this the change could flush unseen by it.
@@ -6234,6 +6237,46 @@ class EmailRepositoryImpl implements EmailRepository {
         .map((r) => r.read(_db.pendingChanges.resourceId)!)
         .get();
     return ids.toSet();
+  }
+
+  @override
+  Future<(T, Map<String, List<int>>)> captureOps<T>(
+    Future<T> Function() apply,
+  ) async {
+    final ops = <String, List<int>>{};
+    final result = await runZoned(apply, zoneValues: {_captureOpsKey: ops});
+    // A copy: work [apply] left running must not add to it later.
+    final copy = {
+      for (final e in ops.entries) e.key: [...e.value],
+    };
+    return (result, copy);
+  }
+
+  @override
+  Future<Set<int>> cancelOps(Iterable<int> ids) async {
+    final cancelled = <int>{};
+    // Latest first, as an Undo of several steps would cancel them.
+    for (final id in ids.toSet().toList()..sort((a, b) => b.compareTo(a))) {
+      final row = await (_db.select(_db.pendingChanges)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      // Only one nothing was sent for (see [_claimPendingChange]).
+      if (row == null) continue;
+      final count = await (_db.delete(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.id.equals(id) &
+                  t.state.equals(_pendingState) &
+                  t.attempts.equals(0),
+            ))
+          .go();
+      if (count == 0) continue;
+      cancelled.add(id);
+      if (_locationChangeTypes.contains(row.changeType)) {
+        await _unmarkAfterCancelledMove(row);
+      }
+    }
+    return cancelled;
   }
 
   @override
@@ -7799,8 +7842,6 @@ class EmailRepositoryImpl implements EmailRepository {
         'UIDVALIDITY of $mailboxPath changed ($stamped → '
         '$selectedUidValidity) and ${uids.isEmpty ? 'no' : 'more than one'} '
         'message matches its Message-ID',
-        // Only after a real search: none is made without a Message-ID.
-        noMatch: uids.isEmpty && messageId != null && messageId.isNotEmpty,
       );
     }
     log(
@@ -7913,30 +7954,6 @@ class EmailRepositoryImpl implements EmailRepository {
         await _recordChangeError(row, e);
         log('IMAP flush for ${account.id} stopped: connection lost ($e)');
         return (applied: 0, connectionLost: e);
-      }
-      if (e is _ImapUidValidityChangedException &&
-          e.noMatch &&
-          row.changeType == 'delete') {
-        // A delete for good of a mail that is not in the renumbered folder
-        // any more: its intent is satisfied (SYNC-REDESIGN.md §5). The stale
-        // UID was not touched.
-        final owned = await (_db.delete(_db.pendingChanges)
-                  ..where((t) => _ownsClaim(t, row)))
-                .go() >
-            0;
-        if (!owned) return (applied: 0, connectionLost: null);
-        log('IMAP change ${row.id} skipped: message already gone ($e)');
-        unawaited(
-          _appLogger?.info(
-            'pending_change.skipped_gone',
-            'Skipped ${_describeChange(row)} — message already gone on '
-                'the server',
-            accountId: account.id,
-            emailId: row.resourceId,
-            data: {'changeType': row.changeType},
-          ),
-        );
-        return (applied: 1, connectionLost: null);
       }
       if (e is _ImapUidValidityChangedException) {
         // The folder was renumbered and the message cannot be identified
@@ -11587,6 +11604,10 @@ Map<String, dynamic> _jmapBodyStructureToJson(Map<String, dynamic> m) => {
 /// [_BulkScope].
 final _bulkScopeKey = Object();
 
+/// Zone key under which [EmailRepositoryImpl.captureOps] collects the ids of
+/// the changes queued meanwhile, per email id.
+final _captureOpsKey = Object();
+
 /// Zone key under which [EmailRepositoryImpl.flushPendingChanges] publishes
 /// its claim token, which every change it claims carries, so it can release
 /// exactly those if it ends without settling one.
@@ -11661,13 +11682,9 @@ class _ImapSourceMailboxGoneException implements Exception {
 /// A queued IMAP change whose folder's UIDVALIDITY changed, and whose
 /// message is not found exactly once again by Message-ID.
 class _ImapUidValidityChangedException implements Exception {
-  _ImapUidValidityChangedException(this.message, {this.noMatch = false});
+  _ImapUidValidityChangedException(this.message);
 
   final String message;
-
-  /// No message in the folder has the change's Message-ID: the mail is not
-  /// there any more.
-  final bool noMatch;
 
   @override
   String toString() => message;

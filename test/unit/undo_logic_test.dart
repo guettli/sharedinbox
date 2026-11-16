@@ -572,4 +572,163 @@ void main() {
     final changes = await db.select(db.pendingChanges).get();
     expect(changes.map((c) => c.changeType), ['move']);
   });
+
+  group('Undo by recorded change ids', () {
+    const emailId = 'acc1:101';
+
+    Future<UndoAction> deleteRecorded() async {
+      final original = (await repo.getEmail(emailId))!;
+      final (dest, ops) =
+          await repo.captureOps(() => repo.deleteEmail(emailId));
+      expect(ops.keys, [emailId]);
+      return UndoAction(
+        id: 'undo-ids',
+        accountId: 'acc1',
+        type: UndoType.delete,
+        emailIds: const [emailId],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: dest,
+        originalEmails: [original],
+        opSeqs: ops,
+      );
+    }
+
+    test('cancels exactly the recorded change and its own reverse', () async {
+      final action = await deleteRecorded();
+      final undo = container.read(undoServiceProvider.notifier);
+      await undo.pushAction(action);
+
+      await undo.undo();
+
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+      expect((await repo.getEmail(emailId))!.mailboxPath, 'INBOX');
+    });
+
+    test('queues a reverse move once a flush has claimed the change', () async {
+      final action = await deleteRecorded();
+      // As if a flush were sending it.
+      await db.update(db.pendingChanges).write(
+            PendingChangesCompanion(
+              state: const Value('inflight'),
+              leaseUntil: Value(DateTime.now().add(const Duration(minutes: 5))),
+            ),
+          );
+      final undo = container.read(undoServiceProvider.notifier);
+      await undo.pushAction(action);
+
+      await undo.undo();
+
+      final changes = await db.select(db.pendingChanges).get();
+      expect(
+        [for (final c in changes) '${c.changeType} ${c.state}'],
+        ['move inflight', 'move pending'],
+      );
+      expect((await repo.getEmail(emailId))!.mailboxPath, 'INBOX');
+    });
+
+    test('cancelOps leaves changes that were sent or are gone', () async {
+      final (_, ops) =
+          await repo.captureOps(() => repo.setFlag(emailId, seen: true));
+      final seq = ops[emailId]!.single;
+      await (db.update(db.pendingChanges)..where((t) => t.id.equals(seq)))
+          .write(const PendingChangesCompanion(attempts: Value(1)));
+
+      expect(await repo.cancelOps([seq, 9999]), isEmpty);
+      expect(await db.select(db.pendingChanges).get(), hasLength(1));
+    });
+
+    test('the recorded ids survive the undo log', () async {
+      final action = await deleteRecorded();
+      final copy = UndoAction.fromJson(
+        jsonDecode(jsonEncode(action.toJson())) as Map<String, dynamic>,
+      );
+      expect(copy.opSeqs, action.opSeqs);
+      expect(
+        UndoAction.fromJson(
+          (jsonDecode(jsonEncode(action.toJson())) as Map<String, dynamic>)
+            ..remove('opSeqs'),
+        ).opSeqs,
+        isEmpty,
+      );
+    });
+  });
+
+  test('Undo cancels the change mirrored to a paired account too', () async {
+    // The same mailbox seen through IMAP and JMAP: a move is mirrored.
+    await accounts.addAccount(
+      const Account(
+        id: 'imap-p',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        imapHost: 'mail.example.com',
+        smtpHost: 'smtp.example.com',
+      ),
+      'pw',
+    );
+    await accounts.addAccount(
+      const Account(
+        id: 'jmap-p',
+        displayName: 'Bob',
+        email: 'bob@example.com',
+        type: AccountType.jmap,
+        jmapUrl: 'https://mail.example.com/.well-known/jmap',
+      ),
+      'pw',
+    );
+    for (final (acc, path, role) in [
+      ('imap-p', 'INBOX', 'inbox'),
+      ('imap-p', 'Archive', 'archive'),
+      ('jmap-p', 'mbx-inbox', 'inbox'),
+      ('jmap-p', 'mbx-archive', 'archive'),
+    ]) {
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: '$acc:$path',
+              accountId: acc,
+              path: path,
+              name: path,
+              role: Value(role),
+            ),
+          );
+    }
+    for (final (id, acc, path, mid) in [
+      ('imap-p:5', 'imap-p', 'INBOX', '<pair@example.com>'),
+      ('jmap-p:e1', 'jmap-p', 'mbx-inbox', 'pair@example.com'),
+    ]) {
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: id,
+              accountId: acc,
+              mailboxPath: path,
+              uid: id == 'imap-p:5' ? 5 : 0,
+              receivedAt: DateTime(2024),
+              messageId: Value(mid),
+            ),
+          );
+    }
+    final original = (await repo.getEmail('imap-p:5'))!;
+    final (_, ops) =
+        await repo.captureOps(() => repo.moveEmail('imap-p:5', 'Archive'));
+    expect(ops.keys, containsAll(['imap-p:5', 'jmap-p:e1']));
+    final undo = container.read(undoServiceProvider.notifier);
+    await undo.pushAction(
+      UndoAction(
+        id: 'undo-pair',
+        accountId: 'imap-p',
+        type: UndoType.move,
+        emailIds: const ['imap-p:5'],
+        sourceMailboxPath: 'INBOX',
+        destinationMailboxPath: 'Archive',
+        originalEmails: [original],
+        opSeqs: ops,
+      ),
+    );
+
+    await undo.undo();
+
+    // Nothing reached the server: nothing left to send, for either account.
+    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    expect((await repo.getEmail('imap-p:5'))!.mailboxPath, 'INBOX');
+    expect((await repo.getEmail('jmap-p:e1'))!.mailboxPath, 'mbx-inbox');
+  });
 }
