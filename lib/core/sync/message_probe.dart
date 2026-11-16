@@ -107,12 +107,15 @@ class ProbeResult {
 /// compared field-by-field against the locally cached copy. See
 /// [MessageDebugScreen] for the caller.
 abstract class MessageProbe {
+  /// [mailboxPath] and [uid] (IMAP) or [jmapId] (JMAP) say where the server
+  /// has the message: its recorded server location, not the folder it is
+  /// shown in.
   Future<ProbeResult> fetch({
     required Account account,
     required String password,
     required String mailboxPath,
-    required String emailId,
     required int uid,
+    String? jmapId,
   });
 }
 
@@ -131,8 +134,8 @@ class MessageProbeImpl implements MessageProbe {
     required Account account,
     required String password,
     required String mailboxPath,
-    required String emailId,
     required int uid,
+    String? jmapId,
   }) async {
     try {
       switch (account.type) {
@@ -144,11 +147,16 @@ class MessageProbeImpl implements MessageProbe {
             uid: uid,
           );
         case AccountType.jmap:
+          if (jmapId == null) {
+            return const ProbeResult.error(
+              'No server id is recorded for this message',
+            );
+          }
           return await _fetchJmap(
             account: account,
             password: password,
             mailboxPath: mailboxPath,
-            emailId: emailId,
+            jmapId: jmapId,
           );
       }
     } on SocketException catch (e) {
@@ -228,23 +236,16 @@ class MessageProbeImpl implements MessageProbe {
     required Account account,
     required String password,
     required String mailboxPath,
-    required String emailId,
+    required String jmapId,
   }) async {
-    final jmapUrl = account.jmapUrl;
-    if (jmapUrl == null || jmapUrl.isEmpty) {
-      return const ProbeResult.error('Account has no JMAP URL configured');
-    }
-    final username =
-        account.username.isNotEmpty ? account.username : account.email;
-    final jmap = await JmapClient.connect(
+    final jmap = await JmapClient.connectAccount(
       httpClient: _httpClient,
-      jmapUrl: Uri.parse(jmapUrl),
-      username: username,
+      account: account,
       password: password,
     );
-    final jmapId = emailId.contains(':')
-        ? emailId.substring(emailId.indexOf(':') + 1)
-        : emailId;
+    if (jmap == null) {
+      return const ProbeResult.error('Account has no JMAP URL configured');
+    }
 
     final responses = await jmap.call([
       [

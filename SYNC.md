@@ -96,17 +96,33 @@ cycle, `SELECT` fails with `NO [NONEXISTENT]`; the email loop catches that, prun
 local cache, and returns zero instead of surfacing an error. The UI's email list bounces
 the user back to the account's folder list when the currently open folder disappears.
 
+**Row identity** — every `emails` row records where the server has the message:
+`srv_mailbox_path`, `srv_uid` and `srv_uid_validity` (IMAP) or `srv_jmap_id` (JMAP),
+unique per account (schema v70). Sync finds the row of a server message by these
+columns, never by building or parsing the row id, and never by the shown
+`mailbox_path`: behind a queued move that already names the destination, so a
+re-fetch of the source would otherwise insert a second row. Server calls about a row
+(body fetch, attachment download, raw message, JMAP flush) use them too. A row whose
+location is unknown matches a known UIDVALIDITY as well; a row stamped with another
+UIDVALIDITY is another message. Local virtual rows (§8a) have none. The row id is
+still built as `accountId:mailboxPath:uid` / `accountId:jmapId` for a new row and
+rewritten by the move remap below (opaque, frozen ids are SYNC-REDESIGN.md phase 2);
+a folder rename only rewrites `mailbox_path` and `srv_mailbox_path`, so the id of
+such a row names the old path. When the server gives a location to another row's
+mail (a re-key), a stale row still recording it gives it up, with an App Log line.
+
 **IMAP move remap** — IMAP UIDs are mailbox-scoped, so a moved message gets a new UID in
 its destination folder. When a `move`/`snooze`/`unsnooze` change is flushed, the local row
-id (`accountId:mailboxPath:uid`) is rewritten in place to point at the new UID. The new
+id (`accountId:mailboxPath:uid`) is rewritten in place to point at the new UID, and the
+row's server location follows. The new
 UID is taken from the RFC 4315 `COPYUID` response code returned by `MOVE`; if the server
 does not advertise `UIDPLUS`, a `UID SEARCH HEADER Message-ID …` in the destination
 mailbox is used as a fallback. `email_bodies`, `threads`, `pending_changes`, and
 `undo_actions` rows that reference the old id are updated atomically so cached bodies and
 pending undo operations keep tracking the same physical message. When a later move,
 snooze or unsnooze of the mail is still queued (it starts in this move's destination),
-only the row's id and UID follow the server: the row keeps showing the mail where the
-user's last move put it (#1276). Deletion reconciliation
+only the row's id, UID and server location follow the server: the row keeps showing the
+mail where the user's last move put it (#1276). Deletion reconciliation
 also skips rows whose move is still queued, so the optimistic local move never gets
 wiped mid-flight.
 

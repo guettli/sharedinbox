@@ -832,6 +832,8 @@ void main() {
               mailboxPath: 'INBOX',
               uid: 50,
               receivedAt: DateTime(2024),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(50),
             ),
           );
       await r.db.into(r.db.emails).insert(
@@ -841,6 +843,8 @@ void main() {
               mailboxPath: 'Archive',
               uid: 50,
               receivedAt: DateTime(2024, 1, 2),
+              srvMailboxPath: const Value('Archive'),
+              srvUid: const Value(50),
             ),
           );
 
@@ -973,6 +977,8 @@ void main() {
                 mailboxPath: 'INBOX',
                 uid: 1,
                 receivedAt: DateTime(2024),
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: const Value(1),
               ),
             );
 
@@ -1003,6 +1009,8 @@ void main() {
                 mailboxPath: 'INBOX',
                 uid: 1,
                 receivedAt: DateTime(2024),
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: const Value(1),
               ),
             );
 
@@ -3312,6 +3320,7 @@ void main() {
               mailboxPath: 'inbox-mbx',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -3762,6 +3771,7 @@ void main() {
                 uid: 0,
                 subject: const Value('First'),
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
               ),
             );
         for (final resourceType in ['Email', 'JMAP:Reconcile:mbx1']) {
@@ -4767,6 +4777,8 @@ void main() {
                 mailboxPath: 'INBOX',
                 uid: 5,
                 receivedAt: DateTime(2024),
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: const Value(5),
               ),
             );
 
@@ -4801,6 +4813,8 @@ void main() {
                 mailboxPath: 'INBOX',
                 uid: 5,
                 receivedAt: DateTime(2024),
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: const Value(5),
               ),
             );
 
@@ -4924,6 +4938,7 @@ void main() {
               mailboxPath: 'mbx-inbox',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -4966,6 +4981,7 @@ void main() {
               mailboxPath: 'mbx-inbox',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -5152,6 +5168,8 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               messageId: const Value('<m1@example.com>'),
+              srvMailboxPath: const Value('Snoozed'),
+              srvUid: const Value(5),
             ),
           );
       await r.db.into(r.db.pendingChanges).insert(
@@ -5654,6 +5672,8 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               messageId: const Value('<m1@example.com>'),
+              srvMailboxPath: const Value('Archive'),
+              srvUid: const Value(5),
             ),
           );
 
@@ -5696,6 +5716,8 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               messageId: const Value('<m1@example.com>'),
+              srvMailboxPath: const Value('Archive'),
+              srvUid: const Value(5),
             ),
           );
 
@@ -5725,6 +5747,7 @@ void main() {
               snoozedUntil: Value(
                 DateTime.now().subtract(const Duration(hours: 1)),
               ),
+              srvJmapId: const Value('e1'),
             ),
           );
       await r.emails.wakeUpEmails('jmap-1');
@@ -5794,6 +5817,7 @@ void main() {
               mailboxPath: 'mbx-inbox',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -5831,6 +5855,8 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               messageId: const Value('<m1@example.com>'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(5),
             ),
           );
 
@@ -5876,6 +5902,7 @@ void main() {
               uid: 0,
               receivedAt: DateTime(2024),
               messageId: const Value('abc@example.com'),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -5945,6 +5972,7 @@ void main() {
               messageId: const Value('abc@example.com'),
               snoozedUntil: Value(past),
               snoozedFromMailboxPath: const Value('INBOX'),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -5991,6 +6019,7 @@ void main() {
               messageId: const Value('abc@example.com'),
               snoozedUntil: Value(until),
               snoozedFromMailboxPath: const Value('INBOX'),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -6551,6 +6580,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -6620,6 +6650,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -6699,6 +6730,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -6729,6 +6761,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -6852,6 +6885,7 @@ void main() {
               uid: 0,
               subject: const Value('First'),
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
       await r.db.into(r.db.emails).insertOnConflictUpdate(
@@ -6862,6 +6896,7 @@ void main() {
               uid: 0,
               subject: const Value('Second'),
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e2'),
             ),
           );
       await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -6886,6 +6921,11 @@ void main() {
 
       final emails = await r.emails.observeEmails('jmap-1', 'mbx1').first;
       expect(emails.map((e) => e.subject).toSet(), {'First updated', 'Third'});
+      // Each row records its server id; sync finds it by that.
+      expect(
+        {for (final e in emails) e.id: e.srvJmapId},
+        {'jmap-1:e1': 'e1', 'jmap-1:e3': 'e3'},
+      );
 
       final emailState = await (r.db.select(r.db.syncStates)
             ..where((t) => t.resourceType.equals('Email')))
@@ -6932,6 +6972,7 @@ void main() {
                 uid: 0,
                 subject: const Value('First'),
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
               ),
             );
         for (final (type, state) in [
@@ -7071,6 +7112,7 @@ void main() {
                 uid: 0,
                 subject: const Value('x'),
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -7141,6 +7183,7 @@ void main() {
                 mailboxPath: 'mbx1',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -7194,6 +7237,7 @@ void main() {
                 uid: 0,
                 subject: const Value('stale'),
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-stale'),
               ),
             );
 
@@ -7244,6 +7288,7 @@ void main() {
                 uid: 0,
                 subject: const Value('ghost'),
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-ghost'),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -7372,6 +7417,7 @@ void main() {
                 mailboxPath: 'mbx1',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-gone'),
               ),
             );
         await r.db.into(r.db.emails).insertOnConflictUpdate(
@@ -7381,6 +7427,7 @@ void main() {
                 mailboxPath: 'mbx1',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-live'),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -7475,6 +7522,7 @@ void main() {
                 mailboxPath: 'mbx1',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-live'),
               ),
             );
         // Server-side gone but no destroyed/updated hit us (the exact bug in
@@ -7486,6 +7534,7 @@ void main() {
                 mailboxPath: 'mbx1',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e-ghost'),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -7659,6 +7708,7 @@ void main() {
                   // Server reports every mail as unseen; only this row claims
                   // to be seen locally, so exactly one mismatch is expected.
                   isSeen: Value(i == mismatchIndex),
+                  srvJmapId: Value('e$i'),
                 ),
               );
         }
@@ -7693,6 +7743,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
     }
@@ -8291,6 +8342,7 @@ void main() {
                 mailboxPath: 'mbx-inbox',
                 uid: 0,
                 receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
               ),
             );
         await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
@@ -8324,6 +8376,7 @@ void main() {
               mailboxPath: 'mbx-inbox',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
       await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
@@ -9650,6 +9703,8 @@ void main() {
               mailboxPath: 'INBOX',
               uid: 1,
               receivedAt: DateTime(2024),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
       Future<void> seedFailed(String changeType, String payload) =>
@@ -9762,6 +9817,9 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               threadId: const Value('t1'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(5),
+              srvUidValidity: const Value(1),
             ),
           );
       await r.db.into(r.db.syncStates).insert(
@@ -10040,6 +10098,8 @@ void main() {
               receivedAt: DateTime(2024),
               snoozedUntil: Value(until),
               snoozedFromMailboxPath: const Value('INBOX'),
+              srvMailboxPath: const Value('Snoozed'),
+              srvUid: const Value(5),
             ),
           );
       // Filing a snoozed mail by hand ends its snooze.
@@ -10590,6 +10650,8 @@ void main() {
                 subject: const Value('note'),
                 messageId: const Value('self-1@example.com'),
                 threadId: const Value('self-1@example.com'),
+                srvMailboxPath: const Value('INBOX'),
+                srvUid: const Value(42),
               ),
             );
         await r.emails.maybeDissolveLocalMessageForTest(
@@ -10623,6 +10685,8 @@ void main() {
                 subject: const Value('note'),
                 messageId: const Value('self-1@example.com'),
                 threadId: const Value('self-1@example.com'),
+                srvMailboxPath: const Value('INBOX.Sent'),
+                srvUid: const Value(7),
               ),
             );
         await r.emails.maybeDissolveLocalMessageForTest(
@@ -10667,6 +10731,8 @@ void main() {
                 mailboxPath: 'Old',
                 uid: 1,
                 receivedAt: DateTime(2024),
+                srvMailboxPath: const Value('Old'),
+                srvUid: const Value(1),
               ),
             );
         await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -10754,6 +10820,8 @@ void main() {
               receivedAt: DateTime(2024),
               subject: const Value('Quarterly report'),
               messageId: const Value('m1@example.com'),
+              srvMailboxPath: const Value('Old'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.pendingChanges).insert(
@@ -10805,6 +10873,8 @@ void main() {
               uid: 1,
               receivedAt: DateTime(2024),
               messageId: const Value('other@example.com'),
+              srvMailboxPath: const Value('Old'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.pendingChanges).insert(
@@ -11014,6 +11084,8 @@ void main() {
               uid: 1,
               receivedAt: DateTime(2024),
               serverEmailId: const Value('E1'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.emailBodies).insert(
@@ -11030,6 +11102,8 @@ void main() {
               uid: 100,
               receivedAt: DateTime(2024),
               serverEmailId: const Value('E1'),
+              srvMailboxPath: const Value('Archive'),
+              srvUid: const Value(100),
             ),
           );
       await r.db.into(r.db.undoActions).insert(
@@ -11106,6 +11180,8 @@ void main() {
               uid: 1,
               receivedAt: DateTime(2024),
               serverEmailId: const Value('E1'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.syncStates).insertOnConflictUpdate(
@@ -11243,6 +11319,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -11279,6 +11356,7 @@ void main() {
               mailboxPath: 'mbx1',
               uid: 0,
               receivedAt: DateTime(2024),
+              srvJmapId: const Value('e1'),
             ),
           );
 
@@ -11707,6 +11785,8 @@ void main() {
               uid: 1,
               receivedAt: DateTime(2024),
               threadId: const Value('t1'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.threads).insert(
@@ -11747,6 +11827,8 @@ void main() {
               uid: 1,
               receivedAt: DateTime(2024),
               preview: const Value('Existing preview'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
 
@@ -11775,6 +11857,8 @@ void main() {
               mailboxPath: 'INBOX',
               uid: 1,
               receivedAt: DateTime(2024),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
 
@@ -11806,6 +11890,8 @@ void main() {
               receivedAt: DateTime(2024),
               listUnsubscribeHeader:
                   const Value('<mailto:existing@example.com>'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
 
@@ -11831,6 +11917,8 @@ void main() {
               mailboxPath: 'INBOX',
               uid: 1,
               receivedAt: DateTime(2024),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
 
@@ -11864,6 +11952,8 @@ void main() {
               bccJson: const Value(
                 '[{"name":null,"email":"kept@example.com"}]',
               ),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(1),
             ),
           );
 
@@ -11887,6 +11977,8 @@ void main() {
               mailboxPath: 'Sent',
               uid: 1,
               receivedAt: DateTime(2024),
+              srvMailboxPath: const Value('Sent'),
+              srvUid: const Value(1),
             ),
           );
       await r.db.into(r.db.emailBodies).insert(
@@ -11969,6 +12061,8 @@ void main() {
               receivedAt: DateTime(2024),
               messageId: const Value(rowMessageId),
               preview: const Value('Automatic reply preview'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(6),
             ),
           );
 
@@ -12012,6 +12106,8 @@ void main() {
               uid: 6,
               receivedAt: DateTime(2024),
               messageId: const Value(rowMessageId),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(6),
             ),
           );
       await r.db.into(r.db.emailBodies).insert(
@@ -12053,6 +12149,8 @@ void main() {
               receivedAt: DateTime(2024),
               messageId: const Value(rowMessageId),
               preview: const Value('Automatic reply preview'),
+              srvMailboxPath: const Value('INBOX'),
+              srvUid: const Value(6),
             ),
           );
       await r.db.into(r.db.threads).insert(

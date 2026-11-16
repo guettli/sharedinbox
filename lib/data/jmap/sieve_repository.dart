@@ -299,19 +299,12 @@ class SieveRepository {
     Account account,
     Future<T> Function(JmapClient) body,
   ) async {
-    final jmapUrl = account.jmapUrl;
-    if (jmapUrl == null || jmapUrl.isEmpty) {
-      throw Exception('Account has no JMAP URL');
-    }
-    final password = await _accounts.getPassword(account.id);
-    final username =
-        account.username.isNotEmpty ? account.username : account.email;
-    final jmap = await JmapClient.connect(
-      httpClient: _httpClient,
-      jmapUrl: Uri.parse(jmapUrl),
-      username: username,
-      password: password,
-    );
+    final jmap = await JmapClient.connectAccount(
+          httpClient: _httpClient,
+          account: account,
+          password: await _accounts.getPassword(account.id),
+        ) ??
+        (throw Exception('Account has no JMAP URL'));
     if (!jmap.supportsSieve) {
       throw Exception(
         'Server does not support Sieve (urn:ietf:params:jmap:sieve)',

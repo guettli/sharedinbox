@@ -1281,6 +1281,60 @@ void main() {
         },
       );
 
+      test('IMAP: RENAME moves the server location of its mail', () async {
+        final spy = SnoozeSpyImapClient();
+        final db = openTestDatabase();
+        final accounts = AccountRepositoryImpl(db, MapSecureStorage());
+        final mailboxes = MailboxRepositoryImpl(
+          db,
+          accounts,
+          imapConnect: (_, __, ___) async => spy,
+        );
+        await accounts.addAccount(_account, 'pw');
+        await db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: 'acc-1:Old',
+                accountId: 'acc-1',
+                path: 'Old',
+                name: 'Old',
+                displayPath: const Value('Old'),
+              ),
+            );
+        Future<void> email(
+          String id,
+          String shownIn,
+          String srvPath,
+          int uid,
+        ) =>
+            db.into(db.emails).insert(
+                  EmailsCompanion.insert(
+                    id: id,
+                    accountId: 'acc-1',
+                    mailboxPath: shownIn,
+                    uid: uid,
+                    receivedAt: DateTime(2026),
+                    srvMailboxPath: Value(srvPath),
+                    srvUid: Value(uid),
+                    srvUidValidity: const Value(7),
+                  ),
+                );
+        await email('acc-1:Old:5', 'Old', 'Old', 5);
+        // Shown in Archive behind a queued move; the server has it in Old.
+        await email('acc-1:Old:6', 'Archive', 'Old', 6);
+        // A stale row still recording UID 6 in a "Chef" that did not exist.
+        await email('acc-1:Chef:6', 'Chef', 'Chef', 6);
+
+        await mailboxes.renameMailbox('acc-1', 'Old', 'Chef');
+
+        final rows = {
+          for (final e in await db.select(db.emails).get())
+            e.id: (e.mailboxPath, e.srvMailboxPath, e.srvUid),
+        };
+        expect(rows['acc-1:Old:5'], ('Chef', 'Chef', 5));
+        expect(rows['acc-1:Old:6'], ('Archive', 'Chef', 6));
+        expect(rows['acc-1:Chef:6'], ('Chef', null, null));
+      });
+
       test(
         'IMAP: DELETE sends the folder in modified UTF-7 (#633)',
         () async {

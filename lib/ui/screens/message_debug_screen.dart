@@ -152,7 +152,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       final result = await fetchRemoteMessageSnapshot(
         ref,
         widget.messageRef,
-        local!.email!.uid,
+        local!.email!,
       );
       if (!mounted) return;
       setState(() => _probe = result);
@@ -238,6 +238,7 @@ class _MessageDebugCardState extends ConsumerState<_MessageDebugCard> {
       ('accountType', account?.typeLabel ?? ''),
       ('mailboxPath', email.mailboxPath),
       ('uid', email.uid.toString()),
+      ('serverLocation', email.serverLocation),
       ('subject', email.subject ?? ''),
       (
         'sentAt',

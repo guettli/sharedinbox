@@ -583,6 +583,7 @@ class EmailRepositoryImpl implements EmailRepository {
     if (account.type == account_model.AccountType.jmap) {
       return _getEmailBodyJmap(
         emailId,
+        _requireJmapId(emailRow),
         account,
         password,
         prefetch: prefetch,
@@ -595,13 +596,18 @@ class EmailRepositoryImpl implements EmailRepository {
       _effectiveUsername(account),
       password,
       (client) async {
-        await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
-        final fetch =
-            await client.uidFetchMessage(emailRow.uid, '(BODY.PEEK[])');
+        // Where the server has it, not where it is shown: behind a queued
+        // move the row already shows the destination.
+        await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
+        final fetch = await client.uidFetchMessage(
+          emailRow.imapServerUid,
+          '(BODY.PEEK[])',
+        );
         final msg = fetch.messages.firstOrNull;
         if (msg == null) {
           throw StateError(
-            'IMAP server returned no message for UID ${emailRow.uid}.',
+            'IMAP server returned no message for UID '
+            '${emailRow.imapServerUid}.',
           );
         }
 
@@ -902,19 +908,19 @@ class EmailRepositoryImpl implements EmailRepository {
     required String expectedMessageId,
     required String fetchedMessageId,
   }) async {
+    final serverPath = emailRow.imapServerPath;
     final resolvedUid = await _searchUidByMessageId(
       client,
-      emailRow.mailboxPath,
+      serverPath,
       emailRow.messageId,
     );
-    if (resolvedUid != null && resolvedUid != emailRow.uid) {
-      final newId =
-          '${emailRow.accountId}:${emailRow.mailboxPath}:$resolvedUid';
+    if (resolvedUid != null && resolvedUid != emailRow.imapServerUid) {
+      final newId = '${emailRow.accountId}:$serverPath:$resolvedUid';
       await _rekeyEmailRow(
         oldId: emailId,
         newId: newId,
         newUid: resolvedUid,
-        newMailboxPath: emailRow.mailboxPath,
+        newMailboxPath: serverPath,
       );
       log(
         'getEmailBody: re-keyed mis-bound row $emailId → $newId after '
@@ -931,7 +937,7 @@ class EmailRepositoryImpl implements EmailRepository {
         'email.body.identity_mismatch',
         'Skipped caching a body whose Message-ID did not match this message '
             '(expected $expectedMessageId, server returned $fetchedMessageId '
-            'for UID ${emailRow.uid} in ${emailRow.mailboxPath}). The message '
+            'for UID ${emailRow.imapServerUid} in $serverPath). The message '
             'is not at that UID; the correct copy will be re-fetched on sync.',
         accountId: emailRow.accountId,
         mailboxPath: emailRow.mailboxPath,
@@ -984,9 +990,11 @@ class EmailRepositoryImpl implements EmailRepository {
     }
   }
 
-  /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`) and all
-  /// references that embed the old id — the cached body, pending changes,
-  /// per-message logs, thread aggregates and undo history — in one transaction.
+  /// Rewrites a local email row's identity (`id`, `uid`, `mailboxPath`, and
+  /// the server location `srv_mailbox_path` / `srv_uid` / `srv_uid_validity`)
+  /// and all references that embed the old id — the cached body, pending
+  /// changes, per-message logs, thread aggregates and undo history — in one
+  /// transaction. [newMailboxPath] is where the server has the mail now.
   /// Shared by [_remapEmailAfterImapMove] and the body-fetch identity guard.
   Future<void> _rekeyEmailRow({
     required String oldId,
@@ -997,11 +1005,15 @@ class EmailRepositoryImpl implements EmailRepository {
     bool mergeDuplicate = false,
   }) async {
     if (newId == oldId) return;
+    var displaced = const <Email>[];
     await _db.transaction(() async {
       final oldRow = await (_db.select(_db.emails)
             ..where((t) => t.id.equals(oldId)))
           .getSingleOrNull();
       final oldUid = oldRow?.uid;
+      final newUidValidity = oldRow == null
+          ? null
+          : await _knownUidValidity(oldRow.accountId, newMailboxPath);
       // Sync already fetched the mail at its new place (its MOVE's answer
       // came after the destination's sync, or another client moved it there
       // first): that row is a second row of the same mail. Drop it and keep
@@ -1009,7 +1021,17 @@ class EmailRepositoryImpl implements EmailRepository {
       // and attachments go with it. Not with [mergeDuplicate] false: the
       // UID was found by Message-ID while a copy with that Message-ID is
       // still in the source, so it may be another copy (cross-posted mail).
-      final existing = await (_db.select(_db.emails)
+      // Found by the server location, like sync finds it.
+      var existing = oldRow == null
+          ? null
+          : await _rowAtImapLocation(
+              oldRow.accountId,
+              newMailboxPath,
+              newUid,
+              uidValidity: newUidValidity,
+              exceptId: oldId,
+            );
+      existing ??= await (_db.select(_db.emails)
             ..where((t) => t.id.equals(newId)))
           .getSingleOrNull();
       if (mergeDuplicate &&
@@ -1017,8 +1039,12 @@ class EmailRepositoryImpl implements EmailRepository {
           oldRow != null &&
           existing.messageId != null &&
           existing.messageId == oldRow.messageId) {
-        log('Re-key $oldId → $newId: dropping the copy sync already fetched');
-        await (_db.delete(_db.emails)..where((t) => t.id.equals(newId))).go();
+        log(
+          'Re-key $oldId → $newId: dropping the copy sync already fetched '
+          '(${existing.id})',
+        );
+        final copyId = existing.id;
+        await (_db.delete(_db.emails)..where((t) => t.id.equals(copyId))).go();
         // The kept row has this app's view of the flags, the dropped one the
         // server's: read them again.
         await _makeFlagReconcileDue(
@@ -1054,6 +1080,18 @@ class EmailRepositoryImpl implements EmailRepository {
       }
       await _db.customStatement('PRAGMA defer_foreign_keys = ON');
 
+      // Another row still records the location the server just gave this
+      // mail: that record is stale (one location holds one message).
+      if (oldRow != null) {
+        displaced = await _releaseImapLocation(
+          oldRow.accountId,
+          newMailboxPath,
+          newUid,
+          newUidValidity,
+          exceptId: oldId,
+        );
+      }
+
       await _db.customStatement(
         'UPDATE email_bodies SET email_id = ?1 WHERE email_id = ?2',
         [newId, oldId],
@@ -1069,7 +1107,13 @@ class EmailRepositoryImpl implements EmailRepository {
         EmailsCompanion(
           id: Value(newId),
           uid: Value(newUid),
+          // The shown folder stays behind a later queued move; the server
+          // location always follows the server.
           mailboxPath: movedOn ? const Value.absent() : Value(newMailboxPath),
+          srvMailboxPath: Value(newMailboxPath),
+          srvUid: Value(newUid),
+          srvUidValidity: Value(newUidValidity),
+          srvJmapId: const Value(null),
         ),
       );
 
@@ -1116,6 +1160,7 @@ class EmailRepositoryImpl implements EmailRepository {
         ['"$oldId"', '"$newId"', '%"$oldId"%'],
       );
     });
+    _logLocationReleased(displaced, takenBy: newId);
   }
 
   /// Points the IMAP payloads of [resourceId]'s queued changes that address
@@ -1180,6 +1225,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   Future<model.EmailBody> _getEmailBodyJmap(
     String emailId,
+    String jmapEmailId,
     account_model.Account account,
     String password, {
     bool prefetch = false,
@@ -1192,10 +1238,6 @@ class EmailRepositoryImpl implements EmailRepository {
       username: _effectiveUsername(account),
       password: password,
     );
-
-    final jmapEmailId = emailId.contains(':')
-        ? emailId.substring(emailId.indexOf(':') + 1)
-        : emailId;
 
     final responses = await jmap.call([
       [
@@ -1650,15 +1692,19 @@ class EmailRepositoryImpl implements EmailRepository {
         // Read inside the transaction: a local edit's queue insert and
         // optimistic write wait for it, so none can slip in between.
         final queuedNow = await _inFlightFlagResourceIds(account.id);
+        final uidValidity = await _knownUidValidity(account.id, mailboxPath);
         final affectedThreads = <String>{};
         for (final msg in result.messages) {
           final uid = msg.uid;
           if (uid == null) continue;
-          final emailId = '${account.id}:$mailboxPath:$uid';
-          final row = await (_db.select(_db.emails)
-                ..where((t) => t.id.equals(emailId)))
-              .getSingleOrNull();
+          final row = await _rowAtImapLocation(
+            account.id,
+            mailboxPath,
+            uid,
+            uidValidity: uidValidity,
+          );
           if (row == null) continue;
+          final emailId = row.id;
           final seen = msg.flags?.contains(r'\Seen') ?? false;
           final flagged = msg.flags?.contains(r'\Flagged') ?? false;
           if (row.isSeen == seen && row.isFlagged == flagged) continue;
@@ -1962,7 +2008,17 @@ class EmailRepositoryImpl implements EmailRepository {
           continue;
         }
         bytes += msg.size ?? 0;
-        final emailId = '${account.id}:$mailboxPath:$uid';
+        // The row the server's message already has, found by where the
+        // server has it, never by the shown folder: behind a queued move
+        // that is already the destination (SYNC-REDESIGN.md §8 phase 2).
+        // Without one, a new row gets the id the insert below writes.
+        final known = await _rowAtImapLocation(
+          account.id,
+          mailboxPath,
+          uid,
+          uidValidity: uidValidity,
+        );
+        final emailId = known?.id ?? '${account.id}:$mailboxPath:$uid';
         final serverEmailId = serverEmailIdByUid[uid];
         final msgId = normaliseMessageId(envelope.messageId);
         final inReplyTo = normaliseMessageId(envelope.inReplyTo);
@@ -1999,11 +2055,14 @@ class EmailRepositoryImpl implements EmailRepository {
           }
         }
 
-        final isNew = await (_db.selectOnly(_db.emails)
-                  ..addColumns([_db.emails.id])
-                  ..where(_db.emails.id.equals(emailId)))
-                .getSingleOrNull() ==
-            null;
+        // Without a known row the insert can still hit a row of that id
+        // whose location is not recorded (e.g. restored by an Undo).
+        final isNew = known == null &&
+            await (_db.selectOnly(_db.emails)
+                      ..addColumns([_db.emails.id])
+                      ..where(_db.emails.id.equals(emailId)))
+                    .getSingleOrNull() ==
+                null;
         // No row, but the user changed it since the FETCH was sent: it was
         // moved or deleted here meanwhile, and maybe already sent, so the
         // answer predates that. Inserting it would duplicate the mail in its
@@ -2066,6 +2125,11 @@ class EmailRepositoryImpl implements EmailRepository {
                 serverEmailId: serverEmailId == null
                     ? const Value.absent()
                     : Value(serverEmailId),
+                srvMailboxPath: Value(mailboxPath),
+                srvUid: Value(uid),
+                srvUidValidity: Value(
+                  uidValidity == null || uidValidity == 0 ? null : uidValidity,
+                ),
               ),
             );
         if (msgId != null) dissolveCandidates.add((emailId, msgId));
@@ -2201,6 +2265,154 @@ class EmailRepositoryImpl implements EmailRepository {
     final raw = await _loadSyncState(accountId, resourceType);
     if (raw == null) return null;
     return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// The UIDVALIDITY of IMAP folder [mailboxPath] as its sync checkpoint
+  /// knows it; null when unknown (never synced, or the server sent none).
+  Future<int?> _knownUidValidity(String accountId, String mailboxPath) async {
+    final checkpoint =
+        await _loadImapCheckpoint(accountId, 'IMAP:$mailboxPath');
+    final validity = checkpoint?['uidValidity'];
+    return validity is int && validity != 0 ? validity : null;
+  }
+
+  /// The row of the message the server has under [uid] in [mailboxPath],
+  /// found by the server-location columns (SYNC-REDESIGN.md §8 phase 2):
+  /// never by building an id, and never by the shown `mailboxPath`, which
+  /// behind a queued move already names the destination. With a known
+  /// [uidValidity] a row stamped with another one is a different message
+  /// and not returned; one without a stamp is (an exact stamp wins). With
+  /// an unknown one, only an unstamped row matches. [exceptId] is skipped.
+  Future<Email?> _rowAtImapLocation(
+    String accountId,
+    String mailboxPath,
+    int uid, {
+    int? uidValidity,
+    String? exceptId,
+  }) =>
+      (_db.select(_db.emails)
+            ..where(
+              (t) => _atImapLocation(
+                t,
+                accountId,
+                mailboxPath,
+                uid,
+                uidValidity: uidValidity,
+                exceptId: exceptId,
+              ),
+            )
+            ..orderBy([(t) => OrderingTerm.desc(t.srvUidValidity.isNotNull())])
+            ..limit(1))
+          .getSingleOrNull();
+
+  /// The condition of [_rowAtImapLocation].
+  static Expression<bool> _atImapLocation(
+    $EmailsTable t,
+    String accountId,
+    String mailboxPath,
+    int uid, {
+    int? uidValidity,
+    String? exceptId,
+  }) {
+    final validity = uidValidity == 0 ? null : uidValidity;
+    final at = t.accountId.equals(accountId) &
+        t.srvMailboxPath.equals(mailboxPath) &
+        t.srvUid.equals(uid) &
+        (validity == null
+            ? t.srvUidValidity.isNull()
+            : (t.srvUidValidity.equals(validity) | t.srvUidValidity.isNull()));
+    return exceptId == null ? at : at & t.id.equals(exceptId).not();
+  }
+
+  /// The row of the JMAP Email [jmapId], found by its server id.
+  Future<Email?> _rowByJmapId(String accountId, String jmapId) =>
+      (_db.select(_db.emails)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.srvJmapId.equals(jmapId),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+
+  /// Clears the recorded server location of the rows other than [exceptId]
+  /// that hold this IMAP location, because the server just gave it to
+  /// [exceptId]'s mail: one location holds one message. Returns those rows
+  /// (log them with [_logLocationReleased] after the transaction).
+  Future<List<Email>> _releaseImapLocation(
+    String accountId,
+    String mailboxPath,
+    int uid,
+    int? uidValidity, {
+    required String exceptId,
+  }) async {
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) => _atImapLocation(
+              t,
+              accountId,
+              mailboxPath,
+              uid,
+              uidValidity: uidValidity,
+              exceptId: exceptId,
+            ),
+          ))
+        .get();
+    for (final row in rows) {
+      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+        const EmailsCompanion(
+          srvMailboxPath: Value(null),
+          srvUid: Value(null),
+          srvUidValidity: Value(null),
+        ),
+      );
+    }
+    return rows;
+  }
+
+  /// App Log line for each row whose server location [_releaseImapLocation]
+  /// cleared: sync no longer finds it, so a stale copy may linger.
+  void _logLocationReleased(List<Email> rows, {required String takenBy}) {
+    for (final released in rows) {
+      _logLocationReleasedOne(released, takenBy: takenBy);
+    }
+  }
+
+  void _logLocationReleasedOne(Email released, {required String takenBy}) {
+    unawaited(
+      _appLogger?.warn(
+        'email.server_location_released',
+        'Forgot where the server has "${released.subject ?? '(no subject)'}" '
+            '(UID ${released.srvUid} in ${released.srvMailboxPath}): the '
+            'server gave that UID to another message. Sync no longer '
+            'updates this copy.',
+        accountId: released.accountId,
+        mailboxPath: released.mailboxPath,
+        emailId: released.id,
+        data: {'takenBy': takenBy},
+      ),
+    );
+  }
+
+  /// The JMAP Email id a queued change of [row] addresses: the mail's
+  /// recorded server id, or, when its row is gone (deleted for good while
+  /// the change was queued), the one in the change's resource id.
+  Future<String> _jmapIdOfChange(PendingChangeRow row) async {
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    final recorded = email?.srvJmapId;
+    if (recorded != null) return recorded;
+    // Phase 2b stamps the JMAP id on the queued change instead.
+    final id = row.resourceId;
+    return id.contains(':') ? id.substring(id.indexOf(':') + 1) : id;
+  }
+
+  /// The JMAP Email id of [row], for a server call about it.
+  static String _requireJmapId(Email row) {
+    final id = row.srvJmapId;
+    if (id == null) {
+      throw StateError('No server id is recorded for this message yet.');
+    }
+    return id;
   }
 
   Future<void> _saveImapCheckpoint(
@@ -2639,7 +2851,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.mailboxPath.equals(mailboxJmapId),
           ))
         .get();
-    final localIdSet = localRows.map((r) => r.id.split(':').last).toSet();
+    final localIdSet = {
+      for (final r in localRows)
+        if (r.srvJmapId != null) r.srvJmapId!,
+    };
 
     final missingLocally = [
       for (final id in allServerIds)
@@ -2647,7 +2862,7 @@ class EmailRepositoryImpl implements EmailRepository {
     ];
     final missingOnServer = [
       for (final row in localRows)
-        if (!serverIdSet.contains(row.id.split(':').last)) row.id,
+        if (!serverIdSet.contains(row.srvJmapId)) row.id,
     ];
 
     return _LiveMailboxCounts(
@@ -2786,7 +3001,10 @@ class EmailRepositoryImpl implements EmailRepository {
                 t.mailboxPath.equals(mailboxJmapId),
           ))
         .get();
-    final localIdSet = localRows.map((r) => r.id.split(':').last).toSet();
+    final localIdSet = {
+      for (final r in localRows)
+        if (r.srvJmapId != null) r.srvJmapId!,
+    };
 
     final missingLocally = <String>[];
     for (final id in allServerIds) {
@@ -2797,15 +3015,17 @@ class EmailRepositoryImpl implements EmailRepository {
 
     final missingOnServer = <String>[];
     for (final row in localRows) {
-      final jmapId = row.id.split(':').last;
-      if (!serverIdSet.contains(jmapId)) {
+      if (!serverIdSet.contains(row.srvJmapId)) {
         missingOnServer.add(row.id);
       }
     }
 
     final flagMismatches = <model.FlagMismatch>[];
     if (allServerIds.isNotEmpty) {
-      final localMap = {for (final r in localRows) r.id.split(':').last: r};
+      final localMap = {
+        for (final r in localRows)
+          if (r.srvJmapId != null) r.srvJmapId!: r,
+      };
 
       // Fetch keywords in pages: sending every id in a single Email/get can
       // exceed the server's maxObjectsInGet and fail with requestTooLarge
@@ -3547,7 +3767,8 @@ class EmailRepositoryImpl implements EmailRepository {
       // read a stale set.
       final inFlight = await _inFlightFlagResourceIds(accountId);
       for (final jmapId in missing) {
-        if (inFlight.contains('$accountId:$jmapId')) {
+        final row = await _rowByJmapId(accountId, jmapId);
+        if (row != null && inFlight.contains(row.id)) {
           log(
             'JMAP-sync: Email/get disclaimed $jmapId but an edit is still '
             'queued for it — keeping the row for now',
@@ -3724,13 +3945,11 @@ class EmailRepositoryImpl implements EmailRepository {
   /// us and a virtual row's id is `<account>:__local__:<message-id>`, which no
   /// server can produce.
   Future<void> _deleteJmapEmailById(String accountId, String jmapId) async {
-    final dbId = '$accountId:$jmapId';
-    final email = await getEmail(dbId);
+    final email = await _rowByJmapId(accountId, jmapId);
     if (email == null) return;
-    final tid = email.threadId ?? dbId;
-    final mailbox = email.mailboxPath;
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
-    await _updateThread(accountId, mailbox, tid);
+    final tid = email.threadId ?? email.id;
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(email.id))).go();
+    await _updateThread(accountId, email.mailboxPath, tid);
   }
 
   Future<void> _clearJmapSyncState(
@@ -3807,8 +4026,7 @@ class EmailRepositoryImpl implements EmailRepository {
       // Local self-sent "virtual" rows have no server counterpart and must
       // survive until the real message arrives and dissolves them (#545).
       if (row.isLocal) continue;
-      final jmapId = row.id.substring('$accountId:'.length);
-      if (serverIds.contains(jmapId)) continue;
+      if (serverIds.contains(row.srvJmapId)) continue;
       if (inFlightSet.contains(row.id)) continue;
       affectedThreads.add(row.threadId ?? row.id);
       await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
@@ -3956,7 +4174,8 @@ class EmailRepositoryImpl implements EmailRepository {
     if (localRows.isEmpty) return;
 
     final localByJmapId = <String, Email>{
-      for (final r in localRows) r.id.substring('$accountId:'.length): r,
+      for (final r in localRows)
+        if (r.srvJmapId != null) r.srvJmapId!: r,
     };
 
     final inFlightSet = await _inFlightFlagResourceIds(accountId);
@@ -4069,8 +4288,15 @@ class EmailRepositoryImpl implements EmailRepository {
     for (final e in emails) {
       final m = e as Map<String, dynamic>;
       final jmapId = m['id'] as String;
-      final dbId = '$accountId:$jmapId';
       bytes += (m['size'] as int?) ?? 0;
+      // Found by the server id; a new row gets the id the insert below
+      // writes, which can also be that of a row whose server id is not
+      // recorded (e.g. restored by an Undo).
+      final newRowId = '$accountId:$jmapId';
+      final existingRow = await _rowByJmapId(accountId, jmapId) ??
+          await (_db.select(_db.emails)..where((t) => t.id.equals(newRowId)))
+              .getSingleOrNull();
+      final dbId = existingRow?.id ?? newRowId;
 
       final mailboxIds = m['mailboxIds'] as Map<String, dynamic>?;
 
@@ -4079,19 +4305,15 @@ class EmailRepositoryImpl implements EmailRepository {
       // Email/changes.destroyed) but is defensive against unusual server
       // states where mailboxIds is empty.
       if (mailboxIds == null || mailboxIds.isEmpty) {
-        final existing = await getEmail(dbId);
-        if (existing != null) {
-          final tid = existing.threadId ?? dbId;
-          final oldMailbox = existing.mailboxPath;
+        if (existingRow != null) {
+          final tid = existingRow.threadId ?? dbId;
+          final oldMailbox = existingRow.mailboxPath;
           await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
           affectedByMailbox.putIfAbsent(oldMailbox, () => {}).add(tid);
         }
         continue;
       }
 
-      final existingRow = await (_db.select(_db.emails)
-            ..where((t) => t.id.equals(dbId)))
-          .getSingleOrNull();
       final String mailboxPath;
       if (existingRow != null &&
           mailboxIds.containsKey(existingRow.mailboxPath)) {
@@ -4206,6 +4428,7 @@ class EmailRepositoryImpl implements EmailRepository {
               references: Value(jmapReferences),
               snoozedUntil: Value(snoozedUntil),
               listUnsubscribeHeader: Value(jmapListUnsubscribe),
+              srvJmapId: Value(jmapId),
             ),
           );
 
@@ -4749,7 +4972,9 @@ class EmailRepositoryImpl implements EmailRepository {
     final isImap = account.type == account_model.AccountType.imap;
     final uid = payload['uid'];
     if (isImap &&
-        (email.uid != uid || email.id != '${row.accountId}:$src:$uid')) {
+        (email.uid != uid ||
+            email.srvMailboxPath != src ||
+            email.srvUid != uid)) {
       return;
     }
     if (isImap && !await _stampStillValid(row.accountId, src, payload)) return;
@@ -6979,6 +7204,31 @@ class EmailRepositoryImpl implements EmailRepository {
   @override
   Future<void> restoreEmails(List<model.Email> emails) async {
     for (final e in emails) {
+      // The snapshot's server location, unless another row holds it by now
+      // (a sync stored the mail again meanwhile): one location, one row.
+      // A snapshot without one (taken before schema v70) leaves the stored
+      // location alone; the next sync records it.
+      var srvPath = e.srvMailboxPath;
+      var srvUid = e.srvUid;
+      var srvJmapId = e.srvJmapId;
+      if (srvPath != null &&
+          srvUid != null &&
+          await _rowAtImapLocation(
+                e.accountId,
+                srvPath,
+                srvUid,
+                uidValidity: e.srvUidValidity,
+                exceptId: e.id,
+              ) !=
+              null) {
+        srvPath = null;
+        srvUid = null;
+      }
+      if (srvJmapId != null) {
+        final holder = await _rowByJmapId(e.accountId, srvJmapId);
+        if (holder != null && holder.id != e.id) srvJmapId = null;
+      }
+      final imapKnown = srvPath != null && srvUid != null;
       await _db.into(_db.emails).insertOnConflictUpdate(
             EmailsCompanion.insert(
               id: e.id,
@@ -7004,6 +7254,12 @@ class EmailRepositoryImpl implements EmailRepository {
               references: Value(e.references),
               snoozedUntil: Value(e.snoozedUntil),
               snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
+              srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
+              srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
+              srvUidValidity:
+                  imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
+              srvJmapId:
+                  srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
             ),
           );
       await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
@@ -8888,10 +9144,7 @@ class EmailRepositoryImpl implements EmailRepository {
     PendingChangeRow row,
   ) async {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
-    // Extract the JMAP email ID from the DB id (format: "accountId:jmapId").
-    final jmapEmailId = row.resourceId.contains(':')
-        ? row.resourceId.substring(row.resourceId.indexOf(':') + 1)
-        : row.resourceId;
+    final jmapEmailId = await _jmapIdOfChange(row);
 
     Map<String, dynamic> setArgs(Map<String, dynamic> extra) => {
           'accountId': jmap.accountId,
@@ -9167,11 +9420,23 @@ class EmailRepositoryImpl implements EmailRepository {
     String? jmapId,
   }) async {
     final mid = normaliseMessageId(messageId);
-    // Prefer the server's own id for the copy, so the next sync of this folder
-    // updates this row instead of adding a second one.
-    final serverId = uid != null
-        ? '$accountId:$mailboxPath:$uid'
-        : (jmapId != null ? '$accountId:$jmapId' : null);
+    // With the server's location the copy is a real server row: the next
+    // sync of this folder finds it by that location and updates it instead
+    // of adding a second one. A row a sync already stored there is reused.
+    final uidValidity =
+        uid == null ? null : await _knownUidValidity(accountId, mailboxPath);
+    final known = uid != null
+        ? await _rowAtImapLocation(
+            accountId,
+            mailboxPath,
+            uid,
+            uidValidity: uidValidity,
+          )
+        : (jmapId != null ? await _rowByJmapId(accountId, jmapId) : null);
+    final serverId = known?.id ??
+        (uid != null
+            ? '$accountId:$mailboxPath:$uid'
+            : (jmapId != null ? '$accountId:$jmapId' : null));
     if (serverId == null && mid == null) return;
     final emailId = serverId ?? '$accountId:$_localSentIdMarker:$mid';
     final isLocal = serverId == null;
@@ -9205,6 +9470,10 @@ class EmailRepositoryImpl implements EmailRepository {
             threadId: Value(threadId),
             messageId: Value(mid),
             isLocal: Value(isLocal),
+            srvMailboxPath: Value(uid == null ? null : mailboxPath),
+            srvUid: Value(uid),
+            srvUidValidity: Value(uidValidity),
+            srvJmapId: Value(uid == null ? jmapId : null),
           ),
         );
     await _db.into(_db.emailBodies).insertOnConflictUpdate(
@@ -10323,16 +10592,20 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
+      await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
       // Fetch the full message so enough_mail has MIME headers (including
       // Content-Transfer-Encoding) and getPart() can decode the part correctly.
       // A partial BODY.PEEK[n] fetch omits those headers, causing
       // decodeContentBinary() to return raw base64 instead of decoded bytes.
-      final fetch = await client.uidFetchMessage(emailRow.uid, 'BODY.PEEK[]');
+      final fetch = await client.uidFetchMessage(
+        emailRow.imapServerUid,
+        'BODY.PEEK[]',
+      );
       final msg = fetch.messages.firstOrNull;
       if (msg == null) {
         throw StateError(
-          'IMAP server returned no message for UID ${emailRow.uid}.',
+          'IMAP server returned no message for UID '
+          '${emailRow.imapServerUid}.',
         );
       }
       // Resolve the specific MIME part. Never fall back to `msg` itself: if the
@@ -10409,9 +10682,7 @@ class EmailRepositoryImpl implements EmailRepository {
         username: _effectiveUsername(account),
         password: password,
       );
-      final jmapEmailId = emailId.contains(':')
-          ? emailId.substring(emailId.indexOf(':') + 1)
-          : emailId;
+      final jmapEmailId = _requireJmapId(emailRow);
       final responses = await jmap.call([
         [
           'Email/get',
@@ -10451,12 +10722,16 @@ class EmailRepositoryImpl implements EmailRepository {
       password,
     );
     try {
-      await client.selectUnicodeMailboxByPath(emailRow.mailboxPath);
-      final fetch = await client.uidFetchMessage(emailRow.uid, 'BODY.PEEK[]');
+      await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
+      final fetch = await client.uidFetchMessage(
+        emailRow.imapServerUid,
+        'BODY.PEEK[]',
+      );
       final msg = fetch.messages.firstOrNull;
       if (msg == null) {
         throw StateError(
-          'IMAP server returned no message for UID ${emailRow.uid}.',
+          'IMAP server returned no message for UID '
+          '${emailRow.imapServerUid}.',
         );
       }
       return msg.renderMessage();
@@ -11107,6 +11382,10 @@ class EmailRepositoryImpl implements EmailRepository {
       listUnsubscribeHeader: row.listUnsubscribeHeader,
       isLocal: row.isLocal,
       size: row.sizeBytes,
+      srvMailboxPath: row.srvMailboxPath,
+      srvUid: row.srvUid,
+      srvUidValidity: row.srvUidValidity,
+      srvJmapId: row.srvJmapId,
     );
   }
 
@@ -11688,4 +11967,12 @@ class _ImapUidValidityChangedException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// Where to ask the IMAP server for a row's message: its recorded server
+/// location, which behind a queued move differs from the folder it is shown
+/// in. Rows without one (none recorded yet) fall back to the shown values.
+extension on Email {
+  String get imapServerPath => srvMailboxPath ?? mailboxPath;
+  int get imapServerUid => srvUid ?? uid;
 }

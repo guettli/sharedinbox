@@ -16,7 +16,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 69);
+      expect(db.schemaVersion, 70);
       await db.close();
     });
 
@@ -181,6 +181,15 @@ void main() {
       expect(
         await _tableColumns(db, 'pending_changes'),
         containsAll(['state', 'lease_until', 'claim_token']), // v68, v69
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        containsAll([
+          'srv_mailbox_path',
+          'srv_uid',
+          'srv_uid_validity',
+          'srv_jmap_id',
+        ]), // v70
       );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
@@ -380,7 +389,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -421,7 +430,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -452,7 +461,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -490,7 +499,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -531,7 +540,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -579,7 +588,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -626,7 +635,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
       await db.close();
     });
 
@@ -676,7 +685,155 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
+      await db.close();
+    });
+
+    test('v69→v70 fills the server location of every row', () async {
+      final dbFile = File('test_migration_v69_srv_location.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('DROP INDEX emails_srv_imap_location;')
+        ..execute('DROP INDEX emails_srv_jmap_id;')
+        ..execute('ALTER TABLE emails DROP COLUMN srv_mailbox_path;')
+        ..execute('ALTER TABLE emails DROP COLUMN srv_uid;')
+        ..execute('ALTER TABLE emails DROP COLUMN srv_uid_validity;')
+        ..execute('ALTER TABLE emails DROP COLUMN srv_jmap_id;');
+      void email(
+        String id,
+        String account,
+        String mailbox,
+        int uid, {
+        bool local = false,
+      }) =>
+          rawDb.execute(
+            'INSERT INTO emails (id, account_id, mailbox_path, uid, '
+            'received_at, is_local) VALUES (?, ?, ?, ?, 0, ?)',
+            [id, account, mailbox, uid, local ? 1 : 0],
+          );
+      var changeId = 0;
+      void change(String resourceId, String type, String state) =>
+          rawDb.execute(
+            'INSERT INTO pending_changes (id, account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, attempts, state) '
+            "VALUES (?, 'acc-i', 'Email', ?, ?, '{}', 0, 0, ?)",
+            [++changeId, resourceId, type, state],
+          );
+      void checkpoint(String path, String state) => rawDb.execute(
+            'INSERT INTO sync_states (account_id, resource_type, state, '
+            "synced_at) VALUES ('acc-i', ?, ?, 0)",
+            ['IMAP:$path', state],
+          );
+      checkpoint('INBOX', '{"uidValidity":777,"lastUid":9}');
+      checkpoint('New', '{"uidValidity":888,"lastUid":9}');
+      checkpoint('Archive', '{"uidValidity":0,"lastUid":9}');
+      checkpoint('FlagReconcile:INBOX', '2026-01-01T00:00:00.000');
+      // Plain row.
+      email('acc-i:INBOX:5', 'acc-i', 'INBOX', 5);
+      // A queued move already shows it in Archive; the server still has it
+      // where the id says.
+      email('acc-i:INBOX:6', 'acc-i', 'Archive', 6);
+      change('acc-i:INBOX:6', 'move', 'pending');
+      // Same for a stuck snooze.
+      email('acc-i:INBOX:11', 'acc-i', 'Snoozed', 11);
+      change('acc-i:INBOX:11', 'snooze', 'stuck');
+      // A failed move protects nothing: the shown folder is used.
+      email('acc-i:INBOX:12', 'acc-i', 'Archive', 12);
+      change('acc-i:INBOX:12', 'move', 'failed');
+      // A queued flag change is no location change.
+      email('acc-i:Old:13', 'acc-i', 'New', 13);
+      change('acc-i:Old:13', 'flag_seen', 'pending');
+      // Folder renamed Old → New: the id still names the old path.
+      email('acc-i:Old:7', 'acc-i', 'New', 7);
+      // A queued move, but the id is not `account:path:uid`.
+      email('acc-i:odd', 'acc-i', 'Archive', 8);
+      change('acc-i:odd', 'move', 'pending');
+      // Two rows for one location: the one whose id names it keeps it.
+      email('acc-i:Old:9', 'acc-i', 'New', 9);
+      email('acc-i:New:9', 'acc-i', 'New', 9);
+      // Two rows for one location without a UIDVALIDITY: both keep it.
+      email('acc-i:Archive:10', 'acc-i', 'Archive', 10);
+      email('acc-i:Old2:10', 'acc-i', 'Archive', 10);
+      // JMAP and local rows.
+      email('acc-j:Mabc', 'acc-j', 'mb-inbox', 0);
+      email('acc-i:__local__:<m@x>', 'acc-i', 'INBOX', 0, local: true);
+      rawDb
+        ..execute('PRAGMA user_version = 69;')
+        ..close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      final rows = {
+        for (final r in await db
+            .customSelect(
+              'SELECT id, srv_mailbox_path, srv_uid, srv_uid_validity, '
+              'srv_jmap_id FROM emails',
+            )
+            .get())
+          r.read<String>('id'): (
+            r.read<String?>('srv_mailbox_path'),
+            r.read<int?>('srv_uid'),
+            r.read<int?>('srv_uid_validity'),
+            r.read<String?>('srv_jmap_id'),
+          ),
+      };
+      expect(rows['acc-i:INBOX:5'], ('INBOX', 5, 777, null));
+      expect(rows['acc-i:INBOX:6'], ('INBOX', 6, 777, null));
+      expect(rows['acc-i:INBOX:11'], ('INBOX', 11, 777, null));
+      expect(rows['acc-i:INBOX:12'], ('Archive', 12, null, null));
+      expect(rows['acc-i:Old:13'], ('New', 13, 888, null));
+      expect(rows['acc-i:Old:7'], ('New', 7, 888, null));
+      expect(rows['acc-i:odd'], ('Archive', 8, null, null));
+      expect(rows['acc-i:New:9'], ('New', 9, 888, null));
+      expect(rows['acc-i:Old:9'], (null, null, null, null));
+      expect(rows['acc-i:Archive:10'], ('Archive', 10, null, null));
+      expect(rows['acc-i:Old2:10'], ('Archive', 10, null, null));
+      expect(rows['acc-j:Mabc'], (null, null, null, 'Mabc'));
+      expect(rows['acc-i:__local__:<m@x>'], (null, null, null, null));
+
+      final indexes = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'emails'",
+          )
+          .get();
+      expect(
+        indexes.map((r) => r.read<String>('name')),
+        containsAll(['emails_srv_imap_location', 'emails_srv_jmap_id']),
+      );
+      // The index holds: a second row for a location cannot be written.
+      await expectLater(
+        db.customStatement(
+          "UPDATE emails SET srv_mailbox_path = 'INBOX', srv_uid = 5, "
+          "srv_uid_validity = 777 WHERE id = 'acc-i:INBOX:6'",
+        ),
+        throwsA(anything),
+      );
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 70);
+      await db.close();
+    });
+
+    test('a fresh database has the server-location indexes', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final indexes = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND tbl_name = 'emails'",
+          )
+          .get();
+      expect(
+        indexes.map((r) => r.read<String>('name')),
+        containsAll(['emails_srv_imap_location', 'emails_srv_jmap_id']),
+      );
       await db.close();
     });
 
@@ -772,7 +929,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 69);
+      expect(version.read<int>('user_version'), 70);
     });
 
     test(
@@ -1310,6 +1467,15 @@ void main() {
       expect(
         await _tableColumns(db, 'pending_changes'),
         containsAll(['state', 'lease_until', 'claim_token']), // v68, v69
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        containsAll([
+          'srv_mailbox_path',
+          'srv_uid',
+          'srv_uid_validity',
+          'srv_jmap_id',
+        ]), // v70
       );
 
       // v30: duration_ms column on sync_log_mailboxes.

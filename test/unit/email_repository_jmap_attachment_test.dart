@@ -17,6 +17,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -134,6 +135,7 @@ void main() {
             mailboxPath: 'INBOX',
             uid: 2,
             receivedAt: DateTime.now(),
+            srvJmapId: const Value('email-2'),
           ),
         );
     EmailAttachment scan(String blobId) => EmailAttachment(
@@ -170,6 +172,7 @@ void main() {
             mailboxPath: 'INBOX',
             uid: 1,
             receivedAt: DateTime.now(),
+            srvJmapId: const Value('email-1'),
           ),
         );
 

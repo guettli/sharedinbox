@@ -228,7 +228,6 @@ void main() {
         ),
         password: 'pw',
         mailboxPath: 'INBOX',
-        emailId: 'acc-1:INBOX:42',
         uid: 42,
       );
       expect(result.error, isNull);
