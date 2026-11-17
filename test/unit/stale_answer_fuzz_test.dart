@@ -9,8 +9,10 @@
 // message must look the same locally and on the server, and match what the
 // user last asked for.
 //
-// Runs a fixed list of seeds by default. Longer runs:
+// Runs a fixed list of seeds by default (1–30, in check-fast). Longer runs:
 //   STALE_FUZZ_SEEDS=500 flutter test test/unit/stale_answer_fuzz_test.dart
+// STALE_FUZZ_FIRST_SEED moves the window (the nightly `task stale-fuzz`
+// runs a different window of 200 seeds each day).
 // Some seeds (as printed on failure): STALE_FUZZ_SEED=17 or =17,42; with
 // STALE_FUZZ_VERBOSE=1 the trace shows the local rows, queue and server after
 // every step. Steps per seed: STALE_FUZZ_STEPS (default 25).
@@ -56,9 +58,13 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   final only = Platform.environment['STALE_FUZZ_SEED'];
+  final first = _envInt('STALE_FUZZ_FIRST_SEED', 1);
   final seeds = only != null
       ? [for (final s in only.split(',')) int.parse(s.trim())]
-      : [for (var s = 1; s <= _envInt('STALE_FUZZ_SEEDS', 30); s++) s];
+      : [
+          for (var s = first; s < first + _envInt('STALE_FUZZ_SEEDS', 30); s++)
+            s,
+        ];
   final steps = _envInt('STALE_FUZZ_STEPS', 25);
 
   group('stale-answer fuzz (IMAP)', () {

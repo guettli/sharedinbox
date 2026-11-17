@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/models/email.dart' as email_model;
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
@@ -198,6 +199,10 @@ void main() {
           onTimeout: () => _abortOnTimeout('final sync hung (seed=$seed)'),
         );
     stdout.writeln('chaos-monkey: final sync fetched=${result.fetched}');
+    // The keywords overlay holds whatever the actions left behind: every
+    // read/star/snooze column is COALESCE(local, srv) and local_* is the
+    // fold of the row's ops (SYNC-REDESIGN.md §8 phase 3).
+    expect(await EmailStateWriter(db).consistencyProblems(), isEmpty);
   });
 }
 

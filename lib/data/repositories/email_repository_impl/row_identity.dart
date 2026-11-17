@@ -447,9 +447,7 @@ extension _RowIdentity on EmailRepositoryImpl {
       // stamp it was read under included. The changes of both rows (the
       // copy's now point here) fold over it: a flag the user changed on
       // [row] before the move keeps showing until a read confirms it.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(current.id)))
-          .write(dup.toCompanion(false).copyWith(id: const Value.absent()));
-      await _state.refold(current.id);
+      await _state.takeOverRow(current.id, dup);
       await _rewritePendingChangeUids(
         resourceId: current.id,
         mailboxPath: newPath,
@@ -581,7 +579,7 @@ extension _RowIdentity on EmailRepositoryImpl {
       );
       // Its own body (when the kept row has one) and attachment rows go
       // with it.
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(dropId))).go();
+      await _state.deleteRow(dropId);
       // The copy's changes fold into the kept row now.
       await _state.refold(keepId);
     });

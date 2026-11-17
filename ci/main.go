@@ -673,14 +673,18 @@ func (m *Ci) CheckHygiene(ctx context.Context) (string, error) {
 		Stdout(ctx)
 }
 
-// CheckLayers enforces that ui/ does not import data/, and that no code
-// builds or parses email ids (scripts/check_email_ids.sh).
+// CheckLayers enforces that ui/ does not import data/, that no code
+// builds or parses email ids (scripts/check_email_ids.sh), and that only the
+// email state writer writes the emails table (scripts/check_email_writes.sh,
+// with its fixture tests).
 func (m *Ci) CheckLayers(ctx context.Context) (string, error) {
 	return m.Base().
-		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/", "scripts/check_email_ids.sh"}}), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
+		WithDirectory("/src", m.Source.Filter(dagger.DirectoryFilterOpts{Include: []string{"lib/", "scripts/check_email_ids.sh", "scripts/check_email_writes.sh", "scripts/test_check_email_writes.sh"}}), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithWorkdir("/src").
 		WithExec([]string{"/bin/bash", "-c", "VIOLATIONS=$(grep -rn \"package:sharedinbox/data/\" lib/ui/ 2>/dev/null || true); if [ -n \"$VIOLATIONS\" ]; then echo \"ERROR: UI layer imports data layer (only core/ interfaces are allowed from ui/):\"; echo \"$VIOLATIONS\"; exit 1; fi; echo \"Layer check passed.\""}).
 		WithExec([]string{"/bin/bash", "scripts/check_email_ids.sh"}).
+		WithExec([]string{"/bin/bash", "scripts/check_email_writes.sh"}).
+		WithExec([]string{"/bin/bash", "scripts/test_check_email_writes.sh"}).
 		Stdout(ctx)
 }
 
@@ -853,6 +857,31 @@ func (m *Ci) Coverage(ctx context.Context) (string, error) {
 				`flutter test test/unit test/widget --concurrency=4 --exclude-tags golden --coverage --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
 				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		WithExec([]string{"dart", "scripts/check_coverage.dart"}).
+		Stdout(ctx)
+}
+
+// StaleFuzz runs the stale-answer fuzz (test/unit/stale_answer_fuzz_test.dart)
+// on seeds seeds from firstSeed on. check-fast runs seeds 1-30 (in Coverage);
+// the nightly run takes another window every day. Its property: once the
+// queue drains, the server and the effective read/star columns equal the
+// user's last intent, and the keywords overlay is consistent
+// (EmailStateWriter.consistencyProblems). Needs no Stalwart.
+func (m *Ci) StaleFuzz(
+	ctx context.Context,
+	// +optional
+	// +default=200
+	seeds int,
+	// +optional
+	// +default=31
+	firstSeed int,
+) (string, error) {
+	return m.setup(m.checkSrc()).
+		WithEnvVariable("STALE_FUZZ_SEEDS", fmt.Sprint(seeds)).
+		WithEnvVariable("STALE_FUZZ_FIRST_SEED", fmt.Sprint(firstSeed)).
+		WithExec([]string{"/bin/bash", "-c",
+			`tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; ` +
+				`flutter test test/unit/stale_answer_fuzz_test.dart --reporter expanded --no-pub >"$tmp" 2>&1 || { cat "$tmp"; exit 1; }; ` +
+				`grep -E '^All [0-9]+ tests passed' "$tmp" || tail -1 "$tmp"`}).
 		Stdout(ctx)
 }
 

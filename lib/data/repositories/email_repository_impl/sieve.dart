@@ -296,7 +296,7 @@ extension _Sieve on EmailRepositoryImpl {
         supersedeFailures: false,
       );
     }
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+    await _state.deleteRow(row.id);
     await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
   }
 

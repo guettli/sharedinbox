@@ -734,11 +734,105 @@ As implemented, phase 3 is two PRs:
      `Email/changes`, the JMAP flag reconcile through the gate), the v71→v72
      migration test, and the stale-answer fuzz, whose property now also
      requires `consistencyProblems()` to be empty.
-2. **3b (next):** enforcement. The allow-list check (`emails` writes only
-   in the email state writer and migrations; see "Enforcement" below), the
-   built-in consistency checks (`consistencyProblems`) sampled in release
-   builds with an App Log line per violation, and the stale-answer fuzz
-   property run in CI (it runs in `check-fast` today with 30 seeds).
+2. **3b (done, no schema change):** enforcement.
+   - **Allow-list check.** `scripts/check_email_writes.sh` (in
+     `check-layers`, so `check-fast`; fixture tests of violations and
+     near-misses in `scripts/test_check_email_writes.sh`, run there too).
+     Two parts. (1) The overlay columns (`is_seen`, `is_flagged`,
+     `snoozed_until`, their `srv_`/`local_` pairs, `srv_keywords_seq`) are
+     written only in `email_state_writer.dart` and the migrations (the
+     members `_upgradeSteps`, `_backfillSrvLocation` and `_overlayKeywords`
+     of `database.dart`; the rest of that file is checked), with no
+     allow-list: it fails on one of them in an `EmailsCompanion(…)`,
+     `.insert(…)` or `.custom(…)` (also across lines, `Value.absent()`
+     excepted), on a `srv…`/`local…` name given a `Value(…)` anywhere (only
+     emails rows have them; `isFlagged` alone is also a `threads` column),
+     on SQL in any letter case (an `UPDATE [OR …] emails … SET` list or an
+     `INSERT INTO emails (…)` column list naming one, also across string
+     literals and quoted, an `INSERT INTO emails` without a column list,
+     the table also interpolated as `${…emails…}`), and, in a member allowed
+     to write `emails`, on a whole-row `toCompanion`, a `copyWith` naming
+     one (not on a thread companion), and an insert/write/replace whose
+     argument is not an `EmailsCompanion…(…)` literal, `withServerKeywords(…)`
+     or a local variable initialised with one (an `Email` data row carries
+     every column). (2) Every other write of `emails` (`EmailsCompanion`,
+     `toCompanion`, Drift update/into/delete/insert/replace on `emails`
+     incl. batches, the table manager and `managers.emails`, `updates: {…}`
+     naming it, raw SQL in any case, and as a backstop against aliases any
+     bare `_db.emails`/`db.emails` outside `select(`, `selectOnly(`, joins,
+     `readTable…(` and `readsFrom:`) is in the writer, the migrations, or a
+     member (method, getter or top-level function, found by indentation;
+     fields, getters, annotations and two-line signatures start a member of
+     their own) on the allow-list, which names file, member and reason with
+     the phase that removes it; a stale entry fails too. A line that only
+     looks like a write can opt out of (2) with `// not an emails write`.
+     SQL is matched in code with `//` comments removed, so prose does not
+     count. Plain `grep -E`/awk, tested with gawk, mawk and busybox awk.
+   - **Moved into the writer** (small, same statements): every delete of
+     rows (`deleteRow`, `deleteRowsOf`: 15 sites in sync, failure handling,
+     counterparts, Sieve, `_mergeDuplicateRow`, force resync,
+     `removeLocalMailbox`; phase 4's clean-up rule will live there), the
+     header backfills (`writeHeaders` for preview, List-Unsubscribe,
+     Reply-To, Bcc; `writeSizes`), and the foreign-move carry-over
+     (`takeOverRow`): its whole-row copy wrote the overlay columns outside
+     the writer (followed by a re-fold, so it was consistent, but it was the
+     one such write the check found).
+   - **Allow-listed** (16 members): the row inserts/upserts (IMAP new-mail
+     fetch, JMAP upsert, Sent copy, virtual self-send rows, Undo's restore;
+     their keyword columns come only from `withServerKeywords`); the
+     optimistic location writes and the local-only
+     `snoozed_from_mailbox_path` (`_applyLocalMove`/`Snooze`/`Unsnooze`,
+     `_wakeUpEmails`, `_restoreLocalSnooze`, `_revertFailedLocation`,
+     `_enqueueSieveMove`), phase 4; the server location facts
+     (`_relocateEmailRow`, `_releaseImapLocation`), phase 4; the Snoozed
+     placeholder repoint and the folder rename, phase 5.
+   - **Sampled consistency checks.** `consistencyProblems` now returns
+     `ConsistencyProblem`s (row, account, mismatching fields, whether the
+     row has foldable ops, the values) and can be limited to given rows;
+     it compares `local_*` with the fold per field, so "no foldable ops ⇒
+     all `local_*` NULL" is the empty fold. `checkSample` checks the rows
+     with the 200 most recent foldable ops plus 200 of the account's rows
+     in `rowid` order from a random start in the account's own `rowid`
+     range (wrapping; the query says `+account_id`, so SQLite walks the
+     rowid range and stops at the limit instead of sorting the account's
+     rows), reading in one transaction so an enqueue and its fold cannot
+     fall between a row and its ops. `OverlayConsistencySampler` runs it
+     after a sync run (`_syncEmails`, after `inSyncRun`), at most once per
+     30 minutes per account, in every build (its own provider in
+     `di.dart`, so a rebuilt repository keeps it; the last check is also
+     stored in `sync_states` as `Overlay:ConsistencyCheck`, for restarts and
+     the background isolate). Tests construct the repository without it
+     and check the whole table themselves. Decision on repair: each broken
+     row is logged first (App Log error `overlay.inconsistent`, `emailId`,
+     and in `data` the fields, the effective/`srv`/`local` values, the fold
+     and the ops; the first 10 rows one line each, then one line with the
+     total and up to 100 more ids), then re-folded, which recomputes
+     `local_*` and the effective columns from the ops and `srv_*`; the log
+     line says it repaired, and the rows whose shown value changed get their
+     thread aggregates refreshed (`_updateThread`). Leaving the row would
+     show a wrong state until its next server read (or for good, for a
+     `local_*` without an op), and the log keeps the bug visible. The check
+     is awaited at the end of `_syncEmails` rather than fired off: it costs
+     one `sync_states` read when not due and a few ms when due, its writes
+     (repair, thread refresh) are ordered before the next sync step, and a
+     background (WorkManager) isolate may be torn down once the sync
+     returns. A failing check logs `overlay.check_failed` (warn) and never
+     fails the sync. `test/unit/overlay_consistency_check_test.dart`.
+   - **Fuzz property in CI.** The stale-answer fuzz already asserted the
+     property (after the queue drains, server and effective read/star
+     columns equal the user's last intent per field, and
+     `consistencyProblems()` is empty) and runs in `check-fast` with seeds
+     1–30. More seeds there cost too much (90 seeds took 3 minutes on
+     their own, against 30 s for 30), so `check-fast` keeps 30 (no extra
+     time) and the nightly `task stale-fuzz` (Dagger `stale-fuzz`, in
+     `fuzz-nightly.yml`, no Stalwart) runs 200 seeds from a window that
+     moves daily (`STALE_FUZZ_FIRST_SEED` = 31 + 200 × (day of the year −
+     1), so January 1st starts right after check-fast's seeds). The nightly chaos monkey and
+     the long-term IMAP/JMAP fuzz assert `consistencyProblems()` empty at
+     their checkpoints. Not done: the fuzz does not snooze (the snooze
+     fold is covered by `keyword_overlay_test.dart`), and
+     `scripts/sync_reliability_fuzz.dart` injects faults but has no
+     per-field intent model to check against.
 
 **Phase 4 — the `location` overlay.**
 - `ALTER TABLE ADD COLUMN` for `local_mailbox_path`, `local_hidden` and
@@ -759,7 +853,7 @@ As implemented, phase 3 is two PRs:
 **Phase 6 — clean-up.** Remove the remaining guard helpers, such as
 `_pendingDeleteOrMoveUids` and the per-path queue checks, and update SYNC.md.
 
-**Enforcement, from phase 3 on:**
+**Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
   (`update`, `into`, `delete`) and raw `UPDATE`/`INSERT`/`DELETE` on
   `emails` may appear only in the email state writer and in migrations.
@@ -837,6 +931,10 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 
 The email state writer (§2) is `lib/data/repositories/email_state_writer.dart`
 (phase 3a), outside the parts so `mailbox_repository_impl.dart` can use it.
+Since phase 3b it also holds the row deletes, the header backfills and the
+carry-over's whole-row copy, and `scripts/check_email_writes.sh` lists the
+members that still write `emails` themselves (allow-list, with the phase
+that moves each).
 
 The line numbers below are from before the split (`33c67b4`).
 

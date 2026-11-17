@@ -798,7 +798,7 @@ extension _SyncJmap on EmailRepositoryImpl {
     final email = await _rowByJmapId(accountId, jmapId);
     if (email == null) return;
     final tid = email.threadId ?? email.id;
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(email.id))).go();
+    await _state.deleteRow(email.id);
     await _updateThread(accountId, email.mailboxPath, tid);
   }
 
@@ -907,7 +907,7 @@ extension _SyncJmap on EmailRepositoryImpl {
       if (jmapId == null || serverIds.contains(jmapId)) continue;
       if (inFlightSet.contains(row.id)) continue;
       affectedThreads.add(row.threadId ?? row.id);
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+      await _state.deleteRow(row.id);
       removed++;
     }
     for (final tid in affectedThreads) {
@@ -1164,7 +1164,7 @@ extension _SyncJmap on EmailRepositoryImpl {
         if (existingRow != null) {
           final tid = existingRow.threadId ?? dbId;
           final oldMailbox = existingRow.mailboxPath;
-          await (_db.delete(_db.emails)..where((t) => t.id.equals(dbId))).go();
+          await _state.deleteRow(dbId);
           affectedByMailbox.putIfAbsent(oldMailbox, () => {}).add(tid);
         }
         continue;

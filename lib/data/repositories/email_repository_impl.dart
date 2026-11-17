@@ -107,6 +107,7 @@ class EmailRepositoryImpl implements EmailRepository {
     Duration sendOperationTimeout = const Duration(seconds: 50),
     DateTime Function() now = DateTime.now,
     EmailIdGenerator newId = newEmailId,
+    OverlayConsistencySampler? consistencySampler,
   })  : _db = db,
         _now = now,
         _newId = newId,
@@ -119,6 +120,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
         _state = EmailStateWriter(db, appLogger: appLogger),
+        _consistencySampler = consistencySampler,
         _sendOperationTimeout = sendOperationTimeout;
 
   final AppDatabase _db;
@@ -177,6 +179,11 @@ class EmailRepositoryImpl implements EmailRepository {
   /// The email state writer (SYNC-REDESIGN.md §2): the only writer of the
   /// read/star/snooze columns.
   final EmailStateWriter _state;
+
+  /// The sampled overlay consistency check after each sync run
+  /// ([EmailStateWriter.checkSample]); off when null (tests check the whole
+  /// table themselves).
+  final OverlayConsistencySampler? _consistencySampler;
 
   /// Tail of the in-flight [_setFlag] chain per email id. [_setFlag] reads the
   /// row, drops no-op flags, then writes; two overlapping calls for the same

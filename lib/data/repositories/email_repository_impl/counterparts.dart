@@ -136,7 +136,7 @@ extension _Counterparts on EmailRepositoryImpl {
 
     // Remove the virtual row first so thread aggregates count only the real
     // message from here on.
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(local.id))).go();
+    await _state.deleteRow(local.id);
     await (_db.delete(_db.emailBodies)
           ..where((t) => t.emailId.equals(local.id)))
         .go();
@@ -273,7 +273,7 @@ extension _Counterparts on EmailRepositoryImpl {
   /// row stops appearing in the combined inbox until the next sync reconciles
   /// it to its true server location. See [_mirrorMoveToCounterparts].
   Future<void> _dropStaleCounterpartRow(Email row) async {
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+    await _state.deleteRow(row.id);
     await _updateThread(row.accountId, row.mailboxPath, row.threadId ?? row.id);
   }
 

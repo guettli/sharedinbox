@@ -540,7 +540,7 @@ extension _UserActions on EmailRepositoryImpl {
         'delete',
         jsonEncode(<String, dynamic>{}),
       );
-      await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+      await _state.deleteRow(emailId);
       await _updateThread(
         row.accountId,
         row.mailboxPath,
@@ -555,7 +555,7 @@ extension _UserActions on EmailRepositoryImpl {
       'delete',
       jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
     );
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+    await _state.deleteRow(emailId);
     await _updateThread(
       row.accountId,
       row.mailboxPath,

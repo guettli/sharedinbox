@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -250,99 +251,342 @@ class EmailStateWriter {
         updateKind: UpdateKind.delete,
       );
 
-  /// The rows of [accountId] (all accounts when null) that break the
-  /// overlay's invariants: an effective column that is not
-  /// `COALESCE(local, srv)`, or a `local_*` value without a foldable op.
-  /// Empty when consistent. For tests, the fuzz property and the sampled
-  /// checks of phase 3b.
-  Future<List<String>> consistencyProblems({String? accountId}) async {
-    final scope = accountId == null ? '' : 'AND e.account_id = ?1';
-    final rows = await _db.customSelect(
-      '''
-      SELECT e.id,
-        e.is_seen IS NOT COALESCE(e.local_is_seen, e.srv_is_seen) AS bad_seen,
-        e.is_flagged IS NOT COALESCE(e.local_is_flagged, e.srv_is_flagged)
-          AS bad_flagged,
-        e.snoozed_until IS NOT
-          NULLIF(COALESCE(e.local_snoozed_until, e.srv_snoozed_until), 0)
-          AS bad_snooze,
-        (e.local_is_seen IS NOT NULL OR e.local_is_flagged IS NOT NULL
-          OR e.local_snoozed_until IS NOT NULL)
-          AND NOT EXISTS (SELECT 1 FROM pending_changes p
-            WHERE p.resource_id = e.id
-              AND p.state IN ('pending', 'inflight', 'stuck', 'acked'))
-          AS orphan_local
-      FROM emails e
-      WHERE (e.is_seen IS NOT COALESCE(e.local_is_seen, e.srv_is_seen)
-        OR e.is_flagged IS NOT COALESCE(e.local_is_flagged, e.srv_is_flagged)
-        OR e.snoozed_until IS NOT
-          NULLIF(COALESCE(e.local_snoozed_until, e.srv_snoozed_until), 0)
-        OR ((e.local_is_seen IS NOT NULL OR e.local_is_flagged IS NOT NULL
-            OR e.local_snoozed_until IS NOT NULL)
-          AND NOT EXISTS (SELECT 1 FROM pending_changes p
-            WHERE p.resource_id = e.id
-              AND p.state IN ('pending', 'inflight', 'stuck', 'acked'))))
-        $scope
-      ''',
-      variables: [if (accountId != null) Variable.withString(accountId)],
-    ).get();
-    final opsByRow = <String, List<PendingChangeRow>>{};
-    for (final op in await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.state.isIn(foldableOpStates) &
-                (accountId == null
-                    ? const Constant(true)
-                    : t.accountId.equals(accountId)),
-          ))
-        .get()) {
-      (opsByRow[op.resourceId] ??= []).add(op);
+  /// The rows that break the overlay's invariants (SYNC-REDESIGN.md §2):
+  /// an effective column that is not `COALESCE(local, srv)`, or a `local_*`
+  /// value that is not the fold of the row's foldable ops (which covers one
+  /// on a row without any). Rows of [accountId] (all accounts when null);
+  /// only [emailIds] when given, otherwise every row that has a `local_*`
+  /// value, a foldable op or an effective column out of line. Empty when
+  /// consistent. For tests, the fuzz property and [checkSample].
+  Future<List<ConsistencyProblem>> consistencyProblems({
+    String? accountId,
+    Iterable<String>? emailIds,
+  }) async {
+    final rows = <QueryRow>[];
+    if (emailIds == null) {
+      rows.addAll(
+        await _db.customSelect(
+          '$_overlaySelect WHERE ('
+          'e.is_seen IS NOT COALESCE(e.local_is_seen, e.srv_is_seen) '
+          'OR e.is_flagged IS NOT COALESCE(e.local_is_flagged, '
+          'e.srv_is_flagged) '
+          'OR e.snoozed_until IS NOT NULLIF(COALESCE(e.local_snoozed_until, '
+          'e.srv_snoozed_until), 0) '
+          'OR e.local_is_seen IS NOT NULL OR e.local_is_flagged IS NOT NULL '
+          'OR e.local_snoozed_until IS NOT NULL '
+          'OR EXISTS (SELECT 1 FROM pending_changes p '
+          'WHERE p.resource_id = e.id AND p.state IN ($_foldableSql)))'
+          '${accountId == null ? '' : ' AND e.account_id = ?1'}',
+          variables: [if (accountId != null) Variable.withString(accountId)],
+        ).get(),
+      );
+    } else {
+      final ids = emailIds.toSet().toList();
+      for (var i = 0; i < ids.length; i += 500) {
+        final chunk = ids.sublist(i, min(i + 500, ids.length));
+        rows.addAll(
+          await _db.customSelect(
+            '$_overlaySelect WHERE e.id IN '
+            '(${List.filled(chunk.length, '?').join(', ')})'
+            '${accountId == null ? '' : ' AND e.account_id = ?'}',
+            variables: [
+              for (final id in chunk) Variable.withString(id),
+              if (accountId != null) Variable.withString(accountId),
+            ],
+          ).get(),
+        );
+      }
     }
-    final notFolded = <String>[];
-    final locals = await _db.customSelect(
-      'SELECT id, local_is_seen, local_is_flagged, local_snoozed_until '
-      'FROM emails e WHERE (local_is_seen IS NOT NULL '
-      'OR local_is_flagged IS NOT NULL OR local_snoozed_until IS NOT NULL '
-      'OR EXISTS (SELECT 1 FROM pending_changes p '
-      'WHERE p.resource_id = e.id '
-      "AND p.state IN ('pending', 'inflight', 'stuck', 'acked'))) $scope",
-      variables: [if (accountId != null) Variable.withString(accountId)],
-    ).get();
-    for (final r in locals) {
-      final id = r.read<String>('id');
-      final snooze = r.readNullable<int>('local_snoozed_until');
-      final stored = KeywordLocal(
-        seen: r.readNullable<bool>('local_is_seen'),
-        flagged: r.readNullable<bool>('local_is_flagged'),
-        snoozedUntil: snooze == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(snooze * 1000, isUtc: true),
-      );
-      final folded = foldKeywords((opsByRow[id] ?? const []).map(foldOpOf));
-      // The fold at second precision, as stored.
-      final expected = KeywordLocal(
-        seen: folded.seen,
-        flagged: folded.flagged,
-        snoozedUntil: folded.snoozedUntil == null
-            ? null
-            : DateTime.fromMillisecondsSinceEpoch(
-                _seconds(folded.snoozedUntil!) * 1000,
-                isUtc: true,
-              ),
-      );
-      if (stored != expected) {
-        notFolded.add('$id: local_* $stored, the fold of its ops $expected');
+    final opsByRow = <String, List<PendingChangeRow>>{};
+    final rowIds = [for (final r in rows) r.read<String>('id')];
+    for (var i = 0; i < rowIds.length; i += 500) {
+      final chunk = rowIds.sublist(i, min(i + 500, rowIds.length));
+      for (final op in await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) => t.state.isIn(foldableOpStates) & t.resourceId.isIn(chunk),
+            ))
+          .get()) {
+        (opsByRow[op.resourceId] ??= []).add(op);
       }
     }
     return [
-      ...notFolded,
       for (final r in rows)
-        '${r.read<String>('id')}:'
-            '${r.read<bool>('bad_seen') ? ' is_seen' : ''}'
-            '${r.read<bool>('bad_flagged') ? ' is_flagged' : ''}'
-            '${r.read<bool>('bad_snooze') ? ' snoozed_until' : ''}'
-            '${r.read<bool>('orphan_local') ? ' local_* without an op' : ''}',
+        if (_problemOf(r, opsByRow[r.read<String>('id')] ?? const [])
+            case final problem?)
+          problem,
     ];
+  }
+
+  static const _overlaySelect = 'SELECT e.id, e.account_id, '
+      'e.is_seen, e.is_flagged, e.snoozed_until, '
+      'e.srv_is_seen, e.srv_is_flagged, e.srv_snoozed_until, '
+      'e.local_is_seen, e.local_is_flagged, e.local_snoozed_until '
+      'FROM emails e';
+
+  static final _foldableSql = foldableOpStates.map((s) => "'$s'").join(', ');
+
+  /// The invariants of one row read with [_overlaySelect] and its foldable
+  /// [ops]; null when it keeps them.
+  ConsistencyProblem? _problemOf(QueryRow r, List<PendingChangeRow> ops) {
+    final seen = r.read<bool>('is_seen');
+    final flagged = r.read<bool>('is_flagged');
+    final snooze = r.readNullable<int>('snoozed_until');
+    final srvSeen = r.read<bool>('srv_is_seen');
+    final srvFlagged = r.read<bool>('srv_is_flagged');
+    final srvSnooze = r.readNullable<int>('srv_snoozed_until');
+    final localSeen = r.readNullable<bool>('local_is_seen');
+    final localFlagged = r.readNullable<bool>('local_is_flagged');
+    final localSnooze = r.readNullable<int>('local_snoozed_until');
+    final folded = foldKeywords(ops.map(foldOpOf));
+    final foldSnooze =
+        folded.snoozedUntil == null ? null : _seconds(folded.snoozedUntil!);
+    final shownSnooze = localSnooze ?? srvSnooze;
+    final fields = [
+      if (seen != (localSeen ?? srvSeen)) 'is_seen',
+      if (flagged != (localFlagged ?? srvFlagged)) 'is_flagged',
+      if (snooze != (shownSnooze == 0 ? null : shownSnooze)) 'snoozed_until',
+      if (localSeen != folded.seen) 'local_is_seen',
+      if (localFlagged != folded.flagged) 'local_is_flagged',
+      if (localSnooze != foldSnooze) 'local_snoozed_until',
+    ];
+    if (fields.isEmpty) return null;
+    return ConsistencyProblem(
+      emailId: r.read<String>('id'),
+      accountId: r.read<String>('account_id'),
+      fields: fields,
+      withoutOps: ops.isEmpty,
+      values: {
+        'effective': {'seen': seen, 'flagged': flagged, 'snoozedUntil': snooze},
+        'srv': {
+          'seen': srvSeen,
+          'flagged': srvFlagged,
+          'snoozedUntil': srvSnooze,
+        },
+        'local': {
+          'seen': localSeen,
+          'flagged': localFlagged,
+          'snoozedUntil': localSnooze,
+        },
+        'fold': {
+          'seen': folded.seen,
+          'flagged': folded.flagged,
+          'snoozedUntil': foldSnooze,
+        },
+        'ops': [for (final op in ops) '#${op.id} ${op.state} ${op.changeType}'],
+      },
+    );
+  }
+
+  /// The sampled form of [consistencyProblems] that runs after sync runs
+  /// in every build ([OverlayConsistencySampler]), bounded so it stays cheap
+  /// on a large mailbox: the rows of [accountId] with the [sampleSize] most
+  /// recent foldable ops, plus [sampleSize] rows of the account in `rowid`
+  /// order from a random start (wrapping around). It reads in one
+  /// transaction, so an enqueue and its fold cannot fall between reading a
+  /// row and its ops.
+  ///
+  /// Each problem is logged first (App Log error `overlay.inconsistent`,
+  /// the mismatching fields and the row's values in `data`; the first
+  /// [logEach] rows one line each, the rest in one summary line) and then
+  /// repaired by re-folding the row ([refold]: `local_*` from its ops, the
+  /// effective columns from both). Logging first keeps the bug visible;
+  /// repairing spares the user a wrong read/star/snooze state until the
+  /// row's next server read. The log line says that it repaired.
+  /// [onRepaired] gets the rows whose shown value the repair changed, for
+  /// their thread aggregates.
+  Future<List<ConsistencyProblem>> checkSample(
+    String accountId, {
+    int sampleSize = 200,
+    int logEach = 10,
+    Random? random,
+    Future<void> Function(Set<String> emailIds)? onRepaired,
+  }) async {
+    final problems = await _db.transaction(() async {
+      final ids = await sampleIds(
+        accountId,
+        sampleSize: sampleSize,
+        random: random ?? Random(),
+      );
+      return consistencyProblems(accountId: accountId, emailIds: ids);
+    });
+    if (problems.isEmpty) return problems;
+    for (final p in problems.take(logEach)) {
+      await _appLogger?.error(
+        'overlay.inconsistent',
+        'Read/star/snooze columns out of line (${p.fields.join(', ')}); '
+            're-folding the row to repair it',
+        accountId: p.accountId,
+        emailId: p.emailId,
+        data: {'fields': p.fields, 'withoutOps': p.withoutOps, ...p.values},
+      );
+    }
+    if (problems.length > logEach) {
+      final rest = problems.skip(logEach).toList();
+      await _appLogger?.error(
+        'overlay.inconsistent',
+        '${problems.length} rows with read/star/snooze columns out of line '
+            'in one sample, ${rest.length} more than logged one by one; '
+            're-folding them to repair them',
+        accountId: accountId,
+        data: {
+          'total': problems.length,
+          'fields': {for (final p in rest) ...p.fields}.toList(),
+          'emailIds': [for (final p in rest.take(100)) p.emailId],
+        },
+      );
+    }
+    final changed = <String>{};
+    for (final p in problems) {
+      if (await refold(p.emailId)) changed.add(p.emailId);
+    }
+    if (changed.isNotEmpty) await onRepaired?.call(changed);
+    return problems;
+  }
+
+  /// The rows [checkSample] looks at, see there. The block query reads
+  /// `+account_id` so SQLite walks the `rowid` range (stopping after the
+  /// limit) instead of collecting the account's rows by index and sorting
+  /// them; the range is the account's own, so a start is uniform over it.
+  Future<Set<String>> sampleIds(
+    String accountId, {
+    required int sampleSize,
+    required Random random,
+  }) async {
+    final ids = <String>{
+      for (final r in await _db.customSelect(
+        'SELECT resource_id AS id FROM pending_changes '
+        'WHERE account_id = ?1 AND state IN ($_foldableSql) '
+        'GROUP BY resource_id ORDER BY MAX(id) DESC LIMIT ?2',
+        variables: [
+          Variable.withString(accountId),
+          Variable.withInt(sampleSize),
+        ],
+      ).get())
+        r.read<String>('id'),
+    };
+    final bounds = await _db.customSelect(
+      'SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM emails '
+      'WHERE account_id = ?1',
+      variables: [Variable.withString(accountId)],
+    ).getSingle();
+    final lo = bounds.readNullable<int>('lo');
+    final hi = bounds.readNullable<int>('hi');
+    if (lo == null || hi == null) return ids;
+    final start = lo + random.nextInt(hi - lo + 1);
+    Future<List<String>> block(String range, int limit) async => [
+          for (final r in await _db.customSelect(
+            'SELECT id FROM emails WHERE +account_id = ?1 AND rowid $range ?2 '
+            'ORDER BY rowid LIMIT ?3',
+            variables: [
+              Variable.withString(accountId),
+              Variable.withInt(start),
+              Variable.withInt(limit),
+            ],
+          ).get())
+            r.read<String>('id'),
+        ];
+    final after = await block('>=', sampleSize);
+    ids.addAll(after);
+    if (after.length < sampleSize) {
+      ids.addAll(await block('<', sampleSize - after.length));
+    }
+    return ids;
+  }
+
+  /// When [OverlayConsistencySampler] last checked [accountId], kept in
+  /// `sync_states` (`Overlay:ConsistencyCheck`), so the interval holds
+  /// across restarts and isolates.
+  Future<DateTime?> lastSampleCheck(String accountId) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_sampleCheckKey),
+          ))
+        .getSingleOrNull();
+    return row == null ? null : DateTime.tryParse(row.state);
+  }
+
+  /// Records [at] as [lastSampleCheck] of [accountId].
+  Future<void> recordSampleCheck(String accountId, DateTime at) =>
+      _db.into(_db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: accountId,
+              resourceType: _sampleCheckKey,
+              state: at.toUtc().toIso8601String(),
+              syncedAt: at,
+            ),
+          );
+
+  static const _sampleCheckKey = 'Overlay:ConsistencyCheck';
+
+  // ── Other columns ──────────────────────────────────────────────────────
+  // Writes of `emails` that touch no overlay column, kept here so that one
+  // file holds the table's writers (scripts/check_email_writes.sh; the
+  // location writes still elsewhere are on its allow-list until phase 4).
+
+  /// Deletes row [emailId]; its body and downloaded attachments cascade.
+  /// Phase 4's clean-up rule (a row with ops is hidden, not deleted) will
+  /// live here.
+  Future<void> deleteRow(String emailId) =>
+      (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
+
+  /// Deletes every row [accountId] shows in [mailboxPath] (a folder that is
+  /// gone, or whose UIDVALIDITY changed), or every row of the account when
+  /// [mailboxPath] is null (force resync).
+  Future<void> deleteRowsOf(String accountId, {String? mailboxPath}) =>
+      (_db.delete(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  (mailboxPath == null
+                      ? const Constant(true)
+                      : t.mailboxPath.equals(mailboxPath)),
+            ))
+          .go();
+
+  /// Fills header columns of row [emailId] that a later schema added or an
+  /// earlier sync missed (null leaves a column alone). No user intent, so
+  /// any read may write them (SYNC-REDESIGN.md §2).
+  Future<void> writeHeaders(
+    String emailId, {
+    String? preview,
+    String? listUnsubscribeHeader,
+    String? replyToJson,
+    String? bccJson,
+  }) =>
+      (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
+        EmailsCompanion(
+          preview: Value.absentIfNull(preview),
+          listUnsubscribeHeader: Value.absentIfNull(listUnsubscribeHeader),
+          replyToJson: Value.absentIfNull(replyToJson),
+          bccJson: Value.absentIfNull(bccJson),
+        ),
+      );
+
+  /// Stores the message sizes in [sizeById] (email row id → bytes) in one
+  /// batch.
+  Future<void> writeSizes(Map<String, int> sizeById) async {
+    if (sizeById.isEmpty) return;
+    await _db.batch((b) {
+      for (final MapEntry(key: id, value: size) in sizeById.entries) {
+        b.update(
+          _db.emails,
+          EmailsCompanion(sizeBytes: Value(size)),
+          where: (t) => t.id.equals(id),
+        );
+      }
+    });
+  }
+
+  /// The foreign-move carry-over (`_carryOverMovedRow`): row [keepId] takes
+  /// everything [copy] recorded except its id, the read/star/snooze state
+  /// with the stamp it was read under included, and the fold of [keepId]'s
+  /// ops (the copy's point here by now) goes over it.
+  Future<void> takeOverRow(String keepId, Email copy) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(keepId)))
+        .write(copy.toCompanion(false).copyWith(id: const Value.absent()));
+    await refold(keepId);
   }
 
   Future<_Effective?> _effective(String emailId) async {
@@ -665,4 +909,96 @@ class _Effective {
 
   @override
   int get hashCode => Object.hash(seen, flagged, snoozedUntil);
+}
+
+/// A row that breaks the `keywords` overlay's invariants
+/// ([EmailStateWriter.consistencyProblems]).
+class ConsistencyProblem {
+  const ConsistencyProblem({
+    required this.emailId,
+    required this.accountId,
+    required this.fields,
+    required this.withoutOps,
+    required this.values,
+  });
+
+  final String emailId;
+  final String accountId;
+
+  /// The columns out of line: an effective column (`is_seen`,
+  /// `is_flagged`, `snoozed_until`) that is not `COALESCE(local, srv)`, or
+  /// a `local_*` column that is not the fold of the row's ops.
+  final List<String> fields;
+
+  /// Whether the row has no foldable op (then every `local_*` must be NULL).
+  final bool withoutOps;
+
+  /// The row's effective, `srv_*` and `local_*` values, the fold and the
+  /// ops, for the App Log.
+  final Map<String, Object?> values;
+
+  @override
+  String toString() => '$emailId: ${fields.join(' ')}'
+      '${withoutOps ? ' (no foldable op)' : ''} $values';
+}
+
+/// Runs [EmailStateWriter.checkSample] after a sync run, at most once per
+/// [interval] per account, on at most twice [sampleSize] rows
+/// (SYNC-REDESIGN.md §8 phase 3b). The time of the last check is kept in
+/// memory and in the database ([EmailStateWriter.recordSampleCheck]), so the
+/// interval holds across restarts, isolates and repository rebuilds.
+class OverlayConsistencySampler {
+  OverlayConsistencySampler({
+    this.interval = const Duration(minutes: 30),
+    this.sampleSize = 200,
+    DateTime Function() now = DateTime.now,
+    Random? random,
+  })  : _now = now,
+        _random = random ?? Random();
+
+  final Duration interval;
+  final int sampleSize;
+  final DateTime Function() _now;
+  final Random _random;
+  final Map<String, DateTime> _lastRun = {};
+
+  /// Checks a sample of [accountId]'s rows through [writer] unless that ran
+  /// less than [interval] ago; returns the problems found (empty when
+  /// skipped). [onRepaired] as in [EmailStateWriter.checkSample]. Never
+  /// throws: a check must not fail a sync.
+  Future<List<ConsistencyProblem>> afterSyncRun(
+    EmailStateWriter writer,
+    String accountId, {
+    Future<void> Function(Set<String> emailIds)? onRepaired,
+  }) async {
+    try {
+      final now = _now();
+      final last =
+          _lastRun[accountId] ?? await writer.lastSampleCheck(accountId);
+      // A last check "in the future" (a clock set back) does not count.
+      if (last != null &&
+          !last.isAfter(now) &&
+          now.difference(last) < interval) {
+        _lastRun[accountId] = last;
+        return const [];
+      }
+      _lastRun[accountId] = now;
+      await writer.recordSampleCheck(accountId, now);
+      return await writer.checkSample(
+        accountId,
+        sampleSize: sampleSize,
+        random: _random,
+        onRepaired: onRepaired,
+      );
+    } catch (e, st) {
+      await writer._appLogger?.warn(
+        'overlay.check_failed',
+        'The sampled read/star/snooze consistency check failed',
+        accountId: accountId,
+        error: e,
+        stack: st,
+      );
+      return const [];
+    }
+  }
 }

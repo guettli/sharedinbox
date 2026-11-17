@@ -1463,11 +1463,7 @@ Future<void> removeLocalMailbox(
 }) async {
   final failed = <PendingChangeRow>[];
   await db.transaction(() async {
-    await (db.delete(db.emails)
-          ..where(
-            (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),
-          ))
-        .go();
+    await EmailStateWriter(db).deleteRowsOf(accountId, mailboxPath: path);
     await (db.delete(db.threads)
           ..where(
             (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),

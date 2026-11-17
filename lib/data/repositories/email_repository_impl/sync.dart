@@ -14,7 +14,7 @@ extension _Sync on EmailRepositoryImpl {
     final password = await _accounts.getPassword(accountId);
     // One sync run: a change one of its reads contradicts is given up only
     // on a read of a later run (SYNC.md §6a).
-    return _state.inSyncRun(() async {
+    final result = await _state.inSyncRun(() async {
       switch (account.type) {
         case account_model.AccountType.imap:
           return _syncEmailsImap(account, password, mailboxPath);
@@ -22,6 +22,29 @@ extension _Sync on EmailRepositoryImpl {
           return _syncEmailsJmap(account, password, mailboxPath);
       }
     });
+    // Sampled, at most every half hour per account (SYNC.md §6a). Awaited:
+    // it is bounded (a few ms when due, one row read otherwise), and a
+    // background isolate may end as soon as the sync returns.
+    await _consistencySampler?.afterSyncRun(
+      _state,
+      accountId,
+      onRepaired: _refreshThreadsOf,
+    );
+    return result;
+  }
+
+  /// Refreshes the thread aggregates of the rows [emailIds] (the sampled
+  /// consistency check repaired their shown read/star/snooze state).
+  Future<void> _refreshThreadsOf(Set<String> emailIds) async {
+    final rows =
+        await (_db.select(_db.emails)..where((t) => t.id.isIn(emailIds))).get();
+    for (final row in rows) {
+      await _updateThread(
+        row.accountId,
+        row.mailboxPath,
+        row.threadId ?? row.id,
+      );
+    }
   }
 
   /// Opportunistic backfill for address headers stored only since a later
@@ -61,12 +84,7 @@ extension _Sync on EmailRepositoryImpl {
     final replyTo = decode(emailRow.replyToJson, 'Reply-To');
     final bcc = decode(emailRow.bccJson, 'Bcc');
     if (replyTo == null && bcc == null) return;
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(
-        replyToJson: replyTo == null ? const Value.absent() : Value(replyTo),
-        bccJson: bcc == null ? const Value.absent() : Value(bcc),
-      ),
-    );
+    await _state.writeHeaders(emailId, replyToJson: replyTo, bccJson: bcc);
   }
 
   /// Records the first time a server message is stored locally, so the
@@ -104,10 +122,7 @@ extension _Sync on EmailRepositoryImpl {
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
-        await (_db.delete(
-          _db.emails,
-        )..where((t) => t.accountId.equals(accountId)))
-            .go();
+        await _state.deleteRowsOf(accountId);
         // NB: pending_changes are deliberately NOT deleted here. A queued
         // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
         // the server yet) is un-pushed user intent — dropping it would let the
@@ -145,13 +160,7 @@ extension _Sync on EmailRepositoryImpl {
         // before clearing; anything still queued (offline) survives and is
         // retried on the next sync, its payload carrying the uid/id needed to
         // apply it even though the email row was deleted.
-        await (_db.delete(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.mailboxPath.equals(mailboxPath),
-              ))
-            .go();
+        await _state.deleteRowsOf(accountId, mailboxPath: mailboxPath);
         await (_db.delete(_db.threads)
               ..where(
                 (t) =>
