@@ -143,6 +143,12 @@ extension _SyncJmap on EmailRepositoryImpl {
       password: password,
     );
 
+    // Read before this run's reads: a contradiction one of them finds makes
+    // the reconcile due for the *next* run (see [_maybeReconcileJmapMailbox]).
+    final reconcileDue = await _loadSyncState(
+      account.id,
+      _flagReconcileDueKey(mailboxJmapId, jmap: true),
+    );
     final mailboxResourceType = 'JMAP:Email:$mailboxJmapId';
     var storedMailboxState =
         await _loadSyncState(account.id, mailboxResourceType);
@@ -199,7 +205,12 @@ extension _SyncJmap on EmailRepositoryImpl {
       // Its own failure must not replace the sync's: a throw out of a
       // `finally` discards the exception in flight.
       try {
-        await _maybeReconcileJmapMailbox(account.id, jmap, mailboxJmapId);
+        await _maybeReconcileJmapMailbox(
+          account.id,
+          jmap,
+          mailboxJmapId,
+          dueValue: reconcileDue,
+        );
       } catch (e, stack) {
         log(
           'JMAP-sync: reconcile failed for mailbox=$mailboxJmapId',
@@ -491,33 +502,28 @@ extension _SyncJmap on EmailRepositoryImpl {
         i,
         math.min(i + _jmapGetBatchSize, ids.length),
       );
-      final flagRead = await _startServerFlagRead(accountId);
-      final Map<String, dynamic> result;
-      final List<dynamic> list;
-      try {
-        final responses = await jmap.call([
-          [
-            'Email/get',
-            {
-              'accountId': jmap.accountId,
-              'ids': batch,
-              'properties': _emailProperties,
-              ..._emailGetBodyOptions,
-            },
-            '0',
-          ],
-        ]);
-        result = _responseArgs(responses, 0, 'Email/get');
-        list = result['list'] as List<dynamic>;
-        bytes += await _upsertJmapEmails(
-          accountId,
-          list,
-          currentMailboxJmapId: mailboxJmapId,
-          flagRead: flagRead,
-        );
-      } finally {
-        _endServerFlagRead();
-      }
+      // Taken right before the request: its keywords are at least this new.
+      final read = await _state.beginRead(accountId);
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': batch,
+            'properties': _emailProperties,
+            ..._emailGetBodyOptions,
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Email/get');
+      final list = result['list'] as List<dynamic>;
+      bytes += await _upsertJmapEmails(
+        accountId,
+        list,
+        currentMailboxJmapId: mailboxJmapId,
+        read: read,
+      );
       fetched += list.length;
 
       if (!deleteMissing) continue;
@@ -610,7 +616,7 @@ extension _SyncJmap on EmailRepositoryImpl {
       // Deliberately inside the loop: `_upsertJmapEmails` can enqueue changes
       // of its own via the #545 dissolve, so hoisting this lookup out would
       // read a stale set.
-      final inFlight = await _inFlightFlagResourceIds(accountId);
+      final inFlight = await _rowsWithLiveChanges(accountId);
       for (final jmapId in missing) {
         final row = await _rowByJmapId(accountId, jmapId);
         if (row != null && inFlight.contains(row.id)) {
@@ -826,7 +832,7 @@ extension _SyncJmap on EmailRepositoryImpl {
   /// orphaned from the folder it left and the one it has not arrived in.
   ///
   /// For a guard that only needs "does the user have an edit in flight", use
-  /// [_SyncImap._inFlightFlagResourceIds] — it covers flag edits and deletes too.
+  /// [_rowsWithLiveChanges] — it covers flag edits and deletes too.
   /// A failed move or snooze is not counted: its row follows the server.
   Future<Set<String>> _rowsWithUnflushedMoveOrSnooze(String accountId) async {
     final ids = await (_db.selectOnly(_db.pendingChanges)
@@ -836,6 +842,32 @@ extension _SyncJmap on EmailRepositoryImpl {
                 _db.pendingChanges.state.isIn(_liveStates) &
                 _db.pendingChanges.changeType.isIn(
                   const ['move', 'snooze', 'unsnooze'],
+                ),
+          ))
+        .map((row) => row.read(_db.pendingChanges.resourceId)!)
+        .get();
+    return ids.toSet();
+  }
+
+  /// Row ids on [accountId] with a change still queued (pending, being sent
+  /// or stuck), of any kind: a row the server disclaims is kept while the
+  /// user has an edit in flight for it. A failed change protects nothing.
+  Future<Set<String>> _rowsWithLiveChanges(String accountId) async {
+    final ids = await (_db.selectOnly(_db.pendingChanges)
+          ..addColumns([_db.pendingChanges.resourceId])
+          ..where(
+            _db.pendingChanges.accountId.equals(accountId) &
+                _db.pendingChanges.state.isIn(_liveStates) &
+                _db.pendingChanges.changeType.isIn(
+                  const [
+                    'flag_seen',
+                    'flag_flagged',
+                    'move',
+                    'snooze',
+                    'unsnooze',
+                    'clear_snooze',
+                    'delete',
+                  ],
                 ),
           ))
         .map((row) => row.read(_db.pendingChanges.resourceId)!)
@@ -893,17 +925,19 @@ extension _SyncJmap on EmailRepositoryImpl {
   /// this for existence (#262) and Stalwart 0.14.x similarly under-reports
   /// keyword changes to the paired IMAP account, causing "seen" drift on the
   /// compare view (#407).
+  ///
+  /// [dueValue] is the due marker as it was when the sync run started: one
+  /// set during this run (an acked change a read just contradicted, SYNC.md
+  /// §6a) waits for the next run, so the second read that may drop the
+  /// change is a later one, not milliseconds later on the same request.
   Future<void> _maybeReconcileJmapMailbox(
     String accountId,
     JmapClient jmap,
-    String mailboxJmapId,
-  ) async {
+    String mailboxJmapId, {
+    required String? dueValue,
+  }) async {
     final key = 'JMAP:Reconcile:$mailboxJmapId';
     final last = await _loadSyncState(accountId, key);
-    final dueValue = await _loadSyncState(
-      accountId,
-      _flagReconcileDueKey(mailboxJmapId, jmap: true),
-    );
     if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
@@ -997,9 +1031,9 @@ extension _SyncJmap on EmailRepositoryImpl {
   }
 
   /// Fetches `keywords` for every local row in [mailboxJmapId] whose JMAP id
-  /// is still on the server and rewrites `isSeen` / `isFlagged` from truth.
-  /// Skips rows whose flag change is still queued in `pendingChanges` so an
-  /// unflushed optimistic edit is not silently reverted.
+  /// is still on the server and writes them through the server-write gate.
+  /// A queued change folds over the server's value, so an unflushed
+  /// optimistic edit is not reverted.
   Future<void> _reconcileJmapFlagsForMailbox(
     String accountId,
     JmapClient jmap,
@@ -1022,13 +1056,9 @@ extension _SyncJmap on EmailRepositoryImpl {
         if (r.srvJmapId != null) r.srvJmapId!: r,
     };
 
-    final inFlightSet = await _inFlightFlagResourceIds(accountId);
-
     final toCheck = [
       for (final jmapId in localByJmapId.keys)
-        if (serverIds.contains(jmapId) &&
-            !inFlightSet.contains(localByJmapId[jmapId]!.id))
-          jmapId,
+        if (serverIds.contains(jmapId)) jmapId,
     ];
     if (toCheck.isEmpty) return;
 
@@ -1040,51 +1070,38 @@ extension _SyncJmap on EmailRepositoryImpl {
         offset,
         math.min(offset + _jmapPageSize, toCheck.length),
       );
-      final flagRead = await _startServerFlagRead(accountId);
-      try {
-        final responses = await jmap.call([
-          [
-            'Email/get',
-            {
-              'accountId': jmap.accountId,
-              'ids': batch,
-              // `size` backfills rows cached before schema v64.
-              'properties': ['id', 'keywords', 'size'],
-            },
-            '0',
-          ],
-        ]);
-        final getResult = _responseArgs(responses, 0, 'Email/get');
-        final list = getResult['list'] as List<dynamic>;
-        final queuedNow = await _inFlightFlagResourceIds(accountId);
-        for (final e in list) {
-          final m = e as Map<String, dynamic>;
-          final jmapId = m['id'] as String;
-          final row = localByJmapId[jmapId];
-          if (row == null) continue;
-          final size = m['size'];
-          if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
-          final keywords = (m['keywords'] as Map<String, dynamic>?) ?? {};
-          final serverSeen = keywords.containsKey(r'$seen');
-          final serverFlagged = keywords.containsKey(r'$flagged');
-          if (serverSeen == row.isSeen && serverFlagged == row.isFlagged) {
-            continue;
-          }
-          // `row` was read before the first batch; a change made since is
-          // newer than this answer.
-          if (flagRead.protects(row.id, queuedNow)) continue;
-          await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
-              .write(
-            EmailsCompanion(
-              isSeen: Value(serverSeen),
-              isFlagged: Value(serverFlagged),
-            ),
-          );
-          affectedThreads.add(row.threadId ?? row.id);
-          corrected++;
-        }
-      } finally {
-        _endServerFlagRead();
+      final read = await _state.beginRead(accountId);
+      final responses = await jmap.call([
+        [
+          'Email/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': batch,
+            // `size` backfills rows cached before schema v64.
+            'properties': ['id', 'keywords', 'size'],
+          },
+          '0',
+        ],
+      ]);
+      final getResult = _responseArgs(responses, 0, 'Email/get');
+      final list = getResult['list'] as List<dynamic>;
+      final rows = <String, Email>{};
+      final byRow = <String, ServerKeywords>{};
+      for (final e in list) {
+        final m = e as Map<String, dynamic>;
+        final jmapId = m['id'] as String;
+        final row = localByJmapId[jmapId];
+        if (row == null) continue;
+        final size = m['size'];
+        if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
+        rows[row.id] = row;
+        byRow[row.id] =
+            ServerKeywords.jmap(m['keywords'] as Map<String, dynamic>?);
+      }
+      for (final id in await read.writeAll(byRow)) {
+        final row = rows[id]!;
+        affectedThreads.add(row.threadId ?? row.id);
+        corrected++;
       }
     }
 
@@ -1118,10 +1135,9 @@ extension _SyncJmap on EmailRepositoryImpl {
     String accountId,
     List<dynamic> emails, {
     String? currentMailboxJmapId,
-    required _ServerFlagRead flagRead,
+    required KeywordRead read,
   }) async {
     var bytes = 0;
-    final queuedNow = await _inFlightFlagResourceIds(accountId);
     final affectedByMailbox = <String, Set<String>>{};
     // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
     // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
@@ -1181,19 +1197,8 @@ extension _SyncJmap on EmailRepositoryImpl {
         );
       }
 
-      final keywords = m['keywords'] as Map<String, dynamic>? ?? {};
-      DateTime? snoozedUntil;
-      for (final String k in keywords.keys) {
-        if (k.startsWith('snz:')) {
-          final ts = k.substring(4);
-          if (ts.length >= 15) {
-            final formatted =
-                '${ts.substring(0, 4)}-${ts.substring(4, 6)}-${ts.substring(6, 8)}T${ts.substring(9, 11)}:${ts.substring(11, 13)}:${ts.substring(13, 15)}Z';
-            snoozedUntil = DateTime.tryParse(formatted);
-          }
-          break;
-        }
-      }
+      final keywords =
+          ServerKeywords.jmap(m['keywords'] as Map<String, dynamic>?);
 
       final from = _encodeJmapAddresses(m['from'] as List<dynamic>?);
       final to = _encodeJmapAddresses(m['to'] as List<dynamic>?);
@@ -1229,48 +1234,44 @@ extension _SyncJmap on EmailRepositoryImpl {
           ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
           : m['subject'] as String?;
 
-      // An existing row the user just changed keeps its read/star state:
-      // this answer may predate the change (or the change is still queued).
-      final keepLocalFlags =
-          existingRow != null && flagRead.protects(dbId, queuedNow);
-
+      final upsert = EmailsCompanion.insert(
+        id: dbId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        uid: 0, // not used for JMAP accounts
+        subject: Value(subject),
+        sentAt: Value(sentAt),
+        receivedAt: receivedAt,
+        fromJson: Value(from),
+        toAddresses: Value(to),
+        ccJson: Value(cc),
+        replyToJson: Value(replyTo),
+        bccJson: Value(bcc),
+        sizeBytes:
+            m['size'] is int ? Value(m['size'] as int) : const Value.absent(),
+        preview: Value(m['preview'] as String?),
+        // Server-defined (RFC 8621); IMAP instead counts
+        // Content-Disposition: attachment parts.
+        hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
+        threadId: Value(jmapThreadId),
+        messageId: Value(jmapMessageId),
+        inReplyTo: Value(jmapInReplyTo),
+        references: Value(jmapReferences),
+        listUnsubscribeHeader: Value(jmapListUnsubscribe),
+        srvJmapId: Value(jmapId),
+      );
+      // The read/star/snooze state only through the server-write gate (see
+      // [_SyncImap._fetchAndUpsertImapGuarded]).
       await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: dbId,
-              accountId: accountId,
-              mailboxPath: mailboxPath,
-              uid: 0, // not used for JMAP accounts
-              subject: Value(subject),
-              sentAt: Value(sentAt),
-              receivedAt: receivedAt,
-              fromJson: Value(from),
-              toAddresses: Value(to),
-              ccJson: Value(cc),
-              replyToJson: Value(replyTo),
-              bccJson: Value(bcc),
-              sizeBytes: m['size'] is int
-                  ? Value(m['size'] as int)
-                  : const Value.absent(),
-              preview: Value(m['preview'] as String?),
-              // Absent leaves the stored value alone on conflict.
-              isSeen: keepLocalFlags
-                  ? const Value.absent()
-                  : Value(keywords.containsKey(r'$seen')),
-              isFlagged: keepLocalFlags
-                  ? const Value.absent()
-                  : Value(keywords.containsKey(r'$flagged')),
-              // Server-defined (RFC 8621); IMAP instead counts
-              // Content-Disposition: attachment parts.
-              hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
-              threadId: Value(jmapThreadId),
-              messageId: Value(jmapMessageId),
-              inReplyTo: Value(jmapInReplyTo),
-              references: Value(jmapReferences),
-              snoozedUntil: Value(snoozedUntil),
-              listUnsubscribeHeader: Value(jmapListUnsubscribe),
-              srvJmapId: Value(jmapId),
-            ),
+            existingRow == null
+                ? EmailStateWriter.withServerKeywords(
+                    upsert,
+                    keywords,
+                    seq: read.seq,
+                  )
+                : upsert,
           );
+      if (existingRow != null) await read.write(dbId, keywords);
 
       // Cache body if the server included bodyValues in this response.
       if (m.containsKey('bodyValues')) {

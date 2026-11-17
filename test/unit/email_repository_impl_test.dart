@@ -27,6 +27,7 @@ import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
@@ -3050,8 +3051,10 @@ void main() {
 
     // #1186: open (read), "Mark as unread", re-open before anything flushed.
     // The third change matches the first queued one but not the latest, so it
-    // must be appended, or the server would end up unread.
-    test('read, unread, read again queues all three flag changes', () async {
+    // must not be dropped, or the server would end up unread. Each newer
+    // change supersedes the queued one (SYNC-REDESIGN.md §3): the latest
+    // value is what gets sent.
+    test('read, unread, read again queues the latest flag change', () async {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
       await r.db.into(r.db.emails).insert(
@@ -3073,9 +3076,8 @@ void main() {
           .get();
       expect(changes.map((c) => c.payload.contains('"seen":true')).toList(), [
         true,
-        false,
-        true,
       ]);
+      expect((await r.emails.getEmail('acc-1:5'))!.isSeen, isTrue);
     });
 
     // #644: a repeated setFlag with an unchanged value must not pile up
@@ -3952,7 +3954,7 @@ void main() {
 
       expect(client.calls.single, startsWith('store add 5 '));
       expect(client.lastSearchCriteria, isNull);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
     });
 
     test('changed UIDVALIDITY finds the message again by Message-ID', () async {
@@ -3969,7 +3971,7 @@ void main() {
 
       // UID 5 may be someone else's mail now: the flag goes to UID 9.
       expect(client.calls.single, startsWith('store add 9 '));
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
     });
 
     test('changed UIDVALIDITY and no match never touches the stale UID',
@@ -4249,7 +4251,7 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         // Change successfully applied — removed from queue.
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await unsettledChanges(r.db), isEmpty);
         // Source mailbox extracted from 'src', not 'mailboxPath'.
         expect(spy.selectedMailbox, 'INBOX');
         expect(spy.createdMailbox, 'Snoozed');
@@ -5197,7 +5199,7 @@ void main() {
         'store remove 205 snz:20260510T150000.000',
         'move Snoozed:205->Archive',
       ]);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
     });
 
     Future<void> insertInboxMove(
@@ -5703,7 +5705,7 @@ void main() {
         'store add 300 snz:20300101T000000.000',
         'move Archive:300->Snoozed',
       ]);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
       final snoozed =
           await r.emails.getEmail(await emailIdAt(r.db, 'Snoozed', 9));
       expect(snoozed!.snoozedUntil, DateTime(2030));
@@ -5742,7 +5744,7 @@ void main() {
         'move Archive:5->Snoozed',
         'store add 9 snz:20300101T000000.000',
       ]);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
       final snoozed =
           await r.emails.getEmail(await emailIdAt(r.db, 'Snoozed', 9));
       expect(snoozed!.snoozedUntil, DateTime(2030));
@@ -5839,7 +5841,7 @@ void main() {
       await r.emails.moveEmail('jmap-1:e1', 'mbx-archive');
       await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
       expect(requests, hasLength(3));
       expect(_emailSetUpdate(requests.first, 'e1'), {
         'keywords/snz:20300101T000000.000': true,
@@ -5884,7 +5886,7 @@ void main() {
         'store remove 42 snz:20300101T000000.000',
         'move Snoozed:42->Archive',
       ]);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
       final archived =
           await r.emails.getEmail(await emailIdAt(r.db, 'Archive', 7));
       expect(archived!.snoozedUntil, isNull);
@@ -9758,8 +9760,8 @@ void main() {
         isTrue,
       );
 
-      // The change failed: the next server read reverts the optimistic value,
-      // and the failure stays listed.
+      // The change failed: it no longer folds (as when the flush fails it),
+      // so the server's value shows, and the failure stays listed.
       await r.db.update(r.db.pendingChanges).write(
             const PendingChangesCompanion(
               attempts: Value(5),
@@ -9767,6 +9769,7 @@ void main() {
               state: Value('failed'),
             ),
           );
+      await EmailStateWriter(r.db).refold(await emailIdAt(r.db, 'INBOX', 42));
       client.modSeq = 3;
       await r.emails.syncEmails('acc-1', 'INBOX');
 
@@ -9973,7 +9976,7 @@ void main() {
       expect(spy.selects.last, 'INBOX');
       expect(spy.calls, [r'store add 5 \Flagged']);
       expect(
-        (await r.db.select(r.db.pendingChanges).get()).map((c) => c.changeType),
+        (await unsettledChanges(r.db)).map((c) => c.changeType),
         ['move'],
       );
     });
@@ -10182,6 +10185,8 @@ void main() {
               uid: 5,
               receivedAt: DateTime(2024),
               snoozedUntil: Value(until),
+              // The server has the snooze (the `keywords` overlay).
+              srvSnoozedUntil: Value(until),
               snoozedFromMailboxPath: const Value('INBOX'),
               srvMailboxPath: const Value('Snoozed'),
               srvUid: const Value(5),
@@ -11650,8 +11655,15 @@ void main() {
           client.beforeAnswer = null;
           await r.emails
               .setFlag(await emailIdAt(r.db, 'INBOX', 42), seen: true);
-          // Flushed: the STORE reached the server after it built the answer.
-          await r.db.delete(r.db.pendingChanges).go();
+          // Flushed: the STORE reached the server after it built the answer,
+          // and the change is acked (as the flush acks it).
+          final ackSeq = await EmailStateWriter(r.db).nextReadSeq();
+          await r.db.update(r.db.pendingChanges).write(
+                PendingChangesCompanion(
+                  state: const Value('acked'),
+                  ackSeq: Value(ackSeq),
+                ),
+              );
         };
         return (client: client, r: r);
       }
@@ -11698,11 +11710,22 @@ void main() {
           ..flags[42] = []
           ..modSeq = 3;
         await r.emails.syncEmails('acc-1', 'INBOX');
+        // The first read after the ack that contradicts the acked change
+        // (the CONDSTORE refresh) keeps it, as the server may lag, and makes
+        // the flag reconcile due; a read of the same sync run does not count
+        // twice.
+        expect(
+          (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+          isTrue,
+        );
+        // The next sync runs the due reconcile: the server's value wins.
+        await r.emails.syncEmails('acc-1', 'INBOX');
 
         expect(
           (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
           isFalse,
         );
+        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
       });
     });
 

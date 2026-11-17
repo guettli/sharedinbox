@@ -1,6 +1,7 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **proposal, chosen direction**, not implemented. Goal: make offline-first (the rules in
+Status: **chosen direction, partly implemented** (phases 0–2 and 3a, see
+§8). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -598,6 +599,147 @@ calls.
   `COALESCE(local_<field>, srv_<field>)`" and "a row with no foldable ops has
   all `local_*` NULL".
 
+As implemented, phase 3 is two PRs:
+1. **3a (done, schema v72):** the overlay itself.
+   - **Schema.** `emails` gets `srv_is_seen`, `srv_is_flagged`,
+     `srv_snoozed_until`, `local_is_seen`, `local_is_flagged`,
+     `local_snoozed_until` and `srv_keywords_seq`; `pending_changes` gets
+     `ack_seq` and `contradicted_seq` (the seq of the first contradicting
+     post-ack read, which makes "a second read" checkable); the read
+     sequence is the one-row table `sync_read_seq`, advanced with one
+     `INSERT … ON CONFLICT DO UPDATE … RETURNING`. A `local_snoozed_until`
+     of 0 (the epoch) means "not snoozed", since NULL means "no intent";
+     the effective column is `NULLIF(COALESCE(local, srv), 0)`.
+   - **Migration.** Copies today's values into `srv_*` (stamp 0), folds the
+     pending/inflight/stuck keyword ops once into `local_*` (and the
+     effective columns), and makes the flag reconcile due
+     (`IMAP:FlagReconcileDue:<folder>` for the row's server folder and the
+     payload's, `JMAP:ReconcileDue:<mailbox>`) for every row with such an
+     op, whose stored value was the user's, not the server's.
+   - **Email state writer** (`lib/data/repositories/email_state_writer.dart`,
+     a plain class on `AppDatabase`, also used by `removeLocalMailbox`): the
+     gate (`beginRead` takes the sequence right before the request,
+     `KeywordRead.write` writes one row with `WHERE srv_keywords_seq <= seq`
+     and settles its acked ops), `withServerKeywords` for a new row's
+     insert, `refold`, `foldSeenBulk` (the SQL bulk form for
+     `markAllAsRead`), `ack`, `dropOrphanedAcks` and `consistencyProblems`
+     (effective = `COALESCE(local, srv)`, and `local_*` = the fold of the
+     row's ops). `refold` and a gate write (with the settling of acked ops)
+     each run in a transaction of their own (a savepoint when nested), so
+     reading the ops and writing the row never interleave with an enqueue
+     and its fold; so do the cancel paths. `KeywordRead.writeAll` writes a
+     whole folder's answer: rows whose `srv_*` already match and that have
+     no acked op are only stamped, one `UPDATE … RETURNING id` per group of
+     equal values; the rest go through the per-row gate. `pending_changes`
+     gets the index `(resource_id, state)`.
+     Every statement sets the effective column together with the `srv_` or
+     `local_` one (in SQL, with the new value inlined: `SET` expressions
+     see the old row). The pure parts (`foldKeywords`, `keywordColumnsOf`,
+     `readAgreesWith`, `ServerKeywords`) are in `lib/data/db/keyword_fold.dart`,
+     shared with the migration.
+   - **Gate sites.** IMAP: the new-mail FETCH (a new row is inserted with
+     the read's values and stamp, an existing one goes through
+     `KeywordRead.write`; the upsert no longer names the keyword columns),
+     the CONDSTORE refresh and the periodic reconcile (which now write
+     every row they read, in one transaction, and also its `snz:` keyword:
+     FLAGS is the whole `keywords` group). JMAP: `_upsertJmapEmails` (the
+     sequence is taken per `Email/get` batch) and the flag reconcile, which
+     no longer skips rows with queued changes. The size backfill, header
+     backfill and body fetch neither write nor stamp. Other writers:
+     the Sent copy and the virtual self-send row are inserted with
+     `withServerKeywords(…, seq: 0)` (a Sent copy sync already stored keeps
+     its state); Undo's restore of a gone row writes the snapshot as
+     `srv_*` with stamp 0, makes the flag reconcile due and re-folds (a row
+     that still exists keeps its keyword columns); the foreign-move carry-over takes the copy's `srv_*` and
+     stamp and re-folds (the `keepOwn` rule is gone); `_mergeDuplicateRow`
+     re-folds the kept row.
+   - **Fold.** Runs in the transaction of every op change: `_enqueueChange`
+     (insert and fold in one transaction), cancel (`cancelOps`,
+     `cancelPendingChange`), discard, retry, failure (with the dependents
+     failed with it), ack, drop, and the ops `removeLocalMailbox` fails.
+     User actions no longer write `is_seen`/`is_flagged`/`snoozed_until`:
+     `setFlag` only queues; move/snooze/unsnooze/wake-up/restore write the
+     location and `snoozed_from_mailbox_path` (local-only) and leave the
+     snooze to the fold (`move` with `clearSnooze`, `snooze`, `unsnooze`,
+     `clear_snooze`); `restoreLocalSnooze` only restores
+     `snoozed_from_mailbox_path`. A failed flag change no longer guesses
+     the previous value (`_revertFailedFlag` is gone): it stops folding, so
+     the row shows `srv_*`, and the flag reconcile is still made due in case
+     `srv_*` is stale (#1270). A failed snooze/move no longer writes
+     `prevSnoozedUntil`; the fold gives the server's snooze back.
+   - **Ack and drop.** On success a flush acks every op that writes a
+     keyword column (`flag_seen`, `flag_flagged`, `clear_snooze`, `snooze`,
+     `unsnooze`, `move` with `clearSnooze`): `state = 'acked'`, `ack_seq` =
+     next read sequence; an older acked op of the row whose columns it
+     covers is dropped then (it no longer shows). Ops without a keyword
+     column (plain move, delete, `add_keywords`) and ops whose row is gone
+     are deleted at ack as before. A gate write with a read sequence above
+     `ack_seq` drops the op when the read agrees (a snooze agrees with any
+     `snz:` keyword: the keyword has second precision in UTC digits and
+     need not round-trip; an unsnooze/clear with none), records
+     `contradicted_seq` on the first contradiction and makes the folder's
+     flag reconcile due (otherwise, with CONDSTORE and on JMAP, an
+     unchanged mail is read again only after 15 minutes), and drops it on a
+     contradicting read of a later sync run with the App Log warning
+     `op.contradicted`. A sync run (`EmailStateWriter.inSyncRun`, one
+     `syncEmails` call) takes a start sequence; a read counts as "later"
+     only when its run started after `contradicted_seq`, and the reconcile
+     uses the due marker as it was when the run started, so the CONDSTORE
+     refresh and the reconcile right after it never count as two reads.
+     An acked op that a newer foldable op of the same columns shadows is
+     dropped silently (at the newer op's ack, or at the next read).
+     Acked ops are hidden from the Pending Changes screen, the failed list
+     and the unsynced-work count, and `acked` is not in `_liveStates`, so
+     every location guard treats an acked op like the deleted one before.
+     Acked ops of rows that no longer exist are deleted at the start of each
+     flush (`dropOrphanedAcks`). Snooze choice: location is not overlaid
+     yet, so `snooze`/`unsnooze`/`move(clearSnooze)` are acked for their
+     `snoozed_until` only and settle on the `keywords` group alone
+     (§4.5 would also wait for `location` once phase 4 overlays it).
+     Deleting them at ack, as before, would make `snoozed_until` flicker
+     back to the old `srv_` value until the row's new location is read.
+   - **Supersede.** A new `flag_seen`/`flag_flagged` deletes the queued
+     (`pending`, not inflight) op of the same flag, in the enqueue
+     transaction, besides the failed/stuck ones the user's action already
+     replaced. Other types are left as before (the location ops still need
+     their order and Undo's cancel). Latent: Undo's captured op ids are not
+     known to the queue, so a superseded flag op could be among them; Undo
+     queues no flag ops today, and a cancel of a gone id falls through to
+     the inverse op (§3).
+   - **Snooze keywords.** A re-snooze now removes the earlier `snz:`
+     keyword (IMAP: FETCH FLAGS and STORE -FLAGS before the new one; JMAP:
+     `keywords/snz:…: null` in the same `Email/set`). Before, both stayed,
+     and sync read back whichever came first; the lenient snooze agreement
+     would have hidden that.
+   - **Removed.** `_ServerFlagRead`, its `protects()` calls,
+     `_inFlightFlagResourceIds` as a flag guard (the JMAP "disclaimed but
+     edited" guard keeps the query as `_rowsWithLiveChanges`), the per-id
+     edit sequence, the flag skip logic in `_settleFlagReconcileDue` and
+     `_revertFailedFlag`. Kept: the #1269 guard against a late new-mail
+     FETCH bringing back a moved or deleted mail, now `_FetchLocationGuard`
+     fed by `_noteLocationEdit` for placement changes only: that is a
+     `location` concern (phase 4).
+   - **Cut, until phase 4:** virtual rows (`is_local`) and JMAP rows
+     without a server id get no op, so a user change on them is stored as
+     their own `srv_*` value (`EmailStateWriter.writeOwn`) instead of a
+     parked op. The `threads` write of `markAllAsRead` stays. Counterpart
+     shadow ops are phase 4; the counterpart mirroring still queues real
+     changes on the twin row, which fold like any other.
+   - **Tests.** `test/unit/keyword_fold_test.dart` (the pure fold),
+     `test/unit/keyword_overlay_test.dart` (gate order, stale answer after
+     a change, ack without flicker, drop, two contradictions, one per sync
+     run, shadowed and orphaned acks, a fold racing an enqueue, failed and
+     stuck, supersede, bulk mark-read, snooze, cancel),
+     `test/unit/keyword_overlay_jmap_test.dart` (ack and drop via
+     `Email/changes`, the JMAP flag reconcile through the gate), the v71→v72
+     migration test, and the stale-answer fuzz, whose property now also
+     requires `consistencyProblems()` to be empty.
+2. **3b (next):** enforcement. The allow-list check (`emails` writes only
+   in the email state writer and migrations; see "Enforcement" below), the
+   built-in consistency checks (`consistencyProblems`) sampled in release
+   builds with an App Log line per violation, and the stale-answer fuzz
+   property run in CI (it runs in `check-fast` today with 30 seeds).
+
 **Phase 4 — the `location` overlay.**
 - `ALTER TABLE ADD COLUMN` for `local_mailbox_path`, `local_hidden` and
   `srv_gone`. `srv_mailbox_path` already exists from phase 2. It was
@@ -675,7 +817,7 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | Part | Role (groups below) |
 |---|---|
 | `sync.dart` | Sync: dispatch, `clearForResync` / `clearMailboxForResync`, `_backfillAddressHeaders` |
-| `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap`, UIDVALIDITY, the server flag read guard |
+| `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap`, UIDVALIDITY, the late-FETCH location guard |
 | `sync_jmap.dart` | Sync: JMAP upsert, `notFound` / `destroyed`, prune, reconcile, sync state |
 | `jmap_push.dart` | Sync: the JMAP EventSource watch (no row writes) |
 | `row_identity.dart` | Sync and flush: rows by server location, `_relocateEmailRow`, `_carryOverMovedRow`, `_mergeDuplicateRow` |
@@ -692,6 +834,9 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | `threads.dart` | Derived: `_updateThread`, `_reconcileSourceThreads`, `_sweepOrphanThreads` |
 | `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes) |
 | `diagnostics.dart` | Diagnostics and the reliability probe (no row writes) |
+
+The email state writer (§2) is `lib/data/repositories/email_state_writer.dart`
+(phase 3a), outside the parts so `mailbox_repository_impl.dart` can use it.
 
 The line numbers below are from before the split (`33c67b4`).
 

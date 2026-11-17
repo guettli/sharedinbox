@@ -2,43 +2,23 @@ part of '../email_repository_impl.dart';
 
 // IMAP sync: fetch and upsert, flag refresh (CONDSTORE) and periodic flag
 // reconcile, size backfill, deletion reconcile, UIDVALIDITY checkpoints and
-// the guard against stale server flag reads.
+// the guard against a stale new-mail FETCH bringing back a moved mail. Every
+// read/star/snooze value read here goes through the server-write gate
+// ([EmailStateWriter.beginRead]).
 
-/// A server flag read in progress (see
-/// [_SyncImap._startServerFlagRead]). The server's answer reflects
-/// its state at some point after [_seq] was taken, so it must not overwrite a
-/// row that had an edit queued when the read started, has one queued now, or
-/// was edited locally since.
-
-class _ServerFlagRead {
-  _ServerFlagRead(
-    this._seq,
-    this._editSeqById,
-    this._editByLocation,
-    this._queuedAtStart,
-  );
+/// A new-mail FETCH in progress (see [_SyncImap._startFetchGuard]): its
+/// answer reflects the server at some point after [_seq] was taken, so it
+/// must not bring back a mail that was moved or deleted locally since
+/// (#1269).
+class _FetchLocationGuard {
+  _FetchLocationGuard(this._seq, this._editByLocation);
 
   final int _seq;
-  final Map<String, int> _editSeqById;
   final Map<_ImapLocation, (int, String)> _editByLocation;
-  final Set<String> _queuedAtStart;
-
-  /// Whether the server's flags for [emailId] may be stale against a local
-  /// edit. [queuedNow] is the `pendingChanges` set read after the answer
-  /// arrived. Checked synchronously right before each write, so an edit
-  /// started up to that moment is respected.
-  bool protects(String emailId, Set<String> queuedNow) =>
-      _queuedAtStart.contains(emailId) ||
-      queuedNow.contains(emailId) ||
-      editedSince(emailId);
-
-  /// Whether a change for [emailId] was queued (or retried) after the read
-  /// started.
-  bool editedSince(String emailId) => (_editSeqById[emailId] ?? 0) > _seq;
 
   /// The id of the row whose mail the server had at [uid] in [mailboxPath]
-  /// when a change for it was queued (or retried) after the read started;
-  /// null when there is none.
+  /// when a move, snooze, unsnooze or delete of it was queued (or retried)
+  /// after the FETCH started; null when there is none.
   String? editedAt(String accountId, String mailboxPath, int uid) {
     final edit = _editByLocation[(accountId, mailboxPath, uid)];
     if (edit == null || edit.$1 <= _seq) return null;
@@ -65,16 +45,26 @@ extension _SyncImap on EmailRepositoryImpl {
     );
   }
 
+  /// A new IMAP connection to [account], logged in with [password].
+  Future<imap.ImapClient> _connectImapAs(
+    account_model.Account account,
+    String password,
+  ) =>
+      _imapConnect(account, _effectiveUsername(account), password);
+
   Future<model.SyncEmailsResult> _syncEmailsImap(
     account_model.Account account,
     String password,
     String mailboxPath,
   ) async {
-    final client = await _imapConnect(
-      account,
-      _effectiveUsername(account),
-      password,
+    // Read before this run's reads: a contradiction one of them finds makes
+    // the reconcile due for the *next* run (see
+    // [_maybeReconcileImapFlagsMailbox]).
+    final reconcileDue = await _loadSyncState(
+      account.id,
+      _flagReconcileDueKey(mailboxPath, jmap: false),
     );
+    final client = await _connectImapAs(account, password);
     try {
       // Only request CONDSTORE if the server advertises it. Servers that don't
       // support the extension may reject SELECT with (CONDSTORE) with BAD.
@@ -112,6 +102,16 @@ extension _SyncImap on EmailRepositoryImpl {
       // Move-stable server id source (RFC 8474 EMAILID / Gmail X-GM-MSGID),
       // null when the server advertises neither (#589).
       final objectIdKind = resolveObjectIdKind(client.serverInfo);
+      // What SELECT reported, with the highest UID fetched.
+      Future<void> saveCheckpoint(int maxUid) => _saveImapCheckpoint(
+            account.id,
+            resourceType,
+            uidValidity,
+            maxUid,
+            highestModSeq: serverModSeq,
+            uidNext: selectedMailbox.uidNext,
+            exists: selectedMailbox.messagesExists,
+          );
 
       if (checkpoint == null || checkpoint['uidValidity'] != uidValidity) {
         // First run or UID validity changed — full sync.
@@ -145,15 +145,7 @@ extension _SyncImap on EmailRepositoryImpl {
           );
         }
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
-        await _saveImapCheckpoint(
-          account.id,
-          resourceType,
-          uidValidity,
-          maxUid,
-          highestModSeq: serverModSeq,
-          uidNext: selectedMailbox.uidNext,
-          exists: selectedMailbox.messagesExists,
-        );
+        await saveCheckpoint(maxUid);
         // Record that we've just fetched every flag so the periodic reconcile
         // in _maybeReconcileImapFlagsMailbox doesn't repeat it immediately.
         await _saveSyncState(
@@ -213,7 +205,12 @@ extension _SyncImap on EmailRepositoryImpl {
         // when CONDSTORE misreports — Stalwart 0.14.x does not always bump
         // HIGHESTMODSEQ when a flag is toggled via JMAP on the same account,
         // so IMAP would otherwise never see the change (#407).
-        await _maybeReconcileImapFlagsMailbox(client, account.id, mailboxPath);
+        await _maybeReconcileImapFlagsMailbox(
+          client,
+          account.id,
+          mailboxPath,
+          dueValue: reconcileDue,
+        );
 
         // Detect remote deletions.
         final serverUids = (await client.uidSearchMessages(
@@ -235,15 +232,7 @@ extension _SyncImap on EmailRepositoryImpl {
         // having been fetched above; if that fetch is ever capped or
         // chunked, advance only to the highest UID actually fetched.
         final maxUid = newUids.fold(lastUid, math.max);
-        await _saveImapCheckpoint(
-          account.id,
-          resourceType,
-          uidValidity,
-          maxUid,
-          highestModSeq: serverModSeq,
-          uidNext: selectedMailbox.uidNext,
-          exists: selectedMailbox.messagesExists,
-        );
+        await saveCheckpoint(maxUid);
         await _sweepOrphanThreads(account.id, mailboxPath);
         return model.SyncEmailsResult(
           fetched: newUids.length,
@@ -256,151 +245,101 @@ extension _SyncImap on EmailRepositoryImpl {
     }
   }
 
-  /// Resource ids on [accountId] with an unflushed optimistic mutation still
-  /// queued in `pendingChanges` — used to protect a local edit from being
-  /// reverted by a server-truth flag refresh before it has been pushed. The
-  /// `flag_flagged` / `flag_seen` change a mail-to-self dissolve queues when it
-  /// carries the star onto the real message lives here until it flushes (#565).
-  /// A failed change protects nothing: server truth wins again.
-  Future<Set<String>> _inFlightFlagResourceIds(String accountId) async {
-    final ids = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.state.isIn(_liveStates) &
-                _db.pendingChanges.changeType.isIn(
-                  const [
-                    'flag_seen',
-                    'flag_flagged',
-                    'move',
-                    'snooze',
-                    'unsnooze',
-                    'clear_snooze',
-                    'delete',
-                  ],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    return ids.toSet();
-  }
-
-  void _noteLocalEdit(String emailId, {_ImapLocation? at}) {
+  /// Remembers, while a new-mail FETCH runs, that the mail of row
+  /// [emailId] at IMAP location [at] was moved, snoozed, unsnoozed or
+  /// deleted locally (see [_FetchLocationGuard]).
+  void _noteLocationEdit(String emailId, _ImapLocation? at) {
     _localEditSeq++;
-    // With no read running, any later read starts at or above this value.
-    if (_activeServerFlagReads == 0) return;
-    _localEditSeqById[emailId] = _localEditSeq;
-    if (at != null) _localEditByLocation[at] = (_localEditSeq, emailId);
+    // With no FETCH running, any later one starts at or above this value.
+    if (_activeFetches == 0 || at == null) return;
+    _localEditByLocation[at] = (_localEditSeq, emailId);
   }
 
-  /// Call right before asking the server for flags, and
-  /// [_endServerFlagRead] when done with its answer (use try/finally).
-  Future<_ServerFlagRead> _startServerFlagRead(String accountId) async {
-    _activeServerFlagReads++;
-    // Taken before the await: an edit landing during the lookup is caught by
-    // the sequence instead.
-    final seq = _localEditSeq;
-    try {
-      return _ServerFlagRead(
-        seq,
-        _localEditSeqById,
-        _localEditByLocation,
-        await _inFlightFlagResourceIds(accountId),
-      );
-    } catch (_) {
-      _endServerFlagRead();
-      rethrow;
-    }
+  /// Call right before a new-mail FETCH, and [_endFetchGuard] when done
+  /// with its answer (use try/finally).
+  _FetchLocationGuard _startFetchGuard() {
+    _activeFetches++;
+    return _FetchLocationGuard(_localEditSeq, _localEditByLocation);
   }
 
-  void _endServerFlagRead() {
-    _activeServerFlagReads--;
-    // No read can still need the per-email sequence; keep the maps small.
-    if (_activeServerFlagReads > 0) return;
-    _localEditSeqById.clear();
+  void _endFetchGuard() {
+    _activeFetches--;
+    // No FETCH can still need the edits; keep the map small.
+    if (_activeFetches > 0) return;
     _localEditByLocation.clear();
   }
 
-  /// Fetches FLAGS for all messages modified since [sinceModSeq] and updates
-  /// the local DB. Only messages whose modseq is > [sinceModSeq] are returned
-  /// by the server (RFC 7162 §3.2). Skips rows with an unflushed optimistic
-  /// flag edit still queued in `pendingChanges`, so a newly delivered message
-  /// whose star the dissolve just carried over is not reverted to server truth
-  /// within the same sync (#565).
+  /// Fetches FLAGS for all messages modified since [sinceModSeq] and writes
+  /// them through the server-write gate. Only messages whose modseq is >
+  /// [sinceModSeq] are returned by the server (RFC 7162 §3.2). A queued or
+  /// just-sent read/star change keeps showing: it folds over the server's
+  /// value until a read after its ack confirms it.
   Future<void> _refreshFlagsImap(
     imap.ImapClient client,
     account_model.Account account,
     String mailboxPath,
     int sinceModSeq,
   ) async {
-    final flagRead = await _startServerFlagRead(account.id);
-    try {
-      final result = await client.uidFetchMessages(
-        imap.MessageSequence.fromAll(),
-        'FLAGS',
-        changedSinceModSequence: sinceModSeq,
-      );
-      // One transaction, and only rows whose flags really changed: a modseq
-      // bump is not always a Seen/Flagged change, and CHANGEDSINCE can return
-      // thousands of messages after a long time offline.
-      await _db.transaction(() async {
-        // Read inside the transaction: a local edit's queue insert and
-        // optimistic write wait for it, so none can slip in between.
-        final queuedNow = await _inFlightFlagResourceIds(account.id);
-        final uidValidity = await _knownUidValidity(account.id, mailboxPath);
-        final affectedThreads = <String>{};
-        for (final msg in result.messages) {
-          final uid = msg.uid;
-          if (uid == null) continue;
-          final row = await _rowAtImapLocation(
-            account.id,
-            mailboxPath,
-            uid,
-            uidValidity: uidValidity,
-          );
-          if (row == null) continue;
-          final emailId = row.id;
-          final seen = msg.flags?.contains(r'\Seen') ?? false;
-          final flagged = msg.flags?.contains(r'\Flagged') ?? false;
-          if (row.isSeen == seen && row.isFlagged == flagged) continue;
-          if (flagRead.protects(emailId, queuedNow)) continue;
-          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-              .write(
-            EmailsCompanion(isSeen: Value(seen), isFlagged: Value(flagged)),
-          );
-          affectedThreads.add(row.threadId ?? row.id);
-        }
-        // The message list reads unread/starred state from the thread row, so
-        // a mail read, unread, starred or unstarred on another device kept its
-        // old look here although its own row was already up to date.
-        for (final tid in affectedThreads) {
-          await _updateThread(account.id, mailboxPath, tid);
-        }
-      });
-    } finally {
-      _endServerFlagRead();
+    final read = await _state.beginRead(account.id);
+    final result = await client.uidFetchMessages(
+      imap.MessageSequence.fromAll(),
+      'FLAGS',
+      changedSinceModSequence: sinceModSeq,
+    );
+    // One transaction: CHANGEDSINCE can return thousands of messages after
+    // a long time offline.
+    final affectedThreads = <(String, String)>{};
+    await _db.transaction(() async {
+      final uidValidity = await _knownUidValidity(account.id, mailboxPath);
+      final rows = <String, Email>{};
+      final byRow = <String, ServerKeywords>{};
+      for (final msg in result.messages) {
+        final uid = msg.uid;
+        if (uid == null) continue;
+        final row = await _rowAtImapLocation(
+          account.id,
+          mailboxPath,
+          uid,
+          uidValidity: uidValidity,
+        );
+        if (row == null) continue;
+        rows[row.id] = row;
+        byRow[row.id] = ServerKeywords.imap(msg.flags);
+      }
+      for (final id in await read.writeAll(byRow)) {
+        final row = rows[id]!;
+        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
+      }
+    });
+    // The message list reads unread/starred state from the thread row, so
+    // a mail read, unread, starred or unstarred on another device kept its
+    // old look here although its own row was already up to date.
+    for (final (shownIn, tid) in affectedThreads) {
+      await _updateThread(account.id, shownIn, tid);
     }
   }
 
   /// Periodic safety net: at most once per [_imapFlagReconcileInterval] per
-  /// mailbox, unconditionally `UID FETCH 1:* FLAGS` and rewrite `isSeen` /
-  /// `isFlagged` from server truth. Runs regardless of whether HIGHESTMODSEQ
-  /// changed, so it catches drift when the server fails to advance MODSEQ on
-  /// a flag mutation (Stalwart 0.14.x is known to do this for JMAP-side
-  /// keyword changes, leaving the paired IMAP account permanently stale —
-  /// #407). Skips rows whose flag change is still queued in `pendingChanges`
-  /// so an unflushed optimistic edit is not silently reverted.
+  /// mailbox, unconditionally `UID FETCH 1:* FLAGS` and write the server's
+  /// read/star/snooze state through the server-write gate. Runs regardless
+  /// of whether HIGHESTMODSEQ changed, so it catches drift when the server
+  /// fails to advance MODSEQ on a flag mutation (Stalwart 0.14.x is known to
+  /// do this for JMAP-side keyword changes, leaving the paired IMAP account
+  /// permanently stale — #407). A queued change folds over the server's
+  /// value, so an unflushed optimistic edit is not reverted.
+  ///
+  /// [dueValue] is the due marker as it was when the sync run started: one
+  /// set during this run (an acked change a read just contradicted, SYNC.md
+  /// §6a) waits for the next run, so the second read that may drop the
+  /// change is a later one, not milliseconds later on the same connection.
   Future<void> _maybeReconcileImapFlagsMailbox(
     imap.ImapClient client,
     String accountId,
-    String mailboxPath,
-  ) async {
+    String mailboxPath, {
+    required String? dueValue,
+  }) async {
     final key = 'IMAP:FlagReconcile:$mailboxPath';
     final last = await _loadSyncState(accountId, key);
-    final dueValue = await _loadSyncState(
-      accountId,
-      _flagReconcileDueKey(mailboxPath, jmap: false),
-    );
     if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
@@ -409,60 +348,47 @@ extension _SyncImap on EmailRepositoryImpl {
       }
     }
 
-    final byUid = <int, ({bool seen, bool flagged})>{};
-    final List<Email> localRows;
+    final byUid = <int, ServerKeywords>{};
     // (shown folder, thread id) of each corrected row.
     final affectedThreads = <(String, String)>{};
     var corrected = 0;
-    final flagRead = await _startServerFlagRead(accountId);
-    try {
-      final fetch = await client.uidFetchMessages(
-        imap.MessageSequence.fromAll(),
-        'FLAGS',
-      );
-      for (final msg in fetch.messages) {
-        final uid = msg.uid;
-        if (uid == null) continue;
-        byUid[uid] = (
-          seen: msg.flags?.contains(r'\Seen') ?? false,
-          flagged: msg.flags?.contains(r'\Flagged') ?? false,
-        );
-      }
+    final read = await _state.beginRead(accountId);
+    final fetch = await client.uidFetchMessages(
+      imap.MessageSequence.fromAll(),
+      'FLAGS',
+    );
+    for (final msg in fetch.messages) {
+      final uid = msg.uid;
+      if (uid == null) continue;
+      byUid[uid] = ServerKeywords.imap(msg.flags);
+    }
 
-      // The rows the server has in this folder, wherever they are shown:
-      // a UID names a message only in its server folder.
-      localRows = await (_db.select(_db.emails)
-            ..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  t.srvMailboxPath.equals(mailboxPath) &
-                  t.srvUid.isNotNull(),
-            ))
-          .get();
+    // The rows the server has in this folder, wherever they are shown:
+    // a UID names a message only in its server folder.
+    final localRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.srvMailboxPath.equals(mailboxPath) &
+                t.srvUid.isNotNull(),
+          ))
+        .get();
 
-      final queuedNow = await _inFlightFlagResourceIds(accountId);
-
-      for (final row in localRows) {
-        final serverFlags = byUid[row.srvUid];
-        if (serverFlags == null) continue; // handled by _reconcileDeletedImap
-        if (serverFlags.seen == row.isSeen &&
-            serverFlags.flagged == row.isFlagged) {
-          continue;
-        }
-        // Checked right before the write: a FETCH of a whole mailbox takes
-        // a while, and a read/star change made meanwhile is newer than it.
-        if (flagRead.protects(row.id, queuedNow)) continue;
-        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-          EmailsCompanion(
-            isSeen: Value(serverFlags.seen),
-            isFlagged: Value(serverFlags.flagged),
-          ),
-        );
-        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-        corrected++;
-      }
-    } finally {
-      _endServerFlagRead();
+    // Every row is written, also an unchanged one: the stamp keeps a
+    // slower, older read from overwriting it (unchanged rows in bulk). A
+    // read/star change made meanwhile folds over the server's value. A
+    // missing UID is handled by _reconcileDeletedImap.
+    final rowsById = {
+      for (final row in localRows)
+        if (byUid.containsKey(row.srvUid)) row.id: row,
+    };
+    final changed = await read.writeAll({
+      for (final row in rowsById.values) row.id: byUid[row.srvUid]!,
+    });
+    for (final id in changed) {
+      final row = rowsById[id]!;
+      affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
+      corrected++;
     }
 
     for (final (shownIn, tid) in affectedThreads) {
@@ -549,9 +475,9 @@ extension _SyncImap on EmailRepositoryImpl {
     const fetchItems = '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE '
         'RFC822.SIZE BODY.PEEK[HEADER.FIELDS (REFERENCES LIST-UNSUBSCRIBE)])';
     // Usually new UIDs only, but a row can already exist (relocated after
-    // a move, or a full sync without a checkpoint): its FLAGS must not undo a
-    // read/star change made meanwhile.
-    final flagRead = await _startServerFlagRead(account.id);
+    // a move, or a full sync without a checkpoint): its FLAGS go through the
+    // server-write gate, so a read/star change made meanwhile keeps showing.
+    final guard = _startFetchGuard();
     try {
       return await _fetchAndUpsertImapGuarded(
         client,
@@ -559,12 +485,12 @@ extension _SyncImap on EmailRepositoryImpl {
         mailboxPath,
         sequence,
         fetchItems,
-        flagRead,
+        guard,
         objectIdKind: objectIdKind,
         uidValidity: uidValidity,
       );
     } finally {
-      _endServerFlagRead();
+      _endFetchGuard();
     }
   }
 
@@ -574,7 +500,7 @@ extension _SyncImap on EmailRepositoryImpl {
     String mailboxPath,
     imap.MessageSequence sequence,
     String fetchItems,
-    _ServerFlagRead flagRead, {
+    _FetchLocationGuard guard, {
     ObjectIdKind? objectIdKind,
     int? uidValidity,
   }) async {
@@ -587,6 +513,7 @@ extension _SyncImap on EmailRepositoryImpl {
       mailboxPath,
       uidValidity: uidValidity,
     );
+    final read = await _state.beginRead(account.id);
     final fetch = sequence.isUidSequence
         ? await client.uidFetchMessages(sequence, fetchItems)
         : await client.fetchMessages(sequence, fetchItems);
@@ -633,7 +560,6 @@ extension _SyncImap on EmailRepositoryImpl {
     // after the transaction so "Show Logs" starts with the fetch (#920).
     final newlyStored = <(String, String?, int?)>[];
     await _db.transaction(() async {
-      final queuedNow = await _inFlightFlagResourceIds(account.id);
       for (final msg in fetch.messages) {
         final envelope = msg.envelope;
         if (envelope == null) {
@@ -693,19 +619,7 @@ extension _SyncImap on EmailRepositoryImpl {
             emailId;
         affectedThreads.add(threadId);
 
-        DateTime? snoozedUntil;
-        for (final String flag in msg.flags ?? <String>[]) {
-          if (flag.startsWith('snz:')) {
-            final ts = flag.substring(4);
-            // Format: YYYYMMDDTHHMMSSZ (no dashes/colons)
-            if (ts.length >= 15) {
-              final formatted =
-                  '${ts.substring(0, 4)}-${ts.substring(4, 6)}-${ts.substring(6, 8)}T${ts.substring(9, 11)}:${ts.substring(11, 13)}:${ts.substring(13, 15)}Z';
-              snoozedUntil = DateTime.tryParse(formatted);
-            }
-            break;
-          }
-        }
+        final keywords = ServerKeywords.imap(msg.flags);
 
         final isNew = known == null;
         // No row, but the user changed the mail that was here since the
@@ -714,7 +628,7 @@ extension _SyncImap on EmailRepositoryImpl {
         // duplicate the mail in its old folder (#1269). If a move fails, its
         // revert brings the row back.
         final editedId =
-            isNew ? flagRead.editedAt(account.id, mailboxPath, uid) : null;
+            isNew ? guard.editedAt(account.id, mailboxPath, uid) : null;
         if (editedId != null && !failedResourceIds.contains(editedId)) {
           log(
             'IMAP: skipping insert for uid=$uid in $mailboxPath '
@@ -722,61 +636,62 @@ extension _SyncImap on EmailRepositoryImpl {
           );
           continue;
         }
-        final keepLocalFlags = !isNew && flagRead.protects(emailId, queuedNow);
+        final upsert = EmailsCompanion.insert(
+          id: emailId,
+          accountId: account.id,
+          mailboxPath: mailboxPath,
+          uid: uid,
+          subject: Value(subject),
+          sentAt: Value(envelope.date),
+          // The server's arrival time, like JMAP `receivedAt`. Never
+          // the local fetch time when the server knows better: mail
+          // without a Date header used to be re-dated to "now" on every
+          // re-fetch, so a resync or reinstall moved it to the top.
+          receivedAt: parseImapDateTime(msg.internalDate) ??
+              envelope.date ??
+              DateTime.now(),
+          fromJson: Value(_encodeAddresses(envelope.from)),
+          toAddresses: Value(_encodeAddresses(envelope.to)),
+          ccJson: Value(_encodeAddresses(envelope.cc)),
+          replyToJson: Value(_encodeAddresses(envelope.replyTo)),
+          bccJson: Value(_encodeAddresses(envelope.bcc)),
+          sizeBytes: msg.size == null ? const Value.absent() : Value(msg.size),
+          preview: Value(
+            previewFromSnippet(msg, previewSnippetByUid[uid]),
+          ),
+          // enough_mail counts parts with Content-Disposition: attachment;
+          // JMAP's hasAttachment (below) is server-defined, so the two
+          // protocols may disagree on e.g. inline images.
+          hasAttachment: Value(msg.hasAttachments()),
+          threadId: Value(threadId),
+          messageId: Value(msgId),
+          inReplyTo: Value(inReplyTo),
+          references: Value(refs),
+          listUnsubscribeHeader: Value(listUnsubscribe),
+          // Preserve a previously captured id if this fetch couldn't
+          // read one, rather than clobbering it with null.
+          serverEmailId: serverEmailId == null
+              ? const Value.absent()
+              : Value(serverEmailId),
+          srvMailboxPath: Value(mailboxPath),
+          srvUid: Value(uid),
+          srvUidValidity: Value(
+            uidValidity == null || uidValidity == 0 ? null : uidValidity,
+          ),
+        );
+        // The read/star/snooze state only through the server-write gate:
+        // with the row's other server facts for a new row, else on its own
+        // (a whole-row write would also overwrite the user's pending values).
         await _db.into(_db.emails).insertOnConflictUpdate(
-              EmailsCompanion.insert(
-                id: emailId,
-                accountId: account.id,
-                mailboxPath: mailboxPath,
-                uid: uid,
-                subject: Value(subject),
-                sentAt: Value(envelope.date),
-                // The server's arrival time, like JMAP `receivedAt`. Never
-                // the local fetch time when the server knows better: mail
-                // without a Date header used to be re-dated to "now" on every
-                // re-fetch, so a resync or reinstall moved it to the top.
-                receivedAt: parseImapDateTime(msg.internalDate) ??
-                    envelope.date ??
-                    DateTime.now(),
-                fromJson: Value(_encodeAddresses(envelope.from)),
-                toAddresses: Value(_encodeAddresses(envelope.to)),
-                ccJson: Value(_encodeAddresses(envelope.cc)),
-                replyToJson: Value(_encodeAddresses(envelope.replyTo)),
-                bccJson: Value(_encodeAddresses(envelope.bcc)),
-                sizeBytes:
-                    msg.size == null ? const Value.absent() : Value(msg.size),
-                preview: Value(
-                  previewFromSnippet(msg, previewSnippetByUid[uid]),
-                ),
-                // Absent keeps the stored value of an edited existing row.
-                isSeen: keepLocalFlags
-                    ? const Value.absent()
-                    : Value(msg.flags?.contains(r'\Seen') ?? false),
-                isFlagged: keepLocalFlags
-                    ? const Value.absent()
-                    : Value(msg.flags?.contains(r'\Flagged') ?? false),
-                // enough_mail counts parts with Content-Disposition: attachment;
-                // JMAP's hasAttachment (below) is server-defined, so the two
-                // protocols may disagree on e.g. inline images.
-                hasAttachment: Value(msg.hasAttachments()),
-                threadId: Value(threadId),
-                messageId: Value(msgId),
-                inReplyTo: Value(inReplyTo),
-                references: Value(refs),
-                snoozedUntil: Value(snoozedUntil),
-                listUnsubscribeHeader: Value(listUnsubscribe),
-                // Preserve a previously captured id if this fetch couldn't
-                // read one, rather than clobbering it with null.
-                serverEmailId: serverEmailId == null
-                    ? const Value.absent()
-                    : Value(serverEmailId),
-                srvMailboxPath: Value(mailboxPath),
-                srvUid: Value(uid),
-                srvUidValidity: Value(
-                  uidValidity == null || uidValidity == 0 ? null : uidValidity,
-                ),
-              ),
+              isNew
+                  ? EmailStateWriter.withServerKeywords(
+                      upsert,
+                      keywords,
+                      seq: read.seq,
+                    )
+                  : upsert,
             );
+        if (!isNew) await read.write(emailId, keywords);
         if (msgId != null) dissolveCandidates.add((emailId, msgId));
         if (isNew) newlyStored.add((emailId, subject, msg.size));
       }

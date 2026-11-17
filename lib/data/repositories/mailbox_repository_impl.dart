@@ -15,6 +15,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
@@ -1507,6 +1508,10 @@ Future<void> removeLocalMailbox(
       );
       failed.add(row);
     }
+    // A failed change no longer folds: a mail it showed elsewhere shows the
+    // server's read/star/snooze state again.
+    await EmailStateWriter(db)
+        .refoldAll([for (final row in failed) row.resourceId]);
 
     await (db.delete(db.mailboxes)
           ..where(

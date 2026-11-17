@@ -132,13 +132,7 @@ extension _UserActions on EmailRepositoryImpl {
           jsonEncode({'flagged': flagged}),
         );
       }
-      // Optimistic local update.
-      await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-        EmailsCompanion(
-          isSeen: seen != null ? Value(seen) : const Value.absent(),
-          isFlagged: flagged != null ? Value(flagged) : const Value.absent(),
-        ),
-      );
+      // The queued change folds into the row: the optimistic local value.
       await _updateThread(
         row.accountId,
         row.mailboxPath,
@@ -172,12 +166,6 @@ extension _UserActions on EmailRepositoryImpl {
         }),
       );
     }
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(
-        isSeen: seen != null ? Value(seen) : const Value.absent(),
-        isFlagged: flagged != null ? Value(flagged) : const Value.absent(),
-      ),
-    );
     await _updateThread(
       row.accountId,
       row.mailboxPath,
@@ -231,37 +219,25 @@ extension _UserActions on EmailRepositoryImpl {
     if (unread.isEmpty) return;
 
     await _db.transaction(() async {
+      final queued = <String>[];
       for (final row in unread) {
-        if (account.type == account_model.AccountType.jmap) {
-          await _enqueueChange(
-            accountId,
-            row.id,
-            'flag_seen',
-            jsonEncode({'seen': true}),
-          );
-        } else {
-          await _enqueueChange(
-            accountId,
-            row.id,
-            'flag_seen',
-            jsonEncode({
-              'uid': row.uid,
-              'mailboxPath': row.mailboxPath,
-              'seen': true,
-            }),
-          );
+        final payload = account.type == account_model.AccountType.jmap
+            ? {'seen': true}
+            : {'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': true};
+        if (await _enqueueChange(
+          accountId,
+          row.id,
+          'flag_seen',
+          jsonEncode(payload),
+          fold: false,
+        )) {
+          queued.add(row.id);
         }
       }
 
-      // Bulk mark all unread emails in this mailbox as seen.
-      await (_db.update(_db.emails)
-            ..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  t.mailboxPath.equals(mailboxPath) &
-                  t.isSeen.equals(false),
-            ))
-          .write(const EmailsCompanion(isSeen: Value(true)));
+      // The fold of all of them at once: each just got `seen: true` as its
+      // newest read change (one without a server copy stored it as its own).
+      await _state.foldSeenBulk(queued);
 
       // Update all threads in this mailbox to reflect no unread.
       await (_db.update(_db.threads)
@@ -385,13 +361,13 @@ extension _UserActions on EmailRepositoryImpl {
   }
 
   /// The optimistic local part of a move of [row] to [destMailboxPath]: the
-  /// row shows in the destination at once, its snooze ended. No change is
-  /// queued here (see [_moveRow]).
+  /// row shows in the destination at once. No change is queued here (see
+  /// [_moveRow]); the end of its snooze comes with the fold of the queued
+  /// move (`clearSnooze`).
   Future<void> _applyLocalMove(Email row, String destMailboxPath) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(destMailboxPath),
-        snoozedUntil: const Value(null),
         snoozedFromMailboxPath: const Value(null),
       ),
     );
@@ -625,7 +601,7 @@ extension _UserActions on EmailRepositoryImpl {
         .go();
 
     // Optimistic local update.
-    await _applyLocalSnooze(row, destPath, until);
+    await _applyLocalSnooze(row, destPath);
 
     await _enqueueChange(
       accountId,
@@ -661,17 +637,13 @@ extension _UserActions on EmailRepositoryImpl {
     );
   }
 
-  /// The optimistic local part of snoozing [row] into [destPath] until
-  /// [until]. No change is queued here (see [_snoozeRow]).
-  Future<void> _applyLocalSnooze(
-    Email row,
-    String destPath,
-    DateTime until,
-  ) async {
+  /// The optimistic local part of snoozing [row] into [destPath]. No change
+  /// is queued here (see [_snoozeRow]); the wake-up time comes with the fold
+  /// of the queued snooze.
+  Future<void> _applyLocalSnooze(Email row, String destPath) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(destPath),
-        snoozedUntil: Value(until),
         snoozedFromMailboxPath: Value(row.mailboxPath),
       ),
     );
@@ -741,11 +713,9 @@ extension _UserActions on EmailRepositoryImpl {
       // `snz:` keyword sync would otherwise keep reading back.
       if (!_isSnoozedPath(row.mailboxPath, snoozedPath)) {
         await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-          const EmailsCompanion(
-            snoozedUntil: Value(null),
-            snoozedFromMailboxPath: Value(null),
-          ),
+          const EmailsCompanion(snoozedFromMailboxPath: Value(null)),
         );
+        // Folds as "not snoozed".
         await _enqueueChange(
           accountId,
           row.id,
@@ -765,17 +735,25 @@ extension _UserActions on EmailRepositoryImpl {
     return woken;
   }
 
+  /// After Undo cancelled a move out of the Snoozed folder: the cancelled
+  /// move no longer folds, so the row shows its snooze again by itself; only
+  /// the local-only [fromMailboxPath] needs restoring. A row without a
+  /// server copy (no change was queued) stores [until] as its own.
   Future<void> _restoreLocalSnooze(
     String emailId, {
     required DateTime until,
     String? fromMailboxPath,
   }) async {
+    final row = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(emailId)))
+        .getSingleOrNull();
+    if (row == null) return;
     await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(
-        snoozedUntil: Value(until),
-        snoozedFromMailboxPath: Value(fromMailboxPath),
-      ),
+      EmailsCompanion(snoozedFromMailboxPath: Value(fromMailboxPath)),
     );
+    if (await _hasNoServerCopy(row)) {
+      await _state.writeOwn(emailId, snoozedUntil: until);
+    }
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that
@@ -824,12 +802,12 @@ extension _UserActions on EmailRepositoryImpl {
   }
 
   /// The optimistic local part of un-snoozing [row] back to [dest]. No change
-  /// is queued here (see [_unsnoozeRow]).
+  /// is queued here (see [_unsnoozeRow]); the end of the snooze comes with
+  /// the fold of the queued unsnooze.
   Future<void> _applyLocalUnsnooze(Email row, String dest) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(
         mailboxPath: Value(dest),
-        snoozedUntil: const Value(null),
         snoozedFromMailboxPath: const Value(null),
       ),
     );
@@ -897,41 +875,60 @@ extension _UserActions on EmailRepositoryImpl {
       }
     }
     final imapKnown = srvPath != null && srvUid != null;
+    final restored = EmailsCompanion.insert(
+      id: e.id,
+      accountId: e.accountId,
+      mailboxPath: e.mailboxPath,
+      uid: e.uid,
+      subject: Value(e.subject),
+      sentAt: Value(e.sentAt),
+      receivedAt: e.receivedAt,
+      fromJson: Value(jsonEncode(e.from)),
+      toAddresses: Value(jsonEncode(e.to)),
+      ccJson: Value(jsonEncode(e.cc)),
+      replyToJson: Value(jsonEncode(e.replyTo)),
+      bccJson: Value(jsonEncode(e.bcc)),
+      sizeBytes: Value(e.size),
+      preview: Value(e.preview),
+      hasAttachment: Value(e.hasAttachment),
+      threadId: Value(e.threadId),
+      messageId: Value(e.messageId),
+      inReplyTo: Value(e.inReplyTo),
+      references: Value(e.references),
+      snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
+      isLocal: Value(e.isLocal),
+      isVirtualSentCopy: Value(e.isVirtualSentCopy),
+      srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
+      srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
+      srvUidValidity:
+          imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
+      srvJmapId: srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
+    );
+    final exists = await (_db.selectOnly(_db.emails)
+              ..addColumns([_db.emails.id])
+              ..where(_db.emails.id.equals(e.id)))
+            .getSingleOrNull() !=
+        null;
+    // A row that is still there keeps its read/star/snooze state. A row
+    // brought back takes the snapshot's as the server's, stamped 0 so any
+    // read corrects it: the snapshot shows what the app showed, which may
+    // be the user's pending value, so the next sync reads the server's
+    // (the flag reconcile is made due). Its queued changes fold over it.
     await _db.into(_db.emails).insertOnConflictUpdate(
-          EmailsCompanion.insert(
-            id: e.id,
-            accountId: e.accountId,
-            mailboxPath: e.mailboxPath,
-            uid: e.uid,
-            subject: Value(e.subject),
-            sentAt: Value(e.sentAt),
-            receivedAt: e.receivedAt,
-            fromJson: Value(jsonEncode(e.from)),
-            toAddresses: Value(jsonEncode(e.to)),
-            ccJson: Value(jsonEncode(e.cc)),
-            replyToJson: Value(jsonEncode(e.replyTo)),
-            bccJson: Value(jsonEncode(e.bcc)),
-            sizeBytes: Value(e.size),
-            preview: Value(e.preview),
-            isSeen: Value(e.isSeen),
-            isFlagged: Value(e.isFlagged),
-            hasAttachment: Value(e.hasAttachment),
-            threadId: Value(e.threadId),
-            messageId: Value(e.messageId),
-            inReplyTo: Value(e.inReplyTo),
-            references: Value(e.references),
-            snoozedUntil: Value(e.snoozedUntil),
-            snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
-            isLocal: Value(e.isLocal),
-            isVirtualSentCopy: Value(e.isVirtualSentCopy),
-            srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
-            srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
-            srvUidValidity:
-                imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
-            srvJmapId:
-                srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
-          ),
+          exists
+              ? restored
+              : EmailStateWriter.withServerKeywords(
+                  restored,
+                  ServerKeywords(
+                    seen: e.isSeen,
+                    flagged: e.isFlagged,
+                    snoozedUntil: e.snoozedUntil,
+                  ),
+                  seq: 0,
+                ),
         );
+    if (!exists) await _state.makeFlagReconcileDue(e.id);
+    await _state.refold(e.id);
     await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
   }
 }

@@ -29,13 +29,15 @@ User taps "Mark as read"
         ▼
 EmailRepository.setFlag(id, seen: true)
         │
-        ├─ 1. Write optimistic update to local DB
-        │      emails.is_seen = true
-        │
-        └─ 2. Insert row into pending_changes
-               { type: 'flag_seen', email_id: id, payload: {seen: true} }
-               (IMAP: includes uid + mailboxPath for the STORE command)
-               (JMAP: includes just the flag map for Email/set)
+        └─ One transaction:
+           ├─ 1. Insert row into pending_changes
+           │      { type: 'flag_seen', email_id: id, payload: {seen: true} }
+           │      (IMAP: includes uid + mailboxPath for the STORE command)
+           │      (JMAP: includes just the flag map for Email/set)
+           │
+           └─ 2. Fold the row's queued changes into it (§6a)
+                  emails.local_is_seen = true
+                  emails.is_seen = COALESCE(local_is_seen, srv_is_seen) = true
 
 [UI immediately reflects the change via Drift's reactive streams]
 
@@ -50,8 +52,10 @@ _SyncLoop._flush() / flushPendingChanges()
 
         │
         ▼
-pending_changes row deleted on success
-(on permanent error: retry count incremented; evicted after 5 failures)
+pending_changes row acked on success (state = 'acked'): it keeps showing
+until a later server read confirms it, then it is dropped (§6a)
+(a move or delete without a snooze is deleted on success)
+(on a refusal: state = 'failed'; after 5 failures that may pass: 'stuck')
 ```
 
 ---
@@ -185,8 +189,8 @@ Undo, logs) is the original's.
 a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is
 sent and after its answer arrived. A row the user moved or deleted *while* the answer was
 on its way (and a flush may already have sent) is skipped too, via the in-memory edit
-sequence of `_ServerFlagRead`, which also remembers the server location (account, folder,
-UID) each edited mail had: its row is gone or relocated by then, and a new row would get a
+sequence of `_FetchLocationGuard`, which remembers the server location (account, folder,
+UID) each moved, snoozed, unsnoozed or deleted mail had: its row is gone or relocated by then, and a new row would get a
 new id. The answer predates the change and would bring the mail back as a duplicate in
 its old folder (#1269). A change that is `failed` by the time the
 answer is processed hides nothing (a failed move's revert has already put the row back;
@@ -317,15 +321,17 @@ reaches the server:
 | `payload` | JSON-encoded protocol-specific arguments |
 | `attempts` | Incremented on each failed try that may have reached the server; 0 means never sent |
 | `created_at` | For debug; the flush runs in `id` order |
-| `state` | `pending` (queued or retrying), `inflight` (claimed by a flush), `stuck` (retry limit reached, still retried with backoff) or `failed` (refused, given up on) |
+| `state` | `pending` (queued or retrying), `inflight` (claimed by a flush), `stuck` (retry limit reached, still retried with backoff), `failed` (refused, given up on) or `acked` (applied, waiting for a read to confirm it, §6a) |
 | `lease_until`, `claim_token` | While `inflight`: until when the claim holds, and which flush holds it |
+| `ack_seq`, `contradicted_seq` | While `acked`: the read sequence taken at the ack, and that of the first later read that contradicted it (§6a) |
 
-**Optimistic UI** — every mutation writes the local change first, then inserts into
-`pending_changes`. The Drift reactive stream delivers the update to the UI before
-the network round-trip completes.
+**Optimistic UI** — every mutation inserts into `pending_changes`; for read, star and
+snooze state the queued change is folded into the row in the same transaction (§6a).
+Location changes (folder) are still written to the row directly. The Drift reactive
+stream delivers the update to the UI before the network round-trip completes.
 
-**Conflict resolution** — the server always wins. On the next sync cycle the server's
-state overwrites local rows. A failure that may pass (a plain IMAP `NO`, a timeout, a
+**Conflict resolution** — the server always wins once nothing of the user's is queued
+for a field. A failure that may pass (a plain IMAP `NO`, a timeout, a
 JMAP request error) is retried; after 5 attempts the change is `stuck`: it keeps
 protecting the user's local value (the mail stays where the user put it), shows as
 "not synced yet" on the Pending Changes screen and the mailbox-list banner, and is
@@ -345,7 +351,7 @@ same database, a force resync racing the sync loop) takes it, and Undo cannot ca
 it (it queues a reverse change instead). A flush also leaves every change of a mail
 that another flush is sending, so a mail's changes reach the server in order. Every
 outcome settles the claim, and only while the flush still owns it (same token): the
-row is deleted when applied, goes back to `pending` (not sent: nothing charged; maybe
+row is acked (read/star/snooze changes, §6a) or deleted when applied, goes back to `pending` (not sent: nothing charged; maybe
 sent: one attempt charged) or becomes `failed`. A claim the flush left unsettled (an
 unexpected error) is released at the end of that flush with one attempt charged. A
 claim whose lease ran out means the app died mid-send: the next flush of the account
@@ -361,19 +367,18 @@ cycle. A JMAP request may still have landed, so its change goes back to `pending
 marked as maybe sent (attempts at least 1: Undo queues a reverse change instead of
 cancelling it) but is not charged further; re-sending it is safe.
 
-A failed change is never flushed again and protects nothing from sync (the guards
-only count `pending` and `inflight` rows), so the next server read shows server truth again. A failed
-read or star change makes the flag reconcile of the mail's folder due, so the next sync
-reads that folder's flags (with CONDSTORE, and with JMAP, an unchanged mail is otherwise
-read again only every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker
-keeps a reconcile already running from overwriting that: a pass clears it only when it
-ran to the end, the marker was not set again meanwhile, and it did not have to skip a
-mail with a failed flag change because another change of that mail is still queued. It also puts the flag back at
-once to its value before the change, unless another change of the same flag exists for
-the mail (then that value is not known locally).
+A failed change is never flushed again, no longer folds into the row (§6a) and protects
+nothing from sync (the location guards only count `pending`, `inflight` and `stuck`
+rows), so the mail shows the server's read/star/snooze state again at once, as last read.
+A failed read or star change also makes the flag reconcile of the mail's folder due, so
+the next sync reads that folder's flags (the last read may predate the change reaching
+the server; with CONDSTORE, and with JMAP, an unchanged mail is otherwise read again only
+every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker keeps a reconcile
+already running from overwriting that: a pass clears it only when it ran to the end and
+the marker was not set again meanwhile.
 A failed move, snooze or unsnooze is also undone locally at once: the mail goes back to its
-source folder with its earlier snooze state (payloads carry `prevSnoozedUntil` /
-`prevSnoozedFrom` for that), and later IMAP flag changes queued for it in the
+source folder, and its snooze state comes back with the fold (the payload's
+`prevSnoozedFrom` restores the folder it was snoozed from), and later IMAP flag changes queued for it in the
 destination are pointed back at the source UID, and the flag reconcile of the source is
 made due (read/star changes made meanwhile may have failed too). This is skipped when the mail is
 gone (message gone, UIDVALIDITY reset, JMAP `notFound`), when it is no longer where
@@ -394,8 +399,8 @@ again; a stuck or queued change keeps its place and is only flushed sooner) and
 **Discard** (deletes it; a stuck or queued one is first undone locally like a
 failure, so the mail does not keep a state the server never gets). A change that did
 not apply in a flush, or a stuck one not due yet, holds back the mail's later changes,
-so they reach the server in order; a newer read/star change replaces a stuck one of
-the same flag. Queueing the same
+so they reach the server in order; a newer read/star change replaces a queued
+(not yet claimed) or stuck one of the same flag. Queueing the same
 action again (or an Undo) deletes the failed change it replaces; changes the app
 queues on its own (snooze wake-up, local Sieve filters, the #545 replay) never do,
 and the wake-up skips a mail whose move, snooze or unsnooze failed.
@@ -405,6 +410,60 @@ fetched back until a force resync. Rows already removed by a reconcile before th
 change failed (IMAP: the source UID is at or below the folder checkpoint; JMAP: the
 mailbox prune) are not recovered either, nor is a mail optimistically moved into a
 folder that was then removed on the server (its row goes with the folder).
+
+---
+
+## 6a. Read, star and snooze state: the `keywords` overlay
+
+Schema v72, SYNC-REDESIGN.md §2–§5 (phase 3a). `is_seen`, `is_flagged` and
+`snoozed_until` are each three columns on `emails`:
+
+| Column | Written by | Meaning |
+|--------|------------|---------|
+| `srv_<field>` | the server-write gate only | what the server last said |
+| `local_<field>` | the fold only | the user's pending intent; NULL = none (`local_snoozed_until` = 0: "not snoozed") |
+| `<field>` | together with either | what the app shows: `COALESCE(local_<field>, srv_<field>)` |
+
+All three are written through the email state writer
+(`lib/data/repositories/email_state_writer.dart`), which sets the effective column in
+the same statement and never rewrites the whole row.
+
+- **Fold.** `local_*` is computed from the row's changes in `pending`, `inflight`,
+  `stuck` and `acked` state, in queue order, the newest winning per field
+  (`foldKeywords`, `lib/data/db/keyword_fold.dart`): `flag_seen`, `flag_flagged`,
+  `snooze` (its time), `unsnooze`, `clear_snooze` and a `move` that ends a snooze
+  ("not snoozed"). It runs in the transaction of whatever changes the row's queued
+  changes: queueing, cancelling (Undo), discarding, retrying, failing, acking and
+  dropping. A `failed` change does not fold, so the mail shows the server's state.
+- **Server-write gate.** Every server read takes the next value of a persistent read
+  sequence (`sync_read_seq`, one row) right before its request (IMAP `UID FETCH`,
+  JMAP `Email/get`) and writes `srv_*` of a row only if no read that started later
+  already wrote them (`srv_keywords_seq`), so a slow, stale answer is ignored row by
+  row. The stamp is in the database, so the background isolate and `BodyCacheService`
+  obey it too. The new-mail FETCH, the CONDSTORE refresh, the 15-minute flag
+  reconcile (IMAP `FLAGS` including the `snz:` keyword; JMAP `keywords`) and the JMAP
+  upsert write through it; size and header backfills and body fetches do not.
+- **Ack.** A change that writes one of these fields is not deleted when the server
+  applies it but `acked`, with `ack_seq` = the next read sequence: it keeps folding,
+  so the answer of a read that started before the ack cannot show the old value again.
+  The first read started after the ack that agrees drops it. One that contradicts it
+  (a server whose reads lag its writes, or another client changed it since) is noted
+  and makes the folder's flag reconcile due for the next sync run; a contradicting
+  read of a later run drops it and logs `op.contradicted` (warn): from then on the
+  server's value shows. Two reads of one run (the CONDSTORE refresh and the reconcile
+  right after it) count once. An acked change a newer change of the same field
+  shadows is dropped at its ack or at the next read, without a log line. Acked changes are not shown
+  as pending anywhere; those of a row that no longer exists are deleted at the start
+  of the next flush.
+- **Rows without a server copy** (a local virtual row, §8a, or a JMAP mail whose
+  server id is unknown) get no queued change; a read/star/snooze change is stored as
+  their own `srv_*` value.
+- **Undo's restore** of a deleted row stores its snapshot as `srv_*` with stamp 0 and
+  makes the flag reconcile due (the snapshot may show a pending value); a row that
+  still exists keeps its state.
+- The v72 upgrade copied each row's values into `srv_*`, folded the queued changes
+  into `local_*`, and made the flag reconcile due for the folders of rows with queued
+  read/star/snooze changes, whose stored value was the user's, not the server's.
 
 ---
 
@@ -461,7 +520,7 @@ server round-trip; if it had already been flushed, a compensating move is queued
 - **Order**: pending changes are flushed before syncing. This prevents the server from
   overwriting an optimistic local state that the server hasn't seen yet.
 - **Idempotency**: `flushPendingChanges` is safe to call multiple times. Each row is
-  deleted only after the server acknowledges the change.
+  acked or deleted only after the server acknowledges the change.
 - **No silent data loss**: a change the app gives up on (retry limit, permanent server
   error, message gone) is kept as a `failed` row and surfaces as a `FailedMutation`
   in the UI (mailbox-list banner → Pending Changes), never deleted without the user.
@@ -499,6 +558,8 @@ a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
   (`_reconcileDeletedImap`, `_pruneJmapMailboxToServerIds`) skip `is_local` rows.
 - **No outbound mutations**: `_enqueueChange` is a no-op for a local row — there is no
   server message to flag/move/delete yet, so the state stays purely local.
+- **Own read/star/snooze state**: with no queued change to fold, a change on a virtual
+  row is stored as its own `srv_*` value (§6a) until the row dissolves.
 - **Dissolve on arrival**: when the real message is synced in, `_maybeDissolveLocalMessage`
   matches it by Message-ID, transfers the star / read-state / folder the user set on the
   virtual copy (queuing the equivalent server mutations so both converge), then deletes
@@ -563,7 +624,9 @@ the run only against the same code (any change in the IMAP commands the app
 sends shifts the random choices), so the trace is the durable record. Bugs it
 finds and that are not fixed yet are kept as skipped regression tests in the
 same file, and the driver avoids exactly their triggers; the regression tests
-of fixed ones (#1266–#1271, #1276) run.
+of fixed ones (#1266–#1271, #1276) run. It also checks the read/star/snooze overlay
+(§6a): every row's shown value is `COALESCE(local_*, srv_*)`, and no row has a
+`local_*` value without a queued change behind it.
 Longer or focused runs (locally, with a
 Flutter SDK):
 

@@ -37,6 +37,7 @@ import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/db/keyword_fold.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -50,6 +51,7 @@ import 'package:sharedinbox/data/imap/rcpt_checking_smtp_client.dart';
 import 'package:sharedinbox/data/imap/reply_headers.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/email_ids.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
@@ -116,6 +118,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
+        _state = EmailStateWriter(db, appLogger: appLogger),
         _sendOperationTimeout = sendOperationTimeout;
 
   final AppDatabase _db;
@@ -155,25 +158,25 @@ class EmailRepositoryImpl implements EmailRepository {
   bool _bodyClientBusy = false;
   Timer? _bodyClientIdleTimer;
 
-  /// Bumped, synchronously, when [_enqueueChange] starts and again once its
-  /// row is queued; [_localEditSeqById] remembers the value
-  /// per email while a server flag read is running. Together with
-  /// [_ServerFlagRead] this closes the window a `pendingChanges` lookup alone
-  /// leaves open: an edit queued *and already flushed* while the server's
-  /// answer was on its way is no longer in `pendingChanges`, yet that answer
-  /// predates it and would write the old read/star state back.
+  /// Bumped, synchronously, when a move, snooze, unsnooze or delete is
+  /// queued ([_SyncImap._noteLocationEdit]); while a new-mail FETCH runs,
+  /// [_localEditByLocation] remembers the value by the IMAP location
+  /// (account, folder, UID) the edited mail had, with its row's id. Once
+  /// such a change is flushed no row is found there, and a FETCH answer
+  /// about that location predating the edit would add the mail again
+  /// (#1269). Read/star/snooze values need no such guard: the `keywords`
+  /// overlay orders reads by the persistent read sequence
+  /// ([EmailStateWriter]).
   ///
   /// In memory, so per isolate: a background (WorkManager) sync in another
   /// isolate does not see the UI's edits and relies on the queue check alone.
   int _localEditSeq = 0;
-  final Map<String, int> _localEditSeqById = {};
-
-  /// Like [_localEditSeqById], by the IMAP location (account, folder, UID)
-  /// the edited mail had, with its row's id: once a move or delete of it is
-  /// flushed, no row is found there, and a FETCH answer about that location
-  /// predating the edit would add the mail again (#1269).
   final Map<_ImapLocation, (int, String)> _localEditByLocation = {};
-  int _activeServerFlagReads = 0;
+  int _activeFetches = 0;
+
+  /// The email state writer (SYNC-REDESIGN.md §2): the only writer of the
+  /// read/star/snooze columns.
+  final EmailStateWriter _state;
 
   /// Tail of the in-flight [_setFlag] chain per email id. [_setFlag] reads the
   /// row, drops no-op flags, then writes; two overlapping calls for the same

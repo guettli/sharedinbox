@@ -50,6 +50,7 @@ extension _FlushImap on EmailRepositoryImpl {
   /// Called at the start of each sync cycle. Returns count of applied changes.
   Future<int> _flushPendingChanges(String accountId, String password) async {
     await _recoverExpiredLeases(accountId);
+    await _state.dropOrphanedAcks(accountId);
     final now = _now();
     final rows = await (_db.select(_db.pendingChanges)
           // A failed change waits for the user's Retry or Discard; a stuck one
@@ -248,7 +249,7 @@ extension _FlushImap on EmailRepositoryImpl {
         log('IMAP batch move failed, applying one by one: $e');
       }
       for (final row in batch.moved) {
-        await _deletePendingChange(row);
+        await _settleApplied(row);
         applied++;
       }
       pending = [
@@ -486,7 +487,7 @@ extension _FlushImap on EmailRepositoryImpl {
   ) async {
     try {
       await _applyPendingChangeImap(client, row);
-      await _deletePendingChange(row);
+      await _settleApplied(row);
       return (applied: 1, connectionLost: null);
     } catch (e) {
       if (_isImapConnectionLost(client, e)) {
@@ -597,6 +598,10 @@ extension _FlushImap on EmailRepositoryImpl {
           // UID, naming whichever mail has that UID there (#1268). Only
           // while this flush still owns the change.
           final dropped = owned && sourceGone ? await _dropGoneRow(row) : null;
+          // The change no longer folds into a row that is still there.
+          if (owned && dropped == null) {
+            await _refoldAndRethread(row.resourceId);
+          }
           return (owned: owned, dropped: dropped);
         });
         if (!owned) return (applied: 0, connectionLost: null);
@@ -725,7 +730,11 @@ extension _FlushImap on EmailRepositoryImpl {
         try {
           await client.createMailbox(dest);
         } catch (_) {}
+        // A re-snooze replaces the earlier snooze keyword: with both, sync
+        // would read back whichever comes first.
+        final resnooze = payload['prevSnoozedUntil'] != null;
         Future<void> tag(imap.MessageSequence s) async {
+          if (resnooze) await _removeImapSnoozeFlags(client, s);
           await client.uidStore(s, [keyword], action: imap.StoreAction.add);
         }
 
@@ -1094,7 +1103,10 @@ extension _FlushImap on EmailRepositoryImpl {
     String destMailboxPath,
   ) async {
     final queued = await (_db.select(_db.pendingChanges)
-          ..where((t) => t.resourceId.equals(oldId)))
+          ..where(
+            (t) =>
+                t.resourceId.equals(oldId) & t.state.equals(_ackedState).not(),
+          ))
         .get();
     if (queued.length < 2) return null;
     String? messageId;

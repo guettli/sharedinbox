@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 
+import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
 
 const _jmapAccountId = 'u1';
@@ -189,7 +190,7 @@ void main() {
     await r.emails.snoozeEmail('${_jmapAccount.id}:e2', until);
     await r.emails.flushPendingChanges(_jmapAccount.id, 'pw');
 
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     // One mailbox is created — with the role first, then without it after
     // the server refuses the role — and the second snooze reuses it.
@@ -228,7 +229,7 @@ void main() {
 
     expect(calls.where((c) => c.method == 'Mailbox/set'), isEmpty);
     expect(emailSetUpdates(calls).single['mailboxIds/mbox-old'], isTrue);
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     await r.db.close();
   });
@@ -244,7 +245,7 @@ void main() {
     await r.emails.snoozeEmail('${_jmapAccount.id}:e1', DateTime(2026, 12));
     await r.emails.flushPendingChanges(_jmapAccount.id, 'pw');
 
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
     final update = emailSetUpdates(calls).single;
     expect(update.keys.where((k) => k.startsWith('mailboxIds/')), isEmpty);
     expect(
@@ -329,7 +330,7 @@ void main() {
     final update = emailSetUpdates(calls).single;
     expect(update['mailboxIds/$_inbox'], isTrue);
     expect(update.keys.where((k) => k.startsWith('mailboxIds/')), hasLength(1));
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     await r.db.close();
   });

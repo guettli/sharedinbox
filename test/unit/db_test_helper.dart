@@ -106,3 +106,12 @@ Future<String> emailIdOfJmap(AppDatabase db, String jmapId) async =>
     (await (db.select(db.emails)..where((t) => t.srvJmapId.equals(jmapId)))
             .getSingle())
         .id;
+
+/// The queued changes of [db] that still wait for the server: all but the
+/// `acked` ones, which the server applied and which only wait for a read to
+/// confirm them (SYNC-REDESIGN.md §4.5).
+Future<List<PendingChangeRow>> unsettledChanges(AppDatabase db) =>
+    (db.select(db.pendingChanges)
+          ..where((t) => t.state.equals('acked').not())
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+        .get();

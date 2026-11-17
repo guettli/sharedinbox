@@ -3,6 +3,11 @@ part of '../email_repository_impl.dart';
 // Local row creation: the Sent copy stored after a send and the virtual
 // self-sent rows that have no server answer yet.
 
+/// The read/star/snooze state of mail the user just sent: read, not
+/// starred, not snoozed.
+const _ownMailKeywords =
+    ServerKeywords(seen: true, flagged: false, snoozedUntil: null);
+
 extension _LocalRows on EmailRepositoryImpl {
   /// Mirrors a message we just sent into the local `emails` table so it shows
   /// up in Sent immediately, instead of only once the background sync next
@@ -58,34 +63,40 @@ extension _LocalRows on EmailRepositoryImpl {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
+      final copy = EmailsCompanion.insert(
+        id: emailId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        uid: uid ?? 0,
+        subject: Value(draft.subject),
+        sentAt: Value(now),
+        receivedAt: now,
+        fromJson: Value(_encodeModelAddresses([draft.from])),
+        toAddresses: Value(_encodeModelAddresses(draft.to)),
+        ccJson: Value(_encodeModelAddresses(draft.cc)),
+        bccJson: Value(_encodeModelAddresses(draft.bcc)),
+        preview: Value(preview),
+        hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+        threadId: Value(threadId),
+        messageId: Value(mid),
+        isLocal: Value(isLocal),
+        isVirtualSentCopy: Value(isLocal),
+        srvMailboxPath: Value(uid == null ? null : mailboxPath),
+        srvUid: Value(uid),
+        srvUidValidity: Value(uidValidity),
+        srvJmapId: Value(uid == null ? jmapId : null),
+      );
+      // You wrote it — mirrors the \Seen flag the APPEND sets, and never
+      // nags with an unread badge on your own mail. A row sync already
+      // stored keeps the state the server-write gate gave it.
       await _db.into(_db.emails).insertOnConflictUpdate(
-            EmailsCompanion.insert(
-              id: emailId,
-              accountId: accountId,
-              mailboxPath: mailboxPath,
-              uid: uid ?? 0,
-              subject: Value(draft.subject),
-              sentAt: Value(now),
-              receivedAt: now,
-              fromJson: Value(_encodeModelAddresses([draft.from])),
-              toAddresses: Value(_encodeModelAddresses(draft.to)),
-              ccJson: Value(_encodeModelAddresses(draft.cc)),
-              bccJson: Value(_encodeModelAddresses(draft.bcc)),
-              preview: Value(preview),
-              // You wrote it — mirrors the \Seen flag the APPEND sets, and never
-              // nags with an unread badge on your own mail.
-              isSeen: const Value(true),
-              isFlagged: const Value(false),
-              hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-              threadId: Value(threadId),
-              messageId: Value(mid),
-              isLocal: Value(isLocal),
-              isVirtualSentCopy: Value(isLocal),
-              srvMailboxPath: Value(uid == null ? null : mailboxPath),
-              srvUid: Value(uid),
-              srvUidValidity: Value(uidValidity),
-              srvJmapId: Value(uid == null ? jmapId : null),
-            ),
+            known == null
+                ? EmailStateWriter.withServerKeywords(
+                    copy,
+                    _ownMailKeywords,
+                    seq: 0,
+                  )
+                : copy,
           );
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
@@ -155,25 +166,28 @@ extension _LocalRows on EmailRepositoryImpl {
           return;
         }
         await _db.into(_db.emails).insert(
-              EmailsCompanion.insert(
-                id: emailId,
-                accountId: account.id,
-                mailboxPath: inbox.path,
-                uid: 0,
-                subject: Value(draft.subject),
-                sentAt: Value(now),
-                receivedAt: now,
-                fromJson: Value(_encodeModelAddresses([draft.from])),
-                toAddresses: Value(_encodeModelAddresses(draft.to)),
-                ccJson: Value(_encodeModelAddresses(draft.cc)),
-                preview: Value(preview),
+              EmailStateWriter.withServerKeywords(
+                EmailsCompanion.insert(
+                  id: emailId,
+                  accountId: account.id,
+                  mailboxPath: inbox.path,
+                  uid: 0,
+                  subject: Value(draft.subject),
+                  sentAt: Value(now),
+                  receivedAt: now,
+                  fromJson: Value(_encodeModelAddresses([draft.from])),
+                  toAddresses: Value(_encodeModelAddresses(draft.to)),
+                  ccJson: Value(_encodeModelAddresses(draft.cc)),
+                  preview: Value(preview),
+                  hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
+                  threadId: Value(threadId),
+                  messageId: Value(mid),
+                  isLocal: const Value(true),
+                ),
                 // Self-sent: you wrote it, so don't nag with an unread badge.
-                isSeen: const Value(true),
-                isFlagged: const Value(false),
-                hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-                threadId: Value(threadId),
-                messageId: Value(mid),
-                isLocal: const Value(true),
+                // A virtual row has no server copy: its values are its own.
+                _ownMailKeywords,
+                seq: 0,
               ),
             );
         await _db.into(_db.emailBodies).insert(

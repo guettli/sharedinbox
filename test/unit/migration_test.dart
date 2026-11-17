@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:drift/drift.dart' show OrderingTerm;
+import 'package:drift/drift.dart' show OrderingTerm, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
@@ -20,7 +20,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 71);
+      expect(db.schemaVersion, 72);
       await db.close();
     });
 
@@ -198,6 +198,22 @@ void main() {
       expect(
         await _tableColumns(db, 'emails'),
         contains('is_virtual_sent_copy'), // v71
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        containsAll([
+          'srv_is_seen',
+          'srv_is_flagged',
+          'srv_snoozed_until',
+          'local_is_seen',
+          'local_is_flagged',
+          'local_snoozed_until',
+          'srv_keywords_seq',
+        ]), // v72
+      );
+      expect(
+        await _tableColumns(db, 'pending_changes'),
+        containsAll(['ack_seq', 'contradicted_seq']), // v72
       );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
@@ -397,7 +413,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -438,7 +454,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -469,7 +485,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -507,7 +523,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -548,7 +564,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -596,7 +612,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -613,6 +629,7 @@ void main() {
       await fresh.close();
 
       var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('DROP INDEX pending_changes_resource_state;') // v72
         ..execute('ALTER TABLE pending_changes DROP COLUMN state;')
         ..execute(
           'INSERT INTO pending_changes (id, account_id, resource_type, '
@@ -643,7 +660,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -693,7 +710,7 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -826,7 +843,7 @@ void main() {
         throwsA(anything),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -1026,7 +1043,180 @@ void main() {
       expect(action.originalEmails[0].srvUidValidity, 55);
 
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
+      await db.close();
+    });
+
+    test(
+        'v71→v72 copies the read/star/snooze state into srv_ and folds the '
+        'queued changes', () async {
+      final dbFile = File('test_migration_v71_keywords.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      for (final column in [
+        'srv_is_seen',
+        'srv_is_flagged',
+        'srv_snoozed_until',
+        'local_is_seen',
+        'local_is_flagged',
+        'local_snoozed_until',
+        'srv_keywords_seq',
+      ]) {
+        rawDb.execute('ALTER TABLE emails DROP COLUMN $column;');
+      }
+      rawDb
+        ..execute('DROP INDEX pending_changes_resource_state;')
+        ..execute('ALTER TABLE pending_changes DROP COLUMN ack_seq;')
+        ..execute('ALTER TABLE pending_changes DROP COLUMN contradicted_seq;')
+        ..execute('DROP TABLE sync_read_seq;');
+      void email(
+        String id,
+        String account, {
+        required bool seen,
+        bool flagged = false,
+        int? snoozedUntil,
+        String path = 'INBOX',
+      }) =>
+          rawDb.execute(
+            'INSERT INTO emails (id, account_id, mailbox_path, uid, '
+            'received_at, is_seen, is_flagged, snoozed_until, '
+            'srv_mailbox_path, srv_uid) '
+            'VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?)',
+            [
+              id,
+              account,
+              path,
+              if (seen) 1 else 0,
+              if (flagged) 1 else 0,
+              snoozedUntil,
+              if (account == 'acc-i') path else null,
+              if (account == 'acc-i') int.parse(id.split('-').last) else null,
+            ],
+          );
+      void change(
+        int id,
+        String email,
+        String type,
+        String payload, {
+        String state = 'pending',
+        String account = 'acc-i',
+      }) =>
+          rawDb.execute(
+            'INSERT INTO pending_changes (id, account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, attempts, state) '
+            "VALUES (?, ?, 'Email', ?, ?, ?, 0, 0, ?)",
+            [id, account, email, type, payload, state],
+          );
+      // Untouched: srv_ is today's value.
+      email('e-1', 'acc-i', seen: true, flagged: true);
+      // Read locally, the change still queued: the shown value stays.
+      email('e-2', 'acc-i', seen: true);
+      change(1, 'e-2', 'flag_seen', '{"seen":true,"mailboxPath":"INBOX"}');
+      // Two changes of the star, the later one wins; a failed one does not
+      // fold.
+      email('e-3', 'acc-i', seen: false, path: 'Archive');
+      change(2, 'e-3', 'flag_flagged', '{"flagged":true}');
+      change(3, 'e-3', 'flag_flagged', '{"flagged":false}', state: 'stuck');
+      change(4, 'e-3', 'flag_seen', '{"seen":true}', state: 'failed');
+      // Snoozed (JMAP), the snooze still queued.
+      email('e-4', 'acc-j', seen: false, snoozedUntil: 1800000000);
+      change(
+        5,
+        'e-4',
+        'snooze',
+        '{"until":"2027-01-15T08:00:00.000Z","src":"inbox-id"}',
+        account: 'acc-j',
+      );
+      // A move without a snooze change is no keyword change.
+      email('e-5', 'acc-i', seen: false, path: 'Trash');
+      change(6, 'e-5', 'move', '{"mailboxPath":"INBOX","dest":"Trash"}');
+      rawDb
+        ..execute('PRAGMA user_version = 71;')
+        ..close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      Future<Map<String, Object?>> row(String id) async =>
+          (await db.customSelect(
+            'SELECT is_seen, is_flagged, snoozed_until, srv_is_seen, '
+            'srv_is_flagged, srv_snoozed_until, local_is_seen, '
+            'local_is_flagged, local_snoozed_until, srv_keywords_seq '
+            'FROM emails WHERE id = ?',
+            variables: [Variable.withString(id)],
+          ).getSingle())
+              .data;
+
+      expect(await row('e-1'), {
+        'is_seen': 1,
+        'is_flagged': 1,
+        'snoozed_until': null,
+        'srv_is_seen': 1,
+        'srv_is_flagged': 1,
+        'srv_snoozed_until': null,
+        'local_is_seen': null,
+        'local_is_flagged': null,
+        'local_snoozed_until': null,
+        'srv_keywords_seq': 0,
+      });
+      final e2 = await row('e-2');
+      expect(e2['is_seen'], 1);
+      expect(e2['local_is_seen'], 1);
+      final e3 = await row('e-3');
+      expect(e3['is_flagged'], 0, reason: 'the stuck change is the later');
+      expect(e3['local_is_flagged'], 0);
+      expect(e3['local_is_seen'], isNull, reason: 'a failed change');
+      expect(e3['is_seen'], 0);
+      final e4 = await row('e-4');
+      final until = DateTime.utc(2027, 1, 15, 8).millisecondsSinceEpoch ~/ 1000;
+      expect(e4['local_snoozed_until'], until);
+      expect(e4['snoozed_until'], until);
+      expect(e4['srv_snoozed_until'], 1800000000);
+      final e5 = await row('e-5');
+      expect(e5['local_is_seen'], isNull);
+      expect(e5['local_snoozed_until'], isNull);
+
+      // The rows with a queued keyword change get their server value read
+      // again.
+      final due = await db
+          .customSelect(
+            'SELECT account_id, resource_type FROM sync_states '
+            "WHERE resource_type LIKE '%Due:%' ORDER BY resource_type",
+          )
+          .get();
+      expect(
+        [
+          for (final r in due)
+            '${r.read<String>('account_id')} '
+                '${r.read<String>('resource_type')}',
+        ],
+        [
+          'acc-i IMAP:FlagReconcileDue:Archive',
+          'acc-i IMAP:FlagReconcileDue:INBOX',
+          'acc-j JMAP:ReconcileDue:INBOX',
+        ],
+      );
+      expect(
+        await _tableColumns(db, 'pending_changes'),
+        containsAll(['ack_seq', 'contradicted_seq']),
+      );
+      expect(await _tableColumns(db, 'sync_read_seq'), contains('seq'));
+      final index = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'pending_changes_resource_state'",
+          )
+          .get();
+      expect(index, hasLength(1));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 72);
       await db.close();
     });
 
@@ -1137,7 +1327,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 71);
+      expect(version.read<int>('user_version'), 72);
     });
 
     test(

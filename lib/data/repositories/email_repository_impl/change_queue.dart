@@ -71,6 +71,13 @@ Duration _stuckBackoff(int attempts) {
 /// with the app is sent again soon after the restart.
 const _leaseDuration = Duration(minutes: 5);
 
+/// `pending_changes.state` of a change the server applied that changes
+/// read/star/snooze state: it keeps folding into the row until a later read
+/// confirms it ([EmailStateWriter.ack], SYNC-REDESIGN.md §4.4–§4.5). Not
+/// flushed, not shown as pending, and protects nothing else (the location
+/// guards count only [_liveStates]).
+const _ackedState = 'acked';
+
 /// `pending_changes.state` of a change the app gave up on (retry limit or
 /// a permanent refusal). Never flushed and protects nothing, so the next
 /// server read shows server truth again; listed on the Pending Changes
@@ -224,17 +231,26 @@ extension _ChangeQueue on EmailRepositoryImpl {
   Future<T> _asAutomaticChange<T>(Future<T> Function() action) =>
       runZoned(action, zoneValues: {_automaticChangeKey: true});
 
-  /// Queues a change. A user action ([supersedeFailures], the default unless
-  /// run via [_asAutomaticChange]) also deletes the failed changes it
-  /// replaces.
-  Future<void> _enqueueChange(
+  /// Queues a change and folds it into the row's read/star/snooze state
+  /// ([EmailStateWriter.refold]) in the same transaction. A user action
+  /// ([supersedeFailures], the default unless run via [_asAutomaticChange])
+  /// also deletes the failed changes it replaces. A newer read or star
+  /// change replaces (supersedes) a queued one of the same flag that was not
+  /// claimed by a flush (SYNC-REDESIGN.md §3). With [fold] false the caller
+  /// folds itself (the bulk form of `markAllAsRead`).
+  ///
+  /// Returns whether a change of this intent is queued now. A row with no
+  /// server copy to change (a local virtual row, a JMAP mail whose server
+  /// id is unknown) gets none: its read/star/snooze value is stored as its
+  /// own ([EmailStateWriter.writeOwn]) and false is returned.
+  Future<bool> _enqueueChange(
     String accountId,
     String resourceId,
     String changeType,
     String payload, {
     bool? supersedeFailures,
+    bool fold = true,
   }) async {
-    _noteLocalEdit(resourceId);
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(resourceId)))
         .getSingleOrNull();
@@ -242,13 +258,16 @@ extension _ChangeQueue on EmailRepositoryImpl {
     // outbound mutation would be rejected (`notFound`) and evicted. The state
     // is instead applied locally and carried over to the real message when it
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
-    if (email?.isLocal ?? false) return;
+    if (email?.isLocal ?? false) {
+      await _writeOwnKeywords(resourceId, changeType, payload);
+      return false;
+    }
     // A JMAP mail whose server id is not known cannot be changed on the
     // server: queued, the change would fail at every flush.
-    if (email?.srvJmapId == null &&
-        email?.srvUid == null &&
-        (await _bulkAccount(accountId))?.type ==
-            account_model.AccountType.jmap) {
+    if (email == null
+        ? (await _bulkAccount(accountId))?.type ==
+            account_model.AccountType.jmap
+        : await _hasNoServerCopy(email)) {
       unawaited(
         _appLogger?.warn(
           'pending_change.no_server_id',
@@ -259,69 +278,135 @@ extension _ChangeQueue on EmailRepositoryImpl {
           mailboxPath: email?.mailboxPath,
         ),
       );
-      return;
+      if (email != null) {
+        await _writeOwnKeywords(resourceId, changeType, payload);
+      }
+      return false;
     }
+    final placement = _placementChangeTypes.contains(changeType);
     final at = _imapLocationOf(email);
-    _noteLocalEdit(resourceId, at: at);
+    if (placement) _noteLocationEdit(resourceId, at);
     payload = _stampJmapId(payload, email?.srvJmapId);
     payload = await _stampUidValidity(accountId, resourceId, payload);
     payload = await _markUidAfterQueuedMove(resourceId, payload);
-    if (supersedeFailures ?? Zone.current[_automaticChangeKey] != true) {
-      await _deleteSupersededFailures(resourceId, changeType);
-    }
+    final supersede =
+        supersedeFailures ?? Zone.current[_automaticChangeKey] != true;
+    final flag = changeType == 'flag_seen' || changeType == 'flag_flagged';
 
-    // Collapse redundant flag changes: if an un-attempted `flag_seen` /
-    // `flag_flagged` / `clear_snooze` for this message with the same payload is
-    // already queued, don't append a duplicate (the wake-up re-queues a
-    // `clear_snooze` each time sync reads a stale snooze back). Only these are
-    // de-duped — move / delete / snooze carry ordering semantics and must not
-    // be collapsed here (#644).
-    if (changeType == 'flag_seen' ||
-        changeType == 'flag_flagged' ||
-        changeType == 'add_keywords' ||
-        changeType == 'clear_snooze') {
-      // Compare against the latest queued change of this type only: with
-      // `[seen:true, seen:false]` queued, a new `seen:true` is not redundant
-      // and must be appended, or the server would end up unread (#1186).
-      // A failed change is not queued work: the new one must be appended.
-      final latest = await (_db.select(_db.pendingChanges)
-            ..where(
-              (t) =>
-                  t.resourceId.equals(resourceId) &
-                  t.state.equals(_pendingState) &
-                  t.changeType.equals(changeType),
-            )
-            ..orderBy([(t) => OrderingTerm.desc(t.id)])
-            ..limit(1))
-          .getSingleOrNull();
-      if (latest != null && latest.payload == payload && latest.attempts == 0) {
-        return;
+    final seq = await _db.transaction(() async {
+      if (supersede) await _deleteSupersededFailures(resourceId, changeType);
+
+      // Collapse redundant changes: if an un-attempted `flag_seen` /
+      // `flag_flagged` / `clear_snooze` for this message with the same
+      // payload is already queued, don't append a duplicate (the wake-up
+      // queues a `clear_snooze` for a stale snooze). Only these are de-duped
+      // — move / delete / snooze carry ordering semantics and must not be
+      // collapsed here (#644).
+      if (flag ||
+          changeType == 'add_keywords' ||
+          changeType == 'clear_snooze') {
+        // Compare against the latest queued change of this type only: with
+        // `[seen:true, seen:false]` queued, a new `seen:true` is not
+        // redundant and must be appended, or the server would end up
+        // unread (#1186). A failed change is not queued work: the new one
+        // must be appended.
+        final latest = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(resourceId) &
+                    t.state.equals(_pendingState) &
+                    t.changeType.equals(changeType),
+              )
+              ..orderBy([(t) => OrderingTerm.desc(t.id)])
+              ..limit(1))
+            .getSingleOrNull();
+        if (latest != null &&
+            latest.payload == payload &&
+            latest.attempts == 0) {
+          return null;
+        }
       }
-    }
+      // Supersede: the new read/star change carries the user's latest value
+      // of the flag, so a queued one no flush has claimed is not sent any
+      // more. One being sent stays; this one follows it. Latent: Undo
+      // records the ids it captured ([_captureOps]) only in its own action,
+      // not here, so a superseded one can be among them. Undo queues no
+      // read/star changes today; if it ever does, a cancel of the gone id
+      // falls through to queueing the inverse (SYNC-REDESIGN.md §3).
+      if (flag) {
+        await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(resourceId) &
+                    t.changeType.equals(changeType) &
+                    t.state.equals(_pendingState),
+              ))
+            .go();
+      }
 
-    final seq = await _db.into(_db.pendingChanges).insert(
-          PendingChangesCompanion.insert(
-            accountId: accountId,
-            resourceType: 'Email',
-            resourceId: resourceId,
-            changeType: changeType,
-            payload: payload,
-            createdAt: DateTime.now(),
-          ),
-        );
+      final seq = await _db.into(_db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: accountId,
+              resourceType: 'Email',
+              resourceId: resourceId,
+              changeType: changeType,
+              payload: payload,
+              createdAt: DateTime.now(),
+            ),
+          );
+      if (fold) await _state.refold(resourceId);
+      return seq;
+    });
+    if (seq == null) return true;
     (Zone.current[_captureOpsKey] as Map<String, List<int>>?)
         ?.putIfAbsent(resourceId, () => [])
         .add(seq);
-    // Again after the insert: a read that started during the awaits above
+    // Again after the insert: a FETCH that started during the awaits above
     // took its sequence after the first note and read the queue before this
     // row existed, so without this the change could flush unseen by it.
-    _noteLocalEdit(resourceId, at: at);
+    if (placement) _noteLocationEdit(resourceId, at);
     final bulk = _bulkScope;
     if (bulk != null) {
       bulk.kickedAccounts.add(accountId);
-      return;
+      return true;
     }
     _changeCtrl.add(accountId);
+    return true;
+  }
+
+  /// Whether [row] has no server copy a change could be queued for: a
+  /// local virtual row, or a JMAP mail whose server id is not known. Its
+  /// read/star/snooze state is its own ([EmailStateWriter.writeOwn]).
+  Future<bool> _hasNoServerCopy(Email row) async {
+    if (row.isLocal) return true;
+    if (row.srvJmapId != null || row.srvUid != null) return false;
+    return (await _bulkAccount(row.accountId))?.type ==
+        account_model.AccountType.jmap;
+  }
+
+  /// The read/star/snooze effect of a [changeType] change with [payload]
+  /// on row [resourceId], which has no server copy to queue it for: stored
+  /// as the row's own value.
+  Future<void> _writeOwnKeywords(
+    String resourceId,
+    String changeType,
+    String payload,
+  ) async {
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = jsonDecode(payload) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+    final local = foldKeywords([
+      FoldOp(seq: 0, type: changeType, payload: decoded, state: _pendingState),
+    ]);
+    await _state.writeOwn(
+      resourceId,
+      seen: local.seen,
+      flagged: local.flagged,
+      snoozedUntil: local.snoozedUntil,
+    );
   }
 
   /// Deletes failed changes of [resourceId] that a new [changeType] change
@@ -615,29 +700,41 @@ extension _ChangeQueue on EmailRepositoryImpl {
     final cancelled = <int>{};
     // Latest first, as an Undo of several steps would cancel them.
     for (final id in ids.toSet().toList()..sort((a, b) => b.compareTo(a))) {
-      final row = await (_db.select(_db.pendingChanges)
-            ..where((t) => t.id.equals(id)))
-          .getSingleOrNull();
-      // Only one nothing was sent for (see [_claimPendingChange]).
-      if (row == null) continue;
-      final count = await (_db.delete(_db.pendingChanges)
-            ..where(
-              (t) =>
-                  t.id.equals(id) &
-                  t.state.equals(_pendingState) &
-                  t.attempts.equals(0),
-            ))
-          .go();
-      if (count == 0) continue;
-      cancelled.add(id);
-      if (_locationChangeTypes.contains(row.changeType)) {
-        await _unmarkAfterCancelledMove(row);
-      }
+      // One transaction per change: its delete and the row's fold.
+      final done = await _db.transaction(() async {
+        final row = await (_db.select(_db.pendingChanges)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        // Only one nothing was sent for (see [_claimPendingChange]).
+        if (row == null) return false;
+        final count = await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.id.equals(id) &
+                    t.state.equals(_pendingState) &
+                    t.attempts.equals(0),
+              ))
+            .go();
+        if (count == 0) return false;
+        if (_locationChangeTypes.contains(row.changeType)) {
+          await _unmarkAfterCancelledMove(row);
+        }
+        await _refoldAndRethread(row.resourceId);
+        return true;
+      });
+      if (done) cancelled.add(id);
     }
     return cancelled;
   }
 
-  Future<bool> _cancelPendingChange(String emailId, String changeType) async {
+  Future<bool> _cancelPendingChange(String emailId, String changeType) =>
+      // One transaction: the delete and the row's fold.
+      _db.transaction(() => _cancelLatestPendingChange(emailId, changeType));
+
+  Future<bool> _cancelLatestPendingChange(
+    String emailId,
+    String changeType,
+  ) async {
     // Find the latest pending change for this email/type that no flush has
     // picked up yet (see [_claimPendingChange]).
     final query = _db.select(_db.pendingChanges)
@@ -661,6 +758,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (_locationChangeTypes.contains(changeType)) {
       await _unmarkAfterCancelledMove(row);
     }
+    await _refoldAndRethread(emailId);
     return true;
   }
 
@@ -728,12 +826,23 @@ extension _ChangeQueue on EmailRepositoryImpl {
   Future<void> _deletePendingChange(PendingChangeRow row) =>
       (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(row.id))).go();
 
+  /// Settles a claimed [row] the server applied: `acked` when it changes
+  /// read/star/snooze state, so it keeps showing until a later read
+  /// confirms it ([EmailStateWriter.ack]); deleted otherwise, as before.
+  Future<void> _settleApplied(PendingChangeRow row) async {
+    if (await _state.ack(row)) return;
+    await _deletePendingChange(row);
+  }
+
   // ── Failed mutations (offline compose queue) ─────────────────────────────
 
   Stream<List<model.FailedMutation>> _observeFailedMutations(String accountId) {
     return (_db.select(_db.pendingChanges)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.lastError.isNotNull(),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.lastError.isNotNull() &
+                t.state.equals(_ackedState).not(),
           )
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
@@ -769,16 +878,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
       if (row == null || row.state == _inflightState) return null;
       await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(id)))
           .go();
-      // A failed change no longer shows locally.
+      // A failed change no longer shows locally (it does not fold).
       if (row.state == _failedState) return null;
       // Pending or stuck: the mail still shows the user's intent. Give that
       // up as a failure would, so it does not vanish or keep a value the
       // server never gets; the mail's later moves and deletes depend on it.
-      await _afterFlagFailure(row, revert: true);
-      return (
-        row: row,
-        dependents: await _afterLocationFailure(row, revert: true)
-      );
+      await _afterFlagFailure(row);
+      final dependents = await _afterLocationFailure(row, revert: true);
+      await _refoldAndRethread(row.resourceId);
+      return (row: row, dependents: dependents);
     });
     if (discarded != null) {
       _logDependentFailures(discarded.row, discarded.dependents);
@@ -805,11 +913,12 @@ extension _ChangeQueue on EmailRepositoryImpl {
       _changeCtrl.add(row.accountId);
       return;
     }
+    final placement = _placementChangeTypes.contains(row.changeType);
     final at = _imapLocationOf(
       await (_db.select(_db.emails)..where((t) => t.id.equals(row.resourceId)))
           .getSingleOrNull(),
     );
-    _noteLocalEdit(row.resourceId, at: at);
+    if (placement) _noteLocationEdit(row.resourceId, at);
     await _db.transaction(() async {
       final current = await (_db.select(_db.pendingChanges)
             ..where((t) => t.id.equals(id) & t.state.equals(_failedState)))
@@ -832,15 +941,18 @@ extension _ChangeQueue on EmailRepositoryImpl {
             ),
           );
       await _deletePendingChange(current);
+      // The retried change folds again.
+      await _refoldAndRethread(current.resourceId);
     });
-    _noteLocalEdit(row.resourceId, at: at);
+    if (placement) _noteLocationEdit(row.resourceId, at);
     _changeCtrl.add(row.accountId);
   }
 
   /// Re-applies the optimistic local part of a failed [row] that is being
-  /// retried, without queueing or mirroring anything: the flag value, or for
-  /// a move/snooze/unsnooze the destination, when the mail is (again) at the
-  /// change's source. Leaves the mail alone otherwise.
+  /// retried, without queueing or mirroring anything: for a
+  /// move/snooze/unsnooze the destination, when the mail is (again) at the
+  /// change's source. Leaves the mail alone otherwise. Read/star/snooze
+  /// values come back with the fold of the retried change.
   Future<void> _reapplyRetriedChange(PendingChangeRow row) async {
     final Map<String, dynamic> payload;
     try {
@@ -853,23 +965,6 @@ extension _ChangeQueue on EmailRepositoryImpl {
         .getSingleOrNull();
     if (email == null) return;
     if (!_sameMessage(row, email.messageId)) return;
-    final seen = payload['seen'];
-    final flagged = payload['flagged'];
-    if ((row.changeType == 'flag_seen' && seen is bool) ||
-        (row.changeType == 'flag_flagged' && flagged is bool)) {
-      await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
-        EmailsCompanion(
-          isSeen: seen is bool ? Value(seen) : const Value.absent(),
-          isFlagged: flagged is bool ? Value(flagged) : const Value.absent(),
-        ),
-      );
-      await _updateThread(
-        email.accountId,
-        email.mailboxPath,
-        email.threadId ?? email.id,
-      );
-      return;
-    }
     if (!_locationChangeTypes.contains(row.changeType)) return;
     final src = payload['mailboxPath'] ?? payload['src'];
     final dest = payload['dest'];
@@ -880,9 +975,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
       case 'move':
         await _applyLocalMove(email, target);
       case 'snooze':
-        final until = DateTime.tryParse(payload['until'] as String? ?? '');
-        if (until == null) return;
-        await _applyLocalSnooze(email, target, until);
+        await _applyLocalSnooze(email, target);
       case 'unsnooze':
         await _applyLocalUnsnooze(email, target);
     }
@@ -890,7 +983,11 @@ extension _ChangeQueue on EmailRepositoryImpl {
 
   Stream<List<model.PendingChange>> _observePendingChanges(String accountId) {
     return (_db.select(_db.pendingChanges)
-          ..where((t) => t.accountId.equals(accountId))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.state.equals(_ackedState).not(),
+          )
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
             (t) => OrderingTerm.asc(t.id),
@@ -901,6 +998,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
 
   Stream<List<model.PendingChange>> _observeAllPendingChanges() {
     return (_db.select(_db.pendingChanges)
+          ..where((t) => t.state.equals(_ackedState).not())
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
             (t) => OrderingTerm.asc(t.id),
