@@ -395,7 +395,17 @@ if header :contains "subject" "lunch" {
     await r.emails.syncEmails('test-jmap', inboxId);
     expect(await r.emails.applySieveRules('test-jmap'), 1);
     await r.emails.flushPendingChanges('test-jmap', user.password);
-    expect(await unsettledChanges(r.db), isEmpty);
+    // Everything was sent. The star is acked: it keeps showing until a
+    // read confirms it (SYNC.md §6a).
+    expect(
+      await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.state.equals('acked').not()))
+          .get(),
+      isEmpty,
+    );
+    // The next sync of the mail's folder reads the star back and drops it.
+    await r.emails.syncEmails('test-jmap', trash.path);
+    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
     // Read the server truth over IMAP, as the flag_seen test above does.
     final client = await connectImap(env: env, user: user);
@@ -438,7 +448,14 @@ if header :contains "subject" "lunch" {
         await r.emails.snoozeEmail(e.id, until);
       }
       await r.emails.flushPendingChanges('test-jmap', user.password);
-      expect(await unsettledChanges(r.db), isEmpty);
+      // Both snoozes were sent; they are acked and keep showing their
+      // wake-up time until a read confirms them (SYNC.md §6a).
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.state.equals('acked').not()))
+            .get(),
+        isEmpty,
+      );
 
       final snoozedRows = await (r.db.select(r.db.mailboxes)
             ..where(
@@ -466,6 +483,18 @@ if header :contains "subject" "lunch" {
           (m.flags ?? []).where((f) => f.toLowerCase().startsWith('snz:')),
           hasLength(1),
         );
+      }
+
+      // The sync of the Snoozed mailbox reads the snooze keywords back and
+      // drops the acked snoozes; the wake-up time stays.
+      await r.emails.syncEmails('test-jmap', snoozedId);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      final synced = await (r.db.select(r.db.emails)
+            ..where((t) => t.accountId.equals('test-jmap')))
+          .get();
+      for (final e in synced) {
+        expect(e.snoozedUntil, isNotNull);
+        expect(e.localSnoozedUntil, isNull);
       }
     },
   );

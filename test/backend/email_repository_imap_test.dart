@@ -8,7 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -918,7 +918,18 @@ if header :contains "subject" "lunch" {
     await r.emails.syncEmails('test', 'INBOX');
     expect(await r.emails.applySieveRules('test'), 1);
     await r.emails.flushPendingChanges('test', user.password);
-    expect(await unsettledChanges(r.db), isEmpty);
+    // Everything was sent. The star is acked: it keeps showing until a
+    // read confirms it (SYNC.md §6a).
+    expect(
+      await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.state.equals('acked').not()))
+          .get(),
+      isEmpty,
+    );
+    // The sync of Trash, where the mail is now, reads the star back and
+    // drops it.
+    await r.emails.syncEmails('test', 'Trash');
+    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
     expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
     await client.selectMailboxByPath('Trash');
