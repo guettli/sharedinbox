@@ -900,6 +900,13 @@ class AppDatabase extends _$AppDatabase {
   /// lookup whether or not the UIDVALIDITY is known; uniqueness is the
   /// same in any column order. A null UIDVALIDITY never collides (SQLite
   /// treats NULLs as distinct).
+  /// Schema v72: the fold, the gate and the drop rules look up a row's
+  /// changes by state (SYNC-REDESIGN.md §4).
+  Future<void> _createPendingChangesResourceIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS pending_changes_resource_state '
+        'ON pending_changes (resource_id, state);',
+      );
+
   Future<void> _createSrvLocationIndexes() async {
     await customStatement(
       'CREATE UNIQUE INDEX IF NOT EXISTS emails_srv_imap_location ON emails '
@@ -1049,6 +1056,7 @@ class AppDatabase extends _$AppDatabase {
           await _createForeignKeyIndexes();
           await _createListOrderIndexes();
           await _createSrvLocationIndexes();
+          await _createPendingChangesResourceIndex();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -1918,6 +1926,7 @@ class AppDatabase extends _$AppDatabase {
         await _addColumnIfMissing(m, emails, column);
       }
       if (await _tableExists(this, 'pending_changes')) {
+        await _createPendingChangesResourceIndex();
         await _addColumnIfMissing(m, pendingChanges, pendingChanges.ackSeq);
         await _addColumnIfMissing(
           m,

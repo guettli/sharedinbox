@@ -47,8 +47,25 @@ class EmailStateWriter {
   /// Starts a server read of the `keywords` group for [accountId]: call
   /// right before the request (IMAP `UID FETCH` of FLAGS, JMAP `Email/get`
   /// with `keywords`), then [KeywordRead.write] each answer.
-  Future<KeywordRead> beginRead(String accountId) async =>
-      KeywordRead._(this, accountId, await nextReadSeq());
+  Future<KeywordRead> beginRead(String accountId) async {
+    final seq = await nextReadSeq();
+    return KeywordRead._(
+      this,
+      accountId,
+      seq,
+      Zone.current[_syncRunKey] as int? ?? seq,
+    );
+  }
+
+  /// Runs [body] as one sync run: the reads it begins share the run's start
+  /// sequence. An acked op a read contradicted is dropped only by a read of
+  /// a later run (or one outside a run), never by a second read moments
+  /// later in the same run, which would tell nothing new about a server
+  /// whose reads lag its writes.
+  Future<T> inSyncRun<T>(Future<T> Function() body) async {
+    final start = await nextReadSeq();
+    return runZoned(body, zoneValues: {_syncRunKey: start});
+  }
 
   /// [row], a companion for a **new** row, with the `keywords` group of a
   /// server read [seq] (0 for a row no read wrote, e.g. the Sent copy).
@@ -73,36 +90,39 @@ class EmailStateWriter {
   /// Recomputes the `local_*` keyword columns of row [emailId] from its
   /// foldable ops ([foldKeywords]) and its effective columns with them.
   /// Returns whether the effective value changed. Run it in the transaction
-  /// that changed the row's ops.
-  Future<bool> refold(String emailId) async {
-    final ops = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.resourceId.equals(emailId) & t.state.isIn(foldableOpStates),
-          ))
-        .get();
-    final local = foldKeywords(ops.map(foldOpOf));
-    final before = await _effective(emailId);
-    if (before == null) return false;
-    final snooze = local.snoozedUntil;
-    await _db.customUpdate(
-      'UPDATE emails SET '
-      'local_is_seen = ?1, local_is_flagged = ?2, local_snoozed_until = ?3, '
-      'is_seen = COALESCE(?1, srv_is_seen), '
-      'is_flagged = COALESCE(?2, srv_is_flagged), '
-      'snoozed_until = NULLIF(COALESCE(?3, srv_snoozed_until), 0) '
-      'WHERE id = ?4',
-      variables: [
-        Variable<bool>(local.seen),
-        Variable<bool>(local.flagged),
-        Variable<int>(snooze == null ? null : _seconds(snooze)),
-        Variable.withString(emailId),
-      ],
-      updates: {_db.emails},
-      updateKind: UpdateKind.update,
-    );
-    return before != await _effective(emailId);
-  }
+  /// that changed the row's ops; it runs in a transaction (a savepoint when
+  /// nested) of its own as well, so reading the ops and writing the row
+  /// cannot interleave with another writer's enqueue and fold.
+  Future<bool> refold(String emailId) => _db.transaction(() async {
+        final ops = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(emailId) &
+                    t.state.isIn(foldableOpStates),
+              ))
+            .get();
+        final local = foldKeywords(ops.map(foldOpOf));
+        final before = await _effective(emailId);
+        if (before == null) return false;
+        final snooze = local.snoozedUntil;
+        await _db.customUpdate(
+          'UPDATE emails SET '
+          'local_is_seen = ?1, local_is_flagged = ?2, local_snoozed_until = ?3, '
+          'is_seen = COALESCE(?1, srv_is_seen), '
+          'is_flagged = COALESCE(?2, srv_is_flagged), '
+          'snoozed_until = NULLIF(COALESCE(?3, srv_snoozed_until), 0) '
+          'WHERE id = ?4',
+          variables: [
+            Variable<bool>(local.seen),
+            Variable<bool>(local.flagged),
+            Variable<int>(snooze == null ? null : _seconds(snooze)),
+            Variable.withString(emailId),
+          ],
+          updates: {_db.emails},
+          updateKind: UpdateKind.update,
+        );
+        return before != await _effective(emailId);
+      });
 
   /// [refold] for each of [emailIds]; returns those whose effective value
   /// changed.
@@ -266,7 +286,56 @@ class EmailStateWriter {
       ''',
       variables: [if (accountId != null) Variable.withString(accountId)],
     ).get();
+    final opsByRow = <String, List<PendingChangeRow>>{};
+    for (final op in await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.state.isIn(foldableOpStates) &
+                (accountId == null
+                    ? const Constant(true)
+                    : t.accountId.equals(accountId)),
+          ))
+        .get()) {
+      (opsByRow[op.resourceId] ??= []).add(op);
+    }
+    final notFolded = <String>[];
+    final locals = await _db.customSelect(
+      'SELECT id, local_is_seen, local_is_flagged, local_snoozed_until '
+      'FROM emails e WHERE (local_is_seen IS NOT NULL '
+      'OR local_is_flagged IS NOT NULL OR local_snoozed_until IS NOT NULL '
+      'OR EXISTS (SELECT 1 FROM pending_changes p '
+      'WHERE p.resource_id = e.id '
+      "AND p.state IN ('pending', 'inflight', 'stuck', 'acked'))) $scope",
+      variables: [if (accountId != null) Variable.withString(accountId)],
+    ).get();
+    for (final r in locals) {
+      final id = r.read<String>('id');
+      final snooze = r.readNullable<int>('local_snoozed_until');
+      final stored = KeywordLocal(
+        seen: r.readNullable<bool>('local_is_seen'),
+        flagged: r.readNullable<bool>('local_is_flagged'),
+        snoozedUntil: snooze == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(snooze * 1000, isUtc: true),
+      );
+      final folded = foldKeywords((opsByRow[id] ?? const []).map(foldOpOf));
+      // The fold at second precision, as stored.
+      final expected = KeywordLocal(
+        seen: folded.seen,
+        flagged: folded.flagged,
+        snoozedUntil: folded.snoozedUntil == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(
+                _seconds(folded.snoozedUntil!) * 1000,
+                isUtc: true,
+              ),
+      );
+      if (stored != expected) {
+        notFolded.add('$id: local_* $stored, the fold of its ops $expected');
+      }
+    }
     return [
+      ...notFolded,
       for (final r in rows)
         '${r.read<String>('id')}:'
             '${r.read<bool>('bad_seen') ? ' is_seen' : ''}'
@@ -290,6 +359,15 @@ class EmailStateWriter {
   }
 
   Future<KeywordWrite> _write(
+    KeywordRead read,
+    String emailId,
+    ServerKeywords keywords,
+  ) =>
+      // One transaction: the write, the settling of the acked ops and the
+      // re-fold must not interleave with an enqueue and its fold.
+      _db.transaction(() => _writeInTransaction(read, emailId, keywords));
+
+  Future<KeywordWrite> _writeInTransaction(
     KeywordRead read,
     String emailId,
     ServerKeywords keywords,
@@ -324,6 +402,60 @@ class EmailStateWriter {
     return KeywordWrite(changed: before != await _effective(emailId));
   }
 
+  /// [KeywordRead.writeAll]: rows whose `srv_*` already hold the read's
+  /// values and that have no acked op only get the read's stamp, in one
+  /// statement per group of equal values (`UPDATE … RETURNING id`, so a row
+  /// whose values changed meanwhile is not stamped over them); every other
+  /// row goes through [_write]. Returns the rows whose shown value changed.
+  Future<Set<String>> _writeAll(
+    KeywordRead read,
+    Map<String, ServerKeywords> byRow,
+  ) =>
+      _db.transaction(() async {
+        final groups = <(bool, bool, int?), List<String>>{};
+        for (final MapEntry(key: id, value: k) in byRow.entries) {
+          if (await read._hasAcked(id)) continue;
+          final snooze = k.snoozedUntil;
+          (groups[(
+            k.seen,
+            k.flagged,
+            snooze == null ? null : _seconds(snooze),
+          )] ??= [])
+              .add(id);
+        }
+        final stamped = <String>{};
+        for (final MapEntry(key: (seen, flagged, snooze), value: ids)
+            in groups.entries) {
+          for (var i = 0; i < ids.length; i += 500) {
+            final chunk = ids.sublist(
+              i,
+              i + 500 > ids.length ? ids.length : i + 500,
+            );
+            final rows = await _db.customSelect(
+              'UPDATE emails SET srv_keywords_seq = ?1 '
+              'WHERE srv_keywords_seq <= ?1 AND srv_is_seen = ?2 '
+              'AND srv_is_flagged = ?3 AND srv_snoozed_until IS ?4 '
+              'AND id IN (${List.filled(chunk.length, '?').join(', ')}) '
+              'RETURNING id',
+              variables: [
+                Variable.withInt(read.seq),
+                Variable<bool>(seen),
+                Variable<bool>(flagged),
+                Variable<int>(snooze),
+                for (final id in chunk) Variable.withString(id),
+              ],
+            ).get();
+            stamped.addAll(rows.map((r) => r.read<String>('id')));
+          }
+        }
+        final changed = <String>{};
+        for (final MapEntry(key: id, value: k) in byRow.entries) {
+          if (stamped.contains(id)) continue;
+          if ((await _writeInTransaction(read, id, k)).changed) changed.add(id);
+        }
+        return changed;
+      });
+
   /// SYNC-REDESIGN.md §4.5 for the acked ops of [emailId] after [read]
   /// wrote [keywords] to it: an op acked before the read started is
   /// dropped when the read agrees with it, kept on the first contradicting
@@ -334,16 +466,32 @@ class EmailStateWriter {
     String emailId,
     ServerKeywords keywords,
   ) async {
-    final acked = await (_db.select(_db.pendingChanges)
+    final ops = await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
-                t.resourceId.equals(emailId) &
-                t.state.equals('acked') &
-                t.ackSeq.isSmallerThanValue(read.seq),
+                t.resourceId.equals(emailId) & t.state.isIn(foldableOpStates),
           ))
         .get();
+    final acked = [
+      for (final op in ops)
+        if (op.state == 'acked' && (op.ackSeq ?? read.seq) < read.seq) op,
+    ];
     var dropped = false;
     for (final op in acked) {
+      // A newer change of the same fields shows instead of it: whatever the
+      // server says, this one no longer matters (and is no contradiction).
+      final columns = keywordColumnsOf(op.changeType, _payloadOf(op));
+      final shadowed = ops.any(
+        (o) =>
+            o.id > op.id &&
+            keywordColumnsOf(o.changeType, _payloadOf(o)).containsAll(columns),
+      );
+      if (shadowed) {
+        await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
+            .go();
+        dropped = true;
+        continue;
+      }
       final agrees = readAgreesWith(foldOpOf(op), keywords);
       final contradictedBefore = op.contradictedSeq;
       if (!agrees && contradictedBefore == null) {
@@ -351,10 +499,10 @@ class EmailStateWriter {
             .write(PendingChangesCompanion(contradictedSeq: Value(read.seq)));
         // The second read must not wait for the 15-minute reconcile: an
         // unchanged mail is not read again before (IMAP CONDSTORE, JMAP).
-        await _makeFlagReconcileDue(emailId);
+        await makeFlagReconcileDue(emailId);
         continue;
       }
-      if (!agrees && read.seq <= contradictedBefore!) continue;
+      if (!agrees && read.runStart <= contradictedBefore!) continue;
       await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
           .go();
       dropped = true;
@@ -366,7 +514,7 @@ class EmailStateWriter {
   /// Makes the flag reconcile of the folder row [emailId] is in on the
   /// server due (the `…ReconcileDue:<folder>` markers the sync reads), so
   /// its next sync reads the row's keywords again.
-  Future<void> _makeFlagReconcileDue(String emailId) => _db.customUpdate(
+  Future<void> makeFlagReconcileDue(String emailId) => _db.customUpdate(
         'INSERT OR REPLACE INTO sync_states '
         '(account_id, resource_type, state, synced_at) '
         'SELECT e.account_id, '
@@ -414,15 +562,23 @@ class EmailStateWriter {
   }
 }
 
+/// Zone key of the start sequence of the sync run
+/// ([EmailStateWriter.inSyncRun]) the code runs in.
+final _syncRunKey = Object();
+
 /// A server read of the `keywords` group ([EmailStateWriter.beginRead]).
 class KeywordRead {
-  KeywordRead._(this._writer, this.accountId, this.seq);
+  KeywordRead._(this._writer, this.accountId, this.seq, this.runStart);
 
   final EmailStateWriter _writer;
   final String accountId;
 
   /// This read's sequence, taken before its request was sent.
   final int seq;
+
+  /// The sequence the sync run this read belongs to started at
+  /// ([EmailStateWriter.inSyncRun]); [seq] for a read outside a run.
+  final int runStart;
 
   Set<String>? _ackedRows;
 
@@ -432,6 +588,11 @@ class KeywordRead {
   /// acked ops.
   Future<KeywordWrite> write(String emailId, ServerKeywords keywords) =>
       _writer._write(this, emailId, keywords);
+
+  /// [write] for many rows at once (a whole folder's FLAGS): unchanged rows
+  /// are only stamped, in bulk. Returns the rows whose shown value changed.
+  Future<Set<String>> writeAll(Map<String, ServerKeywords> byRow) =>
+      _writer._writeAll(this, byRow);
 
   /// Whether [emailId] may have acked ops: the account's acked rows are
   /// loaded once per read (after its answer arrived; an op acked later has

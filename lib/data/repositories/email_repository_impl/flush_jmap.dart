@@ -416,12 +416,18 @@ extension _FlushJmap on EmailRepositoryImpl {
             create: true,
           ))!;
         }
+        // A re-snooze replaces the earlier snooze keyword: with both, sync
+        // would read back whichever comes first.
+        final earlier = payload['prevSnoozedUntil'] == null
+            ? const <String, dynamic>{}
+            : await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId);
         responses = await jmap.call([
           [
             'Email/set',
             setArgs({
               'update': {
                 jmapEmailId: {
+                  ...earlier,
                   'keywords/$keyword': true,
                   // A re-snooze from the Snoozed folder only re-tags: patching
                   // the same id to true and null is a conflicting update.

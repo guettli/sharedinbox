@@ -264,10 +264,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
     }
     // A JMAP mail whose server id is not known cannot be changed on the
     // server: queued, the change would fail at every flush.
-    if (email?.srvJmapId == null &&
-        email?.srvUid == null &&
-        (await _bulkAccount(accountId))?.type ==
-            account_model.AccountType.jmap) {
+    if (email == null
+        ? (await _bulkAccount(accountId))?.type ==
+            account_model.AccountType.jmap
+        : await _hasNoServerCopy(email)) {
       unawaited(
         _appLogger?.warn(
           'pending_change.no_server_id',
@@ -328,7 +328,11 @@ extension _ChangeQueue on EmailRepositoryImpl {
       }
       // Supersede: the new read/star change carries the user's latest value
       // of the flag, so a queued one no flush has claimed is not sent any
-      // more. One being sent stays; this one follows it.
+      // more. One being sent stays; this one follows it. Latent: Undo
+      // records the ids it captured ([_captureOps]) only in its own action,
+      // not here, so a superseded one can be among them. Undo queues no
+      // read/star changes today; if it ever does, a cancel of the gone id
+      // falls through to queueing the inverse (SYNC-REDESIGN.md §3).
       if (flag) {
         await (_db.delete(_db.pendingChanges)
               ..where(
@@ -368,6 +372,16 @@ extension _ChangeQueue on EmailRepositoryImpl {
     }
     _changeCtrl.add(accountId);
     return true;
+  }
+
+  /// Whether [row] has no server copy a change could be queued for: a
+  /// local virtual row, or a JMAP mail whose server id is not known. Its
+  /// read/star/snooze state is its own ([EmailStateWriter.writeOwn]).
+  Future<bool> _hasNoServerCopy(Email row) async {
+    if (row.isLocal) return true;
+    if (row.srvJmapId != null || row.srvUid != null) return false;
+    return (await _bulkAccount(row.accountId))?.type ==
+        account_model.AccountType.jmap;
   }
 
   /// The read/star/snooze effect of a [changeType] change with [payload]
@@ -686,30 +700,41 @@ extension _ChangeQueue on EmailRepositoryImpl {
     final cancelled = <int>{};
     // Latest first, as an Undo of several steps would cancel them.
     for (final id in ids.toSet().toList()..sort((a, b) => b.compareTo(a))) {
-      final row = await (_db.select(_db.pendingChanges)
-            ..where((t) => t.id.equals(id)))
-          .getSingleOrNull();
-      // Only one nothing was sent for (see [_claimPendingChange]).
-      if (row == null) continue;
-      final count = await (_db.delete(_db.pendingChanges)
-            ..where(
-              (t) =>
-                  t.id.equals(id) &
-                  t.state.equals(_pendingState) &
-                  t.attempts.equals(0),
-            ))
-          .go();
-      if (count == 0) continue;
-      cancelled.add(id);
-      if (_locationChangeTypes.contains(row.changeType)) {
-        await _unmarkAfterCancelledMove(row);
-      }
-      await _refoldAndRethread(row.resourceId);
+      // One transaction per change: its delete and the row's fold.
+      final done = await _db.transaction(() async {
+        final row = await (_db.select(_db.pendingChanges)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        // Only one nothing was sent for (see [_claimPendingChange]).
+        if (row == null) return false;
+        final count = await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.id.equals(id) &
+                    t.state.equals(_pendingState) &
+                    t.attempts.equals(0),
+              ))
+            .go();
+        if (count == 0) return false;
+        if (_locationChangeTypes.contains(row.changeType)) {
+          await _unmarkAfterCancelledMove(row);
+        }
+        await _refoldAndRethread(row.resourceId);
+        return true;
+      });
+      if (done) cancelled.add(id);
     }
     return cancelled;
   }
 
-  Future<bool> _cancelPendingChange(String emailId, String changeType) async {
+  Future<bool> _cancelPendingChange(String emailId, String changeType) =>
+      // One transaction: the delete and the row's fold.
+      _db.transaction(() => _cancelLatestPendingChange(emailId, changeType));
+
+  Future<bool> _cancelLatestPendingChange(
+    String emailId,
+    String changeType,
+  ) async {
     // Find the latest pending change for this email/type that no flush has
     // picked up yet (see [_claimPendingChange]).
     final query = _db.select(_db.pendingChanges)

@@ -730,7 +730,11 @@ extension _FlushImap on EmailRepositoryImpl {
         try {
           await client.createMailbox(dest);
         } catch (_) {}
+        // A re-snooze replaces the earlier snooze keyword: with both, sync
+        // would read back whichever comes first.
+        final resnooze = payload['prevSnoozedUntil'] != null;
         Future<void> tag(imap.MessageSequence s) async {
+          if (resnooze) await _removeImapSnoozeFlags(client, s);
           await client.uidStore(s, [keyword], action: imap.StoreAction.add);
         }
 

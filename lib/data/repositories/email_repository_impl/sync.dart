@@ -12,12 +12,16 @@ extension _Sync on EmailRepositoryImpl {
   ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
-    switch (account.type) {
-      case account_model.AccountType.imap:
-        return _syncEmailsImap(account, password, mailboxPath);
-      case account_model.AccountType.jmap:
-        return _syncEmailsJmap(account, password, mailboxPath);
-    }
+    // One sync run: a change one of its reads contradicts is given up only
+    // on a read of a later run (SYNC.md §6a).
+    return _state.inSyncRun(() async {
+      switch (account.type) {
+        case account_model.AccountType.imap:
+          return _syncEmailsImap(account, password, mailboxPath);
+        case account_model.AccountType.jmap:
+          return _syncEmailsJmap(account, password, mailboxPath);
+      }
+    });
   }
 
   /// Opportunistic backfill for address headers stored only since a later

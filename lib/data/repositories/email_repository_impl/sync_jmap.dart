@@ -143,6 +143,12 @@ extension _SyncJmap on EmailRepositoryImpl {
       password: password,
     );
 
+    // Read before this run's reads: a contradiction one of them finds makes
+    // the reconcile due for the *next* run (see [_maybeReconcileJmapMailbox]).
+    final reconcileDue = await _loadSyncState(
+      account.id,
+      _flagReconcileDueKey(mailboxJmapId, jmap: true),
+    );
     final mailboxResourceType = 'JMAP:Email:$mailboxJmapId';
     var storedMailboxState =
         await _loadSyncState(account.id, mailboxResourceType);
@@ -199,7 +205,12 @@ extension _SyncJmap on EmailRepositoryImpl {
       // Its own failure must not replace the sync's: a throw out of a
       // `finally` discards the exception in flight.
       try {
-        await _maybeReconcileJmapMailbox(account.id, jmap, mailboxJmapId);
+        await _maybeReconcileJmapMailbox(
+          account.id,
+          jmap,
+          mailboxJmapId,
+          dueValue: reconcileDue,
+        );
       } catch (e, stack) {
         log(
           'JMAP-sync: reconcile failed for mailbox=$mailboxJmapId',
@@ -914,17 +925,19 @@ extension _SyncJmap on EmailRepositoryImpl {
   /// this for existence (#262) and Stalwart 0.14.x similarly under-reports
   /// keyword changes to the paired IMAP account, causing "seen" drift on the
   /// compare view (#407).
+  ///
+  /// [dueValue] is the due marker as it was when the sync run started: one
+  /// set during this run (an acked change a read just contradicted, SYNC.md
+  /// §6a) waits for the next run, so the second read that may drop the
+  /// change is a later one, not milliseconds later on the same request.
   Future<void> _maybeReconcileJmapMailbox(
     String accountId,
     JmapClient jmap,
-    String mailboxJmapId,
-  ) async {
+    String mailboxJmapId, {
+    required String? dueValue,
+  }) async {
     final key = 'JMAP:Reconcile:$mailboxJmapId';
     final last = await _loadSyncState(accountId, key);
-    final dueValue = await _loadSyncState(
-      accountId,
-      _flagReconcileDueKey(mailboxJmapId, jmap: true),
-    );
     if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
@@ -1072,23 +1085,24 @@ extension _SyncJmap on EmailRepositoryImpl {
       ]);
       final getResult = _responseArgs(responses, 0, 'Email/get');
       final list = getResult['list'] as List<dynamic>;
-      await _db.transaction(() async {
-        for (final e in list) {
-          final m = e as Map<String, dynamic>;
-          final jmapId = m['id'] as String;
-          final row = localByJmapId[jmapId];
-          if (row == null) continue;
-          final size = m['size'];
-          if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
-          final written = await read.write(
-            row.id,
-            ServerKeywords.jmap(m['keywords'] as Map<String, dynamic>?),
-          );
-          if (!written.changed) continue;
-          affectedThreads.add(row.threadId ?? row.id);
-          corrected++;
-        }
-      });
+      final rows = <String, Email>{};
+      final byRow = <String, ServerKeywords>{};
+      for (final e in list) {
+        final m = e as Map<String, dynamic>;
+        final jmapId = m['id'] as String;
+        final row = localByJmapId[jmapId];
+        if (row == null) continue;
+        final size = m['size'];
+        if (row.sizeBytes == null && size is int) sizeById[row.id] = size;
+        rows[row.id] = row;
+        byRow[row.id] =
+            ServerKeywords.jmap(m['keywords'] as Map<String, dynamic>?);
+      }
+      for (final id in await read.writeAll(byRow)) {
+        final row = rows[id]!;
+        affectedThreads.add(row.threadId ?? row.id);
+        corrected++;
+      }
     }
 
     for (final tid in affectedThreads) {

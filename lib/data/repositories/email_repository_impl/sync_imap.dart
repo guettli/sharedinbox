@@ -57,6 +57,13 @@ extension _SyncImap on EmailRepositoryImpl {
     String password,
     String mailboxPath,
   ) async {
+    // Read before this run's reads: a contradiction one of them finds makes
+    // the reconcile due for the *next* run (see
+    // [_maybeReconcileImapFlagsMailbox]).
+    final reconcileDue = await _loadSyncState(
+      account.id,
+      _flagReconcileDueKey(mailboxPath, jmap: false),
+    );
     final client = await _connectImapAs(account, password);
     try {
       // Only request CONDSTORE if the server advertises it. Servers that don't
@@ -198,7 +205,12 @@ extension _SyncImap on EmailRepositoryImpl {
         // when CONDSTORE misreports — Stalwart 0.14.x does not always bump
         // HIGHESTMODSEQ when a flag is toggled via JMAP on the same account,
         // so IMAP would otherwise never see the change (#407).
-        await _maybeReconcileImapFlagsMailbox(client, account.id, mailboxPath);
+        await _maybeReconcileImapFlagsMailbox(
+          client,
+          account.id,
+          mailboxPath,
+          dueValue: reconcileDue,
+        );
 
         // Detect remote deletions.
         final serverUids = (await client.uidSearchMessages(
@@ -279,6 +291,8 @@ extension _SyncImap on EmailRepositoryImpl {
     final affectedThreads = <(String, String)>{};
     await _db.transaction(() async {
       final uidValidity = await _knownUidValidity(account.id, mailboxPath);
+      final rows = <String, Email>{};
+      final byRow = <String, ServerKeywords>{};
       for (final msg in result.messages) {
         final uid = msg.uid;
         if (uid == null) continue;
@@ -289,11 +303,12 @@ extension _SyncImap on EmailRepositoryImpl {
           uidValidity: uidValidity,
         );
         if (row == null) continue;
-        final written =
-            await read.write(row.id, ServerKeywords.imap(msg.flags));
-        if (written.changed) {
-          affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-        }
+        rows[row.id] = row;
+        byRow[row.id] = ServerKeywords.imap(msg.flags);
+      }
+      for (final id in await read.writeAll(byRow)) {
+        final row = rows[id]!;
+        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
       }
     });
     // The message list reads unread/starred state from the thread row, so
@@ -312,17 +327,19 @@ extension _SyncImap on EmailRepositoryImpl {
   /// do this for JMAP-side keyword changes, leaving the paired IMAP account
   /// permanently stale — #407). A queued change folds over the server's
   /// value, so an unflushed optimistic edit is not reverted.
+  ///
+  /// [dueValue] is the due marker as it was when the sync run started: one
+  /// set during this run (an acked change a read just contradicted, SYNC.md
+  /// §6a) waits for the next run, so the second read that may drop the
+  /// change is a later one, not milliseconds later on the same connection.
   Future<void> _maybeReconcileImapFlagsMailbox(
     imap.ImapClient client,
     String accountId,
-    String mailboxPath,
-  ) async {
+    String mailboxPath, {
+    required String? dueValue,
+  }) async {
     final key = 'IMAP:FlagReconcile:$mailboxPath';
     final last = await _loadSyncState(accountId, key);
-    final dueValue = await _loadSyncState(
-      accountId,
-      _flagReconcileDueKey(mailboxPath, jmap: false),
-    );
     if (last != null && dueValue == null) {
       final lastAt = DateTime.tryParse(last);
       if (lastAt != null &&
@@ -357,19 +374,22 @@ extension _SyncImap on EmailRepositoryImpl {
           ))
         .get();
 
-    await _db.transaction(() async {
-      for (final row in localRows) {
-        final keywords = byUid[row.srvUid];
-        if (keywords == null) continue; // handled by _reconcileDeletedImap
-        // Every row is written, also an unchanged one: the stamp keeps a
-        // slower, older read from overwriting it. A read/star change made
-        // meanwhile folds over the server's value.
-        final written = await read.write(row.id, keywords);
-        if (!written.changed) continue;
-        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-        corrected++;
-      }
+    // Every row is written, also an unchanged one: the stamp keeps a
+    // slower, older read from overwriting it (unchanged rows in bulk). A
+    // read/star change made meanwhile folds over the server's value. A
+    // missing UID is handled by _reconcileDeletedImap.
+    final rowsById = {
+      for (final row in localRows)
+        if (byUid.containsKey(row.srvUid)) row.id: row,
+    };
+    final changed = await read.writeAll({
+      for (final row in rowsById.values) row.id: byUid[row.srvUid]!,
     });
+    for (final id in changed) {
+      final row = rowsById[id]!;
+      affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
+      corrected++;
+    }
 
     for (final (shownIn, tid) in affectedThreads) {
       await _updateThread(accountId, shownIn, tid);

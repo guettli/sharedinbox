@@ -629,6 +629,7 @@ void main() {
       await fresh.close();
 
       var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('DROP INDEX pending_changes_resource_state;') // v72
         ..execute('ALTER TABLE pending_changes DROP COLUMN state;')
         ..execute(
           'INSERT INTO pending_changes (id, account_id, resource_type, '
@@ -1073,6 +1074,7 @@ void main() {
         rawDb.execute('ALTER TABLE emails DROP COLUMN $column;');
       }
       rawDb
+        ..execute('DROP INDEX pending_changes_resource_state;')
         ..execute('ALTER TABLE pending_changes DROP COLUMN ack_seq;')
         ..execute('ALTER TABLE pending_changes DROP COLUMN contradicted_seq;')
         ..execute('DROP TABLE sync_read_seq;');
@@ -1206,6 +1208,13 @@ void main() {
         containsAll(['ack_seq', 'contradicted_seq']),
       );
       expect(await _tableColumns(db, 'sync_read_seq'), contains('seq'));
+      final index = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'pending_changes_resource_state'",
+          )
+          .get();
+      expect(index, hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
       expect(version.read<int>('user_version'), 72);
       await db.close();

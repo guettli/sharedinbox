@@ -448,14 +448,19 @@ the same statement and never rewrites the whole row.
   so the answer of a read that started before the ack cannot show the old value again.
   The first read started after the ack that agrees drops it. One that contradicts it
   (a server whose reads lag its writes, or another client changed it since) is noted
-  and makes the folder's flag reconcile due; a second contradicting read drops it and
-  logs `op.contradicted` (warn): from then on the server's value shows. A newer acked
-  change of the same field drops the older one at its ack. Acked changes are not shown
+  and makes the folder's flag reconcile due for the next sync run; a contradicting
+  read of a later run drops it and logs `op.contradicted` (warn): from then on the
+  server's value shows. Two reads of one run (the CONDSTORE refresh and the reconcile
+  right after it) count once. An acked change a newer change of the same field
+  shadows is dropped at its ack or at the next read, without a log line. Acked changes are not shown
   as pending anywhere; those of a row that no longer exists are deleted at the start
   of the next flush.
 - **Rows without a server copy** (a local virtual row, §8a, or a JMAP mail whose
   server id is unknown) get no queued change; a read/star/snooze change is stored as
   their own `srv_*` value.
+- **Undo's restore** of a deleted row stores its snapshot as `srv_*` with stamp 0 and
+  makes the flag reconcile due (the snapshot may show a pending value); a row that
+  still exists keeps its state.
 - The v72 upgrade copied each row's values into `srv_*`, folded the queued changes
   into `local_*`, and made the flag reconcile due for the folders of rows with queued
   read/star/snooze changes, whose stored value was the user's, not the server's.

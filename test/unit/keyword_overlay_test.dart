@@ -303,4 +303,71 @@ void main() {
     expect(e.localIsFlagged, isNull);
     await expectConsistent();
   });
+
+  test('a fold racing a change of the ops never loses the change', () async {
+    final id = (await mail()).id;
+    for (var i = 0; i < 20; i++) {
+      await Future.wait([
+        writer().refold(id),
+        emails.setFlag(id, seen: i.isEven),
+        writer().refold(id),
+      ]);
+    }
+    expect((await mail()).isSeen, isFalse, reason: 'the last change');
+    await expectConsistent();
+  });
+
+  test('an acked change a newer one shadows is dropped without a log line',
+      () async {
+    final logs = RecordingAppLogRepository();
+    final id = (await mail()).id;
+    await emails.setFlag(id, seen: true);
+    await flush();
+    await emails.setFlag(id, seen: false);
+
+    final read = await writer(appLogger: AppLogger(logs)).beginRead(
+      _account.id,
+    );
+    await read.write(id, _unread);
+    await pumpEventQueue();
+
+    expect(
+      [for (final c in await ops()) '${c.changeType} ${c.state}'],
+      ['flag_seen pending'],
+    );
+    expect(logs.rows, isEmpty);
+    expect((await mail()).isSeen, isFalse);
+    await expectConsistent();
+  });
+
+  test('acked changes of a row that is gone are dropped at the next flush',
+      () async {
+    final id = (await mail()).id;
+    await emails.setFlag(id, flagged: true);
+    await flush();
+    expect((await ops()).single.state, 'acked');
+    await (db.delete(db.emails)..where((t) => t.id.equals(id))).go();
+
+    await flush();
+
+    expect(await ops(), isEmpty);
+  });
+
+  test('a contradicted change is dropped by a later sync run, not the same',
+      () async {
+    final id = (await mail()).id;
+    await emails.setFlag(id, seen: true);
+    await flush();
+    // Another client marks it unread again.
+    server.setFlagElsewhere('a@test', r'\Seen', on: false);
+
+    await sync();
+    expect((await ops()).single.contradictedSeq, isNotNull);
+    expect((await mail()).isSeen, isTrue, reason: 'one run, one read');
+
+    await sync();
+    expect(await ops(), isEmpty);
+    expect((await mail()).isSeen, isFalse, reason: "the other client's");
+    await expectConsistent();
+  });
 }

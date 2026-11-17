@@ -751,7 +751,9 @@ extension _UserActions on EmailRepositoryImpl {
     await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
       EmailsCompanion(snoozedFromMailboxPath: Value(fromMailboxPath)),
     );
-    if (row.isLocal) await _state.writeOwn(emailId, snoozedUntil: until);
+    if (await _hasNoServerCopy(row)) {
+      await _state.writeOwn(emailId, snoozedUntil: until);
+    }
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that
@@ -873,46 +875,59 @@ extension _UserActions on EmailRepositoryImpl {
       }
     }
     final imapKnown = srvPath != null && srvUid != null;
-    // The snapshot's read/star/snooze state as the server's, stamped 0 so
-    // any read corrects it; the row's queued changes fold over it.
-    final restored = EmailStateWriter.withServerKeywords(
-      EmailsCompanion.insert(
-        id: e.id,
-        accountId: e.accountId,
-        mailboxPath: e.mailboxPath,
-        uid: e.uid,
-        subject: Value(e.subject),
-        sentAt: Value(e.sentAt),
-        receivedAt: e.receivedAt,
-        fromJson: Value(jsonEncode(e.from)),
-        toAddresses: Value(jsonEncode(e.to)),
-        ccJson: Value(jsonEncode(e.cc)),
-        replyToJson: Value(jsonEncode(e.replyTo)),
-        bccJson: Value(jsonEncode(e.bcc)),
-        sizeBytes: Value(e.size),
-        preview: Value(e.preview),
-        hasAttachment: Value(e.hasAttachment),
-        threadId: Value(e.threadId),
-        messageId: Value(e.messageId),
-        inReplyTo: Value(e.inReplyTo),
-        references: Value(e.references),
-        snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
-        isLocal: Value(e.isLocal),
-        isVirtualSentCopy: Value(e.isVirtualSentCopy),
-        srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
-        srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
-        srvUidValidity:
-            imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
-        srvJmapId: srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
-      ),
-      ServerKeywords(
-        seen: e.isSeen,
-        flagged: e.isFlagged,
-        snoozedUntil: e.snoozedUntil,
-      ),
-      seq: 0,
+    final restored = EmailsCompanion.insert(
+      id: e.id,
+      accountId: e.accountId,
+      mailboxPath: e.mailboxPath,
+      uid: e.uid,
+      subject: Value(e.subject),
+      sentAt: Value(e.sentAt),
+      receivedAt: e.receivedAt,
+      fromJson: Value(jsonEncode(e.from)),
+      toAddresses: Value(jsonEncode(e.to)),
+      ccJson: Value(jsonEncode(e.cc)),
+      replyToJson: Value(jsonEncode(e.replyTo)),
+      bccJson: Value(jsonEncode(e.bcc)),
+      sizeBytes: Value(e.size),
+      preview: Value(e.preview),
+      hasAttachment: Value(e.hasAttachment),
+      threadId: Value(e.threadId),
+      messageId: Value(e.messageId),
+      inReplyTo: Value(e.inReplyTo),
+      references: Value(e.references),
+      snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
+      isLocal: Value(e.isLocal),
+      isVirtualSentCopy: Value(e.isVirtualSentCopy),
+      srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
+      srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
+      srvUidValidity:
+          imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
+      srvJmapId: srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
     );
-    await _db.into(_db.emails).insertOnConflictUpdate(restored);
+    final exists = await (_db.selectOnly(_db.emails)
+              ..addColumns([_db.emails.id])
+              ..where(_db.emails.id.equals(e.id)))
+            .getSingleOrNull() !=
+        null;
+    // A row that is still there keeps its read/star/snooze state. A row
+    // brought back takes the snapshot's as the server's, stamped 0 so any
+    // read corrects it: the snapshot shows what the app showed, which may
+    // be the user's pending value, so the next sync reads the server's
+    // (the flag reconcile is made due). Its queued changes fold over it.
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          exists
+              ? restored
+              : EmailStateWriter.withServerKeywords(
+                  restored,
+                  ServerKeywords(
+                    seen: e.isSeen,
+                    flagged: e.isFlagged,
+                    snoozedUntil: e.snoozedUntil,
+                  ),
+                  seq: 0,
+                ),
+        );
+    if (!exists) await _state.makeFlagReconcileDue(e.id);
     await _state.refold(e.id);
     await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
   }

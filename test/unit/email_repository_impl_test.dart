@@ -11712,8 +11712,15 @@ void main() {
         await r.emails.syncEmails('acc-1', 'INBOX');
         // The first read after the ack that contradicts the acked change
         // (the CONDSTORE refresh) keeps it, as the server may lag, and makes
-        // the flag reconcile due; the reconcile, a second read in the same
-        // sync, lets the server's value win.
+        // the flag reconcile due; a read of the same sync run does not count
+        // twice.
+        expect(
+          (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
+          isTrue,
+        );
+        // The next sync runs the due reconcile: the server's value wins.
+        await r.emails.syncEmails('acc-1', 'INBOX');
+
         expect(
           (await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 42)))!.isSeen,
           isFalse,
