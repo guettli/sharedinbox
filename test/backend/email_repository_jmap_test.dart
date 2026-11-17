@@ -395,7 +395,7 @@ if header :contains "subject" "lunch" {
     await r.emails.syncEmails('test-jmap', inboxId);
     expect(await r.emails.applySieveRules('test-jmap'), 1);
     await r.emails.flushPendingChanges('test-jmap', user.password);
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     // Read the server truth over IMAP, as the flag_seen test above does.
     final client = await connectImap(env: env, user: user);
@@ -438,7 +438,7 @@ if header :contains "subject" "lunch" {
         await r.emails.snoozeEmail(e.id, until);
       }
       await r.emails.flushPendingChanges('test-jmap', user.password);
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(r.db), isEmpty);
 
       final snoozedRows = await (r.db.select(r.db.mailboxes)
             ..where(

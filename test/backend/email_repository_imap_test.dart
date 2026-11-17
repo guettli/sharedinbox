@@ -918,7 +918,7 @@ if header :contains "subject" "lunch" {
     await r.emails.syncEmails('test', 'INBOX');
     expect(await r.emails.applySieveRules('test'), 1);
     await r.emails.flushPendingChanges('test', user.password);
-    expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     expect((await client.selectMailboxByPath('INBOX')).messagesExists, 0);
     await client.selectMailboxByPath('Trash');
