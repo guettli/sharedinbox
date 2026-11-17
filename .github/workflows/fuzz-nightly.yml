@@ -19,3 +19,16 @@ jobs:
         run: scripts/setup_dagger_remote.sh
       - name: Run long-term sync fuzz
         run: task test-fuzz
+  stale-fuzz:
+    name: Stale-answer fuzz (200 seeds, daily window)
+    runs-on: sharedinbox-arc
+    timeout-minutes: 40
+    if: github.server_url == 'https://github.com'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup Dagger Remote Engine
+        env:
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: scripts/setup_dagger_remote.sh
+      - name: Run stale-answer fuzz
+        run: task stale-fuzz

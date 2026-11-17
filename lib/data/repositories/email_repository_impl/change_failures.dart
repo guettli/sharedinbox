@@ -289,7 +289,7 @@ extension _ChangeFailures on EmailRepositoryImpl {
           ..where((t) => t.id.equals(failed.resourceId)))
         .getSingleOrNull();
     if (email == null || !_sameMessage(failed, email.messageId)) return null;
-    await (_db.delete(_db.emails)..where((t) => t.id.equals(email.id))).go();
+    await _state.deleteRow(email.id);
     await _updateThread(
       email.accountId,
       email.mailboxPath,

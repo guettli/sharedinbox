@@ -789,7 +789,7 @@ tasks:
       - dagger call --progress=plain -q -m ci --source=. check-fast
 
   check-layers:
-    desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed); no code builds or parses email ids
+    desc: Enforce architecture — ui/ must not import data/ (only core/ interfaces allowed); no code builds or parses email ids; emails is written only by the email state writer
     cmds:
       - |
         VIOLATIONS=$(grep -rn "package:sharedinbox/data/" lib/ui/ 2>/dev/null || true)
@@ -799,6 +799,8 @@ tasks:
           exit 1
         fi
       - scripts/check_email_ids.sh
+      - scripts/check_email_writes.sh
+      - bash scripts/test_check_email_writes.sh
 
   check-hygiene:
     desc: Verify that no forbidden files (like home dir config) are tracked
@@ -875,6 +877,20 @@ tasks:
     # whole pipeline, so size it well above the cumulative worst case.
     cmds:
       - timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. chaos-monkey-backend
+
+  stale-fuzz:
+    desc: Stale-answer fuzz on a window of 200 seeds that moves daily (nightly, via Dagger; check-fast runs seeds 1-30)
+    # The window starts at 31 + 200 * (day of the year), so a year of
+    # nightly runs covers about 73000 seeds; a failure prints its seed
+    # (rerun with STALE_FUZZ_SEED=<n>). FIRST overrides the start.
+    vars:
+      FIRST: '{{.FIRST | default "" }}'
+    cmds:
+      - |
+        first="{{.FIRST}}"
+        [ -n "$first" ] || first=$(( 31 + 200 * $(date -u +%-j) ))
+        echo "stale-answer fuzz: seeds $first..$(( first + 199 ))"
+        timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. stale-fuzz --seeds=200 --first-seed="$first"
 
   test-fuzz:
     desc: Long-running IMAP/JMAP cross-protocol fuzz test (nightly, via Dagger, headless)

@@ -415,7 +415,7 @@ folder that was then removed on the server (its row goes with the folder).
 
 ## 6a. Read, star and snooze state: the `keywords` overlay
 
-Schema v72, SYNC-REDESIGN.md §2–§5 (phase 3a). `is_seen`, `is_flagged` and
+Schema v72, SYNC-REDESIGN.md §2–§5 (phases 3a and 3b). `is_seen`, `is_flagged` and
 `snoozed_until` are each three columns on `emails`:
 
 | Column | Written by | Meaning |
@@ -427,6 +427,40 @@ Schema v72, SYNC-REDESIGN.md §2–§5 (phase 3a). `is_seen`, `is_flagged` and
 All three are written through the email state writer
 (`lib/data/repositories/email_state_writer.dart`), which sets the effective column in
 the same statement and never rewrites the whole row.
+
+- **Email state writer.** The writer of the `emails` table (phase 3b): besides the
+  overlay it deletes rows (`deleteRow`, `deleteRowsOf`), fills header backfills
+  (`writeHeaders`, `writeSizes`) and does the foreign-move carry-over
+  (`takeOverRow`, a whole-row copy followed by a re-fold).
+  `scripts/check_email_writes.sh` (in `check-layers`, run by `check-fast`, with
+  fixture tests in `scripts/test_check_email_writes.sh`) enforces it: any write of
+  `is_seen`, `is_flagged`, `snoozed_until`, their `srv_`/`local_` columns or
+  `srv_keywords_seq` outside the writer and the migrations fails (an
+  `EmailsCompanion` naming one, `srvIsSeen: Value(…)` and the like, SQL `UPDATE
+  emails SET` / `INSERT INTO emails (…)` with one, a whole-row `toCompanion` write),
+  with no exception. Any other write of `emails` (`EmailsCompanion`, Drift
+  `update`/`into`/`delete`/`insert`/`replace` on `emails`, raw `UPDATE`/`INSERT`/
+  `DELETE`) must be in the writer, the migrations, or a member on the script's
+  allow-list, which names file, method and reason: the row inserts and upserts of
+  sync, the Sent copy, virtual rows and Undo's restore (their keyword columns come
+  from `withServerKeywords`), the optimistic location writes of user actions, the
+  failure revert and Sieve, the Snoozed placeholder and folder rename, and the
+  `srv_` location writes of `row_identity.dart`. Phase 4 (location overlay) and 5
+  (mailbox ops) empty it; an entry that no longer matches a write fails too.
+- **Built-in consistency checks.** `EmailStateWriter.consistencyProblems` lists the
+  rows whose effective column is not `COALESCE(local_*, srv_*)` or whose `local_*`
+  is not the fold of the row's foldable changes (so a row without any has all
+  `local_*` NULL). Tests and the fuzzes assert it is empty. The app runs a sample of
+  it after a sync run (`OverlayConsistencySampler`, wired in `di.dart`, all builds):
+  at most once per 30 minutes per account (in memory: the first run after a start
+  checks), on the rows with the 200 most recent foldable changes plus 200 rows in
+  `rowid` order from a random start, in one read transaction (a few ms). Each broken
+  row is logged first, App Log error `overlay.inconsistent` with the row id and in
+  `data` the mismatching fields, the effective, `srv_` and `local_` values, the fold
+  and the changes, and then repaired by re-folding it (the log line says so): the
+  bug stays visible, and the user does not look at a wrong state until the row's
+  next server read. A failing check logs `overlay.check_failed` (warn) and never
+  fails the sync.
 
 - **Fold.** `local_*` is computed from the row's changes in `pending`, `inflight`,
   `stuck` and `acked` state, in queue order, the newest winning per field
@@ -605,8 +639,10 @@ The fault-injection layer itself lives in `scripts/sync_reliability_fuzz.dart`
 and has unit coverage in `test/unit/sync_reliability_fuzz_test.dart`.
 
 **Stale answers.** `test/unit/stale_answer_fuzz_test.dart` runs in
-`task check-fast` (no network; about 15 s on its own, more under the
-`--coverage` run of check-fast). It drives the real
+`task check-fast` on seeds 1–30 (no network; about 15 s on its own, more under the
+`--coverage` run of check-fast). The nightly `task stale-fuzz`
+(`.github/workflows/fuzz-nightly.yml`, Dagger `stale-fuzz`) runs another 200 seeds,
+a window that moves every day (`STALE_FUZZ_FIRST_SEED`). It drives the real
 `EmailRepositoryImpl` against a stateful in-memory IMAP server
 (`test/unit/helpers/stateful_fake_imap.dart`: folders with UIDVALIDITY,
 UIDs, Message-IDs, flags and MODSEQ; SELECT, UID SEARCH, UID FETCH incl.
@@ -625,13 +661,16 @@ sends shifts the random choices), so the trace is the durable record. Bugs it
 finds and that are not fixed yet are kept as skipped regression tests in the
 same file, and the driver avoids exactly their triggers; the regression tests
 of fixed ones (#1266–#1271, #1276) run. It also checks the read/star/snooze overlay
-(§6a): every row's shown value is `COALESCE(local_*, srv_*)`, and no row has a
-`local_*` value without a queued change behind it.
+(§6a): `consistencyProblems()` is empty, so every row's shown value is
+`COALESCE(local_*, srv_*)` and `local_*` is the fold of its queued changes. The
+nightly chaos monkey and the long-term IMAP/JMAP fuzz (Stalwart) assert the same at
+their checkpoints.
 Longer or focused runs (locally, with a
 Flutter SDK):
 
 ```
 STALE_FUZZ_SEEDS=500 flutter test test/unit/stale_answer_fuzz_test.dart
+STALE_FUZZ_FIRST_SEED=1000 STALE_FUZZ_SEEDS=200 flutter test test/unit/stale_answer_fuzz_test.dart
 STALE_FUZZ_SEED=17,42 STALE_FUZZ_VERBOSE=1 flutter test test/unit/stale_answer_fuzz_test.dart
 STALE_FUZZ_KNOWN_BUGS=1 flutter test test/unit/stale_answer_fuzz_test.dart  # run the skipped ones
 ```

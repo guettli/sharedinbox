@@ -60,6 +60,7 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -209,6 +210,9 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
     smtpConnect: ref.watch(smtpConnectProvider),
     outbox: ref.watch(outboxRepositoryProvider),
     appLogger: ref.watch(appLoggerProvider),
+    // The overlay's consistency checks, sampled (SYNC-REDESIGN.md §8
+    // phase 3b): App Log errors `overlay.inconsistent`.
+    consistencySampler: OverlayConsistencySampler(),
   );
 });
 
