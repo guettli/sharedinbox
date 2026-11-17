@@ -117,13 +117,7 @@ extension _SyncImap on EmailRepositoryImpl {
         // First run or UID validity changed — full sync.
         if (checkpoint != null) {
           // UID validity changed: remove stale local emails for this mailbox.
-          await (_db.delete(_db.emails)
-                ..where(
-                  (t) =>
-                      t.accountId.equals(account.id) &
-                      t.mailboxPath.equals(mailboxPath),
-                ))
-              .go();
+          await _state.deleteRowsOf(account.id, mailboxPath: mailboxPath);
         }
         // Use UID SEARCH ALL + UID FETCH so every message gets a reliable UID.
         // Regular FETCH 1:* may not populate msg.uid on all servers.
@@ -446,16 +440,7 @@ extension _SyncImap on EmailRepositoryImpl {
   /// batch: rows cached before schema v64 have none, and the first
   /// reconcile after the upgrade can fill in a whole mailbox at once.
   Future<void> _backfillSizes(Map<String, int> sizeById) async {
-    if (sizeById.isEmpty) return;
-    await _db.batch((b) {
-      for (final MapEntry(key: id, value: size) in sizeById.entries) {
-        b.update(
-          _db.emails,
-          EmailsCompanion(sizeBytes: Value(size)),
-          where: (t) => t.id.equals(id),
-        );
-      }
-    });
+    await _state.writeSizes(sizeById);
   }
 
   // Returns the total bytes transferred (sum of RFC822.SIZE for each message).
@@ -939,7 +924,7 @@ extension _SyncImap on EmailRepositoryImpl {
           }
           if (carried.kept) continue;
         }
-        await (_db.delete(_db.emails)..where((t) => t.id.equals(row.id))).go();
+        await _state.deleteRow(row.id);
       }
     }
     for (final tid in affectedThreads) {

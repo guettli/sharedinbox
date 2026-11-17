@@ -60,6 +60,7 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -201,6 +202,12 @@ final pendingChangeCountForAccountProvider =
       .map((rows) => rows.length);
 });
 
+/// One sampler per container, outside [emailRepositoryProvider], so a
+/// rebuild of the repository keeps the per-account interval.
+final overlayConsistencySamplerProvider = Provider<OverlayConsistencySampler>(
+  (ref) => OverlayConsistencySampler(),
+);
+
 final emailRepositoryProvider = Provider<EmailRepository>((ref) {
   return EmailRepositoryImpl(
     ref.watch(dbProvider),
@@ -209,6 +216,9 @@ final emailRepositoryProvider = Provider<EmailRepository>((ref) {
     smtpConnect: ref.watch(smtpConnectProvider),
     outbox: ref.watch(outboxRepositoryProvider),
     appLogger: ref.watch(appLoggerProvider),
+    // The overlay's consistency checks, sampled (SYNC-REDESIGN.md §8
+    // phase 3b): App Log errors `overlay.inconsistent`.
+    consistencySampler: ref.watch(overlayConsistencySamplerProvider),
   );
 });
 

@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
 import '../db_test_helper.dart';
 import 'fake_secure_storage.dart';
@@ -40,6 +41,7 @@ class StatefulImapRig {
     StatefulFakeImapServer server, {
     required List<(String, String)> folders,
     AppLogger? appLogger,
+    OverlayConsistencySampler? consistencySampler,
   }) async {
     final rig = StatefulImapRig._(server, openTestDatabase());
     final db = rig.db;
@@ -56,6 +58,7 @@ class StatefulImapRig {
       fetchPreviewSnippets: (_, __, ___) async => const {},
       now: () => rig.now,
       appLogger: appLogger,
+      consistencySampler: consistencySampler,
       getCacheDir: () async => rig.cacheDir,
     );
     await accounts.addAccount(statefulRigAccount, 'pw');

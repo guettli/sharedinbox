@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
@@ -244,6 +245,11 @@ void main() {
       );
       _printComparison(result);
       expect(result.isIdentical, isTrue, reason: reason);
+      expect(
+        await EmailStateWriter(db).consistencyProblems(),
+        isEmpty,
+        reason: '$reason: the keywords overlay is consistent',
+      );
     }
 
     // 3. Do some CRUD operations directly on the Stalwart server via IMAP

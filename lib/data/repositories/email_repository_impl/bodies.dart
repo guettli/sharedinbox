@@ -298,8 +298,7 @@ extension _Bodies on EmailRepositoryImpl {
         if ((emailRow.preview ?? '').isEmpty) {
           final backfill = previewFromBody(textBody, rawHtml);
           if (backfill != null && backfill.isNotEmpty) {
-            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-                .write(EmailsCompanion(preview: Value(backfill)));
+            await _state.writeHeaders(emailId, preview: backfill);
             await _updateThread(
               emailRow.accountId,
               emailRow.mailboxPath,
@@ -317,9 +316,9 @@ extension _Bodies on EmailRepositoryImpl {
           final listUnsubscribe =
               msg.getHeaderValue('List-Unsubscribe')?.trim();
           if (listUnsubscribe != null && listUnsubscribe.isNotEmpty) {
-            await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-                .write(
-              EmailsCompanion(listUnsubscribeHeader: Value(listUnsubscribe)),
+            await _state.writeHeaders(
+              emailId,
+              listUnsubscribeHeader: listUnsubscribe,
             );
           }
         }
