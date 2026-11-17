@@ -433,34 +433,47 @@ the same statement and never rewrites the whole row.
   (`writeHeaders`, `writeSizes`) and does the foreign-move carry-over
   (`takeOverRow`, a whole-row copy followed by a re-fold).
   `scripts/check_email_writes.sh` (in `check-layers`, run by `check-fast`, with
-  fixture tests in `scripts/test_check_email_writes.sh`) enforces it: any write of
+  fixture tests in `scripts/test_check_email_writes.sh`) enforces it. Any write of
   `is_seen`, `is_flagged`, `snoozed_until`, their `srv_`/`local_` columns or
-  `srv_keywords_seq` outside the writer and the migrations fails (an
-  `EmailsCompanion` naming one, `srvIsSeen: Value(…)` and the like, SQL `UPDATE
-  emails SET` / `INSERT INTO emails (…)` with one, a whole-row `toCompanion` write),
-  with no exception. Any other write of `emails` (`EmailsCompanion`, Drift
-  `update`/`into`/`delete`/`insert`/`replace` on `emails`, raw `UPDATE`/`INSERT`/
-  `DELETE`) must be in the writer, the migrations, or a member on the script's
-  allow-list, which names file, method and reason: the row inserts and upserts of
-  sync, the Sent copy, virtual rows and Undo's restore (their keyword columns come
-  from `withServerKeywords`), the optimistic location writes of user actions, the
-  failure revert and Sieve, the Snoozed placeholder and folder rename, and the
-  `srv_` location writes of `row_identity.dart`. Phase 4 (location overlay) and 5
-  (mailbox ops) empty it; an entry that no longer matches a write fails too.
+  `srv_keywords_seq` outside the writer and the migrations (the three members of
+  `database.dart` that write `emails` while upgrading) fails, with no exception: an
+  `EmailsCompanion`/`.insert`/`.custom` naming one, `srvIsSeen: Value(…)` and the
+  like, SQL in any letter case (`UPDATE [OR …] emails … SET`, quoted columns,
+  `INSERT INTO emails (…)` with one or without a column list, the table also
+  interpolated), and in the members allowed to write `emails` a whole-row
+  `toCompanion`, a `copyWith` naming one, or an insert/write whose argument is not a
+  companion literal, `withServerKeywords(…)` or a variable holding one. Any other
+  write of `emails` (companions, Drift `update`/`into`/`delete`/`insert`/`replace`,
+  the table managers, `updates: {…emails…}`, raw SQL, and any other bare reference
+  to the table outside reads, which catches aliases) must be in the writer, the
+  migrations, or a member on the script's allow-list, which names file, method and
+  reason: the row inserts and upserts of sync, the Sent copy, virtual rows and
+  Undo's restore, the optimistic location writes of user actions, the failure revert
+  and Sieve, the Snoozed placeholder and folder rename, and the `srv_` location
+  writes of `row_identity.dart`. Phase 4 (location overlay) and 5 (mailbox ops)
+  empty it; an entry that no longer matches a write fails too. Members are found by
+  indentation; fields, getters, annotations and signatures over two lines end the
+  member above them.
 - **Built-in consistency checks.** `EmailStateWriter.consistencyProblems` lists the
   rows whose effective column is not `COALESCE(local_*, srv_*)` or whose `local_*`
   is not the fold of the row's foldable changes (so a row without any has all
   `local_*` NULL). Tests and the fuzzes assert it is empty. The app runs a sample of
-  it after a sync run (`OverlayConsistencySampler`, wired in `di.dart`, all builds):
-  at most once per 30 minutes per account (in memory: the first run after a start
-  checks), on the rows with the 200 most recent foldable changes plus 200 rows in
-  `rowid` order from a random start, in one read transaction (a few ms). Each broken
-  row is logged first, App Log error `overlay.inconsistent` with the row id and in
-  `data` the mismatching fields, the effective, `srv_` and `local_` values, the fold
-  and the changes, and then repaired by re-folding it (the log line says so): the
-  bug stays visible, and the user does not look at a wrong state until the row's
-  next server read. A failing check logs `overlay.check_failed` (warn) and never
-  fails the sync.
+  it after a sync run (`OverlayConsistencySampler`, its own provider in `di.dart`,
+  all builds): at most once per 30 minutes per account (the last check is kept in
+  memory and in `sync_states` as `Overlay:ConsistencyCheck`, so restarts, the
+  background isolate and repository rebuilds keep the interval), on the rows with
+  the 200 most recent foldable changes plus 200 of the account's rows in `rowid`
+  order from a random start within the account's `rowid` range, in one read
+  transaction (a few ms). Each broken row is logged first, App Log error
+  `overlay.inconsistent` with the row id and in `data` the mismatching fields, the
+  effective, `srv_` and `local_` values, the fold and the changes (the first 10 rows
+  one line each, the rest in one line with the total), and then repaired by
+  re-folding it (the log line says so); rows whose shown value changed get their
+  thread aggregate refreshed. The bug stays visible, and the user does not look at
+  a wrong state until the row's next server read. The check is awaited at the end
+  of the sync: it is bounded, and the background isolate may end as soon as the
+  sync returns. A failing check logs `overlay.check_failed` (warn) and never fails
+  the sync.
 
 - **Fold.** `local_*` is computed from the row's changes in `pending`, `inflight`,
   `stuck` and `acked` state, in queue order, the newest winning per field

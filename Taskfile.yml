@@ -880,7 +880,7 @@ tasks:
 
   stale-fuzz:
     desc: Stale-answer fuzz on a window of 200 seeds that moves daily (nightly, via Dagger; check-fast runs seeds 1-30)
-    # The window starts at 31 + 200 * (day of the year), so a year of
+    # The window starts at 31 + 200 * (day of the year - 1), so a year of
     # nightly runs covers about 73000 seeds; a failure prints its seed
     # (rerun with STALE_FUZZ_SEED=<n>). FIRST overrides the start.
     vars:
@@ -888,7 +888,7 @@ tasks:
     cmds:
       - |
         first="{{.FIRST}}"
-        [ -n "$first" ] || first=$(( 31 + 200 * $(date -u +%-j) ))
+        [ -n "$first" ] || first=$(( 31 + 200 * ($(date -u +%-j) - 1) ))
         echo "stale-answer fuzz: seeds $first..$(( first + 199 ))"
         timeout --kill-after=10 1800 dagger call --progress=plain -q -m ci --source=. stale-fuzz --seeds=200 --first-seed="$first"
 

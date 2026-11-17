@@ -170,6 +170,55 @@ void main() {
       ]);
     });
 
+    test('logs the first rows one by one, the rest in one line', () async {
+      await rows(14);
+      for (var i = 0; i < 14; i++) {
+        await corrupt('$_acc-$i', 'is_seen = 1');
+      }
+      final repaired = <String>{};
+
+      final problems = await writer.checkSample(
+        _acc,
+        sampleSize: 20,
+        onRepaired: (ids) async => repaired.addAll(ids),
+      );
+
+      expect(problems, hasLength(14));
+      final lines = inconsistent();
+      expect(lines, hasLength(11));
+      expect(lines.take(10).every((l) => l.emailId != null), isTrue);
+      final summary = lines.last;
+      expect(summary.emailId, isNull);
+      expect(summary.message, contains('14 rows'));
+      final data = jsonDecode(summary.dataJson!) as Map<String, dynamic>;
+      expect(data['total'], 14);
+      expect(data['emailIds'], hasLength(4));
+      expect(data['fields'], ['is_seen']);
+      expect(
+        repaired,
+        hasLength(14),
+        reason: 'every row changed its shown value',
+      );
+      expect(await writer.consistencyProblems(), isEmpty);
+    });
+
+    test('onRepaired gets only rows whose shown value changed', () async {
+      await rows(2);
+      // Effective right, only a local_ value without an op: the repair
+      // clears it, the row shows the same.
+      await corrupt('$_acc-0', 'local_is_flagged = 0');
+      await corrupt('$_acc-1', 'is_flagged = 1');
+      final repaired = <String>{};
+
+      await writer.checkSample(
+        _acc,
+        sampleSize: 10,
+        onRepaired: (ids) async => repaired.addAll(ids),
+      );
+
+      expect(repaired, {'$_acc-1'});
+    });
+
     test('a consistent sample logs nothing', () async {
       await rows(5);
       await queue('$_acc-3', {'seen': true});
@@ -272,6 +321,24 @@ void main() {
       ]);
     });
 
+    test('the last check is kept in the database', () async {
+      await rows(1);
+      var now = DateTime.utc(2026, 11, 17, 12);
+      OverlayConsistencySampler sampler() =>
+          OverlayConsistencySampler(sampleSize: 10, now: () => now);
+
+      await sampler().afterSyncRun(writer, _acc);
+      await corrupt('$_acc-0', 'is_seen = 1');
+      now = now.add(const Duration(minutes: 10));
+      expect(
+        await sampler().afterSyncRun(writer, _acc),
+        isEmpty,
+        reason: 'a new sampler (restart, other isolate) keeps the interval',
+      );
+      now = now.add(const Duration(minutes: 20));
+      expect(await sampler().afterSyncRun(writer, _acc), hasLength(1));
+    });
+
     test('a failing check is logged, never thrown', () async {
       final sampler = OverlayConsistencySampler();
       await db.close();
@@ -299,6 +366,8 @@ void main() {
     final id = (await rig.db.select(rig.db.emails).getSingle()).id;
     await rig.db
         .customStatement('UPDATE emails SET is_flagged = 1 WHERE id = ?', [id]);
+    // The thread aggregate was computed from the broken row.
+    await rig.db.customStatement('UPDATE threads SET is_flagged = 1');
 
     await rig.emails.syncEmails(statefulRigAccount.id, 'INBOX');
 
@@ -313,6 +382,11 @@ void main() {
       (await rig.db.select(rig.db.emails).getSingle()).isFlagged,
       isFalse,
       reason: 'repaired',
+    );
+    expect(
+      (await rig.db.select(rig.db.threads).getSingle()).isFlagged,
+      isFalse,
+      reason: 'the thread aggregate follows the repaired row',
     );
   });
 }

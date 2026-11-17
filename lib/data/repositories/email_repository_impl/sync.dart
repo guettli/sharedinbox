@@ -22,9 +22,29 @@ extension _Sync on EmailRepositoryImpl {
           return _syncEmailsJmap(account, password, mailboxPath);
       }
     });
-    // Sampled, at most every few minutes per account (SYNC.md §6a).
-    await _consistencySampler?.afterSyncRun(_state, accountId);
+    // Sampled, at most every half hour per account (SYNC.md §6a). Awaited:
+    // it is bounded (a few ms when due, one row read otherwise), and a
+    // background isolate may end as soon as the sync returns.
+    await _consistencySampler?.afterSyncRun(
+      _state,
+      accountId,
+      onRepaired: _refreshThreadsOf,
+    );
     return result;
+  }
+
+  /// Refreshes the thread aggregates of the rows [emailIds] (the sampled
+  /// consistency check repaired their shown read/star/snooze state).
+  Future<void> _refreshThreadsOf(Set<String> emailIds) async {
+    final rows =
+        await (_db.select(_db.emails)..where((t) => t.id.isIn(emailIds))).get();
+    for (final row in rows) {
+      await _updateThread(
+        row.accountId,
+        row.mailboxPath,
+        row.threadId ?? row.id,
+      );
+    }
   }
 
   /// Opportunistic backfill for address headers stored only since a later

@@ -174,6 +174,255 @@ extension _Sieve on EmailRepositoryImpl {
 }
 EOF
 
+# ── Review round: SQL spellings, aliases, data rows, member tracking ───────
+expect fail 'lower-case SQL: update emails set is_seen' \
+  "$repo/flush_imap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement(
+        'update emails set is_seen = 1 where id = ?',
+      );
+}
+EOF
+
+expect fail 'UPDATE OR IGNORE emails SET is_flagged' \
+  "$repo/flush_imap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement(
+        'UPDATE OR IGNORE emails SET is_flagged = 1 WHERE id = ?',
+      );
+}
+EOF
+
+expect fail 'an interpolated table name' \
+  "$repo/flush_imap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement(
+        'UPDATE ${_db.emails.actualTableName} SET snoozed_until = NULL',
+      );
+}
+EOF
+
+expect fail 'a quoted column name' "$repo/flush_imap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement(
+        'UPDATE emails SET "is_seen" = 1',
+      );
+}
+EOF
+
+expect fail 'INSERT INTO emails SELECT without a column list' \
+  "$repo/flush_imap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement(
+        'INSERT INTO emails SELECT * FROM old_emails',
+      );
+}
+EOF
+
+expect fail 'EmailsCompanion.custom naming an overlay column' \
+  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
+extension _Sieve on EmailRepositoryImpl {
+  Future<void> _enqueueSieveMove() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion.custom(isSeen: const Constant(true)),
+    );
+  }
+}
+EOF
+
+expect fail 'copyWith naming an overlay column in an allowed member' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    final upsert = EmailsCompanion.insert(id: emailId);
+    final again = upsert.copyWith(isFlagged: Value(true));
+    await _db.into(_db.emails).insertOnConflictUpdate(again);
+  }
+}
+EOF
+
+expect fail 'an Email data row inserted in an allowed member' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded(Email row) async {
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          row,
+        );
+  }
+}
+EOF
+
+expect fail 'an Email data row written by update(…).write' \
+  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
+extension _Sieve on EmailRepositoryImpl {
+  Future<void> _enqueueSieveMove(Email row) async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
+        .write(row.copyWith(mailboxPath: destPath));
+  }
+}
+EOF
+
+expect fail 'lower-case delete from emails' \
+  "$repo/queries.dart" 'emails is written only' <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  Future<void> _x() => _db.customStatement('delete from emails where id = ?');
+}
+EOF
+
+expect fail 'an interpolated DELETE FROM' \
+  "$repo/queries.dart" 'emails is written only' <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  Future<void> _x() =>
+      _db.customStatement('DELETE FROM ${_db.emails.actualTableName}');
+}
+EOF
+
+expect fail 'the managers table manager' \
+  "$repo/queries.dart" 'emails is written only' <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  Future<void> _x() => _db.managers.emails
+      .filter((f) => f.id(id))
+      .update((o) => o(subject: const Value('x')));
+}
+EOF
+
+expect fail 'updates: naming emails' \
+  "$repo/queries.dart" 'emails is written only' <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  Future<void> _x() => _db.customUpdate(sql, updates: {_db.emails});
+}
+EOF
+
+expect fail 'an alias of the table' \
+  "$repo/queries.dart" 'emails is written only' <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  Future<void> _x() async {
+    final t = _db.emails;
+    await (_db.delete(t)..where((r) => r.id.equals(id))).go();
+  }
+}
+EOF
+
+expect fail 'a getter after an allowed member does not borrow its name' \
+  "$repo/sieve.dart" 'emails is written only' <<'EOF'
+extension _Sieve on EmailRepositoryImpl {
+  Future<void> _enqueueSieveMove() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(mailboxPath: Value(destPath)),
+    );
+  }
+
+  Future<int> get _purge => (_db.delete(_db.emails)).go();
+}
+EOF
+
+expect fail 'a field after an allowed member does not borrow its name' \
+  "$repo/sieve.dart" 'emails is written only' <<'EOF'
+class Sieve {
+  Future<void> _enqueueSieveMove() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(mailboxPath: Value(destPath)),
+    );
+  }
+
+  late final _purge = _db.delete(_db.emails);
+}
+EOF
+
+expect fail 'a signature over two lines after an allowed member' \
+  "$repo/sieve.dart" 'emails is written only' <<'EOF'
+extension _Sieve on EmailRepositoryImpl {
+  Future<void> _enqueueSieveMove() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(mailboxPath: Value(destPath)),
+    );
+  }
+
+  Future<Map<String, int>>
+      _purge(String id) async {
+    await (_db.delete(_db.emails)..where((t) => t.id.equals(id))).go();
+    return {};
+  }
+}
+EOF
+
+expect fail 'an annotated member after an allowed member' \
+  "$repo/sieve.dart" 'emails is written only' <<'EOF'
+class Sieve {
+  Future<void> _enqueueSieveMove() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
+      EmailsCompanion(mailboxPath: Value(destPath)),
+    );
+  }
+
+  @visibleForTesting
+  Future<void> purge() => _db.customStatement('DELETE FROM emails');
+}
+EOF
+
+expect fail 'a write in database.dart outside the migrations' \
+  "data/db/database.dart" 'emails is written only' <<'EOF'
+class AppDatabase {
+  Future<void> _upgradeSteps(Migrator m, int from) async {
+    await customStatement('UPDATE emails SET is_seen = 0');
+  }
+
+  Future<void> wipe() => customStatement('DELETE FROM emails');
+}
+EOF
+
+expect pass 'migrations in database.dart' "data/db/database.dart" <<'EOF'
+class AppDatabase {
+  Future<void> _overlayKeywords() async {
+    await customStatement('UPDATE emails SET srv_is_seen = is_seen');
+  }
+}
+EOF
+
+expect pass 'reads through the table, prose in comments' \
+  "$repo/queries.dart" <<'EOF'
+extension _Queries on EmailRepositoryImpl {
+  // We never delete from emails here; update emails set is_seen is the
+  // writer's business.
+  Future<void> _reads() async {
+    final row = await (_db.select(
+      _db.emails,
+    )..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    final q = _db.select(_db.threads).join([
+      leftOuterJoin(
+        _db.emails,
+        _db.emails.id.equalsExp(_db.threads.latestEmailId),
+      ),
+    ]);
+    await _db.customSelect('SELECT 1', readsFrom: {_db.emails}).get();
+    final e = q.readTableOrNull(_db.emails);
+  }
+}
+EOF
+
+expect pass 'companion variables, conditional rows, a thread copyWith' \
+  "$repo/sync_imap.dart" <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    final upsert = EmailsCompanion.insert(
+      id: emailId,
+      subject: Value(subject),
+    );
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          isNew
+              ? EmailStateWriter.withServerKeywords(
+                  upsert,
+                  keywords,
+                  seq: read.seq,
+                )
+              : upsert,
+        );
+    final t = ThreadsCompanion(id: Value(id)).copyWith(isFlagged: Value(f));
+  }
+}
+EOF
+
 # ── Near-misses that must pass ──────────────────────────────────────────────
 expect pass 'allowed member writing a location column' \
   "$repo/sieve.dart" <<'EOF'

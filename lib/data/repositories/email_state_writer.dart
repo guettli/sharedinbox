@@ -380,20 +380,26 @@ class EmailStateWriter {
   /// The sampled form of [consistencyProblems] that runs after sync runs
   /// in every build ([OverlayConsistencySampler]), bounded so it stays cheap
   /// on a large mailbox: the rows of [accountId] with the [sampleSize] most
-  /// recent foldable ops, plus [sampleSize] rows in `rowid` order from a
-  /// random start (wrapping around). It reads in one transaction, so an
-  /// enqueue and its fold cannot fall between reading a row and its ops.
+  /// recent foldable ops, plus [sampleSize] rows of the account in `rowid`
+  /// order from a random start (wrapping around). It reads in one
+  /// transaction, so an enqueue and its fold cannot fall between reading a
+  /// row and its ops.
   ///
   /// Each problem is logged first (App Log error `overlay.inconsistent`,
-  /// the mismatching fields and the row's values in `data`) and then
+  /// the mismatching fields and the row's values in `data`; the first
+  /// [logEach] rows one line each, the rest in one summary line) and then
   /// repaired by re-folding the row ([refold]: `local_*` from its ops, the
   /// effective columns from both). Logging first keeps the bug visible;
   /// repairing spares the user a wrong read/star/snooze state until the
   /// row's next server read. The log line says that it repaired.
+  /// [onRepaired] gets the rows whose shown value the repair changed, for
+  /// their thread aggregates.
   Future<List<ConsistencyProblem>> checkSample(
     String accountId, {
     int sampleSize = 200,
+    int logEach = 10,
     Random? random,
+    Future<void> Function(Set<String> emailIds)? onRepaired,
   }) async {
     final problems = await _db.transaction(() async {
       final ids = await sampleIds(
@@ -403,7 +409,8 @@ class EmailStateWriter {
       );
       return consistencyProblems(accountId: accountId, emailIds: ids);
     });
-    for (final p in problems) {
+    if (problems.isEmpty) return problems;
+    for (final p in problems.take(logEach)) {
       await _appLogger?.error(
         'overlay.inconsistent',
         'Read/star/snooze columns out of line (${p.fields.join(', ')}); '
@@ -412,12 +419,34 @@ class EmailStateWriter {
         emailId: p.emailId,
         data: {'fields': p.fields, 'withoutOps': p.withoutOps, ...p.values},
       );
-      await refold(p.emailId);
     }
+    if (problems.length > logEach) {
+      final rest = problems.skip(logEach).toList();
+      await _appLogger?.error(
+        'overlay.inconsistent',
+        '${problems.length} rows with read/star/snooze columns out of line '
+            'in one sample, ${rest.length} more than logged one by one; '
+            're-folding them to repair them',
+        accountId: accountId,
+        data: {
+          'total': problems.length,
+          'fields': {for (final p in rest) ...p.fields}.toList(),
+          'emailIds': [for (final p in rest.take(100)) p.emailId],
+        },
+      );
+    }
+    final changed = <String>{};
+    for (final p in problems) {
+      if (await refold(p.emailId)) changed.add(p.emailId);
+    }
+    if (changed.isNotEmpty) await onRepaired?.call(changed);
     return problems;
   }
 
-  /// The rows [checkSample] looks at, see there.
+  /// The rows [checkSample] looks at, see there. The block query reads
+  /// `+account_id` so SQLite walks the `rowid` range (stopping after the
+  /// limit) instead of collecting the account's rows by index and sorting
+  /// them; the range is the account's own, so a start is uniform over it.
   Future<Set<String>> sampleIds(
     String accountId, {
     required int sampleSize,
@@ -435,16 +464,18 @@ class EmailStateWriter {
       ).get())
         r.read<String>('id'),
     };
-    final bounds = await _db
-        .customSelect('SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM emails')
-        .getSingle();
+    final bounds = await _db.customSelect(
+      'SELECT MIN(rowid) AS lo, MAX(rowid) AS hi FROM emails '
+      'WHERE account_id = ?1',
+      variables: [Variable.withString(accountId)],
+    ).getSingle();
     final lo = bounds.readNullable<int>('lo');
     final hi = bounds.readNullable<int>('hi');
     if (lo == null || hi == null) return ids;
     final start = lo + random.nextInt(hi - lo + 1);
     Future<List<String>> block(String range, int limit) async => [
           for (final r in await _db.customSelect(
-            'SELECT id FROM emails WHERE account_id = ?1 AND rowid $range ?2 '
+            'SELECT id FROM emails WHERE +account_id = ?1 AND rowid $range ?2 '
             'ORDER BY rowid LIMIT ?3',
             variables: [
               Variable.withString(accountId),
@@ -461,6 +492,33 @@ class EmailStateWriter {
     }
     return ids;
   }
+
+  /// When [OverlayConsistencySampler] last checked [accountId], kept in
+  /// `sync_states` (`Overlay:ConsistencyCheck`), so the interval holds
+  /// across restarts and isolates.
+  Future<DateTime?> lastSampleCheck(String accountId) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(_sampleCheckKey),
+          ))
+        .getSingleOrNull();
+    return row == null ? null : DateTime.tryParse(row.state);
+  }
+
+  /// Records [at] as [lastSampleCheck] of [accountId].
+  Future<void> recordSampleCheck(String accountId, DateTime at) =>
+      _db.into(_db.syncStates).insertOnConflictUpdate(
+            SyncStatesCompanion.insert(
+              accountId: accountId,
+              resourceType: _sampleCheckKey,
+              state: at.toUtc().toIso8601String(),
+              syncedAt: at,
+            ),
+          );
+
+  static const _sampleCheckKey = 'Overlay:ConsistencyCheck';
 
   // ── Other columns ──────────────────────────────────────────────────────
   // Writes of `emails` that touch no overlay column, kept here so that one
@@ -886,8 +944,9 @@ class ConsistencyProblem {
 
 /// Runs [EmailStateWriter.checkSample] after a sync run, at most once per
 /// [interval] per account, on at most twice [sampleSize] rows
-/// (SYNC-REDESIGN.md §8 phase 3b). In memory, so per isolate and reset on
-/// restart: the first sync run of an account after a start checks.
+/// (SYNC-REDESIGN.md §8 phase 3b). The time of the last check is kept in
+/// memory and in the database ([EmailStateWriter.recordSampleCheck]), so the
+/// interval holds across restarts, isolates and repository rebuilds.
 class OverlayConsistencySampler {
   OverlayConsistencySampler({
     this.interval = const Duration(minutes: 30),
@@ -905,20 +964,31 @@ class OverlayConsistencySampler {
 
   /// Checks a sample of [accountId]'s rows through [writer] unless that ran
   /// less than [interval] ago; returns the problems found (empty when
-  /// skipped). Never throws: a check must not fail a sync.
+  /// skipped). [onRepaired] as in [EmailStateWriter.checkSample]. Never
+  /// throws: a check must not fail a sync.
   Future<List<ConsistencyProblem>> afterSyncRun(
     EmailStateWriter writer,
-    String accountId,
-  ) async {
-    final now = _now();
-    final last = _lastRun[accountId];
-    if (last != null && now.difference(last) < interval) return const [];
-    _lastRun[accountId] = now;
+    String accountId, {
+    Future<void> Function(Set<String> emailIds)? onRepaired,
+  }) async {
     try {
+      final now = _now();
+      final last =
+          _lastRun[accountId] ?? await writer.lastSampleCheck(accountId);
+      // A last check "in the future" (a clock set back) does not count.
+      if (last != null &&
+          !last.isAfter(now) &&
+          now.difference(last) < interval) {
+        _lastRun[accountId] = last;
+        return const [];
+      }
+      _lastRun[accountId] = now;
+      await writer.recordSampleCheck(accountId, now);
       return await writer.checkSample(
         accountId,
         sampleSize: sampleSize,
         random: _random,
+        onRepaired: onRepaired,
       );
     } catch (e, st) {
       await writer._appLogger?.warn(
