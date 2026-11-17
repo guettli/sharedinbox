@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the retry blocks in scripts/setup_dagger_remote.sh.
 #
-# The verify call wraps `dagger core --help` in a retry-on-timeout loop and
+# The verify call wraps `dagger query '{version}'` in a retry-on-timeout loop and
 # distinguishes a transient engine timeout (exit 124) from a genuine CLI/engine
 # version mismatch. These tests pin both behaviors. See issues #103 and #105.
 #
@@ -50,20 +50,20 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 cat >"$SCRATCH/dagger" <<EOF
 #!/usr/bin/env bash
-# args: version | core --help
+# args: version | query (reads {version} on stdin)
 case "\$1" in
     version)
         echo "dagger v0.21.7"
         ;;
-    core)
+    query)
         n=\$(cat "$SCRATCH/attempts"); n=\$((n + 1)); echo \$n >"$SCRATCH/attempts"
-        if [ -n "\${DAGGER_CORE_OUTPUT:-}" ]; then
-            printf '%s\n' "\$DAGGER_CORE_OUTPUT"
+        if [ -n "\${DAGGER_QUERY_OUTPUT:-}" ]; then
+            printf '%s\n' "\$DAGGER_QUERY_OUTPUT"
         fi
-        if [ -n "\${DAGGER_CORE_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$DAGGER_CORE_SUCCEED_ON" ]; then
+        if [ -n "\${DAGGER_QUERY_SUCCEED_ON:-}" ] && [ "\$n" -ge "\$DAGGER_QUERY_SUCCEED_ON" ]; then
             exit 0
         fi
-        exit "\${DAGGER_CORE_RC:-0}"
+        exit "\${DAGGER_QUERY_RC:-0}"
         ;;
 esac
 EOF
@@ -85,9 +85,9 @@ chmod +x "$SCRATCH/sleep"
 
 # Run the verify snippet with the stubs above. Behavior is controlled by env
 # vars set by the caller:
-#   DAGGER_CORE_RC          — exit code returned by `dagger core --help`
-#   DAGGER_CORE_OUTPUT      — text emitted by `dagger core --help`
-#   DAGGER_CORE_SUCCEED_ON  — attempt number on which to flip to rc=0 (optional)
+#   DAGGER_QUERY_RC          — exit code returned by `dagger query`
+#   DAGGER_QUERY_OUTPUT      — text emitted by `dagger query`
+#   DAGGER_QUERY_SUCCEED_ON  — attempt number on which to flip to rc=0 (optional)
 # The attempts counter is reset before each call; read it via $SCRATCH/attempts.
 #
 # We pin DAGGER_VERIFY_MAX_ATTEMPTS=3 (the production default is 5) and the
@@ -104,7 +104,7 @@ run_verify() {
 }
 
 # --- Empty verify_out after 3 timeouts prints engine-down error ----------------
-out=$(DAGGER_CORE_RC=124 DAGGER_CORE_OUTPUT="" run_verify)
+out=$(DAGGER_QUERY_RC=124 DAGGER_QUERY_OUTPUT="" run_verify)
 rc=$?
 attempts=$(cat "$SCRATCH/attempts")
 if [ "$rc" -eq 0 ]; then
@@ -122,7 +122,7 @@ else
 fi
 
 # --- Transient timeout that recovers on attempt 2 succeeds silently ------------
-out=$(DAGGER_CORE_RC=124 DAGGER_CORE_OUTPUT="" DAGGER_CORE_SUCCEED_ON=2 run_verify)
+out=$(DAGGER_QUERY_RC=124 DAGGER_QUERY_OUTPUT="" DAGGER_QUERY_SUCCEED_ON=2 run_verify)
 rc=$?
 attempts=$(cat "$SCRATCH/attempts")
 if [ "$rc" -ne 0 ]; then
@@ -141,7 +141,7 @@ fi
 
 # --- Version mismatch (rc!=124) does NOT retry; prints mismatch error ----------
 mismatch_output='Error: dagger engine v0.20.5 is incompatible with CLI v0.21.7'
-out=$(DAGGER_CORE_RC=1 DAGGER_CORE_OUTPUT="$mismatch_output" run_verify)
+out=$(DAGGER_QUERY_RC=1 DAGGER_QUERY_OUTPUT="$mismatch_output" run_verify)
 rc=$?
 attempts=$(cat "$SCRATCH/attempts")
 if [ "$rc" -eq 0 ]; then
@@ -159,7 +159,7 @@ else
 fi
 
 # --- Non-empty output with no parseable engine version still prints diagnostics
-out=$(DAGGER_CORE_RC=1 DAGGER_CORE_OUTPUT='connection refused' run_verify)
+out=$(DAGGER_QUERY_RC=1 DAGGER_QUERY_OUTPUT='connection refused' run_verify)
 rc=$?
 if [ "$rc" -eq 0 ]; then
     _fail "unparseable: should exit non-zero" "$out"
@@ -172,7 +172,7 @@ else
 fi
 
 # --- Success on first attempt: silent about errors and verified-line printed ---
-out=$(DAGGER_CORE_RC=0 DAGGER_CORE_OUTPUT="usage: dagger core ..." run_verify)
+out=$(DAGGER_QUERY_RC=0 DAGGER_QUERY_OUTPUT='{"version": "v0.21.7"}' run_verify)
 rc=$?
 attempts=$(cat "$SCRATCH/attempts")
 if [ "$rc" -ne 0 ]; then
@@ -463,6 +463,12 @@ for case in "CI=true:started" "CI=false:skipped" ":skipped" "DAGGER_TUNNEL_WATCH
     got=$(run_watchdog $vars)
     [ "$got" = "$want" ] && _pass || _fail "watchdog gate [${vars:-no CI}]: want $want, got $got"
 done
+
+# --- No deprecated `dagger core` in the engine probes ---------------------------
+# Dagger 1.0 deprecated `dagger core` (it prints a notice on every call). The
+# probes use `dagger query '{version}'`, which both the 0.21 and 1.0 CLIs accept.
+_core=$(grep -nE '^[^#]*dagger core\b' "$SCRIPT" "$SCRIPT_DIR/worker_dagger_tunnel.sh" || true)
+[ -z "$_core" ] && _pass || _fail "deprecated \`dagger core\` still used" "$_core"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

@@ -230,7 +230,9 @@ fi
 # mismatch must fail the job loudly rather than silently degrade.
 CLI_VERSION=$(dagger version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -1)
 echo "Verifying connection to Dagger engine via SSH tunnel (runner CLI ${CLI_VERSION:-unknown})..."
-# `dagger core` forces a real engine connection without a complex GraphQL query.
+# `dagger query '{version}'` forces a real engine connection with the smallest
+# possible query. (Not `dagger core --help`: deprecated in Dagger 1.0. Not
+# `dagger api query`: the 0.21 CLI baked into older runner images lacks `api`.)
 # Capture rc separately because an `if !` clause flips $? to 0 in its then-block,
 # which would hide the timeout (124) vs mismatch distinction the retry depends on.
 # The remote engine occasionally fails to answer in time due to a transient
@@ -246,7 +248,7 @@ verify_rc=0
 verify_out=""
 for attempt in $(seq 1 "$VERIFY_MAX_ATTEMPTS"); do
     verify_rc=0
-    verify_out=$(timeout "$VERIFY_TIMEOUT_S" dagger core --help 2>&1) || verify_rc=$?
+    verify_out=$(timeout "$VERIFY_TIMEOUT_S" dagger query <<<'{version}' 2>&1) || verify_rc=$?
     if [ "$verify_rc" -eq 0 ]; then
         break
     fi
@@ -268,7 +270,7 @@ if [ "$verify_rc" -ne 0 ]; then
     if [ "$verify_rc" = 124 ] && [ -z "$ENGINE_VERSION" ]; then
         echo "::error::Dagger engine did not respond within ${VERIFY_TIMEOUT_S}s on ${VERIFY_MAX_ATTEMPTS} attempts via the SSH tunnel."
         echo "::error::The tunnel authenticated and the port forward is up, but"
-        echo "::error::\`dagger core --help\` timed out before the engine replied."
+        echo "::error::\`dagger query {version}\` timed out before the engine replied."
         echo "::error::This usually means the engine is down or unreachable; check"
         echo "::error::the engine pod on tc (gitops:"
         echo "::error::k8s/plain/tc/dagger/dagger/apps_Deployment/dagger-engine.yaml)."
@@ -284,7 +286,7 @@ if [ "$verify_rc" -ne 0 ]; then
     if [ -n "$verify_out" ]; then
         printf '%s\n' "$verify_out" | tail -8
     else
-        echo "(no output captured from \`dagger core --help\`)"
+        echo "(no output captured from \`dagger query {version}\`)"
     fi
     exit 1
 fi

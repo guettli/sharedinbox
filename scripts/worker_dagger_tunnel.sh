@@ -28,7 +28,7 @@ PORT=8080
 # stale tunnel down so the fresh one below can bind the port.
 if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then
     exec 3>&- 3<&-
-    if timeout 15 dagger core --help >/dev/null 2>&1; then
+    if timeout 15 dagger query <<<'{version}' >/dev/null 2>&1; then
         echo "dagger tunnel already up and engine reachable on 127.0.0.1:${PORT}"
         exit 0
     fi
@@ -85,10 +85,10 @@ fi
 
 # Verify the CLI can actually reach the engine over the tunnel (also catches a
 # CLI/engine version mismatch, which looks like an unreachable engine).
-if timeout 15 dagger core --help >/dev/null 2>&1; then
+if timeout 15 dagger query <<<'{version}' >/dev/null 2>&1; then
     echo "dagger engine reachable via tunnel (CLI $(dagger version 2>/dev/null | grep -oE 'v[0-9.]+' | head -1))."
 else
-    echo "WARNING: tunnel is up but 'dagger core' did not answer within 15s — the engine is" >&2
+    echo "WARNING: tunnel is up but 'dagger query' did not answer within 15s — the engine is" >&2
     echo "         not responding, or the CLI and engine versions differ (they must match," >&2
     echo "         see DAGGER.md). Left unbounded this check could itself hang out the" >&2
     echo "         preflight clock (issue #1002)." >&2
