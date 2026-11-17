@@ -25,6 +25,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
 import 'db_test_helper.dart';
 import 'helpers/fake_secure_storage.dart';
@@ -460,10 +461,12 @@ void _knownBugs() {
           isFalse,
           reason: 'only a was starred',
         );
+        // The star reached the server; it is acked and shows until a read
+        // confirms it (SYNC-REDESIGN.md §4.5).
         final left = await db.select(db.pendingChanges).get();
         expect(
           [for (final c in left) '${c.changeType} ${c.state}'],
-          ['move failed'],
+          ['move failed', 'flag_flagged acked'],
         );
       },
     );
@@ -570,10 +573,12 @@ void _knownBugs() {
           await emails.flushPendingChanges(_account.id, 'pw');
         }
 
+        // The unstar superseded the star while both were queued
+        // (SYNC-REDESIGN.md §3): one failed change.
         final failed = await (db.select(db.pendingChanges)
               ..where((t) => t.state.equals('failed')))
             .get();
-        expect(failed, hasLength(2));
+        expect(failed, hasLength(1));
         expect((await row('a@test')).isFlagged, isFalse);
         await _syncCycle(emails);
         expect((await row('a@test')).isFlagged, isFalse);
@@ -1085,7 +1090,12 @@ class _FuzzRun {
   }
 
   Future<List<String>> _check() async {
-    final problems = <String>[];
+    final problems = <String>[
+      // Every row's read/star/snooze state is COALESCE(local_, srv_), and a
+      // local_ value has an op behind it (SYNC-REDESIGN.md §8 phase 3).
+      for (final p in await EmailStateWriter(_db).consistencyProblems())
+        'overlay inconsistent: $p',
+    ];
 
     final noIntentCheck = <String>{
       if (_refused case final refused?) refused,

@@ -167,11 +167,7 @@ extension _Diagnostics on EmailRepositoryImpl {
     String password,
     String mailboxPath,
   ) async {
-    final client = await _imapConnect(
-      account,
-      _effectiveUsername(account),
-      password,
-    );
+    final client = await _connectImapAs(account, password);
     try {
       // SELECT yields the server's EXISTS count — the same number the folder
       // list's STATUS query trusts.
@@ -306,11 +302,7 @@ extension _Diagnostics on EmailRepositoryImpl {
     String password,
     String mailboxPath,
   ) async {
-    final client = await _imapConnect(
-      account,
-      _effectiveUsername(account),
-      password,
-    );
+    final client = await _connectImapAs(account, password);
     try {
       await client.selectUnicodeMailboxByPath(mailboxPath);
       final serverUids = (await client.uidSearchMessages(

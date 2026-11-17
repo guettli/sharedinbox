@@ -442,25 +442,14 @@ extension _RowIdentity on EmailRepositoryImpl {
       if (known != null && newUidValidity != null && known != newUidValidity) {
         return gone;
       }
-      // A flag the user changed on [row] before the move, not changed on
-      // the copy since: the server's value there does not have the change
-      // yet, so the row keeps showing it until the queued change is sent.
-      bool keepOwn(String type) =>
-          rowChanges.any((c) => c.changeType == type) &&
-          !copyChanges.any((c) => c.changeType == type);
       await _mergeDuplicateRow(dropId: dup.id, keepId: current.id);
+      // The copy's server facts, the read/star/snooze state with the read
+      // stamp it was read under included. The changes of both rows (the
+      // copy's now point here) fold over it: a flag the user changed on
+      // [row] before the move keeps showing until a read confirms it.
       await (_db.update(_db.emails)..where((t) => t.id.equals(current.id)))
-          .write(
-        dup.toCompanion(false).copyWith(
-              id: const Value.absent(),
-              isSeen: keepOwn('flag_seen')
-                  ? Value(current.isSeen)
-                  : Value(dup.isSeen),
-              isFlagged: keepOwn('flag_flagged')
-                  ? Value(current.isFlagged)
-                  : Value(dup.isFlagged),
-            ),
-      );
+          .write(dup.toCompanion(false).copyWith(id: const Value.absent()));
+      await _state.refold(current.id);
       await _rewritePendingChangeUids(
         resourceId: current.id,
         mailboxPath: newPath,
@@ -593,6 +582,8 @@ extension _RowIdentity on EmailRepositoryImpl {
       // Its own body (when the kept row has one) and attachment rows go
       // with it.
       await (_db.delete(_db.emails)..where((t) => t.id.equals(dropId))).go();
+      // The copy's changes fold into the kept row now.
+      await _state.refold(keepId);
     });
     await _moveOrDropAttachmentDir(
       dropId: dropId,

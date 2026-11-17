@@ -129,43 +129,52 @@ extension _ChangeFailures on EmailRepositoryImpl {
       log('Pending change ${row.id}: claim lost meanwhile, outcome dropped');
       return null;
     }
-    await _afterFlagFailure(row, revert: revert);
-    return _afterLocationFailure(row, revert: revert);
+    await _afterFlagFailure(row);
+    final dependents = await _afterLocationFailure(row, revert: revert);
+    // A failed change no longer folds (SYNC-REDESIGN.md §5), nor do the
+    // dependents failed with it: the mail shows the server's read/star/
+    // snooze state again.
+    await _refoldAndRethread(row.resourceId);
+    return dependents;
   }
 
-  /// Called (inside the transaction that marked [row] failed) when a read or
-  /// star change just became failed: it no longer protects the optimistic
-  /// value (#1264), but an unchanged mail is read again only by the
-  /// 15-minute flag reconcile (with IMAP CONDSTORE, and always with JMAP),
-  /// so the app would show the user's value as if it had applied (#1270).
-  ///
-  /// Makes the flag reconcile of the mail's folder due, so the next sync
-  /// reads server truth, and with [revert] also puts the flag back at once
-  /// to its value before the change: the opposite of the requested one,
-  /// queued only when the shown value differed. That guess is skipped when
-  /// another change of the same flag exists (see below) or something else
-  /// already changed the flag; the reconcile sets it right then. A failure
-  /// here is logged and rolled back on its own, never taking the failed
-  /// state with it.
-  Future<void> _afterFlagFailure(
-    PendingChangeRow row, {
-    required bool revert,
-  }) async {
+  /// Re-folds row [emailId] ([EmailStateWriter.refold]) after its ops
+  /// changed, and refreshes its thread when what the app shows changed.
+  Future<void> _refoldAndRethread(String emailId) async {
+    if (!await _state.refold(emailId)) return;
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(emailId)))
+        .getSingleOrNull();
+    if (email == null) return;
+    await _updateThread(
+      email.accountId,
+      email.mailboxPath,
+      email.threadId ?? email.id,
+    );
+  }
+
+  /// Called (inside the transaction that marked [row] failed, or discarded
+  /// it) when a read or star change just ended without applying. It no
+  /// longer folds, so the mail shows the server's last known value
+  /// (`srv_*`) again. That value may be stale: an unchanged mail is read
+  /// again only by the 15-minute flag reconcile (with IMAP CONDSTORE, and
+  /// always with JMAP), and the change may have reached the server before
+  /// it failed (#1270). So the flag reconcile of the mail's folder is made
+  /// due, and the next sync reads the server's value. A failure here is
+  /// logged and rolled back on its own, never taking the failed state with
+  /// it.
+  Future<void> _afterFlagFailure(PendingChangeRow row) async {
     if (row.changeType != 'flag_seen' && row.changeType != 'flag_flagged') {
       return;
     }
     try {
-      await _db.transaction(() => _revertFailedFlag(row, revert: revert));
+      await _db.transaction(() => _makeFailedFlagReconcileDue(row));
     } catch (e) {
-      log('Could not revert failed change ${row.id}: $e');
+      log('Could not schedule a flag reconcile for change ${row.id}: $e');
     }
   }
 
-  Future<void> _revertFailedFlag(
-    PendingChangeRow row, {
-    required bool revert,
-  }) async {
-    final key = row.changeType == 'flag_seen' ? 'seen' : 'flagged';
+  Future<void> _makeFailedFlagReconcileDue(PendingChangeRow row) async {
     final payload = _decodePayload(row);
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(row.resourceId)))
@@ -173,48 +182,17 @@ extension _ChangeFailures on EmailRepositoryImpl {
     final account = await _accounts.getAccount(row.accountId);
     if (account == null) return;
     final jmap = account.type == account_model.AccountType.jmap;
-    // The folder the mail is shown in, and for IMAP the one the change
-    // addressed (they differ behind a queued move).
+    // The folder the mail is shown in, the one the server has it in, and
+    // for IMAP the one the change addressed (they differ behind a queued
+    // move).
     final addressed = jmap ? null : payload?['mailboxPath'];
     for (final folder in {
       if (email != null) email.mailboxPath,
+      if (!jmap && email?.srvMailboxPath != null) email!.srvMailboxPath!,
       if (addressed is String) addressed,
     }) {
       await _makeFlagReconcileDue(row.accountId, folder, jmap: jmap);
     }
-    if (!revert || email == null || !_sameMessage(row, email.messageId)) {
-      return;
-    }
-    final wanted = payload?[key];
-    if (wanted is! bool) return;
-    // The value before [row] is known only when no other change of this
-    // flag is queued: a later pending one owns the local value, and after
-    // an earlier one (pending or failed) the shown value was never server
-    // truth.
-    final other = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.resourceId.equals(row.resourceId) &
-                t.id.equals(row.id).not() &
-                t.changeType.equals(row.changeType) &
-                (t.id.isSmallerThanValue(row.id) | t.state.isIn(_liveStates)),
-          )
-          ..limit(1))
-        .getSingleOrNull();
-    if (other != null) return;
-    final current = key == 'seen' ? email.isSeen : email.isFlagged;
-    if (current != wanted) return;
-    await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
-      EmailsCompanion(
-        isSeen: key == 'seen' ? Value(!wanted) : const Value.absent(),
-        isFlagged: key == 'flagged' ? Value(!wanted) : const Value.absent(),
-      ),
-    );
-    await _updateThread(
-      email.accountId,
-      email.mailboxPath,
-      email.threadId ?? email.id,
-    );
   }
 
   Future<void> _makeFlagReconcileDue(
@@ -230,10 +208,10 @@ extension _ChangeFailures on EmailRepositoryImpl {
 
   /// Called after a flag reconcile of [folder] that ran to the end, with
   /// [dueValue], the due marker as it was when the pass started. Clears the
-  /// marker unless it was set again since (a change failed during the pass),
-  /// or the pass had to skip a mail with a failed read/star change because
-  /// another change of that mail is still queued: then the next sync tries
-  /// again. A pass that throws leaves the marker alone.
+  /// marker unless it was set again since (a change failed during the pass):
+  /// then the next sync reads again. A pass that throws leaves the marker
+  /// alone. The pass writes every row it read through the server-write gate,
+  /// so it never skips one.
   Future<void> _settleFlagReconcileDue(
     String accountId,
     String folder, {
@@ -241,29 +219,6 @@ extension _ChangeFailures on EmailRepositoryImpl {
     required String? dueValue,
   }) async {
     if (dueValue == null) return;
-    final inFlight = await _inFlightFlagResourceIds(accountId);
-    if (inFlight.isNotEmpty) {
-      final failedFlags = await (_db.select(_db.pendingChanges)
-            ..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  t.state.equals(_failedState) &
-                  t.changeType.isIn(const ['flag_seen', 'flag_flagged']) &
-                  t.resourceId.isIn(inFlight),
-            ))
-          .get();
-      if (failedFlags.isNotEmpty) {
-        final skipped = await (_db.select(_db.emails)
-              ..where(
-                (t) =>
-                    t.id.isIn([for (final c in failedFlags) c.resourceId]) &
-                    t.mailboxPath.equals(folder),
-              )
-              ..limit(1))
-            .getSingleOrNull();
-        if (skipped != null) return;
-      }
-    }
     await (_db.delete(_db.syncStates)
           ..where(
             (t) =>
@@ -447,9 +402,10 @@ extension _ChangeFailures on EmailRepositoryImpl {
     final prevFrom = payload['prevSnoozedFrom'] as String?;
     final target = await _resolveSnoozedPlaceholder(row.accountId, src);
     await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
+      // The snooze state itself comes back with the fold: the failed
+      // change no longer folds, so the row shows the server's snooze.
       EmailsCompanion(
         mailboxPath: Value(target),
-        snoozedUntil: Value(prevUntil),
         snoozedFromMailboxPath: Value(prevUntil == null ? null : prevFrom),
       ),
     );

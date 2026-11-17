@@ -52,10 +52,7 @@ extension _FlushJmap on EmailRepositoryImpl {
         // reconciles this mutation together with any concurrent server changes
         // (re-applying our own change is idempotent).
         await _applyPendingChangeJmap(jmap, row);
-        await (_db.delete(
-          _db.pendingChanges,
-        )..where((t) => t.id.equals(row.id)))
-            .go();
+        await _settleApplied(row);
         applied++;
         blocked.remove(row.resourceId);
       } on JmapSetItemException catch (e) {

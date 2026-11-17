@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/db/keyword_fold.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/undo_repository_impl.dart';
 import 'package:sharedinbox/di.dart';
 
@@ -496,14 +498,30 @@ void main() {
                 ),
               );
         }
+        // The queued changes reached the server and a sync read the mail
+        // back: the changes are gone and the server has their effect.
+        Future<void> applied() async {
+          final shown = (await repo.getEmail(emailId))!;
+          await db.delete(db.pendingChanges).go();
+          final read = await EmailStateWriter(db).beginRead(accountId);
+          await read.write(
+            emailId,
+            ServerKeywords(
+              seen: shown.isSeen,
+              flagged: shown.isFlagged,
+              snoozedUntil: shown.snoozedUntil,
+            ),
+          );
+          await EmailStateWriter(db).refold(emailId);
+        }
+
         final until = DateTime(2030);
         await repo.snoozeEmail(emailId, until);
-        // The snooze reached the server.
-        await db.delete(db.pendingChanges).go();
+        await applied();
         final original = (await repo.getEmail(emailId))!;
 
         await repo.moveEmail(emailId, 'Archive');
-        if (flushed) await db.delete(db.pendingChanges).go();
+        if (flushed) await applied();
 
         final undo = container.read(undoServiceProvider.notifier);
         await undo.pushAction(

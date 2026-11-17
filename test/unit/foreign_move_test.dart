@@ -176,7 +176,7 @@ void main() {
     await emails.flushPendingChanges(_account.id, 'pw');
 
     expect(server.find('a@test')!.message.seen, isTrue);
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(db), isEmpty);
   });
 
   test("the copy's body and references move to the kept row", () async {

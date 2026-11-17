@@ -11,7 +11,10 @@ class UnsyncedWorkRepositoryImpl implements UnsyncedWorkRepository {
   Future<UnsyncedWork> countForAccount(String accountId) async {
     final row = await _db.customSelect(
       'SELECT '
-      '(SELECT COUNT(*) FROM pending_changes WHERE account_id = ?1) AS changes, '
+      // An acked change reached the server; it only waits for a read to
+      // confirm it.
+      '(SELECT COUNT(*) FROM pending_changes WHERE account_id = ?1 '
+      "AND state <> 'acked') AS changes, "
       '(SELECT COUNT(*) FROM outbox WHERE account_id = ?1) AS outbox, '
       // A note deleted locally but not yet on the server (pending_delete)
       // loses nothing: the server keeps the note.

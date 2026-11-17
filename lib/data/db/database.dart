@@ -16,6 +16,7 @@ import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
 import 'package:sharedinbox/data/db/db_encryption_migration.dart';
+import 'package:sharedinbox/data/db/keyword_fold.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 import 'package:sqlite3/sqlite3.dart' show Database, SqliteException, sqlite3;
 
@@ -172,6 +173,25 @@ class Emails extends Table {
   // JMAP: the server's Email id.
   TextColumn get srvJmapId => text().nullable()();
 
+  // Added in schema v72: the `keywords` overlay (SYNC-REDESIGN.md §2). The
+  // read/star/snooze state the app shows ([isSeen], [isFlagged],
+  // [snoozedUntil]) is `COALESCE(local_<field>, srv_<field>)`: `srv_` is
+  // what the server last said, written only by the server-write gate
+  // (`EmailStateWriter`); `local_` is the user's pending intent, folded
+  // from the row's queued changes (NULL: none). All three are written
+  // together by the email state writer. A `local_snoozed_until` of 0 (the
+  // epoch) means "not snoozed" (`snoozeCleared`).
+  BoolColumn get srvIsSeen => boolean().withDefault(const Constant(false))();
+  BoolColumn get srvIsFlagged => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get srvSnoozedUntil => dateTime().nullable()();
+  BoolColumn get localIsSeen => boolean().nullable()();
+  BoolColumn get localIsFlagged => boolean().nullable()();
+  DateTimeColumn get localSnoozedUntil => dateTime().nullable()();
+  // The read sequence (`sync_read_seq`) of the server read that last wrote
+  // the `srv_` keyword columns; an older read no longer writes them
+  // (SYNC-REDESIGN.md §4.2–§4.3).
+  IntColumn get srvKeywordsSeq => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -273,6 +293,32 @@ class PendingChanges extends Table {
   // outcome write checks it, so a flush that lost its claim (lease expired
   // and taken over) cannot overwrite the new one.
   TextColumn get claimToken => text().nullable()();
+  // Added in schema v72. "acked": the server applied the change, and it
+  // keeps folding into the row's `local_*` keyword columns until a server
+  // read started after the ack ([ackSeq], a read sequence) agrees, or a
+  // second one contradicts it (SYNC-REDESIGN.md §4.4–§4.5). Only changes
+  // that write a keyword column are acked; the others are deleted when
+  // applied, as before.
+  IntColumn get ackSeq => integer().nullable()();
+  // The read sequence of the first post-ack read that contradicted an
+  // acked change; a later contradicting read drops it (`op.contradicted`).
+  IntColumn get contradictedSeq => integer().nullable()();
+}
+
+/// The read sequence (SYNC-REDESIGN.md §4.1): one persistent counter, taken
+/// right before each server read (`UID FETCH`, `Email/get`, …) and at each
+/// ack, so every repository instance and isolate orders reads against
+/// local changes the same way. One row, `id = 1`.
+@DataClassName('ReadSequenceRow')
+class ReadSequence extends Table {
+  @override
+  String get tableName => 'sync_read_seq';
+
+  IntColumn get id => integer()();
+  IntColumn get seq => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
 }
 
 /// Sync checkpoint per (account, resource type).
@@ -656,6 +702,7 @@ class UserPreferences extends Table {
     Drafts,
     SyncStates,
     PendingChanges,
+    ReadSequence,
     SyncLogs,
     SyncLogMailboxes,
     SyncHealth,
@@ -1856,6 +1903,134 @@ class AppDatabase extends _$AppDatabase {
         await _completeUndoSnapshots();
         await _notifiedByLocation();
       }
+    }
+    if (from < 72 && await _tableExists(this, 'emails')) {
+      // The `keywords` overlay (phase 3a of SYNC-REDESIGN.md).
+      for (final column in [
+        emails.srvIsSeen,
+        emails.srvIsFlagged,
+        emails.srvSnoozedUntil,
+        emails.localIsSeen,
+        emails.localIsFlagged,
+        emails.localSnoozedUntil,
+        emails.srvKeywordsSeq,
+      ]) {
+        await _addColumnIfMissing(m, emails, column);
+      }
+      if (await _tableExists(this, 'pending_changes')) {
+        await _addColumnIfMissing(m, pendingChanges, pendingChanges.ackSeq);
+        await _addColumnIfMissing(
+          m,
+          pendingChanges,
+          pendingChanges.contradictedSeq,
+        );
+      }
+      if (!await _tableExists(this, 'sync_read_seq')) {
+        await m.createTable(readSequence);
+      }
+      await _overlayKeywords();
+    }
+  }
+
+  static int? _sqlBool(bool? value) => value == null ? null : (value ? 1 : 0);
+
+  /// Schema v72: today's read/star/snooze values become the server's
+  /// (`srv_*`), and the queued changes are folded once into `local_*`, so
+  /// every row shows what it showed before. For a row with a queued
+  /// read/star/snooze change the stored value was the user's, not the
+  /// server's: its `srv_keywords_seq` stays 0 (any read overwrites it) and
+  /// the flag reconcile of its folder is made due, so the next sync reads
+  /// the server's value.
+  Future<void> _overlayKeywords() async {
+    await customStatement('''
+      UPDATE emails SET
+        srv_is_seen = is_seen,
+        srv_is_flagged = is_flagged,
+        srv_snoozed_until = snoozed_until,
+        srv_keywords_seq = 0,
+        local_is_seen = NULL,
+        local_is_flagged = NULL,
+        local_snoozed_until = NULL
+    ''');
+    if (!await _tableExists(this, 'pending_changes') ||
+        !await _tableExists(this, 'accounts')) {
+      return;
+    }
+    final rows = await customSelect('''
+      SELECT p.id, p.resource_id, p.change_type, p.payload, p.state,
+        e.account_id, e.mailbox_path, e.srv_mailbox_path, a.account_type
+      FROM pending_changes p
+      JOIN emails e ON e.id = p.resource_id
+      JOIN accounts a ON a.id = e.account_id
+      WHERE p.state IN ('pending', 'inflight', 'stuck')
+      ORDER BY p.id
+    ''').get();
+    final opsByRow = <String, List<FoldOp>>{};
+    final due = <(String, String)>{};
+    for (final r in rows) {
+      Map<String, dynamic>? payload;
+      try {
+        final decoded = jsonDecode(r.read<String>('payload'));
+        if (decoded is Map<String, dynamic>) payload = decoded;
+      } catch (_) {}
+      final type = r.read<String>('change_type');
+      if (keywordColumnsOf(type, payload).isEmpty) continue;
+      final id = r.read<String>('resource_id');
+      (opsByRow[id] ??= []).add(
+        FoldOp(
+          seq: r.read<int>('id'),
+          type: type,
+          payload: payload,
+          state: r.read<String>('state'),
+        ),
+      );
+      final account = r.read<String>('account_id');
+      if (r.read<String>('account_type') == 'jmap') {
+        final mailbox = r.read<String>('mailbox_path');
+        due.add((account, 'JMAP:ReconcileDue:$mailbox'));
+        continue;
+      }
+      for (final folder in {
+        r.readNullable<String>('srv_mailbox_path') ??
+            r.read<String>('mailbox_path'),
+        if ((payload?['mailboxPath'] ?? payload?['src']) case final String p) p,
+      }) {
+        due.add((account, 'IMAP:FlagReconcileDue:$folder'));
+      }
+    }
+    for (final MapEntry(key: id, value: ops) in opsByRow.entries) {
+      final local = foldKeywords(ops);
+      final snooze = local.snoozedUntil;
+      await customStatement(
+        '''
+        UPDATE emails SET
+          local_is_seen = ?1, local_is_flagged = ?2, local_snoozed_until = ?3,
+          is_seen = COALESCE(?1, srv_is_seen),
+          is_flagged = COALESCE(?2, srv_is_flagged),
+          snoozed_until = NULLIF(COALESCE(?3, srv_snoozed_until), 0)
+        WHERE id = ?4
+        ''',
+        [
+          _sqlBool(local.seen),
+          _sqlBool(local.flagged),
+          snooze == null ? null : snooze.millisecondsSinceEpoch ~/ 1000,
+          id,
+        ],
+      );
+    }
+    if (due.isEmpty || !await _tableExists(this, 'sync_states')) return;
+    final now = DateTime.now();
+    for (final (account, key) in due) {
+      await customStatement(
+        'INSERT OR REPLACE INTO sync_states '
+        '(account_id, resource_type, state, synced_at) VALUES (?1, ?2, ?3, ?4)',
+        [
+          account,
+          key,
+          now.toIso8601String(),
+          now.millisecondsSinceEpoch ~/ 1000,
+        ],
+      );
     }
   }
 

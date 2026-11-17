@@ -90,7 +90,7 @@ void main() {
     expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
 
     expect(server.find('a@test')!.message.seen, isTrue);
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(db), isEmpty);
   });
 
   test('a change whose flush died at the retry limit is stuck, then resent',
@@ -110,7 +110,7 @@ void main() {
     now = now.add(const Duration(minutes: 16));
     expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
     expect(server.find('a@test')!.message.seen, isTrue);
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
+    expect(await unsettledChanges(db), isEmpty);
   });
 
   test('a flush leaves the other changes of a mail being sent elsewhere',
@@ -130,9 +130,7 @@ void main() {
     expect(server.find('b@test')!.message.flagged, isTrue);
     // a's star waits behind its read change, still claimed elsewhere.
     expect(server.find('a@test')!.message.flagged, isFalse);
-    final left = await (db.select(db.pendingChanges)
-          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
-        .get();
+    final left = await unsettledChanges(db);
     expect(
       [for (final c in left) '${c.changeType} ${c.state} ${c.attempts}'],
       ['flag_seen inflight 0', 'flag_flagged pending 0'],
@@ -197,7 +195,7 @@ void main() {
       now = now.add(const Duration(minutes: 16));
       expect(await emails.flushPendingChanges(_account.id, 'pw'), 1);
       expect(server.find('a@test')!.message.seen, isTrue);
-      expect(await db.select(db.pendingChanges).get(), isEmpty);
+      expect(await unsettledChanges(db), isEmpty);
     });
 
     test('is sent at the next flush when the user retries it', () async {
