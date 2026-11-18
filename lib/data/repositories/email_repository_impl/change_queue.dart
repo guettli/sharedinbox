@@ -84,6 +84,69 @@ const _ackedState = 'acked';
 /// screen.
 const _failedState = 'failed';
 
+/// `pending_changes.state` of a change of a mail that has no server copy
+/// yet (a virtual row; a JMAP mail whose server id is unknown,
+/// SYNC-REDESIGN.md §6): it folds like a pending one, but is not flushed
+/// until the server copy is matched in place ([_ChangeQueue._unparkOps]
+/// makes it pending), and expires after
+/// [EmailStateWriter.parkedExpiry] ([EmailStateWriter.expireParked]).
+const _parkedState = 'parked';
+
+/// `pending_changes.state` of a counterpart's shadow change
+/// (`origin = counterpart:<id>`, SYNC-REDESIGN.md §6): the effect of the
+/// primary change `<id>` on the twin row of a counterpart account. Folds,
+/// is never flushed or listed, and follows its primary: acked with it,
+/// dropped when it is cancelled, superseded, failed or discarded
+/// ([EmailStateWriter.dropOrphanedShadows]).
+const _shadowState = 'shadow';
+
+/// States of a change nothing was sent for yet that a newer change of the
+/// same intent may replace, and Undo may cancel.
+const _unsentStates = [_pendingState, _parkedState];
+
+/// Zone key under which [_ChangeQueue._enqueueChange] queues shadows of
+/// the change with this id instead of real changes ([_Counterparts]).
+final _shadowOfKey = Object();
+
+/// Payload key of a parked change: the folder its row showed when it was
+/// queued. It marks the payload as built for a row without a server copy
+/// (rewritten by [_ChangeQueue._unparkOps], which removes it), and tells
+/// where a delete for good was meant.
+const _parkedShownInKey = 'parkedShownIn';
+
+/// [payload] of a change parked on a row shown in [shownIn].
+String _markParked(String payload, String shownIn) {
+  final Map<String, dynamic> map;
+  try {
+    map = jsonDecode(payload) as Map<String, dynamic>;
+  } catch (_) {
+    return payload;
+  }
+  map[_parkedShownInKey] = shownIn;
+  return jsonEncode(map);
+}
+
+/// What [_ChangeQueue._unparkOps] did.
+class _Unparked {
+  const _Unparked({
+    required this.sent,
+    required this.deletedForGood,
+    this.refusedDelete,
+  });
+
+  static const none = _Unparked(sent: 0, deletedForGood: false);
+
+  /// Changes that became pending.
+  final int sent;
+
+  /// One of them deletes the mail for good.
+  final bool deletedForGood;
+
+  /// A delete for good that failed instead: the mail arrived elsewhere
+  /// than where the user deleted it.
+  final PendingChangeRow? refusedDelete;
+}
+
 /// [row]'s JSON payload, or null when it is not a JSON object.
 Map<String, dynamic>? _decodePayload(PendingChangeRow row) {
   try {
@@ -95,9 +158,9 @@ Map<String, dynamic>? _decodePayload(PendingChangeRow row) {
 
 // ── pending_changes queue ──────────────────────────────────────────────────
 
-/// Zone key marking changes the app queues on its own (snooze wake-up,
-/// local Sieve filters, the #545 dissolve replay), not as a direct user
-/// action; see [_ChangeQueue._asAutomaticChange].
+/// Zone key marking changes the app queues on its own (snooze wake-up and
+/// local Sieve filters), not as a direct user action; see
+/// [_ChangeQueue._asAutomaticChange].
 final _automaticChangeKey = Object();
 
 /// Whether [row] was queued for the mail with [messageId]: true unless its
@@ -162,6 +225,7 @@ model.PendingChange _toPendingChange(PendingChangeRow r) => model.PendingChange(
       sending: r.state == _inflightState,
       stuck: r.state == _stuckState,
       nextTry: r.state == _stuckState ? r.leaseUntil : null,
+      parked: r.state == _parkedState,
     );
 
 extension _ChangeQueue on EmailRepositoryImpl {
@@ -241,8 +305,11 @@ extension _ChangeQueue on EmailRepositoryImpl {
   ///
   /// Returns whether a change of this intent is queued now. A row with no
   /// server copy to change (a local virtual row, a JMAP mail whose server
-  /// id is unknown) gets none: its read/star/snooze value is stored as its
-  /// own ([EmailStateWriter.writeOwn]) and false is returned.
+  /// id is unknown) gets a `parked` one ([_parkedState]): it folds, and is
+  /// sent once the server copy is matched in place ([_unparkOps]). Inside
+  /// [_asShadowOf] the change is queued as a shadow of that primary
+  /// ([_shadowState]): folded, never sent. False only for a JMAP mail
+  /// whose row is gone.
   Future<bool> _enqueueChange(
     String accountId,
     String resourceId,
@@ -254,46 +321,67 @@ extension _ChangeQueue on EmailRepositoryImpl {
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(resourceId)))
         .getSingleOrNull();
-    // Local self-sent "virtual" messages have no server counterpart yet, so an
-    // outbound mutation would be rejected (`notFound`) and evicted. The state
-    // is instead applied locally and carried over to the real message when it
-    // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
-    if (email?.isLocal ?? false) {
-      await _writeOwnKeywords(resourceId, changeType, payload);
-      await _writeOwnLocation(resourceId, changeType, payload);
-      return false;
-    }
-    // A JMAP mail whose server id is not known cannot be changed on the
-    // server: queued, the change would fail at every flush.
-    if (email == null
-        ? (await _bulkAccount(accountId))?.type ==
-            account_model.AccountType.jmap
-        : await _hasNoServerCopy(email)) {
+    final shadowOf = Zone.current[_shadowOfKey] as int?;
+    if (email == null &&
+        (await _bulkAccount(accountId))?.type ==
+            account_model.AccountType.jmap) {
+      // No row, so no server id to send it for: queued, it would fail at
+      // every flush.
       unawaited(
         _appLogger?.warn(
           'pending_change.no_server_id',
-          'Did not send $changeType to the server: the server id of this '
-              'message is not known. The change stays on this device.',
+          'Did not queue $changeType: this message is no longer stored, so '
+              'its server id is not known.',
           accountId: accountId,
-          emailId: email?.id,
-          mailboxPath: email?.mailboxPath,
+          data: {'emailId': resourceId, 'changeType': changeType},
         ),
       );
-      if (email != null) {
-        await _writeOwnKeywords(resourceId, changeType, payload);
-        await _writeOwnLocation(resourceId, changeType, payload);
-      }
       return false;
     }
-    payload = _stampJmapId(payload, email?.srvJmapId);
-    payload = await _stampUidValidity(accountId, resourceId, payload);
-    payload = await _markUidAfterQueuedMove(resourceId, payload);
-    final supersede =
-        supersedeFailures ?? Zone.current[_automaticChangeKey] != true;
+    // A local self-sent "virtual" message (#545), or a JMAP mail whose
+    // server id is not known, has no server copy to change yet: the change
+    // is parked, folds like any other and is sent once the server copy is
+    // matched in place (SYNC-REDESIGN.md §6).
+    final parked = email != null && await _hasNoServerCopy(email);
+    if (!parked) {
+      payload = _stampJmapId(payload, email?.srvJmapId);
+      payload = await _stampUidValidity(accountId, resourceId, payload);
+      payload = await _markUidAfterQueuedMove(resourceId, payload);
+    } else if (shadowOf == null) {
+      payload = _markParked(payload, email.mailboxPath);
+    }
+    final supersede = shadowOf == null &&
+        (supersedeFailures ?? Zone.current[_automaticChangeKey] != true);
     final flag = changeType == 'flag_seen' || changeType == 'flag_flagged';
 
     final seq = await _db.transaction(() async {
       if (supersede) await _deleteSupersededFailures(resourceId, changeType);
+      if (shadowOf != null) {
+        // One shadow per primary and row.
+        final known = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(resourceId) &
+                    t.origin.equals(EmailStateWriter.shadowOrigin(shadowOf)),
+              )
+              ..limit(1))
+            .getSingleOrNull();
+        if (known != null) return null;
+        final seq = await _db.into(_db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: accountId,
+                resourceType: 'Email',
+                resourceId: resourceId,
+                changeType: changeType,
+                payload: payload,
+                createdAt: DateTime.now(),
+                state: const Value(_shadowState),
+                origin: Value(EmailStateWriter.shadowOrigin(shadowOf)),
+              ),
+            );
+        if (fold) await _state.refold(resourceId);
+        return seq;
+      }
 
       // Collapse redundant changes: if an un-attempted `flag_seen` /
       // `flag_flagged` / `clear_snooze` for this message with the same
@@ -313,7 +401,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
               ..where(
                 (t) =>
                     t.resourceId.equals(resourceId) &
-                    t.state.equals(_pendingState) &
+                    t.state.isIn(_unsentStates) &
                     t.changeType.equals(changeType),
               )
               ..orderBy([(t) => OrderingTerm.desc(t.id)])
@@ -333,14 +421,18 @@ extension _ChangeQueue on EmailRepositoryImpl {
       // read/star changes today; if it ever does, a cancel of the gone id
       // falls through to queueing the inverse (SYNC-REDESIGN.md §3).
       if (flag) {
-        await (_db.delete(_db.pendingChanges)
+        final superseded = await (_db.delete(_db.pendingChanges)
               ..where(
                 (t) =>
                     t.resourceId.equals(resourceId) &
                     t.changeType.equals(changeType) &
-                    t.state.equals(_pendingState),
+                    t.state.isIn(_unsentStates),
               ))
             .go();
+        // Its shadows on a counterpart go with it.
+        if (superseded > 0) {
+          await _rethreadRefolds(await _state.dropOrphanedShadows());
+        }
       }
 
       final seq = await _db.into(_db.pendingChanges).insert(
@@ -351,15 +443,21 @@ extension _ChangeQueue on EmailRepositoryImpl {
               changeType: changeType,
               payload: payload,
               createdAt: DateTime.now(),
+              state: parked ? const Value(_parkedState) : const Value.absent(),
             ),
           );
       if (fold) await _state.refold(resourceId);
       return seq;
     });
     if (seq == null) return true;
+    // A shadow is not the user's change: Undo cancels its primary, which
+    // takes it along.
+    if (shadowOf != null) return true;
     (Zone.current[_captureOpsKey] as Map<String, List<int>>?)
         ?.putIfAbsent(resourceId, () => [])
         .add(seq);
+    // Nothing to send before the server copy is there.
+    if (parked) return true;
     final bulk = _bulkScope;
     if (bulk != null) {
       bulk.kickedAccounts.add(accountId);
@@ -369,9 +467,9 @@ extension _ChangeQueue on EmailRepositoryImpl {
     return true;
   }
 
-  /// Whether [row] has no server copy a change could be queued for: a
-  /// local virtual row, or a JMAP mail whose server id is not known. Its
-  /// read/star/snooze state is its own ([EmailStateWriter.writeOwn]).
+  /// Whether [row] has no server copy a change could be sent for: a local
+  /// virtual row, or a JMAP mail whose server id is not known. Its changes
+  /// are parked ([_parkedState]).
   Future<bool> _hasNoServerCopy(Email row) async {
     if (row.isLocal) return true;
     if (row.srvJmapId != null || row.srvUid != null) return false;
@@ -379,53 +477,105 @@ extension _ChangeQueue on EmailRepositoryImpl {
         account_model.AccountType.jmap;
   }
 
-  /// The read/star/snooze effect of a [changeType] change with [payload]
-  /// on row [resourceId], which has no server copy to queue it for: stored
-  /// as the row's own value.
-  Future<void> _writeOwnKeywords(
-    String resourceId,
-    String changeType,
-    String payload,
-  ) async {
-    Map<String, dynamic>? decoded;
-    try {
-      decoded = jsonDecode(payload) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
-    final local = foldKeywords([
-      FoldOp(seq: 0, type: changeType, payload: decoded, state: _pendingState),
-    ]);
-    await _state.writeOwn(
-      resourceId,
-      seen: local.seen,
-      flagged: local.flagged,
-      snoozedUntil: local.snoozedUntil,
-    );
-  }
+  /// Runs [action] so that the changes it queues are shadows of change
+  /// [primaryId] ([_shadowState]) on the counterpart rows it acts on.
+  Future<T> _asShadowOf<T>(int primaryId, Future<T> Function() action) =>
+      runZoned(action, zoneValues: {_shadowOfKey: primaryId});
 
-  /// The folder effect of a [changeType] change with [payload] on row
-  /// [resourceId], which has no server copy to queue it for: a move, snooze
-  /// or unsnooze puts it in the destination as its own folder. (A delete of
-  /// such a row deletes it, see [_UserActions._deleteRow].)
-  Future<void> _writeOwnLocation(
-    String resourceId,
-    String changeType,
-    String payload,
-  ) async {
-    Map<String, dynamic>? decoded;
-    try {
-      decoded = jsonDecode(payload) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
-    final local = foldLocation([
-      FoldOp(seq: 0, type: changeType, payload: decoded, state: _pendingState),
-    ]);
-    final path = local.mailboxPath;
-    if (path == null) return;
-    await _state.writeOwnLocation(resourceId, path);
-  }
+  /// The parked changes of row [emailId], whose server copy was just
+  /// matched in place ([_Counterparts._matchArrival]), become pending: in
+  /// queue order, each payload addresses the mail where it is when that
+  /// change runs (the server's folder, UID and UIDVALIDITY for the first,
+  /// the destination of the change before it for the later ones, which
+  /// then find the mail by Message-ID, [_markUidAfterQueuedMove]), and
+  /// carries the server id, as one queued now would. They keep their ids
+  /// (their order, and Undo's references).
+  ///
+  /// A move into the folder the mail is in already is dropped (nothing to
+  /// send). A delete for good is sent only when the mail arrived in the
+  /// inbox or is in the folder the user deleted it from ([_parkedShownInKey]):
+  /// a server-side filter may have filed it elsewhere (Junk, Gmail's All
+  /// Mail, where an expunge removes every label), and deleting that for
+  /// good was not what the user saw. Such a delete fails instead, so the
+  /// mail shows again and stays listed with the change.
+  Future<_Unparked> _unparkOps(String emailId) => _db.transaction(() async {
+        final row = await (_db.select(_db.emails)
+              ..where((t) => t.id.equals(emailId)))
+            .getSingleOrNull();
+        if (row == null || await _hasNoServerCopy(row)) return _Unparked.none;
+        final parked = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceId.equals(emailId) & t.state.equals(_parkedState),
+              )
+              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+            .get();
+        final arrival = row.srvMailboxPath ?? row.mailboxPath;
+        final arrivalIsInbox =
+            await _mailboxRole(row.accountId, arrival) == 'inbox';
+        var at = arrival;
+        var sent = 0;
+        var deletedForGood = false;
+        PendingChangeRow? refusedDelete;
+        for (final op in parked) {
+          final payload = _decodePayload(op) ?? <String, dynamic>{};
+          final shownIn = payload.remove(_parkedShownInKey);
+          if (op.changeType == 'move' &&
+              payload['dest'] == at &&
+              payload['clearSnooze'] != true) {
+            await (_db.delete(_db.pendingChanges)
+                  ..where((t) => t.id.equals(op.id)))
+                .go();
+            continue;
+          }
+          if (op.changeType == 'delete' && !arrivalIsInbox && shownIn != at) {
+            await (_db.update(_db.pendingChanges)
+                  ..where((t) => t.id.equals(op.id)))
+                .write(
+              PendingChangesCompanion(
+                state: const Value(_failedState),
+                lastError: Value(
+                  'the delivered mail arrived in $arrival, not where it was '
+                  'deleted: not deleted for good',
+                ),
+              ),
+            );
+            refusedDelete = op;
+            continue;
+          }
+          if (payload.containsKey('uid')) payload['uid'] = row.srvUid ?? 0;
+          for (final key in const ['mailboxPath', 'src']) {
+            if (payload.containsKey(key)) payload[key] = at;
+          }
+          payload.remove('uidValidity');
+          payload.remove(_uidAfterMoveKey);
+          if (row.messageId != null) payload['messageId'] = row.messageId;
+          var stamped = _stampJmapId(jsonEncode(payload), row.srvJmapId);
+          stamped = await _stampUidValidity(row.accountId, emailId, stamped);
+          stamped = await _markUidAfterQueuedMove(emailId, stamped);
+          await (_db.update(_db.pendingChanges)
+                ..where(
+                  (t) => t.id.equals(op.id) & t.state.equals(_parkedState),
+                ))
+              .write(
+            PendingChangesCompanion(
+              state: const Value(_pendingState),
+              payload: Value(stamped),
+            ),
+          );
+          sent++;
+          if (op.changeType == 'delete') deletedForGood = true;
+          if (payload['dest'] case final String dest
+              when _locationChangeTypes.contains(op.changeType)) {
+            at = dest;
+          }
+        }
+        return _Unparked(
+          sent: sent,
+          deletedForGood: deletedForGood,
+          refusedDelete: refusedDelete,
+        );
+      });
 
   /// Deletes failed changes of [resourceId] that a new [changeType] change
   /// replaces: the same flag change, or for a move/snooze/unsnooze/delete any
@@ -515,6 +665,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
   /// There the UID may name another mail. The move's answer replaces it
   /// ([_FlushImap._repointQueuedChanges]); a change still marked when it is applied
   /// finds its mail by Message-ID instead, or fails ([_FlushImap._currentImapUid]).
+  ///
+  /// Since phase 4b the rule is the location overlay's: the payload's
+  /// folder is not where the server has the row's mail as last read
+  /// (`srv_mailbox_path`). That covers a queued move, a counterpart twin
+  /// shown in a folder through a shadow and an acked move whose new UID
+  /// was never learnt (all keep the source's UID; acting on it in the
+  /// shown folder would hit another mail), and leaves alone an acked move
+  /// whose new location is recorded. Only a row without a recorded server
+  /// folder falls back to the queued moves into the payload's folder.
   Future<String> _markUidAfterQueuedMove(
     String resourceId,
     String payload,
@@ -528,15 +687,26 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (map['uid'] is! int) return payload;
     final path = map['mailboxPath'] ?? map['src'];
     if (path is! String) return payload;
-    final moves = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.resourceId.equals(resourceId) &
-                t.state.isIn(_liveStates) &
-                t.changeType.isIn(_locationChangeTypes),
-          ))
-        .get();
-    if (!moves.any((m) => _decodePayload(m)?['dest'] == path)) return payload;
+    final srv = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.srvMailboxPath])
+          ..where(_db.emails.id.equals(resourceId)))
+        .getSingleOrNull();
+    final srvPath = srv?.read(_db.emails.srvMailboxPath);
+    if (srvPath != null) {
+      if (srvPath == path) return payload;
+    } else {
+      final moves = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(resourceId) &
+                  t.state.isIn(_liveStates) &
+                  t.changeType.isIn(_locationChangeTypes),
+            ))
+          .get();
+      if (!moves.any((m) => _decodePayload(m)?['dest'] == path)) {
+        return payload;
+      }
+    }
     map[_uidAfterMoveKey] = true;
     if (map['messageId'] == null) {
       final messageId = await _messageIdOf(resourceId);
@@ -729,7 +899,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
               ..where(
                 (t) =>
                     t.id.equals(id) &
-                    t.state.equals(_pendingState) &
+                    t.state.isIn(_unsentStates) &
                     t.attempts.equals(0),
               ))
             .go();
@@ -761,7 +931,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
         (t) =>
             t.resourceId.equals(emailId) &
             t.changeType.equals(changeType) &
-            t.state.equals(_pendingState) &
+            t.state.isIn(_unsentStates) &
             t.attempts.equals(0),
       )
       ..orderBy([(t) => OrderingTerm.desc(t.id)])
@@ -892,7 +1062,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
             (t) =>
                 t.accountId.equals(accountId) &
                 t.lastError.isNotNull() &
-                t.state.equals(_ackedState).not(),
+                t.state.isIn(const [_ackedState, _shadowState]).not(),
           )
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
@@ -971,6 +1141,20 @@ extension _ChangeQueue on EmailRepositoryImpl {
       // The failure showed the server's state again; show the user's
       // intent again while it is retried.
       await _reapplyRetriedChange(current);
+      // A mail that still has no server copy (an expired parked change of
+      // a JMAP mail without a known id) waits for it again.
+      final email = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(current.resourceId)))
+          .getSingleOrNull();
+      final wasParked =
+          _decodePayload(current)?.containsKey(_parkedShownInKey) ?? false;
+      // A change that was parked (built for a row without a server copy:
+      // UID 0, the row's own folder) is never sent as it is: its row is
+      // gone, so it stays failed; or it waits again for the server copy;
+      // or, the copy being there by now, it is rewritten for it below.
+      if (wasParked && email == null) return;
+      final parked =
+          email != null && (wasParked || await _hasNoServerCopy(email));
       // A fresh row at the end of the queue (new autoincrement id): the
       // retried change must not jump ahead of changes queued after it, or it
       // could undo the user's newer intent for the same mail.
@@ -982,9 +1166,13 @@ extension _ChangeQueue on EmailRepositoryImpl {
               changeType: current.changeType,
               payload: current.payload,
               createdAt: DateTime.now(),
+              state: parked ? const Value(_parkedState) : const Value.absent(),
             ),
           );
       await _deletePendingChange(current);
+      if (parked && !await _hasNoServerCopy(email)) {
+        await _unparkOps(email.id);
+      }
       // The retried change folds again: the folder, read/star and snooze.
       await _refoldAndRethread(current.resourceId);
     });
@@ -1024,7 +1212,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.state.equals(_ackedState).not(),
+                t.state.isIn(const [_ackedState, _shadowState]).not(),
           )
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
@@ -1036,7 +1224,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
 
   Stream<List<model.PendingChange>> _observeAllPendingChanges() {
     return (_db.select(_db.pendingChanges)
-          ..where((t) => t.state.equals(_ackedState).not())
+          ..where((t) => t.state.isIn(const [_ackedState, _shadowState]).not())
           ..orderBy([
             (t) => OrderingTerm.asc(t.createdAt),
             (t) => OrderingTerm.asc(t.id),

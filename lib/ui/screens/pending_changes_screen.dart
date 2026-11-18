@@ -239,6 +239,7 @@ String attemptsLabel(PendingChange change) {
   }
   if (change.failed) return 'failed after $n attempts';
   if (change.sending) return 'sending…';
+  if (change.parked) return 'waiting for the server copy of this mail';
   if (change.stuck) {
     final next = change.nextTry?.toLocal();
     if (next == null) return 'not synced yet';
@@ -301,7 +302,7 @@ String changeReport(PendingChange change) {
         ..writeln('Attempts:   ${change.attempts}')
         ..writeln(
           'State:      '
-          '${change.failed ? 'failed' : change.sending ? 'inflight' : change.stuck ? 'stuck' : 'pending'}',
+          '${change.failed ? 'failed' : change.sending ? 'inflight' : change.stuck ? 'stuck' : change.parked ? 'parked' : 'pending'}',
         )
         ..writeln('Payload:    ${_prettyPayload(change.payload)}')
         ..write('Last error: ${change.lastError ?? '(none)'}'))

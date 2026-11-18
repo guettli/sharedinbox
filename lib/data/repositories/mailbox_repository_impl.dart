@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show max;
 
 import 'package:drift/drift.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
@@ -17,6 +18,44 @@ import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
+
+/// The change in a mailbox `m`'s unread count (SQL, correlated on `m`) that
+/// the stored server count `m.unread_count` does not reflect yet
+/// (SYNC-REDESIGN.md §7): over the rows of its account with a change that
+/// is queued, being sent, stuck, parked or a counterpart's shadow, or acked
+/// after the count was read (`ack_seq > m.unread_seq`), the unread rows the
+/// app shows in `m` minus the unread rows the server has in `m` as last
+/// read (`srv_*`). This covers read/unread changes, and moves, deletes and
+/// snoozes of unread mail, each once; a change the count already reflects
+/// is not counted again, so the number does not flicker back. Virtual rows
+/// (no server copy) are left out: the server's count never had them.
+///
+/// Limits: `srv_*` is the server's state as last read, not as of the
+/// count's read. A row read again after the count (its change confirmed
+/// and dropped) adds nothing any more, so until the next count read the
+/// folder shows the older server count; a count read before a mail
+/// arrived can make the sum negative ([MailboxRepositoryImpl] shows 0 and
+/// logs it). The query is driven from the foldable ops
+/// (`pending_changes_resource_state`, then the `emails` primary key), so
+/// re-running it on every write costs one probe per queued change and
+/// mailbox.
+const unreadDeltaSql = 'COALESCE((SELECT SUM(c.n) FROM ('
+    'SELECT e.id, e.account_id, e.mailbox_path AS path, 1 AS n '
+    'FROM emails e WHERE e.is_seen = 0 AND e.is_local = 0 '
+    'AND e.id IN ($_queuedRowsSql) '
+    'UNION ALL '
+    'SELECT e.id, e.account_id, e.srv_mailbox_path AS path, -1 AS n '
+    'FROM emails e WHERE e.srv_is_seen = 0 AND e.srv_gone = 0 '
+    'AND e.is_local = 0 '
+    'AND e.id IN ($_queuedRowsSql)'
+    ') c WHERE c.account_id = m.account_id AND c.path = m.path '
+    'AND EXISTS (SELECT 1 FROM pending_changes p WHERE p.resource_id = c.id '
+    "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
+    "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq)))), 0)";
+
+const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
+    "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow', "
+    "'acked')";
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
@@ -38,16 +77,53 @@ class MailboxRepositoryImpl implements MailboxRepository {
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
 
+  /// The mailboxes, each with the unread count the UI shows: the server's
+  /// count plus the effect of the user's changes it does not reflect yet
+  /// (SYNC-REDESIGN.md §7, [unreadDeltaSql]).
   @override
   Stream<List<model.Mailbox>> observeMailboxes(String? accountId) {
-    return (_db.select(_db.mailboxes)
-          ..where((t) {
-            if (accountId != null) return t.accountId.equals(accountId);
-            return const Constant(true);
-          })
-          ..orderBy([(t) => OrderingTerm.asc(t.path)]))
+    return _db
+        .customSelect(
+          'SELECT m.*, ($unreadDeltaSql) AS unread_delta FROM mailboxes m'
+          '${accountId == null ? '' : ' WHERE m.account_id = ?1'} '
+          'ORDER BY m.path',
+          variables: [if (accountId != null) Variable.withString(accountId)],
+          readsFrom: {_db.mailboxes, _db.emails, _db.pendingChanges},
+        )
         .watch()
-        .map((rows) => rows.map(_toModel).toList());
+        .map(
+          (rows) => [
+            for (final r in rows)
+              _shownUnread(
+                _db.mailboxes.map(r.data),
+                r.read<int>('unread_delta'),
+              ),
+          ],
+        );
+  }
+
+  /// Folders whose shown unread count came out negative, logged once each.
+  final _negativeLogged = <String>{};
+
+  /// [row] with the unread count the UI shows (server count plus
+  /// [delta]); a negative sum (a count read before mail it now has, see
+  /// [unreadDeltaSql]) shows as 0 and is logged once per folder.
+  model.Mailbox _shownUnread(MailboxRow row, int delta) {
+    final shown = row.unreadCount + delta;
+    if (shown < 0 && _negativeLogged.add(row.id)) {
+      unawaited(
+        _appLogger?.warn(
+          'mailbox.unread_negative',
+          'The unread count of "${row.name}" came out at $shown (server '
+              '${row.unreadCount}, local changes $delta); showing 0 until '
+              'the next count read',
+          accountId: row.accountId,
+          mailboxPath: row.path,
+          data: {'server': row.unreadCount, 'delta': delta},
+        ),
+      );
+    }
+    return _toModel(row, unreadDelta: delta);
   }
 
   @override
@@ -110,6 +186,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
         var unread = 0;
         var total = 0;
+        // The read sequence of this count (SYNC-REDESIGN.md §7).
+        final readSeq = await EmailStateWriter(_db).nextReadSeq();
         try {
           final status = await client.statusMailbox(mb, [
             imap.StatusFlags.messages,
@@ -146,6 +224,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 path: path,
                 name: mb.name,
                 unreadCount: Value(unread),
+                unreadSeq: Value(readSeq),
                 totalCount: Value(total),
                 role: Value(role),
                 // IMAP paths are already hierarchical + human-readable, so the
@@ -189,6 +268,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   /// First-time sync: fetch all mailboxes and persist state.
   Future<int> _jmapFullMailboxSync(String accountId, JmapClient jmap) async {
+    final readSeq = await EmailStateWriter(_db).nextReadSeq();
     final responses = await jmap.call([
       [
         'Mailbox/get',
@@ -208,7 +288,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     };
     await pruneLocalMailboxes(accountId, serverIds);
 
-    await _upsertJmapMailboxes(accountId, mailboxes);
+    await _upsertJmapMailboxes(accountId, mailboxes, readSeq: readSeq);
     await _saveSyncState(accountId, 'Mailbox', newState);
     log(
       'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState',
@@ -222,6 +302,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
     JmapClient jmap,
     String sinceState,
   ) async {
+    // Before the requests: the counts read below are at least this new.
+    final readSeq = await EmailStateWriter(_db).nextReadSeq();
     final responses = await jmap.call([
       [
         'Mailbox/changes',
@@ -246,7 +328,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         accountId,
         toFetch,
       );
-      await _upsertJmapMailboxes(accountId, fetched);
+      await _upsertJmapMailboxes(accountId, fetched, readSeq: readSeq);
     }
 
     // Remove destroyed mailboxes (and their cached emails / sync state).
@@ -344,10 +426,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return null;
   }
 
+  /// [readSeq]: the read sequence taken before the requests that returned
+  /// [mailboxes], stored with their unread counts (SYNC-REDESIGN.md §7).
   Future<void> _upsertJmapMailboxes(
     String accountId,
-    List<dynamic> mailboxes,
-  ) async {
+    List<dynamic> mailboxes, {
+    required int readSeq,
+  }) async {
     // For JMAP, `path` stores the opaque mailbox ID (so Email rows can
     // reference it via mailboxPath) but the UI wants the hierarchical,
     // human-readable path — e.g. "Archive/2026". Build that by walking each
@@ -432,6 +517,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
               path: jmapId,
               name: name,
               unreadCount: Value((m['unreadEmails'] as int?) ?? 0),
+              unreadSeq: Value(readSeq),
               totalCount: Value((m['totalEmails'] as int?) ?? 0),
               role: Value(role),
               displayPath: Value(displayPath),
@@ -506,7 +592,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return triple[1] as Map<String, dynamic>;
   }
 
-  model.Mailbox _toModel(MailboxRow row) => model.Mailbox(
+  model.Mailbox _toModel(MailboxRow row, {int unreadDelta = 0}) =>
+      model.Mailbox(
         id: row.id,
         accountId: row.accountId,
         path: row.path,
@@ -515,7 +602,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // v47 migration, or was inserted by test setup with the older API).
         displayPath: row.displayPath.isEmpty ? row.path : row.displayPath,
         parentId: row.parentId,
-        unreadCount: row.unreadCount,
+        unreadCount: max(0, row.unreadCount + unreadDelta),
         totalCount: row.totalCount,
         role: row.role,
       );
@@ -1172,6 +1259,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 path: rewrittenPath,
                 name: rewrittenName,
                 unreadCount: Value(d.unreadCount),
+                unreadSeq: Value(d.unreadSeq),
                 totalCount: Value(d.totalCount),
                 role: Value(d.role),
                 displayPath: Value(rewrittenPath),
@@ -1462,7 +1550,7 @@ Future<void> removeLocalMailbox(
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.state.isIn(const ['pending', 'stuck']),
+                t.state.isIn(const ['pending', 'stuck', 'parked']),
           ))
         .get();
     for (final row in pending) {
@@ -1487,6 +1575,8 @@ Future<void> removeLocalMailbox(
     // server's folder and read/star/snooze state again.
     final shownElsewhere =
         await writer.refoldAll([for (final row in failed) row.resourceId]);
+    // Their shadows on a counterpart account go with them.
+    shownElsewhere.addAll((await writer.dropOrphanedShadows()).keys);
     kept = await writer.markFolderGone(accountId, path);
     for (final row in await (db.select(db.emails)
           ..where((t) => t.id.isIn(shownElsewhere)))

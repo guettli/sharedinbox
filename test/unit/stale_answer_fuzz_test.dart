@@ -637,10 +637,12 @@ void _knownBugs() {
 }
 
 /// A repository on an in-memory database that talks to [server], with the
-/// account and its INBOX, Archive and Trash folders set up.
+/// account and its INBOX, Archive and Trash folders set up; its clock is
+/// [now].
 Future<({AppDatabase db, EmailRepositoryImpl emails})> _openApp(
-  StatefulFakeImapServer server,
-) async {
+  StatefulFakeImapServer server, {
+  DateTime Function() now = DateTime.now,
+}) async {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
   final emails = EmailRepositoryImpl(
@@ -651,6 +653,7 @@ Future<({AppDatabase db, EmailRepositoryImpl emails})> _openApp(
         Future.error(UnsupportedError('no SMTP in this test')),
     fetchObjectIds: (_, __, ___) async => const {},
     fetchPreviewSnippets: (_, __, ___) async => const {},
+    now: now,
   );
   await accounts.addAccount(_account, 'pw');
   for (final path in _folders) {
@@ -729,6 +732,9 @@ class _FuzzRun {
   late final AppDatabase _db;
   late final EmailRepositoryImpl _emails;
 
+  /// The app's clock: real time, moved on when the run settles.
+  DateTime _now = DateTime.now();
+
   /// The Message-ID whose STORE/MOVE the server refuses, if any.
   String? _refused;
 
@@ -798,7 +804,7 @@ class _FuzzRun {
       'refused=${_refused ?? 'none'}; server: ${_serverDump()}',
     );
 
-    final app = await _openApp(_server);
+    final app = await _openApp(_server, now: () => _now);
     _db = app.db;
     _emails = app.emails;
     _server.beforeAnswer = _onAnswer;
@@ -1049,6 +1055,10 @@ class _FuzzRun {
   Future<List<String>> _settle() async {
     _hooksOn = false;
     _trace.add('settle');
+    // Time passes while the queue drains: an acked move waiting for its
+    // destination copy resolves (SYNC-REDESIGN.md §4.5), and stuck changes
+    // are due.
+    _now = _now.add(EmailStateWriter.awaitAppearWindow);
     String? last;
     var stable = 0;
     for (var i = 0; i < 15 && stable < 2; i++) {

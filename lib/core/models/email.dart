@@ -30,8 +30,8 @@ class Email {
   // RFC 2369 List-Unsubscribe header value, e.g. "<mailto:...>, <https://...>".
   final String? listUnsubscribeHeader;
   // A local "virtual" copy of a message that was just sent to one of the user's
-  // own accounts. It appears in the inbox immediately for note-taking and is
-  // dissolved into the real message once it arrives via sync (see #545).
+  // own accounts. It appears in the inbox immediately for note-taking, and the
+  // real message fills it in place once it arrives via sync (see #545).
   final bool isLocal;
   // A local virtual copy ([isLocal]) of a sent message in the Sent folder
   // (#918), as opposed to the self-send note in the inbox (#545).

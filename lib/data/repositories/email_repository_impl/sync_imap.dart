@@ -509,9 +509,9 @@ extension _SyncImap on EmailRepositoryImpl {
     final affectedThreads = <String>{};
     // (folder shown before, thread id) of existing rows whose folder changed.
     final hiddenOrMovedThreads = <(String, String)>{};
-    // (realEmailId, messageId) of each row we just wrote — checked afterwards
-    // for a local self-sent "virtual" counterpart to dissolve (#545).
-    final dissolveCandidates = <(String, String?)>[];
+    // (emailId, messageId, isNew) of each row written: matched afterwards
+    // with a row waiting for its server copy ([_Counterparts._matchArrival]).
+    final dissolveCandidates = <(String, String?, bool)>[];
     // (emailId, subject, size) of each row stored for the first time — logged
     // after the transaction so "Show Logs" starts with the fetch (#920).
     final newlyStored = <(String, String?, int?)>[];
@@ -648,7 +648,7 @@ extension _SyncImap on EmailRepositoryImpl {
           }
           await read.write(emailId, keywords);
         }
-        if (msgId != null) dissolveCandidates.add((emailId, msgId));
+        if (msgId != null) dissolveCandidates.add((emailId, msgId, isNew));
         if (isNew) newlyStored.add((emailId, subject, msg.size));
       }
     });
@@ -669,13 +669,14 @@ extension _SyncImap on EmailRepositoryImpl {
     for (final (shownIn, tid) in hiddenOrMovedThreads) {
       await _updateThread(account.id, shownIn, tid);
     }
-    if (dissolveCandidates.isNotEmpty && await _hasLocalMessages(account.id)) {
-      for (final (emailId, msgId) in dissolveCandidates) {
-        await _maybeDissolveLocalMessage(
+    if (dissolveCandidates.isNotEmpty && await _hasWaitingRows(account.id)) {
+      for (final (emailId, msgId, isNew) in dissolveCandidates) {
+        await _matchArrival(
           account.id,
           mailboxPath,
           emailId,
           msgId,
+          isNew: isNew,
         );
       }
     }
@@ -721,12 +722,22 @@ extension _SyncImap on EmailRepositoryImpl {
     }
   }
 
-  /// Whether [accountId] has any local self-sent "virtual" rows awaiting a real
-  /// counterpart (#545). A one-shot guard so sync's per-message dissolve scan is
-  /// skipped entirely for the common case of no pending self-sends.
-  Future<bool> _hasLocalMessages(String accountId) async {
-    final row = await (_db.select(_db.emails)
-          ..where((t) => t.accountId.equals(accountId) & t.isLocal.equals(true))
+  /// Whether [accountId] has any row that may wait for its server copy
+  /// ([_Counterparts._matchArrival]): a local virtual row (#545, #918), a
+  /// row gone from its source (an acked move waiting for its destination
+  /// copy), or one without a server location (a JMAP mail whose id is
+  /// unknown). A one-shot guard so sync's per-message match is skipped
+  /// entirely in the common case.
+  Future<bool> _hasWaitingRows(String accountId) async {
+    final row = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.id])
+          ..where(
+            _db.emails.accountId.equals(accountId) &
+                (_db.emails.isLocal.equals(true) |
+                    _db.emails.srvGone.equals(true) |
+                    (_db.emails.srvUid.isNull() &
+                        _db.emails.srvJmapId.isNull())),
+          )
           ..limit(1))
         .getSingleOrNull();
     return row != null;

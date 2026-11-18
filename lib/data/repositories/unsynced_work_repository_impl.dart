@@ -12,9 +12,10 @@ class UnsyncedWorkRepositoryImpl implements UnsyncedWorkRepository {
     final row = await _db.customSelect(
       'SELECT '
       // An acked change reached the server; it only waits for a read to
-      // confirm it.
+      // confirm it. A shadow is the counterpart's view of another
+      // account's change, counted there.
       '(SELECT COUNT(*) FROM pending_changes WHERE account_id = ?1 '
-      "AND state <> 'acked') AS changes, "
+      "AND state NOT IN ('acked', 'shadow')) AS changes, "
       '(SELECT COUNT(*) FROM outbox WHERE account_id = ?1) AS outbox, '
       // A note deleted locally but not yet on the server (pending_delete)
       // loses nothing: the server keeps the note.

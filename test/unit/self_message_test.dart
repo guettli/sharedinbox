@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/repositories/email_repository.dart'
 import 'package:sharedinbox/data/db/database.dart' hide Account, Email;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
@@ -18,9 +19,10 @@ import 'fake_imap.dart' show ScriptedSmtpClient;
 
 // Mail-to-self "virtual" message support (#545): a mail addressed to one of the
 // user's own accounts appears in the inbox as soon as SMTP accepted it, for
-// note-taking, and is dissolved into the real message once it arrives via
-// sync. Never before acceptance: a rejected or discarded send must not leave a
-// phantom inbox message behind.
+// note-taking, and the real message fills it in place once it arrives via
+// sync (SYNC-REDESIGN.md §6): the row keeps its id, and the user's changes,
+// parked until then, are sent. Never before acceptance: a rejected or
+// discarded send must not leave a phantom inbox message behind.
 
 typedef _Repos = ({
   AppDatabase db,
@@ -43,7 +45,10 @@ Future<imap.ImapClient> _noImapConnect(Account a, String u, String p) =>
 /// with the n-th entry's response lines; once they run out, SMTP accepts. IMAP
 /// stays unavailable, so the best-effort Sent-copy APPEND fails quietly after
 /// a successful send.
-_Repos _makeRepos({List<List<String>> smtpRejects = const []}) {
+_Repos _makeRepos({
+  List<List<String>> smtpRejects = const [],
+  DateTime Function() now = DateTime.now,
+}) {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, MapSecureStorage());
   final pending = List.of(smtpRejects);
@@ -54,6 +59,7 @@ _Repos _makeRepos({List<List<String>> smtpRejects = const []}) {
     smtpConnect: (a, u, p) async => ScriptedSmtpClient(
       rejectWith: pending.isEmpty ? null : pending.removeAt(0),
     ),
+    now: now,
   );
   return (db: db, accounts: accounts, emails: emails);
 }
@@ -62,8 +68,9 @@ _Repos _makeRepos({List<List<String>> smtpRejects = const []}) {
 /// needed for a self-send to land somewhere.
 Future<_Repos> _reposWithInbox({
   List<List<String>> smtpRejects = const [],
+  DateTime Function() now = DateTime.now,
 }) async {
-  final r = _makeRepos(smtpRejects: smtpRejects);
+  final r = _makeRepos(smtpRejects: smtpRejects, now: now);
   await r.accounts.addAccount(_account, 'pw');
   await _seedMailbox(r.db, 'INBOX', 'inbox');
   return r;
@@ -132,16 +139,16 @@ Future<List<Email>> _expectMovedToTrash(_Repos r) async {
 }
 
 /// Inserts a row mimicking what the sync engine writes when the real message
-/// arrives (sharing [messageId] with the virtual copy) and dissolves it.
-/// Returns the real row's id.
-Future<String> _arriveAndDissolve(
+/// arrives (sharing [messageId] with the virtual copy) and matches it in
+/// place. Returns the real row's id.
+Future<String> _arriveAndMatch(
   _Repos r,
   String messageId, {
   String mailboxPath = 'INBOX',
   int uid = 42,
 }) async {
   final id = await _storeArrived(r, messageId, mailboxPath, uid);
-  await r.emails.maybeDissolveLocalMessageForTest(
+  await r.emails.matchArrivalForTest(
     'acc-1',
     mailboxPath,
     id,
@@ -170,14 +177,16 @@ Future<String> _storeArrived(
           messageId: Value(messageId),
           threadId: Value(messageId),
           isSeen: const Value(false),
+          srvUid: Value(uid),
         ),
       );
   return id;
 }
 
-Future<List<String>> _pendingChangeTypes(_Repos r) async {
+/// (type, state) of every queued change.
+Future<List<(String, String)>> _pendingChanges(_Repos r) async {
   final changes = await r.db.select(r.db.pendingChanges).get();
-  return changes.map((c) => c.changeType).toList();
+  return [for (final c in changes) (c.changeType, c.state)];
 }
 
 void main() {
@@ -344,58 +353,92 @@ void main() {
   });
 
   group('mutations on the virtual message', () {
-    test('starring a virtual message does not queue a server change', () async {
+    test('starring a virtual message parks the change', () async {
       final r = await _reposWithInbox();
       final virtual = await _enqueueSelfNote(r);
 
       await r.emails.setFlag(virtual.id, flagged: true);
 
       expect((await _inbox(r)).single.isFlagged, isTrue);
-      expect(await _pendingChangeTypes(r), isEmpty);
+      // Folded, but not sent: there is no server copy to change yet.
+      expect(await _pendingChanges(r), [('flag_flagged', 'parked')]);
+      expect(await EmailStateWriter(r.db).consistencyProblems(), isEmpty);
     });
 
-    test('trashing a virtual message does not queue a server change', () async {
+    test('trashing a virtual message parks the move', () async {
       final r = await _reposWithTrash();
 
-      await _enqueueAndTrashSelfNote(r);
+      final virtual = await _enqueueAndTrashSelfNote(r);
 
-      await _expectMovedToTrash(r);
-      expect(await _pendingChangeTypes(r), isEmpty);
+      final trash = await _expectMovedToTrash(r);
+      expect(trash.single.id, virtual.id);
+      expect(await _pendingChanges(r), [('move', 'parked')]);
+    });
+
+    test('Undo of a parked move cancels it', () async {
+      final r = await _reposWithTrash();
+      final virtual = await _enqueueSelfNote(r);
+
+      final (_, ops) = await r.emails.captureOps(
+        () => r.emails.moveEmail(virtual.id, 'Trash'),
+      );
+      await r.emails.cancelOps(ops[virtual.id]!);
+
+      expect((await _inbox(r)).single.id, virtual.id);
+      expect(await _pendingChanges(r), isEmpty);
     });
   });
 
-  group('dissolving on real arrival', () {
-    test('transfers the star to the real message and removes the virtual row',
+  group('matching the server copy in place', () {
+    test('the real message fills the virtual row, which keeps id and star',
         () async {
       final r = await _reposWithInbox();
       final virtual = await _enqueueSelfNote(r);
       await r.emails.setFlag(virtual.id, flagged: true);
 
-      final realId = await _arriveAndDissolve(r, virtual.messageId!);
+      final realId = await _arriveAndMatch(r, virtual.messageId!);
 
       final inbox = await _inbox(r);
       expect(inbox, hasLength(1));
-      expect(inbox.single.id, realId);
+      expect(inbox.single.id, virtual.id, reason: 'matched in place');
       expect(inbox.single.isLocal, isFalse);
-      expect(inbox.single.isFlagged, isTrue, reason: 'star carried over');
+      expect(inbox.single.isFlagged, isTrue, reason: 'the parked star folds');
+      expect(
+        await (r.db.select(r.db.emails)..where((t) => t.id.equals(realId)))
+            .getSingleOrNull(),
+        isNull,
+        reason: 'the stored copy was merged into the virtual row',
+      );
 
-      // The star is now pushed to the server for the real message.
-      expect(await _pendingChangeTypes(r), contains('flag_flagged'));
+      // The parked star is sent now, for the server copy.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.changeType, 'flag_flagged');
+      expect(change.state, 'pending');
+      final payload = jsonDecode(change.payload) as Map<String, dynamic>;
+      expect(payload['uid'], 42);
+      expect(payload['mailboxPath'], 'INBOX');
+      expect(await EmailStateWriter(r.db).consistencyProblems(), isEmpty);
     });
 
-    test('moves the real message to the folder the virtual was filed into',
-        () async {
+    test(
+        'a virtual row filed into Trash keeps showing there; the move is '
+        'sent from where the server has the mail', () async {
       final r = await _reposWithTrash();
       // User trashes the note before the real mail arrives.
       final virtual = await _enqueueAndTrashSelfNote(r);
 
-      final realId = await _arriveAndDissolve(r, virtual.messageId!);
+      await _arriveAndMatch(r, virtual.messageId!);
 
       final trash = await _expectMovedToTrash(r);
-      expect(trash.single.id, realId);
-
-      // The move to Trash is queued for the server too.
-      expect(await _pendingChangeTypes(r), contains('move'));
+      expect(trash.single.id, virtual.id);
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.changeType, 'move');
+      expect(change.state, 'pending');
+      final payload = jsonDecode(change.payload) as Map<String, dynamic>;
+      expect(payload['uid'], 42);
+      expect(payload['mailboxPath'], 'INBOX');
+      expect(payload['dest'], 'Trash');
+      expect(await EmailStateWriter(r.db).consistencyProblems(), isEmpty);
     });
 
     test('leaves the virtual message untouched for the Sent copy', () async {
@@ -403,16 +446,100 @@ void main() {
       await _seedMailbox(r.db, 'Sent', 'sent');
       final virtual = await _enqueueSelfNote(r);
 
-      await _arriveAndDissolve(
+      await _arriveAndMatch(
         r,
         virtual.messageId!,
         mailboxPath: 'Sent',
         uid: 7,
       );
 
-      // The virtual inbox copy survives; only the inbox arrival dissolves it.
-      expect(await _inbox(r), hasLength(1));
+      // The virtual inbox copy survives; only the inbox arrival matches it.
+      expect((await _inbox(r)).single.isLocal, isTrue);
       expect(await r.emails.observeEmails('acc-1', 'Sent').first, hasLength(1));
+    });
+  });
+
+  group('a note deleted for good before its delivery', () {
+    Future<Email> deleteNoteForGood(_Repos r) async {
+      // No Trash folder: the delete is for good, parked, the note hidden.
+      final virtual = await _enqueueSelfNote(r);
+      await r.emails.deleteEmail(virtual.id);
+      expect(await _inbox(r), isEmpty);
+      expect(await _pendingChanges(r), [('delete', 'parked')]);
+      return virtual;
+    }
+
+    test('is sent when the mail arrives in the inbox', () async {
+      final r = await _reposWithInbox();
+      final virtual = await deleteNoteForGood(r);
+
+      await _arriveAndMatch(r, virtual.messageId!);
+
+      expect(await _pendingChanges(r), [('delete', 'pending')]);
+      expect(await _inbox(r), isEmpty);
+    });
+
+    test('fails when a server filter filed the mail elsewhere', () async {
+      final r = await _reposWithInbox();
+      await _seedMailbox(r.db, 'Junk', 'junk');
+      final virtual = await deleteNoteForGood(r);
+
+      await _arriveAndMatch(r, virtual.messageId!, mailboxPath: 'Junk');
+
+      // Not deleted for good: the mail shows where it is, and the delete
+      // is listed as failed.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('not deleted for good'));
+      final junk = await r.emails.observeEmails('acc-1', 'Junk').first;
+      expect(junk.single.id, virtual.id);
+      expect(await EmailStateWriter(r.db).consistencyProblems(), isEmpty);
+    });
+  });
+
+  test('a second copy with the same Message-ID does not match the row again',
+      () async {
+    final r = await _reposWithInbox();
+    final virtual = await _enqueueSelfNote(r);
+    await r.emails.setFlag(virtual.id, flagged: true);
+    await _arriveAndMatch(r, virtual.messageId!);
+
+    final second = await _arriveAndMatch(r, virtual.messageId!, uid: 43);
+
+    expect(
+      await (r.db.select(r.db.emails)..where((t) => t.id.equals(second)))
+          .getSingleOrNull(),
+      isNotNull,
+      reason: 'the row no longer waits: the second copy stays a row',
+    );
+    final change = (await r.db.select(r.db.pendingChanges).get()).single;
+    expect((jsonDecode(change.payload) as Map)['uid'], 42);
+  });
+
+  group('expiry', () {
+    test(
+        'a virtual row unmatched after 7 days is dropped; its parked change '
+        'fails and stays listed', () async {
+      var now = DateTime.now();
+      final r = await _reposWithInbox(now: () => now);
+      final virtual = await _enqueueSelfNote(r);
+      await r.emails.setFlag(virtual.id, flagged: true);
+      // Runs after each successful inbox sync (never before it).
+      Future<void> expireAfterInboxSync() =>
+          EmailStateWriter(r.db, now: () => now)
+              .expireParked('acc-1', folder: 'INBOX', role: 'inbox');
+
+      // Not yet.
+      now = now.add(const Duration(days: 6));
+      await expireAfterInboxSync();
+      expect((await _inbox(r)).single.id, virtual.id);
+
+      now = now.add(const Duration(days: 2));
+      await expireAfterInboxSync();
+      expect(await _inbox(r), isEmpty);
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('never arrived'));
     });
   });
 }

@@ -25,16 +25,12 @@ void main() {
 
   setUp(() async {
     // No Trash folder: a delete is a delete for good.
-    logs = await openRigWithMailA(
-      uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
-      folders: [('INBOX', 'inbox'), ('Archive', 'archive')],
-    );
+    logs = await openRigInboxArchive();
   });
   tearDown(() => db.close());
 
-  Future<List<PendingChangeRow>> ops() => db.select(db.pendingChanges).get();
-  Future<void> expectConsistent() async =>
-      expect(await EmailStateWriter(db).consistencyProblems(), isEmpty);
+  Future<List<PendingChangeRow>> ops() => rigOps();
+  Future<void> expectConsistent() async => expect(await rigProblems(), isEmpty);
   Future<void> sync(String folder) => emails.syncEmails(_account.id, folder);
   Future<void> flush() => emails.flushPendingChanges(_account.id, 'pw');
   Future<List<String>> threadFolders() async => [

@@ -28,6 +28,7 @@ class PendingChange {
     this.sending = false,
     this.stuck = false,
     this.nextTry,
+    this.parked = false,
   });
 
   final int id;
@@ -64,6 +65,11 @@ class PendingChange {
   /// keeps the user's value locally and is retried at [nextTry].
   final bool stuck;
   final DateTime? nextTry;
+
+  /// The mail has no server copy yet (a self-sent note waiting for its
+  /// delivery, a JMAP mail whose server id is unknown): the change shows
+  /// locally and is sent once the server copy is found.
+  final bool parked;
 
   bool get hasError => lastError != null;
 }

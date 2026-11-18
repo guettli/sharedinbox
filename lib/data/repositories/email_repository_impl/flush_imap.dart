@@ -51,6 +51,9 @@ extension _FlushImap on EmailRepositoryImpl {
   Future<int> _flushPendingChanges(String accountId, String password) async {
     await _recoverExpiredLeases(accountId);
     await _state.dropOrphanedAcks(accountId);
+    // Shadows whose primary ended in another isolate or by a path that did
+    // not take them along (SYNC-REDESIGN.md §6).
+    await _rethreadRefolds(await _state.dropOrphanedShadows());
     // Rows gone on the server whose last change settled since (failed or
     // was discarded): nothing can bring them back (clean-up rule).
     final cleaned = await _state.cleanUpGone(accountId);
@@ -89,6 +92,59 @@ extension _FlushImap on EmailRepositoryImpl {
       );
     } finally {
       await _releaseUnsettledClaims(accountId, token);
+    }
+  }
+
+  /// [EmailStateWriter.expireParked] for [accountId] after a successful
+  /// sync of [folder] (role [role]), with an App Log warning for each
+  /// virtual row dropped (`email.virtual_expired`: its server copy never
+  /// arrived) and each parked change given up on
+  /// (`pending_change.parked_expired`, listed on the Pending Changes screen).
+  Future<void> _expireParked(
+    String accountId, {
+    required String folder,
+    required String? role,
+  }) async {
+    final expiry =
+        await _state.expireParked(accountId, folder: folder, role: role);
+    if (expiry.isEmpty) return;
+    for (final row in expiry.droppedRows) {
+      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+      unawaited(
+        _appLogger?.warn(
+          'email.virtual_expired',
+          'Removed the local copy of "${row.subject ?? '(no subject)'}" '
+              '(${row.mailboxPath.isEmpty ? 'hidden' : row.mailboxPath}): '
+              'its server copy did not arrive within '
+              '${EmailStateWriter.parkedExpiry.inDays} days',
+          accountId: accountId,
+          mailboxPath: row.mailboxPath,
+          data: {
+            'removedEmailId': row.id,
+            'messageId': row.messageId,
+            'sentCopy': row.isVirtualSentCopy,
+          },
+        ),
+      );
+    }
+    for (final id in expiry.changedRows) {
+      await _rethreadRow(id);
+    }
+    for (final op in expiry.failedOps) {
+      unawaited(
+        _appLogger?.warn(
+          'pending_change.parked_expired',
+          'Gave up on a ${_describeChange(op)} that waited '
+              '${EmailStateWriter.parkedExpiry.inDays} days for the server '
+              'copy of its mail; listed on the Pending Changes screen',
+          accountId: accountId,
+          data: {
+            'emailId': op.resourceId,
+            'changeId': op.id,
+            'changeType': op.changeType,
+          },
+        ),
+      );
     }
   }
 

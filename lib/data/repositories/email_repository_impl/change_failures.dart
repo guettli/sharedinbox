@@ -141,9 +141,29 @@ extension _ChangeFailures on EmailRepositoryImpl {
   /// Re-folds row [emailId] ([EmailStateWriter.refold]) after its ops
   /// changed, and refreshes its thread when what the app shows changed: in
   /// the folder it showed in before and in the one it shows in now.
+  ///
+  /// A change that ended without reaching the server (cancelled, failed,
+  /// discarded, retried as a new one) takes its counterpart shadows along
+  /// ([EmailStateWriter.dropOrphanedShadows]), in the same transaction.
   Future<void> _refoldAndRethread(String emailId) async {
+    await _rethreadRefolds(await _state.dropOrphanedShadows());
     final refold = await _state.refoldRow(emailId);
-    if (refold == null || !refold.changed) return;
+    if (refold == null) return;
+    await _rethreadRefold(emailId, refold);
+  }
+
+  /// [_rethreadRefold] for each of [refolds].
+  Future<void> _rethreadRefolds(Map<String, Refold> refolds) async {
+    for (final MapEntry(key: id, value: refold) in refolds.entries) {
+      await _rethreadRefold(id, refold);
+    }
+  }
+
+  /// Refreshes the thread of row [emailId] after [refold] when what the
+  /// app shows changed: in the folder it showed in before and in the one it
+  /// shows in now.
+  Future<void> _rethreadRefold(String emailId, Refold refold) async {
+    if (!refold.changed) return;
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();

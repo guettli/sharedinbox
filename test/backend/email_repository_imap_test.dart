@@ -295,9 +295,11 @@ void main() {
   // #565: a mail-to-self shows a local copy once sent; starring it must
   // survive the very sync that delivers the real message. The delivery
   // advances HIGHESTMODSEQ, so the incremental sync runs the CONDSTORE flag
-  // refresh (_refreshFlagsImap) right after the dissolve carries the star
-  // over — and that refresh used to overwrite the just-transferred star back
-  // to server truth (unflagged).
+  // refresh (_refreshFlagsImap) right after the real message fills the local
+  // copy in place — that refresh used to overwrite the star back to server
+  // truth (unflagged). Since phase 4b the star is a parked change of the
+  // local copy, which keeps its id, and is sent once the server copy is
+  // matched (SYNC-REDESIGN.md §6).
   test('self-message star survives the delivering sync (#565)', () async {
     final r = makeRepo();
     await r.accounts.addAccount(account, user.password);
@@ -339,11 +341,11 @@ void main() {
     expect(local.isLocal, isTrue, reason: 'mail-to-self shows a local copy');
     await r.emails.setFlag(local.id, flagged: true);
 
-    // Sync until the delivered message dissolves the virtual copy into the
-    // real one.
+    // Sync until the delivered message fills the virtual copy in place.
 
     var arrived = false;
     var stillStarred = false;
+    String? arrivedId;
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (DateTime.now().isBefore(deadline)) {
       await r.emails.syncEmails('test', 'INBOX');
@@ -353,6 +355,7 @@ void main() {
       if (match.isNotEmpty) {
         arrived = true;
         stillStarred = match.single.isFlagged;
+        arrivedId = match.single.id;
         break;
       }
     }
@@ -363,6 +366,20 @@ void main() {
       isTrue,
       reason: 'the star set on the local copy must carry over to the real '
           'message and survive the CONDSTORE flag refresh (#565)',
+    );
+    expect(arrivedId, local.id, reason: 'matched in place: same row');
+
+    // The parked star is sent now, and the server's read confirms it.
+    await r.emails.flushPendingChanges('test', user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+    final after = (await r.emails.getEmail(local.id))!;
+    expect(after.isFlagged, isTrue);
+    expect(
+      await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.state.isIn(const ['pending', 'parked'])))
+          .get(),
+      isEmpty,
+      reason: 'the star reached the server',
     );
   });
 
