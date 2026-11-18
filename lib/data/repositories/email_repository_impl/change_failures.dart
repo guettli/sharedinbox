@@ -54,10 +54,13 @@ extension _ChangeFailures on EmailRepositoryImpl {
     // discoverable in the per-message "Show Logs" view and in bug reports —
     // previously it was only written to `pending_changes.lastError` and stayed
     // silent (#579), unlike the outbox path (see [_outboxLogObserver]).
+    // A folder op names a mailbox, not a mail (the log's email reference).
+    final folder = row.resourceType == mailboxResourceType;
     final data = <String, Object?>{
       'changeType': row.changeType,
       'attempts': next,
       'maxAttempts': _maxChangeAttempts,
+      if (folder) 'mailboxId': row.resourceId,
     };
     if (gaveUp) {
       unawaited(
@@ -66,7 +69,7 @@ extension _ChangeFailures on EmailRepositoryImpl {
           'Could not apply ${_describeChange(row)} after $next attempts; '
               'not synced yet, next try at ${_hhmm(nextTry!)}',
           accountId: row.accountId,
-          emailId: row.resourceId,
+          emailId: folder ? null : row.resourceId,
           data: data,
           error: error,
         ),
@@ -78,7 +81,7 @@ extension _ChangeFailures on EmailRepositoryImpl {
           'Could not apply ${_describeChange(row)} — will retry '
               '(attempt $next of $_maxChangeAttempts)',
           accountId: row.accountId,
-          emailId: row.resourceId,
+          emailId: folder ? null : row.resourceId,
           data: data,
           error: error,
         ),

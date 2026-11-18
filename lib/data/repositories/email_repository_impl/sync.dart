@@ -31,6 +31,7 @@ extension _Sync on EmailRepositoryImpl {
       _state,
       accountId,
       onRepaired: _refreshThreadsOf,
+      alsoCheck: () => _mailboxState.checkAndRepair(accountId),
     );
     return result;
   }

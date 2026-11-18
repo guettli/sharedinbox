@@ -58,34 +58,54 @@ extension _FlushImap on EmailRepositoryImpl {
     // was discarded): nothing can bring them back (clean-up rule).
     final cleaned = await _state.cleanUpGone(accountId);
     if (cleaned.isNotEmpty) await _logCleanedWithFailures(accountId, cleaned);
-    final now = _now();
-    final rows = await (_db.select(_db.pendingChanges)
-          // A failed change waits for the user's Retry or Discard; a stuck one
-          // for its next try.
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                (t.state.equals(_pendingState) |
-                    (t.state.equals(_stuckState) &
-                        t.leaseUntil.isSmallerOrEqualValue(now))),
-          )
-          // Flush in enqueue order. The autoincrement id gives that exactly;
-          // `createdAt` can tie for changes queued together (a Sieve flag +
-          // move) and would follow the wall clock if it steps back.
-          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
-        .get();
-    if (rows.isEmpty) return 0;
+    Future<List<PendingChangeRow>> due({required bool mailboxes}) {
+      final now = _now();
+      return (_db.select(_db.pendingChanges)
+            // A failed change waits for the user's Retry or Discard; a stuck
+            // one for its next try.
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  (mailboxes
+                      ? t.resourceType.equals(mailboxResourceType)
+                      : t.resourceType.equals(mailboxResourceType).not()) &
+                  (t.state.equals(_pendingState) |
+                      (t.state.equals(_stuckState) &
+                          t.leaseUntil.isSmallerOrEqualValue(now))),
+            )
+            // Flush in enqueue order. The autoincrement id gives that
+            // exactly; `createdAt` can tie for changes queued together (a
+            // Sieve flag + move) and would follow the wall clock if it
+            // steps back.
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+    }
+
+    if ((await due(mailboxes: true)).isEmpty &&
+        (await due(mailboxes: false)).isEmpty) {
+      return 0;
+    }
 
     final account = (await _accounts.getAccount(accountId))!;
     final token = _newClaimToken();
     try {
       return await runZoned(
         () async {
+          // Folder creates and renames first: a move into a folder created
+          // offline needs the folder (SYNC-REDESIGN.md §7).
+          final folders = await _flushMailboxOps(account, password);
+          final rows = await _holdForLocalFolders(
+            accountId,
+            await due(mailboxes: false),
+          );
+          if (rows.isEmpty) return folders;
           switch (account.type) {
             case account_model.AccountType.imap:
-              return _flushPendingChangesImap(account, password, rows);
+              return folders +
+                  await _flushPendingChangesImap(account, password, rows);
             case account_model.AccountType.jmap:
-              return _flushPendingChangesJmap(account, password, rows);
+              return folders +
+                  await _flushPendingChangesJmap(account, password, rows);
           }
         },
         zoneValues: {_flushTokenKey: token},

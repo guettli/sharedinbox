@@ -744,10 +744,11 @@ class EmailStateWriter {
       _db.transaction(() => _settleAcked(read, emailId));
 
   /// Deletes acked ops whose row no longer exists (deleted by sync, merged
-  /// away): nothing will ever read them back.
+  /// away): nothing will ever read them back. Mailbox ops are the mailbox
+  /// state writer's.
   Future<void> dropOrphanedAcks(String accountId) => _db.customUpdate(
         "DELETE FROM pending_changes WHERE state = 'acked' "
-        'AND account_id = ?1 '
+        "AND account_id = ?1 AND resource_type <> 'Mailbox' "
         'AND resource_id NOT IN (SELECT id FROM emails)',
         variables: [Variable.withString(accountId)],
         updates: {_db.pendingChanges},
@@ -1182,16 +1183,22 @@ class EmailStateWriter {
     }
   }
 
-  /// Folder [from] of [accountId] is called [to] now (an IMAP folder
-  /// rename, or the Snoozed placeholder getting its JMAP id): the server
-  /// folder of its rows, the destinations and sources of the queued changes
-  /// (payload `dest`, `src`, `mailboxPath`), the pending moves folded from
-  /// them and `snoozed_from_mailbox_path` follow, in one transaction, and so
-  /// do the folder the rows show, the `prevSnoozedFrom` of the queued
-  /// changes and the folders stored in Undo actions (App Log warn
-  /// `pending_change.folder_renamed` when any queued data changed). A row that still records an IMAP
-  /// location under [to] (that folder did not exist on the server) gives it
-  /// up first: one location, one row. Returns how many rows gave one up.
+  /// Folder [from] of [accountId] is called [to] on the server now (an
+  /// acked IMAP folder rename, the server id a folder created offline got,
+  /// the path an IMAP create really got; SYNC-REDESIGN.md §7). Called by
+  /// the mailbox state writer only, in one transaction:
+  /// - the server folder of its rows follows (`srv_mailbox_path`, a server
+  ///   fact, not a re-key; a row that still records an IMAP location under
+  ///   [to], which that folder did not have on the server, gives it up
+  ///   first: one location, one row);
+  /// - the queued changes naming it (payload `dest`, `src`, `mailboxPath`,
+  ///   `prevSnoozedFrom`) name [to], and the rows they belong to are
+  ///   re-folded, so the folder a pending move shows comes from the fold,
+  ///   never from a direct write of `local_mailbox_path`;
+  /// - the local-only `snoozed_from_mailbox_path` and the folders stored in
+  ///   Undo actions follow.
+  /// App Log warn `pending_change.folder_renamed` when queued data changed.
+  /// Returns how many rows gave up a location.
   Future<int> renameFolder(String accountId, String from, String to) =>
       _db.transaction(() async {
         final released = await _db.customUpdate(
@@ -1209,9 +1216,14 @@ class EmailStateWriter {
           updateKind: UpdateKind.update,
         );
         final ops = await (_db.select(_db.pendingChanges)
-              ..where((t) => t.accountId.equals(accountId)))
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.resourceType.equals('Mailbox').not(),
+              ))
             .get();
         var rewrittenOps = 0;
+        final refoldIds = <String>{};
         for (final op in ops) {
           final payload = _payloadOf(op);
           if (payload == null) continue;
@@ -1228,6 +1240,7 @@ class EmailStateWriter {
           }
           if (!changed) continue;
           rewrittenOps++;
+          refoldIds.add(op.resourceId);
           final rewritten = jsonEncode(payload);
           await (_db.update(_db.pendingChanges)
                 ..where((t) => t.id.equals(op.id)))
@@ -1238,9 +1251,9 @@ class EmailStateWriter {
           _logOutside(
             (logger) => logger.warn(
               'pending_change.folder_renamed',
-              'Folder "$from" is "$to" now: $rewrittenOps queued change(s) '
-                  'and $rewrittenUndo Undo entr${rewrittenUndo == 1 ? 'y' : 'ies'} '
-                  'name the new folder',
+              'Folder "$from" is "$to" on the server now: $rewrittenOps '
+                  'queued change(s) and $rewrittenUndo Undo '
+                  'entr${rewrittenUndo == 1 ? 'y' : 'ies'} name the new folder',
               accountId: accountId,
               data: {
                 'from': from,
@@ -1251,23 +1264,12 @@ class EmailStateWriter {
             ),
           );
         }
+        // The server's folder of the rows (a server fact), shown unless a
+        // pending move shows them elsewhere.
         await _db.customUpdate(
-          'UPDATE emails SET '
-          'srv_mailbox_path = CASE WHEN srv_mailbox_path = ?2 THEN ?3 '
-          'ELSE srv_mailbox_path END, '
-          'local_mailbox_path = CASE WHEN local_mailbox_path = ?2 THEN ?3 '
-          'ELSE local_mailbox_path END, '
-          'snoozed_from_mailbox_path = CASE '
-          'WHEN snoozed_from_mailbox_path = ?2 THEN ?3 '
-          'ELSE snoozed_from_mailbox_path END, '
-          'mailbox_path = ${_shownPathSql(
-            local: 'CASE WHEN local_mailbox_path = ?2 THEN ?3 '
-                'ELSE local_mailbox_path END',
-            srv: 'CASE WHEN srv_mailbox_path = ?2 THEN ?3 '
-                'ELSE srv_mailbox_path END',
-          )} '
-          'WHERE account_id = ?1 AND (srv_mailbox_path = ?2 '
-          'OR local_mailbox_path = ?2 OR snoozed_from_mailbox_path = ?2)',
+          'UPDATE emails SET srv_mailbox_path = ?3, '
+          "mailbox_path = ${_shownPathSql(srv: '?3')} "
+          'WHERE account_id = ?1 AND srv_mailbox_path = ?2',
           variables: [
             Variable.withString(accountId),
             Variable.withString(from),
@@ -1276,6 +1278,22 @@ class EmailStateWriter {
           updates: {_db.emails},
           updateKind: UpdateKind.update,
         );
+        await _db.customUpdate(
+          'UPDATE emails SET snoozed_from_mailbox_path = ?3 '
+          'WHERE account_id = ?1 AND snoozed_from_mailbox_path = ?2',
+          variables: [
+            Variable.withString(accountId),
+            Variable.withString(from),
+            Variable.withString(to),
+          ],
+          updates: {_db.emails},
+          updateKind: UpdateKind.update,
+        );
+        // The folder their pending moves show them in: the fold of the
+        // rewritten queue.
+        for (final id in refoldIds) {
+          await refold(id);
+        }
         return released;
       });
 
@@ -2190,12 +2208,15 @@ class OverlayConsistencySampler {
 
   /// Checks a sample of [accountId]'s rows through [writer] unless that ran
   /// less than [interval] ago; returns the problems found (empty when
-  /// skipped). [onRepaired] as in [EmailStateWriter.checkSample]. Never
-  /// throws: a check must not fail a sync.
+  /// skipped). [onRepaired] as in [EmailStateWriter.checkSample]. When
+  /// due, [alsoCheck] runs too (the mailbox overlay's check,
+  /// `MailboxStateWriter.checkAndRepair`). Never throws: a check must not
+  /// fail a sync.
   Future<List<ConsistencyProblem>> afterSyncRun(
     EmailStateWriter writer,
     String accountId, {
     Future<void> Function(Set<String> emailIds)? onRepaired,
+    Future<void> Function()? alsoCheck,
   }) async {
     try {
       final now = _now();
@@ -2210,12 +2231,14 @@ class OverlayConsistencySampler {
       }
       _lastRun[accountId] = now;
       await writer.recordSampleCheck(accountId, now);
-      return await writer.checkSample(
+      final problems = await writer.checkSample(
         accountId,
         sampleSize: sampleSize,
         random: _random,
         onRepaired: onRepaired,
       );
+      await alsoCheck?.call();
+      return problems;
     } catch (e, st) {
       await writer._appLogger?.warn(
         'overlay.check_failed',

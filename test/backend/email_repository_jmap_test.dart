@@ -486,8 +486,10 @@ if header :contains "subject" "lunch" {
       }
 
       // The sync of the Snoozed mailbox reads the snooze keywords back and
-      // drops the acked snoozes; the wake-up time stays.
+      // drops the acked snoozes; the wake-up time stays. A folder listing
+      // confirms the folder's create (SYNC-REDESIGN.md §7).
       await r.emails.syncEmails('test-jmap', snoozedId);
+      await r.mailboxes.syncMailboxes('test-jmap');
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
       final synced = await (r.db.select(r.db.emails)
             ..where((t) => t.accountId.equals('test-jmap')))
@@ -526,6 +528,8 @@ if header :contains "subject" "lunch" {
     final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
     await dropArchive(r.mailboxes, 'test-jmap');
     try {
+      // Created locally at once (offline-first); the flush creates it on
+      // the server, then moves the mail that waited for it.
       final archive = await r.mailboxes
           .createMailboxWithRole('test-jmap', 'Archive', 'archive');
       expect(archive.role, 'archive');
@@ -543,15 +547,16 @@ if header :contains "subject" "lunch" {
       await r.mailboxes.syncMailboxes('test-jmap');
       final synced =
           await r.mailboxes.findMailboxByRole('test-jmap', 'archive');
-      expect(synced?.path, archive.path);
+      expect(synced?.id, archive.id);
+      expect(synced?.path, isNot(archive.path), reason: "the server's id");
       await r.emails.syncEmails('test-jmap', inboxId);
       expect(
         await r.emails.observeEmails('test-jmap', inboxId).first,
         isEmpty,
       );
-      await r.emails.syncEmails('test-jmap', archive.path);
+      await r.emails.syncEmails('test-jmap', synced!.path);
       final archived =
-          await r.emails.observeEmails('test-jmap', archive.path).first;
+          await r.emails.observeEmails('test-jmap', synced.path).first;
       expect(archived.map((e) => e.subject), ['archive-me']);
     } finally {
       await dropArchive(r.mailboxes, 'test-jmap');
@@ -589,6 +594,7 @@ if header :contains "subject" "lunch" {
           await r.mailboxes.createMailbox('test-jmap', 'Projects/2026');
       expect(leaf.name, '2026');
       expect(leaf.displayPath, 'Projects/2026');
+      await r.emails.flushPendingChanges('test-jmap', user.password);
 
       // Re-read the server's view, not just the optimistic local rows.
       await r.mailboxes.syncMailboxes('test-jmap');
@@ -597,7 +603,7 @@ if header :contains "subject" "lunch" {
       expect(projects, hasLength(1));
       expect(projects.single.name, 'Projects');
       expect(projects.single.parentId, isNull);
-      final child = all.singleWhere((m) => m.path == leaf.path);
+      final child = all.singleWhere((m) => m.id == leaf.id);
       expect(child.name, '2026');
       expect(child.parentId, projects.single.path);
       expect(child.displayPath, 'Projects/2026');
@@ -606,13 +612,15 @@ if header :contains "subject" "lunch" {
       final second =
           await r.mailboxes.createMailbox('test-jmap', 'Projects/2027');
       expect(second.parentId, projects.single.path);
+      await r.emails.flushPendingChanges('test-jmap', user.password);
       await r.mailboxes.syncMailboxes('test-jmap');
       all = await r.mailboxes.observeMailboxes('test-jmap').first;
       expect(all.where((m) => m.name == 'Projects'), hasLength(1));
       expect(
-        all.singleWhere((m) => m.path == second.path).displayPath,
+        all.singleWhere((m) => m.id == second.id).displayPath,
         'Projects/2027',
       );
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     } finally {
       await dropProjects();
     }
@@ -638,7 +646,10 @@ if header :contains "subject" "lunch" {
     }
 
     await dropFolder();
-    final folder = await r.mailboxes.createMailbox('test-jmap', folderName);
+    final local = await r.mailboxes.createMailbox('test-jmap', folderName);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
+    final folder = (await r.mailboxes.observeMailboxes('test-jmap').first)
+        .singleWhere((m) => m.id == local.id);
     final jmap = await connectJmap(env: env, user: user);
 
     await appendToInbox('only-in-folder');
@@ -727,5 +738,87 @@ if header :contains "subject" "lunch" {
     await r.emails.syncEmails('test-jmap', inboxId);
     final inbox = await r.emails.observeEmails('test-jmap', inboxId).first;
     expect(inbox.map((e) => e.subject), ['in-both']);
+  });
+
+  // #1242: folder actions offline. A folder created offline shows at once
+  // and takes a move; a rename shows at once. The next flush creates the
+  // folder, renames it and then moves the mail, in that order, against
+  // Stalwart; a name the server has already is a failed change.
+  test(
+      'offline: create a folder, move a mail into it and rename it; the '
+      'flush does all three on the server', () async {
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    const created = 'P5Offline';
+    const renamed = 'P5Renamed';
+    const clash = 'P5Clash';
+
+    Future<void> dropFolders() async {
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final all = await r.mailboxes.observeMailboxes('test-jmap').first;
+      for (final m in all.where(
+        (m) => const [created, renamed, clash].contains(m.name),
+      )) {
+        await r.mailboxes
+            .deleteMailbox('test-jmap', m.path, removeEmails: true);
+      }
+    }
+
+    await dropFolders();
+    try {
+      await appendToInbox('p5-move-me');
+      await r.emails.syncEmails('test-jmap', inboxId);
+      final mail =
+          (await r.emails.observeEmails('test-jmap', inboxId).first).single;
+
+      final folder = await r.mailboxes.createMailbox('test-jmap', created);
+      await r.emails.moveEmail(mail.id, folder.path);
+      final shown =
+          await r.mailboxes.renameMailbox('test-jmap', folder.path, renamed);
+      expect(shown.name, renamed);
+      expect((await r.emails.getEmail(mail.id))!.mailboxPath, folder.path);
+
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.state.isIn(const ['acked']).not()))
+            .get(),
+        isEmpty,
+      );
+
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final server = (await r.mailboxes.observeMailboxes('test-jmap').first)
+          .singleWhere((m) => m.id == folder.id);
+      expect(server.name, renamed);
+      expect(server.path, isNot(startsWith('~new:')));
+      await r.emails.syncEmails('test-jmap', server.path);
+      final moved =
+          await r.emails.observeEmails('test-jmap', server.path).first;
+      expect(moved.map((e) => e.id), [mail.id]);
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+
+      // A name another client gave a folder meanwhile is a clash on the
+      // server: a failed change (listed for Retry/Discard), not a second
+      // folder of that name.
+      final jmap = await connectJmap(env: env, user: user);
+      await jmap.call([
+        [
+          'Mailbox/set',
+          {
+            'accountId': jmap.accountId,
+            'create': {
+              'x': {'name': clash},
+            },
+          },
+          '0',
+        ],
+      ]);
+      await r.mailboxes.createMailbox('test-jmap', clash);
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+      final change = await r.db.select(r.db.pendingChanges).getSingle();
+      expect((change.changeType, change.state), ('create_mailbox', 'failed'));
+    } finally {
+      await dropFolders();
+    }
   });
 }

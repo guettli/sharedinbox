@@ -611,6 +611,24 @@ extension _UserActions on EmailRepositoryImpl {
     if (row.mailboxPath.isEmpty) return;
     final accountId = row.accountId;
     final destPath = await _snoozedMailboxPath(accountId);
+    // On JMAP a snooze needs the server's Snoozed folder. When none is
+    // known (or creating it failed), it is created first, as a queued folder
+    // create the snooze waits for (SYNC-REDESIGN.md §7); its ack names the
+    // server's id in the snooze. IMAP creates the folder in the snooze's
+    // own flush (the path is the name).
+    if (!_inShadow &&
+        (await _bulkAccount(accountId))?.type ==
+            account_model.AccountType.jmap) {
+      final folder = await _mailboxState.rowByPath(accountId, destPath);
+      if (folder == null || folder.isLocal) {
+        await _mailboxState.ensureLocal(
+          accountId: accountId,
+          path: destPath,
+          name: folder?.name ?? _snoozedPlaceholder,
+          role: 'snoozed',
+        );
+      }
+    }
 
     // A queued keyword cleanup from an earlier stale snooze would strip the
     // keyword this snooze is about to add.

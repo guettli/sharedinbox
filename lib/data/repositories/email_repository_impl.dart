@@ -38,6 +38,7 @@ import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/core/utils/subject_normalize.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/keyword_fold.dart';
+import 'package:sharedinbox/data/db/mailbox_fold.dart';
 import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
@@ -53,7 +54,12 @@ import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/email_ids.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
-    show removeLocalMailbox;
+    show
+        imapMailboxFor,
+        imapPathSeparator,
+        jmapMailboxSetErrorText,
+        removeLocalMailbox;
+import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 
@@ -64,6 +70,7 @@ part 'email_repository_impl/counterparts.dart';
 part 'email_repository_impl/diagnostics.dart';
 part 'email_repository_impl/flush_imap.dart';
 part 'email_repository_impl/flush_jmap.dart';
+part 'email_repository_impl/flush_mailbox.dart';
 part 'email_repository_impl/jmap_push.dart';
 part 'email_repository_impl/local_rows.dart';
 part 'email_repository_impl/queries.dart';
@@ -121,6 +128,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
         _state = EmailStateWriter(db, appLogger: appLogger, now: now),
+        _mailboxState = MailboxStateWriter(db, appLogger: appLogger, now: now),
         _consistencySampler = consistencySampler,
         _sendOperationTimeout = sendOperationTimeout;
 
@@ -164,6 +172,10 @@ class EmailRepositoryImpl implements EmailRepository {
   /// The email state writer (SYNC-REDESIGN.md §2): the only writer of the
   /// read/star/snooze and location columns.
   final EmailStateWriter _state;
+
+  /// The mailbox state writer (SYNC-REDESIGN.md §7): the queued folder
+  /// creates and renames, flushed before the email changes.
+  final MailboxStateWriter _mailboxState;
 
   /// The sampled overlay consistency check after each sync run
   /// ([EmailStateWriter.checkSample]); off when null (tests check the whole

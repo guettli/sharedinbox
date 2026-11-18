@@ -97,6 +97,20 @@ class Mailboxes extends Table {
   // Added in schema v47: parent mailbox server ID (JMAP). Null for a root
   // or for IMAP.
   TextColumn get parentId => text().nullable()();
+  // Added in schema v75: the mailbox overlay (SYNC-REDESIGN.md §7, phase 5).
+  // [name] is the effective name, `COALESCE(local_name, srv_name)`; only
+  // the mailbox state writer writes these. [srvName] is the name the
+  // server last gave (null while the mailbox has no server copy);
+  // [localName] the fold of the mailbox's queued `create_mailbox` /
+  // `rename_mailbox` ops (null: none). [isLocal]: created offline, no
+  // server copy yet; [path] is then a stand-in (the guessed IMAP path, or
+  // `~new:…` on JMAP) that the create's ack replaces by the server's.
+  // [srvSeq]: the read sequence (§4.1) of the read or ack that last wrote
+  // [srvName], so an older read cannot put a confirmed rename back.
+  TextColumn get srvName => text().nullable()();
+  TextColumn get localName => text().nullable()();
+  BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
+  IntColumn get srvSeq => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -299,6 +313,9 @@ class PendingChanges extends Table {
   TextColumn get resourceId => text()();
   // "flag_seen" | "flag_flagged" | "add_keywords" | "move" | "delete"
   //   | "snooze" | "unsnooze" | "clear_snooze" (strip `snz:` keywords only)
+  // Since v75, with [resourceType] "Mailbox" and [resourceId] a
+  // `mailboxes.id`: "create_mailbox" | "rename_mailbox" (mailbox ops,
+  // SYNC-REDESIGN.md §7).
   TextColumn get changeType => text()();
   // JSON payload, e.g. {"seen": true} or {"dest": "Archive"}
   TextColumn get payload => text()();
@@ -2035,6 +2052,69 @@ class AppDatabase extends _$AppDatabase {
           );
         }
       }
+    }
+    if (from < 75 && await _tableExists(this, 'mailboxes')) {
+      // The mailbox overlay (phase 5a of SYNC-REDESIGN.md).
+      for (final column in [
+        mailboxes.srvName,
+        mailboxes.localName,
+        mailboxes.isLocal,
+        mailboxes.srvSeq,
+      ]) {
+        await _addColumnIfMissing(m, mailboxes, column);
+      }
+      await _overlayMailboxes();
+    }
+  }
+
+  /// Schema v75: every cached mailbox came from the server, so its name is
+  /// the server's (no mailbox op existed: folder actions were sent at
+  /// once). A JMAP snooze queued while the Snoozed folder was unknown names
+  /// the stand-in `Snoozed` (the flush used to create the folder and
+  /// rewrite the queue); it now waits for a `create_mailbox` op of a local
+  /// `Snoozed` row, whose ack moves its changes onto the server's id.
+  Future<void> _overlayMailboxes() async {
+    await customStatement(
+      'UPDATE mailboxes SET srv_name = name WHERE srv_name IS NULL',
+    );
+    if (!await _tableExists(this, 'pending_changes') ||
+        !await _tableExists(this, 'accounts')) {
+      return;
+    }
+    final accounts = await customSelect(
+      'SELECT DISTINCT p.account_id AS account_id FROM pending_changes p '
+      "JOIN accounts a ON a.id = p.account_id AND a.account_type = 'jmap' "
+      "WHERE p.state IN ('pending', 'inflight', 'stuck', 'parked') "
+      "AND p.change_type IN ('snooze', 'unsnooze') "
+      "AND (p.payload LIKE '%\"dest\":\"Snoozed\"%' "
+      "OR p.payload LIKE '%\"src\":\"Snoozed\"%')",
+    ).get();
+    for (final r in accounts) {
+      final accountId = r.read<String>('account_id');
+      final known = await customSelect(
+        'SELECT 1 FROM mailboxes WHERE account_id = ?1 '
+        "AND path = 'Snoozed'",
+        variables: [Variable.withString(accountId)],
+      ).getSingleOrNull();
+      if (known != null) continue;
+      final id = '$accountId:Snoozed'; // not an email id
+      await customStatement(
+        'INSERT OR IGNORE INTO mailboxes (id, account_id, path, name, '
+        "role, display_path, local_name, is_local) VALUES (?1, ?2, 'Snoozed', "
+        "'Snoozed', 'snoozed', 'Snoozed', 'Snoozed', 1)",
+        [id, accountId],
+      );
+      await customStatement(
+        'INSERT INTO pending_changes (account_id, resource_type, '
+        'resource_id, change_type, payload, created_at) '
+        "VALUES (?1, 'Mailbox', ?2, 'create_mailbox', ?3, ?4)",
+        [
+          accountId,
+          id,
+          '{"name":"Snoozed","role":"snoozed"}',
+          DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        ],
+      );
     }
   }
 

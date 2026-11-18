@@ -284,6 +284,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
         return 'unsnooze';
       case 'clear_snooze':
         return 'snooze cleanup';
+      case createMailboxOp:
+        return 'folder creation';
+      case renameMailboxOp:
+        return 'folder rename';
       default:
         return '"${row.changeType}" change';
     }
@@ -1089,6 +1093,20 @@ extension _ChangeQueue on EmailRepositoryImpl {
   }
 
   Future<void> _discardMutation(int id) async {
+    final mailboxOp = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) => t.id.equals(id) & t.resourceType.equals(mailboxResourceType),
+          ))
+        .getSingleOrNull();
+    if (mailboxOp != null) {
+      // A folder op: discarding a create of a folder made offline removes
+      // the folder, and what waits for it fails (SYNC-REDESIGN.md §7).
+      _mailboxState.logDependents(
+        mailboxOp,
+        await _mailboxState.discard(mailboxOp),
+      );
+      return;
+    }
     final discarded = await _db.transaction(() async {
       final row = await (_db.select(_db.pendingChanges)
             ..where((t) => t.id.equals(id)))
@@ -1130,6 +1148,11 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (row.state != _failedState) {
       // Still queued: it keeps its place, so newer changes stay newer and a
       // change being flushed right now is not queued twice. Just flush soon.
+      _changeCtrl.add(row.accountId);
+      return;
+    }
+    if (row.resourceType == mailboxResourceType) {
+      await _mailboxState.retry(row);
       _changeCtrl.add(row.accountId);
       return;
     }
