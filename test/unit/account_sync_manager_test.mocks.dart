@@ -386,6 +386,16 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
         ),
         returnValue: _i6.Future<bool>.value(false),
       ) as _i6.Future<bool>);
+
+  @override
+  _i6.Stream<Set<({String accountId, String path})>> observeHiddenFolders() =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #observeHiddenFolders,
+          [],
+        ),
+        returnValue: _i6.Stream<Set<({String accountId, String path})>>.empty(),
+      ) as _i6.Stream<Set<({String accountId, String path})>>);
 }
 
 /// A class which mocks [EmailRepository].

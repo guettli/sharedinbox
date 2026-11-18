@@ -81,6 +81,9 @@ class FakeMailboxRepositoryBase implements MailboxRepository {
       true;
 
   @override
+  Stream<Set<FolderRef>> observeHiddenFolders() => Stream.value(const {});
+
+  @override
   Future<Mailbox> moveMailbox(
     String accountId,
     String mailboxPath, {

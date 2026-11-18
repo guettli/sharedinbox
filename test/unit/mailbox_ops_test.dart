@@ -599,6 +599,41 @@ void main() {
       expect((rename.state, rename.attempts), ('pending', 0));
     });
 
+    test(
+        'a listing that shows a rename done while it is being sent stores '
+        'no second folder; the ack renames the folder (6b)', () async {
+      final archive = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Archive');
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+
+      var listed = false;
+      server.beforeAnswer = (command) async {
+        if (listed || !command.startsWith('RENAME')) return;
+        listed = true;
+        await rig.mailboxes.syncMailboxes(_acc.id);
+        expect(
+          (await db.select(db.mailboxes).get()).map((m) => m.path),
+          isNot(contains('Old Mail')),
+        );
+        expect(
+          (await shownFolders()).where((p) => p == 'Old Mail'),
+          hasLength(1),
+        );
+      };
+      await flush();
+      server.beforeAnswer = null;
+
+      expect(listed, isTrue);
+      final renamed = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Old Mail');
+      expect(renamed.id, archive.id);
+      final shown = await shownFolders();
+      expect(shown.where((p) => p == 'Old Mail'), hasLength(1));
+      expect(shown, isNot(contains('Archive')));
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      await _expectConsistent(db);
+    });
+
     test('a removed folder leaves no acked op of it behind', () async {
       await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
       await flush();
@@ -796,6 +831,82 @@ void main() {
         containsAll(['Archive/Work', 'Archive/Work/2026']),
       );
       await _expectConsistent(db);
+    });
+
+    test(
+        'a listing that shows a move done while it is being sent stores no '
+        'second folder; the ack moves the folder there (6b)', () async {
+      await addWork();
+      final rows = await db.select(db.mailboxes).get();
+      final work = rows.singleWhere((m) => m.path == 'Work');
+      final child = rows.singleWhere((m) => m.path == 'Work/2026');
+      await rig.mailboxes
+          .moveMailbox(_acc.id, 'Work', newParentDisplayPath: 'Archive');
+
+      var listed = false;
+      server.beforeAnswer = (command) async {
+        if (listed || !command.startsWith('RENAME')) return;
+        listed = true;
+        // The RENAME is done on the server, its answer is not back yet: a
+        // listing now has the new paths only.
+        await rig.mailboxes.syncMailboxes(_acc.id);
+        expect(
+          (await db.select(db.mailboxes).get()).map((m) => m.path),
+          isNot(anyOf(contains('Archive/Work'), contains('Archive/Work/2026'))),
+        );
+        final shown = await shownFolders();
+        expect(shown.where((p) => p == 'Archive/Work'), hasLength(1));
+        expect(shown.where((p) => p == 'Archive/Work/2026'), hasLength(1));
+      };
+      await flush();
+      server.beforeAnswer = null;
+
+      expect(listed, isTrue);
+      expect((await folder(work.id)).path, 'Archive/Work');
+      expect((await folder(child.id)).path, 'Archive/Work/2026');
+      final shown = await shownFolders();
+      expect(shown.where((p) => p == 'Archive/Work'), hasLength(1));
+      expect(shown.where((p) => p == 'Archive/Work/2026'), hasLength(1));
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      expect(events(), isNot(contains('pending_change.folder_removed')));
+      await _expectConsistent(db);
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      expect((await mail('w@test')).mailboxPath, 'Archive/Work/2026');
+      await _expectConsistent(db);
+    });
+
+    test(
+        'an open thread drops the mail of a folder deleted (queued) at once; '
+        'the hidden folders are observable (6b)', () async {
+      await addWork();
+      final threadId = (await mail('w@test')).threadId;
+      expect(threadId, isNotNull);
+      final seen = <List<String?>>[];
+      final sub = emails
+          .observeThreadAcrossFolders(_acc.id, threadId!)
+          .listen((mails) => seen.add([for (final m in mails) m.messageId]));
+      addTearDown(sub.cancel);
+      Future<void> until(bool Function() done) async {
+        for (var i = 0; i < 400 && !done(); i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        expect(done(), isTrue);
+      }
+
+      await until(() => seen.isNotEmpty);
+      expect(seen.last, ['w@test']);
+      expect(await rig.mailboxes.observeHiddenFolders().first, isEmpty);
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Work/2026');
+
+      // Only `mailboxes.local_hidden` changed: the query re-runs anyway.
+      await until(() => seen.last.isEmpty);
+      expect(
+        await rig.mailboxes.observeHiddenFolders().first,
+        {(accountId: _acc.id, path: 'Work/2026')},
+      );
     });
 
     test(

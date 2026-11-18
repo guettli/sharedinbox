@@ -136,16 +136,26 @@ class BodyCacheService {
         ),
       );
 
+  /// Drops the oldest cached bodies until the cache fits [limitBytes]. A
+  /// virtual row's body (a self-sent note, the virtual Sent copy,
+  /// `is_local`) is never dropped: it is the text the user wrote, with no
+  /// server copy to fetch it from again yet.
   Future<void> _evictIfNeeded(int limitBytes) async {
     final currentSize = await _getCacheSizeBytes();
     if (currentSize <= limitBytes) return;
 
+    final virtualRows = _db.selectOnly(_db.emails)
+      ..addColumns([_db.emails.id])
+      ..where(_db.emails.isLocal);
     final bodies = await (_db.select(_db.emailBodies)
-          ..where((t) => t.cachedAt.isNotNull())
+          ..where(
+            (t) => t.cachedAt.isNotNull() & t.emailId.isNotInQuery(virtualRows),
+          )
           ..orderBy([(t) => OrderingTerm.asc(t.cachedAt)]))
         .get();
 
     var remaining = currentSize;
+    var evicted = 0;
     for (final body in bodies) {
       if (remaining <= limitBytes) break;
       final bodySize =
@@ -154,7 +164,17 @@ class BodyCacheService {
             ..where((t) => t.emailId.equals(body.emailId)))
           .go();
       remaining -= bodySize;
+      evicted++;
     }
+    if (evicted == 0) return;
+    unawaited(
+      _appLogger?.info(
+        'body_cache.evicted',
+        'Dropped $evicted cached email bodies to stay under the cache limit; '
+            'they are fetched again when opened',
+        data: {'count': evicted, 'limitBytes': limitBytes},
+      ),
+    );
   }
 
   Future<int> _getCacheSizeBytes() async {

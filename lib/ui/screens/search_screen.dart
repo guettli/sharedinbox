@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -175,9 +176,37 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   late final EmailThreadListController _selection;
 
+  /// The folders whose delete is queued (SYNC-REDESIGN.md §8, phase 6b):
+  /// their mail is out of every search, so results read before the delete
+  /// drop it at once and the search re-runs; when the set shrinks (the
+  /// delete was undone or failed) it re-runs to bring the mail back.
+  StreamSubscription<Set<FolderRef>>? _hiddenFoldersSub;
+  Set<FolderRef>? _hiddenFolders;
+
+  void _onHiddenFolders(Set<FolderRef> hidden) {
+    final before = _hiddenFolders ?? const <FolderRef>{};
+    _hiddenFolders = hidden;
+    final results = _results;
+    if (results == null || !mounted) return;
+    final newlyHidden = hidden.difference(before);
+    if (newlyHidden.isEmpty && before.difference(hidden).isEmpty) return;
+    final kept = [
+      for (final e in results)
+        if (!newlyHidden
+            .contains((accountId: e.accountId, path: e.mailboxPath)))
+          e,
+    ];
+    if (kept.length != results.length) setState(() => _results = kept);
+    unawaited(_refresh());
+  }
+
   @override
   void initState() {
     super.initState();
+    _hiddenFoldersSub = ref
+        .read(mailboxRepositoryProvider)
+        .observeHiddenFolders()
+        .listen(_onHiddenFolders);
     _selection = EmailThreadListController()..addListener(_onSelectionChange);
     _focusNode.addListener(() {
       if (mounted) setState(() => _fieldFocused = _focusNode.hasFocus);
@@ -215,6 +244,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   @override
   void dispose() {
+    unawaited(_hiddenFoldersSub?.cancel());
     _selection
       ..removeListener(_onSelectionChange)
       ..dispose();

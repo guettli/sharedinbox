@@ -15,12 +15,15 @@ const _emailListOrderSql =
 /// shown in a folder whose delete is queued (`mailboxes.local_hidden`,
 /// phase 5b): the folder shows nowhere, so its mail does not either (in
 /// search, by address, by thread, by id). Queries that filter by a folder
-/// exclude it already; the others add this.
+/// exclude it already; the others add this. A watched query using it also
+/// re-runs when a folder's `local_hidden` changes (phase 6b), so an open
+/// thread drops the mail of a folder just deleted at once.
 Expression<bool> _visible($EmailsTable t) =>
-    t.mailboxPath.equals('').not() & _notInHiddenFolder;
-
-final _notInHiddenFolder =
-    CustomExpression<bool>('NOT (${_inHiddenFolderSql('emails')})');
+    t.mailboxPath.equals('').not() &
+    CustomExpression<bool>(
+      'NOT (${_inHiddenFolderSql(t.aliasedName)})',
+      watchedTables: [(t.attachedDatabase as AppDatabase).mailboxes],
+    );
 
 /// SQL (correlated on the `emails` alias [e]): the mail shows in a folder
 /// whose delete is queued.

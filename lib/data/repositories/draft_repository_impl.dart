@@ -291,12 +291,25 @@ class DraftRepositoryImpl extends DraftRepository {
 
   /// Deletes the draft row [row] that sync found gone from the server —
   /// unless it was edited since sync read it (it is dirty again then, and
-  /// its edit is pushed as a new copy).
+  /// its edit is pushed as a new copy). App Log warn `draft.server_gone`.
   Future<void> _dropSyncedRow(Draft row) => _serialized(row.id, () async {
         final deleted = await (_db.delete(_db.drafts)
               ..where((t) => t.id.equals(row.id) & t.dirty.equals(false)))
             .go();
-        if (deleted > 0) await _deleteFilesOf(row);
+        if (deleted == 0) return;
+        await _deleteFilesOf(row);
+        unawaited(
+          _appLogger?.warn(
+            'draft.server_gone',
+            'Removed the draft "${row.subjectText}": its copy on the server '
+                'is gone (deleted or sent from another client)',
+            accountId: row.accountId,
+            data: {
+              'draftId': row.id,
+              'serverId': row.imapServerId ?? row.jmapServerId,
+            },
+          ),
+        );
       });
 
   @override
@@ -545,8 +558,8 @@ class DraftRepositoryImpl extends DraftRepository {
         .getSingleOrNull();
     final previousPath = row?.state ?? _draftsFolder;
     if (previousPath != draftsPath) {
-      await _db.transaction(() async {
-        await (_db.update(_db.drafts)
+      final (pushed, dropped) = await _db.transaction(() async {
+        final pushed = await (_db.update(_db.drafts)
               ..where(
                 (t) =>
                     t.accountId.equals(accountId) & t.imapServerId.isNotNull(),
@@ -554,10 +567,29 @@ class DraftRepositoryImpl extends DraftRepository {
             .write(
           const DraftsCompanion(imapServerId: Value(null), dirty: Value(true)),
         );
-        await (_db.delete(_db.draftTombstones)
+        final dropped = await (_db.delete(_db.draftTombstones)
               ..where((t) => t.accountId.equals(accountId)))
             .go();
+        return (pushed, dropped);
       });
+      if (pushed > 0 || dropped > 0) {
+        unawaited(
+          _appLogger?.warn(
+            'draft.folder_changed',
+            'The Drafts folder is "$draftsPath" now (was "$previousPath"): '
+                '$pushed draft(s) are uploaded there again; $dropped queued '
+                'removal(s) of drafts in "$previousPath" were dropped, so '
+                'their old copies stay there',
+            accountId: accountId,
+            data: {
+              'from': previousPath,
+              'to': draftsPath,
+              'reuploaded': pushed,
+              'droppedRemovals': dropped,
+            },
+          ),
+        );
+      }
     }
     if (row?.state != draftsPath) {
       await _db.into(_db.syncStates).insertOnConflictUpdate(

@@ -444,12 +444,25 @@ extension _Counterparts on EmailRepositoryImpl {
         .getSingleOrNull();
     final destRole = sourceDest?.role;
     final destName = sourceDest?.name ?? destMailboxPath;
+    // The folders above the destination, so a nested folder is looked up,
+    // and stood in for, below the same parent on the counterpart (phase
+    // 6b). Null: an ancestor is not cached.
+    final ancestors =
+        sourceDest == null ? null : await _mailboxState.ancestorsOf(sourceDest);
 
     for (final row in twins) {
+      // The counterpart's folder for the destination's parent; null at the
+      // top level, or when a folder above it is not known there (then the
+      // stand-in is made at the top level, as before 6b).
+      final parent = ancestors == null || ancestors.isEmpty
+          ? null
+          : await _resolveCounterpartParent(row.accountId, ancestors);
       final counterpartDest = await _resolveCounterpartMailboxPath(
         row.accountId,
         role: destRole,
         name: destName,
+        scoped: parent != null,
+        below: parent,
       );
       if (counterpartDest == null) {
         // The counterpart has no equivalent destination mailbox yet — e.g. an
@@ -466,6 +479,7 @@ extension _Counterparts on EmailRepositoryImpl {
           name: destName,
           role: destRole,
           primarySeq: primary,
+          parent: parent,
         );
         await _asShadowOf(primary, () => _moveRow(row, standIn));
         continue;
@@ -506,6 +520,11 @@ extension _Counterparts on EmailRepositoryImpl {
   /// then a case-insensitive name match for role-less custom folders. Returns
   /// null when the counterpart has no equivalent mailbox.
   ///
+  /// With [scoped], the name passes look only at the folders shown below
+  /// [below] (the top level when null): a nested folder's name is matched
+  /// below its parent's counterpart, so "A/2026" never pairs with "B/2026"
+  /// (phase 6b). The role passes stay account-wide.
+  ///
   /// The exact pass matters because a role is not unique: Stalwart ships
   /// "Deleted Items" as its trash folder, so a mailbox the user (or a test)
   /// creates as "Trash" carries role `trash` too. Matching on the role alone
@@ -517,31 +536,69 @@ extension _Counterparts on EmailRepositoryImpl {
     String accountId, {
     required String? role,
     required String name,
+    bool scoped = false,
+    String? below,
   }) async {
-    // Only folders the server has: a folder created offline (or whose
-    // create failed, hidden) is no place a server-side move can have put
-    // the mail (SYNC-REDESIGN.md §7).
-    // Nor one being deleted (phase 5b).
-    final mailboxes = await (_db.select(_db.mailboxes)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.isLocal.not() &
-                t.localHidden.not(),
-          ))
-        .get();
+    final mailboxes = await _counterpartFolders(accountId);
     final lowerName = name.toLowerCase();
-    for (final m in mailboxes) {
-      if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
-    }
     if (role != null) {
+      for (final m in mailboxes) {
+        if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
+      }
       for (final m in mailboxes) {
         if (m.role == role) return m.path;
       }
     }
-    for (final m in mailboxes) {
+    final parents = scoped ? await _mailboxState.shownParents(accountId) : null;
+    final scope = [
+      for (final m in mailboxes)
+        if (parents == null || parents[m.path] == below) m,
+    ];
+    for (final m in scope) {
+      if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
+    }
+    for (final m in scope) {
       if (m.name.toLowerCase() == lowerName) return m.path;
     }
     return null;
+  }
+
+  /// The folders of [accountId] a server-side move can have put a mail
+  /// into: only folders the server has: a folder created offline (or
+  /// whose create failed, hidden) is no such place (SYNC-REDESIGN.md §7),
+  /// nor one being deleted (phase 5b). So a stand-in is never made below a
+  /// `~new:` folder.
+  Future<List<MailboxRow>> _counterpartFolders(String accountId) =>
+      (_db.select(_db.mailboxes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.isLocal.not() &
+                  t.localHidden.not(),
+            ))
+          .get();
+
+  /// The path of the folder of counterpart [accountId] that stands for the
+  /// last of [chain] (another account's folders, outermost first): each
+  /// level matched as [_resolveCounterpartMailboxPath] matches a
+  /// destination, among the folders shown below the level before. Null
+  /// when a level has no match there (phase 6b).
+  Future<String?> _resolveCounterpartParent(
+    String accountId,
+    List<MailboxRow> chain,
+  ) async {
+    String? parent;
+    for (final level in chain) {
+      final match = await _resolveCounterpartMailboxPath(
+        accountId,
+        role: level.role,
+        name: level.name,
+        scoped: true,
+        below: parent,
+      );
+      if (match == null) return null;
+      parent = match;
+    }
+    return parent;
   }
 }

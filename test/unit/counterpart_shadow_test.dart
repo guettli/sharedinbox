@@ -372,6 +372,165 @@ void main() {
     expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
   });
 
+  group('a stand-in for a nested folder (6b)', () {
+    Future<void> folder(
+      String account,
+      String path,
+      String name, {
+      String? parentId,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$account:$path',
+                accountId: account,
+                path: path,
+                name: name,
+                parentId: Value(parentId),
+              ),
+            );
+    Future<MailboxRow> mailbox(String path) =>
+        (db.select(db.mailboxes)..where((t) => t.path.equals(path)))
+            .getSingle();
+    Future<PendingChangeRow> shadowCreate(String accountId) async =>
+        (await opsOf(accountId))
+            .singleWhere((o) => o.changeType == 'create_mailbox');
+    Future<void> ackPrimary(String accountId) async {
+      final primary = (await opsOf(accountId)).single;
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.id.equals(primary.id)))
+          .write(const PendingChangesCompanion(state: Value('inflight')));
+      await EmailStateWriter(db).ack(
+        await (db.select(db.pendingChanges)
+              ..where((t) => t.id.equals(primary.id)))
+            .getSingle(),
+      );
+    }
+
+    test(
+        'JMAP: made below the parent the counterpart has (not a same-named '
+        'folder elsewhere), never sent, no stand-in id as a parent; the '
+        "listing adopts it when the server's folder is nested", () async {
+      await folder('imap-p', 'Projects', 'Projects');
+      await folder('imap-p', 'Projects/2026', '2026');
+      await folder('jmap-p', 'mbox-proj', 'Projects');
+      // A "2026" below another folder is not the destination.
+      await folder('jmap-p', 'mbox-other', 'Other');
+      await folder('jmap-p', 'mbox-o2026', '2026', parentId: 'mbox-other');
+
+      await emails.moveEmail('imap-p:5', 'Projects/2026');
+
+      final twin = await row('jmap-p:e1');
+      expect(twin.mailboxPath, startsWith('~new:'));
+      final standIn = await mailbox(twin.mailboxPath);
+      expect(
+        (standIn.isLocal, standIn.name, standIn.parentId, standIn.displayPath),
+        (true, '2026', 'mbox-proj', 'Projects/2026'),
+      );
+      final create = await shadowCreate('jmap-p');
+      expect(create.state, 'shadow');
+      expect(
+        (jsonDecode(create.payload) as Map<String, dynamic>)['parent'],
+        'mbox-proj',
+      );
+      expect(await emails.flushPendingChanges('jmap-p', 'pw'), 0);
+      expect(jmapRequests, isEmpty, reason: 'its create is never sent');
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+
+      await ackPrimary('imap-p');
+      final writer = EmailStateWriter(db);
+      await MailboxStateWriter(db).writeServer(
+        accountId: 'jmap-p',
+        path: 'mbox-2026',
+        name: '2026',
+        role: null,
+        parentId: 'mbox-proj',
+        unreadCount: 0,
+        totalCount: 1,
+        unreadSeq: 0,
+        readSeq: await writer.nextReadSeq(),
+      );
+
+      final adopted = await mailbox('mbox-2026');
+      expect((adopted.id, adopted.isLocal), (standIn.id, false));
+      expect((await row('jmap-p:e1')).mailboxPath, 'mbox-2026');
+      expect(
+        (await opsOf('jmap-p')).map((o) => o.changeType),
+        isNot(contains('create_mailbox')),
+      );
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+    });
+
+    test(
+        'JMAP: a parent the counterpart does not know puts the stand-in at '
+        'the top level', () async {
+      await folder('imap-p', 'Projects', 'Projects');
+      await folder('imap-p', 'Projects/2026', '2026');
+
+      await emails.moveEmail('imap-p:5', 'Projects/2026');
+
+      final standIn = await mailbox((await row('jmap-p:e1')).mailboxPath);
+      expect(standIn.isLocal, isTrue);
+      expect(standIn.parentId, isNull);
+      expect(
+        (jsonDecode((await shadowCreate('jmap-p')).payload)
+                as Map<String, dynamic>)
+            .containsKey('parent'),
+        isFalse,
+      );
+      await expectConsistent();
+    });
+
+    test(
+        'IMAP: made at the path the server gives the nested folder, and the '
+        'listing of that path takes it over', () async {
+      await folder('jmap-p', 'mbox-proj', 'Projects');
+      await folder('jmap-p', 'mbox-2026', '2026', parentId: 'mbox-proj');
+      await folder('imap-p', 'Projects', 'Projects');
+
+      await emails.moveEmail('jmap-p:e1', 'mbox-2026');
+
+      final twin = await row('imap-p:5');
+      expect(twin.mailboxPath, 'Projects/2026');
+      final standIn = await mailbox('Projects/2026');
+      expect(
+        (standIn.isLocal, standIn.accountId, standIn.displayPath),
+        (true, 'imap-p', 'Projects/2026'),
+      );
+      expect(
+        (jsonDecode((await shadowCreate('imap-p')).payload)
+            as Map<String, dynamic>)['parent'],
+        'Projects',
+      );
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+
+      await ackPrimary('jmap-p');
+      await MailboxStateWriter(db).writeServer(
+        accountId: 'imap-p',
+        path: 'Projects/2026',
+        name: '2026',
+        role: null,
+        parentId: null,
+        unreadCount: 0,
+        totalCount: 1,
+        unreadSeq: 0,
+        readSeq: await EmailStateWriter(db).nextReadSeq(),
+      );
+
+      final adopted = await mailbox('Projects/2026');
+      expect((adopted.id, adopted.isLocal), (standIn.id, false));
+      expect((await row('imap-p:5')).mailboxPath, 'Projects/2026');
+      expect(
+        (await opsOf('imap-p')).map((o) => o.changeType),
+        isNot(contains('create_mailbox')),
+      );
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+    });
+  });
+
   group('an IMAP twin shown in a folder through a shadow', () {
     setUp(() async {
       // The user archives on the JMAP account: the IMAP twin shows Archive,

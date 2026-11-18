@@ -956,17 +956,31 @@ extension _SyncJmap on EmailRepositoryImpl {
     // Skipping them would mean flag drift (#407) and phantom threads (#523)
     // were never corrected for exactly the mailboxes having trouble.
     if (_jmapEnumerationComplete(serverIds, reportedTotal)) {
-      final removed = (await _pruneJmapMailboxToServerIds(
+      final pruned = await _pruneJmapMailboxToServerIds(
         accountId,
         mailboxJmapId,
         serverIds,
         read: enumeration,
-      ))
-          .length;
-      if (removed > 0) {
+      );
+      if (pruned.isNotEmpty) {
         log(
-          'JMAP-sync: reconcile mailbox=$mailboxJmapId pruned=$removed '
+          'JMAP-sync: reconcile mailbox=$mailboxJmapId pruned=${pruned.length} '
           '(server=${serverIds.length})',
+        );
+        // Mail no change reported deleted vanishes: say which.
+        unawaited(
+          _appLogger?.warn(
+            'sync.reconcile_pruned',
+            'The periodic check of $mailboxJmapId removed ${pruned.length} '
+                'cached mail(s) the server no longer lists there, although '
+                'no change reported them deleted',
+            accountId: accountId,
+            mailboxPath: mailboxJmapId,
+            data: {
+              'serverCount': serverIds.length,
+              'emailIds': [for (final row in pruned.take(100)) row.id],
+            },
+          ),
         );
       }
     } else {

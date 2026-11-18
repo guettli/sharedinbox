@@ -89,4 +89,15 @@ abstract class MailboxRepository {
   /// moved back. Returns false when it can no longer be undone (a delete
   /// being sent, or one that may have reached the server).
   Future<bool> undoFolderChange(String accountId, String mailboxId);
+
+  /// The folders of every account whose delete is queued (hidden at once,
+  /// SYNC-REDESIGN.md §8 phase 5b): their mail shows nowhere, search
+  /// included. Emits the current set, then again whenever it changes, so a
+  /// screen holding mail it read before (search results) drops the mail of
+  /// a folder just deleted, and gets it back when the delete is undone or
+  /// fails.
+  Stream<Set<FolderRef>> observeHiddenFolders();
 }
+
+/// A folder of an account: [path] is `Mailbox.path` (and `Email.mailboxPath`).
+typedef FolderRef = ({String accountId, String path});

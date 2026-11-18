@@ -124,6 +124,44 @@ void main() {
     expect(await bodyCount(), 0);
   });
 
+  test(
+      "eviction never drops a virtual row's body (the only copy of the "
+      'text the user wrote)', () async {
+    await seedEmails(1);
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'a:~virtual',
+            accountId: 'a',
+            mailboxPath: 'INBOX',
+            uid: 0,
+            receivedAt: DateTime.utc(2025),
+            isLocal: const Value(true),
+          ),
+        );
+    for (final id in ['a:INBOX:1', 'a:~virtual']) {
+      await db.into(db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: id,
+              textBody: const Value('body'),
+              cachedAt: Value(DateTime.utc(2025)),
+            ),
+          );
+    }
+    await db.into(db.userPreferences).insertOnConflictUpdate(
+          const UserPreferencesCompanion(
+            id: Value(1),
+            bodyCacheLimitMb: Value(0),
+          ),
+        );
+
+    await service(_FakeFetcher(db)).run();
+
+    expect(
+      (await db.select(db.emailBodies).get()).map((b) => b.emailId),
+      ['a:~virtual'],
+    );
+  });
+
   test('skips recently failed messages on later runs, retries after 24h',
       () async {
     await seedEmails(30);

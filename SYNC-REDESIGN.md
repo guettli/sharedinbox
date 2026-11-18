@@ -1,6 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **chosen direction, partly implemented** (phases 0–5 and 6a, see §8; phase 6b left). Goal: make offline-first (the rules in
+Status: **done** (phases 0–6, see §8; what remains open is in §10). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -400,6 +400,28 @@ forever. `_dropStaleCounterpartRow`
   creation and the placeholder `"Snoozed"` path (`_repointSnoozedPlaceholder`,
   7071). Rename updates `srv_mailbox_path` of the rows in that mailbox, which
   is a server fact, not a re-key.
+- **Queued payloads follow a folder's new server path** (decided in 5a,
+  final). Mail ops name folders by path (`dest`, `src`, `mailboxPath`,
+  `prevSnoozedFrom`), and so do the mailbox ops (`parent`, `fromParent`)
+  and Undo actions. When the server confirms a new path for a folder (the
+  ack of an IMAP rename or move, a create's JMAP id or corrected IMAP path,
+  a counterpart's stand-in adopted by a listing, a rename made on another
+  IMAP client and followed), `MailboxStateWriter.serverPathChanged` moves
+  the folder's row (its id stays) and rewrites every queued payload and
+  Undo action naming the old path, in the same transaction
+  (`EmailStateWriter.renameFolder`, `_repointMailboxOps`), then re-folds
+  the rows of the rewritten mail ops; each rewrite is logged (App Log warn
+  `pending_change.folder_renamed`). An acked create keeps its stand-in path
+  as `localPath`, so a change queued afterwards from a screen that still
+  names it is pointed at the server's path at enqueue and in the flush
+  (`resolveStandIn`). **Rejected: an alias table** (old path → new path,
+  resolved when a payload is read). It would have to be applied at about
+  50 payload reads (the flush of each op type, the settle rules, the
+  per-path holds of the flush, Undo, the Pending Changes screen), could
+  only be pruned once no op or Undo action names an old path any more, and
+  a missed read would send a change to a path the server no longer has.
+  The rewrite happens once, at the one place the server's new path becomes
+  known, and the ops stay plain data that every reader takes as is.
 - **Unread counts** stay server counts (STATUS, `unreadEmails`). Each stored
   count gets the read sequence it was read at. The UI shows `server + delta`,
   where the delta covers only ops that the count does not reflect yet:
@@ -1528,9 +1550,10 @@ listing and the twin shows where its account reads it); a folder moved
 while a stale listing runs can show twice until the move's ack merges
 the rows (`mailbox.local_merged`), as in 5a for renames; a watched email query (search results open on screen) is not re-run
 when only a folder's `local_hidden` changes, so it drops the mail of a
-folder just deleted at its next refresh.
+folder just deleted at its next refresh. (6a and 6b below handle each of
+these, or say why not.)
 
-As implemented, phase 6 is two PRs:
+As implemented, phase 6 is two PRs, both done:
 1. **6a (done, schema v77):** the guards, mark-and-sweep for force
    resync, and the last allow-listed writes of `emails` (points 1–3 of the
    phase 6 brief).
@@ -1659,7 +1682,7 @@ As implemented, phase 6 is two PRs:
      account resync's full-sync marks, the contract test's listing sweeping
      a folder the server dropped, the v77 migration, and check 4 and the
      fixture flag in the check fixtures.
-   - **Left for 6b:** points 4–8 of the brief (watched email queries and
+   - **Left for 6b (done, below):** points 4–8 of the brief (watched email queries and
      `local_hidden`, the nested counterpart stand-in, a folder moved during
      a stale listing, documenting the payload rewrite decision, the
      remaining App Log audit, and the final docs, status and §9 review). Not
@@ -1667,6 +1690,95 @@ As implemented, phase 6 is two PRs:
      destination still ends as a new row (2c, 4b): carrying it over needs
      the vanished row to wait without a change of the user's, which is not
      what the resync's sweep does.
+
+2. **6b (done, no schema change):** the rest of the phase 6 brief.
+   - **Watched email queries and `local_hidden`.** `_visible` (the
+     hidden-row filter of §2, which since 5b also hides the mail of a
+     folder whose delete is queued) declares `mailboxes` as a watched table
+     (Drift `CustomExpression.watchedTables`), so a watched query using it
+     (the thread across folders) re-runs when only a folder's
+     `local_hidden` changes, and drops that folder's mail at once. The
+     search screen holds results it read once: it listens to the new
+     `MailboxRepository.observeHiddenFolders()` (the set of folders whose
+     delete is queued, every account), drops the results in a folder that
+     became hidden at once and re-runs the search; when the set shrinks
+     (the delete was undone or failed) it re-runs too, so the mail comes
+     back. The folder lists filter by folder already.
+   - **Counterpart stand-in for a nested folder.** `_mirrorMoveToCounterparts`
+     resolves the destination's ancestors on the source account
+     (`MailboxStateWriter.ancestorsOf`, by the parent each folder shows
+     below) level by level on the counterpart, each matched by role, then
+     by name among the folders below the level before
+     (`_resolveCounterpartParent`; only folders with a server copy and not
+     being deleted). The destination's own name match is limited to the
+     folders below that parent, so "A/2026" no longer pairs with "B/2026".
+     With the parent found, the stand-in is made below it
+     (`ensureCounterpartFolder(parent:)`): on IMAP at the path the server
+     gives the folder (parent, separator, name), on JMAP with a `~new:`
+     path and the parent's server id as `parent_id`; its shadow create
+     names that parent. A listing adopts it when it lists a folder of that
+     name below that parent (JMAP `parentId`; IMAP the path's parent, or
+     the path itself), so a nested folder is adopted on JMAP too. Safety:
+     the create stays a shadow (never flushed), a parent is always a
+     folder with a server copy (`ensureCounterpartFolder` drops a local
+     one), so no `~new:` path ever becomes a parent sent to a server; a
+     folder the user creates below a stand-in waits for the stand-in's
+     adoption (its create names a local parent) and fails with it when the
+     stand-in is dropped. **Parent unknown to the counterpart** (it has not
+     listed the parent, or the parent was itself created offline on the
+     other account): the stand-in is made at the top level, as before. On
+     IMAP a listing still adopts it by its name alone when no stand-in
+     below the listed parent matches; on JMAP it is not adopted (the
+     parent ids differ), so the listing that started after the primary's
+     ack drops it (`mailbox.counterpart_folder_dropped`) and the twin
+     shows where its account reads it.
+   - **A folder moved or renamed during a stale listing no longer shows
+     twice** (IMAP; JMAP ids are stable). A listing whose LIST already has
+     the new path of a rename or move that is being sent (`inflight`), and
+     no longer the old one, does not store a row at the new path or below
+     it (`pathsArrivingByRename`), and does not offer those paths to
+     `_followRenamesElsewhere`; the op's ack then moves the folder there,
+     keeping its id. Before, the listing stored a second folder, shown
+     next to the moving one until the ack merged them
+     (`mailbox.local_merged`). A rename or move sent before without an
+     answer was already completed by `completeLostRenames`. If the op is
+     refused after all, the path is stored by the next listing. The merge
+     stays for a listing that stores the path before the op is claimed
+     (another device's rename of the same folder); its log line now says
+     "created, renamed or moved on this device".
+   - **RFC 8474 MAILBOXID: not done.** enough_mail 2.1.7 neither asks for
+     nor parses `MAILBOXID` (STATUS, LIST-EXTENDED or the SELECT response
+     code), so following folders by id needs a raw command and parser,
+     plus a stored id per folder (a schema change) and a migration that
+     fetches it; not cheap. `_followRenamesElsewhere` keeps its
+     UIDVALIDITY / Message-ID rules (§10).
+   - **The payload rewrite on a path change** is documented in its final
+     place, §7 ("Queued payloads follow a folder's new server path").
+   - **App Log audit.** New warn lines where sync removed or rewrote local
+     data without one: `mailbox.removed_gone` (a folder the server no
+     longer has, by listing, SELECT or JMAP `destroyed`, removed with the
+     mail cached for it; before, only kept mail or failed changes were
+     logged), `sync.uidvalidity_changed` now also when no mail is kept
+     (how many cached mails were removed and come back as new rows),
+     `sync.reconcile_pruned` (the periodic JMAP reconcile removing mail no
+     change reported deleted), `draft.server_gone` (a synced draft whose
+     server copy is gone) and `draft.folder_changed` (the Drafts folder
+     changed: drafts uploaded again, queued removals dropped). Info
+     `body_cache.evicted`. Fix: the body cache eviction no longer drops a
+     virtual row's body (`is_local`, the text the user wrote, with no
+     server copy to fetch it again). `markFolderGone` returns how many rows
+     it removed with the ones it kept.
+   - **Tests.** `counterpart_shadow_test.dart` (a nested stand-in on JMAP
+     below the parent the counterpart has, not a same-named folder
+     elsewhere, never sent, adopted by the nested listing; an unknown
+     parent at the top level; IMAP at the server's path, taken over by
+     the listing), `mailbox_ops_test.dart` (a listing inside the in-flight
+     RENAME of a move and of a rename: no second folder, the ack moves it,
+     no `mailbox.local_merged`; an open thread dropping a deleted folder's
+     mail and `observeHiddenFolders`), `search_screen_test.dart` (results
+     drop a deleted folder's mail before the re-query answers; Undo brings
+     it back) and `body_cache_service_test.dart` (a virtual row's body is
+     not evicted).
 
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
@@ -1682,40 +1794,108 @@ As implemented, phase 6 is two PRs:
 
 ## 9. Effect on open issues
 
-| Issue | After the redesign |
-|---|---|
-| #1236 force resync wipes offline | phase 0 short-term fix; §6 mark-and-sweep long-term |
-| #1237 remove account drops pending work | phase 0, independent |
-| #1238 JMAP upsert overwrites move/snooze | fixed by phase 4 |
-| #1239 sync drops queued changes | phase 0 stops the silent drops; fixed by phases 4 and 5 |
-| #1240 mailto unsubscribe | phase 0, independent |
-| #1241, #1244 body / raw / attachment cache | independent |
-| #1242 folder ops offline | phase 5 |
-| #1243 Sieve | §7, independent |
-| #1245, #1246, #1248 UI / smoke / exploratory | independent |
-| #1247 race test helper | replaced by the phase 0 fuzz work |
+State as of phase 6b (checked with `gh issue view`):
+
+| Issue | State | After the redesign |
+|---|---|---|
+| #1236 force resync wipes offline | closed | phase 0 checks the server first; phase 6a's mark-and-sweep keeps every row the refetch finds |
+| #1237 remove account drops pending work | closed | phase 0, independent |
+| #1238 JMAP upsert overwrites move/snooze | closed | fixed by phase 4 (the location overlay) |
+| #1239 sync drops queued changes | closed | phase 0 stops the silent drops; phases 4 and 5 keep the rows and fail the changes visibly |
+| #1240 mailto unsubscribe | closed | phase 0, independent |
+| #1242 folder ops offline | closed | phase 5 |
+| #1247 race test helper | closed | replaced by the phase 0 stale-answer fuzz |
+| #1241 a cached body older than 7 days does not open offline | open | independent of the redesign |
+| #1243 Sieve scripts offline | open | independent (§7) |
+| #1244 raw source / attachment cache | open | independent |
+| #1245 "needs a connection" UI | open | independent |
+| #1246 offline smoke test | open | independent |
+| #1248 offline exploratory testing | open | independent |
 
 ## 10. Risks and open questions
 
-- **The copy `UPDATE`** on a large DB (phases 3 and 4) rewrites every row
-  once and grows the WAL. It sets only `srv_*`, so no FTS trigger fires.
-  Phase 2 also builds the unique location index. Measure both on a 50k-row
-  DB.
+What remains after phase 6, with where it is handled today:
+
+- **A foreign move whose source folder is synced first** (another client
+  moved the mail; this device syncs the source before the destination):
+  the source's absence rule deletes the row, and the destination's sync
+  stores a new one with a new id, without the body or local references
+  (2c, 4b). Carrying it over needs the vanished row to wait without a
+  change of the user's, which the clean-up rule does not allow. Out of
+  scope for the redesign; documented only. The other order (destination
+  first) is carried over (`_carryOverMovedRow`).
+- **A folder renamed or moved on another IMAP client** is followed only
+  when its UIDVALIDITY survives the RENAME and its cached Message-IDs are
+  found, or, on servers that give it a new UIDVALIDITY (Stalwart), when it
+  holds every cached Message-ID with exactly the cached count
+  (`_followRenamesElsewhere`). Not followed: an empty or never-synced
+  folder on such a server, a rename and a move at once (neither leaf nor
+  parent match), two candidates. Then its queued changes fail visibly
+  ("folder removed on the server") and its mail is fetched again under the
+  new path as new rows. RFC 8474 `MAILBOXID` would close this; enough_mail
+  does not support it (6b).
+- **A UIDVALIDITY change drops the folder's cached rows** (bodies,
+  downloaded attachments, references) and refetches them as new rows;
+  only rows with a queued change are kept. §6's re-match by Message-ID was
+  not built. Logged (`sync.uidvalidity_changed`, since 6b also without a
+  kept row).
+- **Two isolates write the same database** (the foreground app and the
+  WorkManager / background sync isolate). Correctness lives in the DB
+  (ops, stamps, the read sequence, claim tokens), but SQLite allows one
+  writer: `busy_timeout` is 5 s (`database.dart`), and a longer write
+  transaction in one isolate (a big fetch, a fold over many rows) can make
+  the other's write fail with `SQLITE_BUSY` after the timeout. A sync step
+  that fails that way is retried by the next cycle; what a user action
+  does then was not tested. Not measured on large accounts.
+  Drift change streams are per connection, so a background write
+  refreshes the foreground lists only at their next query.
+- **IMAP `BAD` is treated as transient.** Only `NO` with a permanent
+  response code (`[CANNOT]`, `[NOPERM]`, …) refuses a change at once; a
+  `BAD` (a command the server cannot parse, e.g. a path or flag it
+  rejects) is retried with backoff and ends `stuck` after 5 attempts, not
+  `failed`, so it keeps folding and is retried for good with a long
+  backoff instead of being listed with Retry / Discard.
+- **Ops still carry UIDs.** §3 wanted ops to resolve the server location
+  from the row's `srv_*` columns at flush time. Queued IMAP payloads still
+  hold the UID, folder and UIDVALIDITY they were queued with, and the
+  writers that move a mail rewrite them (`_rewritePendingChangeUids`, the
+  in-place match's `_unparkOps`, `uidAfterMove` with a Message-ID search).
+  The UIDVALIDITY stamp makes a stale UID fail instead of hitting another
+  mail, but every new location writer must remember the rewrite.
+- **Folder paths in payloads are rewritten, not aliased** (§7): a writer
+  that changes a folder's path without `serverPathChanged` would leave
+  queued changes naming a path the server no longer has (they then fail
+  visibly as "folder removed"). `check_email_writes.sh` check 3 keeps
+  `mailboxes` writes in the mailbox writer, which is the only caller.
+- **A folder is removed when the server seems not to have it**: by a
+  listing without it, a JMAP `destroyed`, or an IMAP SELECT error that
+  `isImapMailboxNotFound` matches by text ("nonexistent", "does not
+  exist", "trycreate", "not found"). A listing that is empty or partial is
+  not guarded against (the JMAP mail enumeration is, the folder listing is
+  not), and a SELECT error that merely contains "not found" removes the
+  folder. Its mail goes with it unless a change of it is queued. Logged
+  since 6b (`mailbox.removed_gone`).
+- **The `_pendingDeleteOrMoveUids` guard** (6a) is the one in-memory-free
+  but payload-based guard left: the late FETCH answer for a vacated
+  location is recognised only through the queued op's payload. If a read
+  settles the op before a stale answer from a concurrent sync of the same
+  account is processed, that answer is stored as a new row until the next
+  reconcile marks it gone (4a).
+- **A counterpart stand-in whose parent the counterpart does not know**
+  is made at the top level; on JMAP it is not adopted and is dropped by the
+  next listing (6b).
 - **Enforcement is a check, not the schema.** A direct write that slips
-  past the grep check is caught by the consistency checks, not refused at
+  past `check_email_writes.sh` is caught by the sampled consistency checks
+  (`OverlayConsistencySampler`, repaired and logged), not refused at
   compile time.
-- **Fold cost** inside large sync transactions: today `_updateThread` runs
-  outside the fetch transaction (1928). Sync does not fold except on drop,
-  so this mainly hits `markAllAsRead` and bulk Sieve runs. Batch them.
-- **Drift change streams are per connection.** Background-isolate writes
-  may not refresh foreground streams. Correctness lives in the DB (ops,
-  stamps, sequence), so only freshness is at stake. Decide in phase 1
-  whether the background isolate writes `srv_` columns at all.
-- **Thread derivation** on IMAP (`_computeThreadId`, 9262) stays as it is
-  and reads the effective columns.
-- **Phase 2 blast radius**: id parsing (`split(':').last`,
-  `substring('$accountId:'.length)`) and attachment folder names derived
-  from ids. Inventory these first.
+- **Unread counts** are `server + delta` (§7); the delta can be off by one
+  for a row with one change the count reflects and another it does not,
+  and shows the older count until the next count read.
+- **Not measured:** the v72/v73 copy `UPDATE`s and the location index on a
+  50k-row database (WAL growth at upgrade), and the fold cost of
+  `markAllAsRead` and large Sieve runs.
+- **Thread derivation** on IMAP (`_computeThreadId`) is unchanged and reads
+  the effective columns.
 
 ## Appendix A: every writer and where it goes
 
@@ -1726,23 +1906,23 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | Part | Role (groups below) |
 |---|---|
 | `sync.dart` | Sync: dispatch, `clearForResync` / `clearMailboxForResync` (the mark of mark-and-sweep since 6a, and the sweep of rows outside any folder), `_backfillAddressHeaders` |
-| `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap`, UIDVALIDITY (the late-FETCH location guard until 4a) |
-| `sync_jmap.dart` | Sync: JMAP upsert, `notFound` / `destroyed`, prune, reconcile, sync state |
+| `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap` (also the sweep of a complete refetch since 6a), UIDVALIDITY, the late-FETCH guard `_pendingDeleteOrMoveUids` |
+| `sync_jmap.dart` | Sync: JMAP upsert, `notFound` / `destroyed`, prune (the sweep of a full sync since 6a), reconcile, sync state |
 | `jmap_push.dart` | Sync: the JMAP EventSource watch (no row writes) |
-| `row_identity.dart` | Sync and flush: rows by server location, `_relocateEmailRow`, `_carryOverMovedRow`, `_mergeDuplicateRow` |
+| `row_identity.dart` | Sync and flush: rows by server location, `_relocateEmailRow`, `_carryOverMovedRow`, `_mergeDuplicateRow`, `_rewritePendingChangeUids` |
 | `bodies.dart` | Sync: bodies, attachments, raw messages, `_healMismatchedImapBody` |
-| `change_queue.dart` | Flush and user actions: the op table (enqueue, claim, lease, Undo `captureOps` / `cancelOps`, `cancelPendingChange`, `retryMutation`) |
+| `change_queue.dart` | Flush and user actions: the op table (enqueue, claim, lease, Undo `captureOps` / `cancelOps`, `cancelPendingChange`, `retryMutation`), parked ops and `_unparkOps` (4b) |
 | `change_failures.dart` | Flush: `_recordChangeError`, stuck and failed changes, reverting failed flag and location changes |
 | `flush_imap.dart` | Flush: `_applyPendingChangeImap`, `_settleImapChange`, `_remapEmailAfterImapMove`, `_retryImapMoveByMessageId` |
 | `flush_jmap.dart` | Flush: `_applyPendingChangeJmap` (`_repointSnoozedPlaceholder` gone in 5a) |
 | `flush_mailbox.dart` | Flush: mailbox ops (`_flushMailboxOps`: create, rename since 5a; move, delete since 5b) and the hold of mail changes that need a folder not created yet or being deleted |
-| `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, `restoreEmails` |
-| `counterparts.dart` | User actions: `_mirror*ToCounterparts` and `_dropStaleCounterpartRow` (shadow ops since 4b); sync: `_matchArrival` (the in-place match, 4b) |
+| `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, Undo's `restoreEmails` (through the writer's `restoreRow` since 6a) |
+| `counterparts.dart` | User actions: `_mirror*ToCounterparts` (shadow ops since 4b; the counterpart's stand-in folder since 5b, below the right parent since 6b: `_resolveCounterpartParent`); sync: `_matchArrival` (the in-place match, 4b) |
 | `sieve.dart` | User actions: Sieve `_enqueueSieveMove/Delete/Flags` |
 | `local_rows.dart` | Local row creation: `_storeSentCopyLocally`, `_createLocalSelfMessages` (their row writes through the writer's `insertLocalRow` since 4b) |
 | `send.dart` | Sending (SMTP, JMAP submission, outbox); its row writes go through `local_rows.dart` |
 | `threads.dart` | Derived: `_updateThread`, `_reconcileSourceThreads`, `_sweepOrphanThreads` |
-| `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes) |
+| `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes); `_visible`, the hidden-row filter, also watches `mailboxes` (6b) |
 | `diagnostics.dart` | Diagnostics and the reliability probe (no row writes) |
 
 The email state writer (§2) is `lib/data/repositories/email_state_writer.dart`
@@ -1756,7 +1936,14 @@ since 6a the rows of server copies (`insertServerRow`,
 `writeServerHeaders`) and Undo's restore (`restoreRow`). `scripts/check_email_writes.sh` has an allow-list
 for members that write `emails` themselves; it is empty since 6a. Since 5a the mailbox state writer
 (`lib/data/repositories/mailbox_state_writer.dart`) is the only writer of
-`mailboxes` (check 3 of the same script). The thread aggregate is `refreshThreadAggregate`
+`mailboxes` (check 3 of the same script): the user's folder ops (create,
+rename, move, delete, Undo), the fold, the listings' gate (`writeServer`,
+`prunable`, `completeLostRenames`, since 6b `pathsArrivingByRename`), the
+flush outcomes, `serverPathChanged` (which rewrites the queued payloads,
+§7) and the counterpart stand-ins (`ensureCounterpartFolder`,
+`dropOrphanedCounterpartFolders`). Folder listings and removals are in
+`mailbox_repository_impl.dart` (`syncMailboxes`, `_followRenamesElsewhere`,
+`removeLocalMailbox`), the folder flush in `flush_mailbox.dart`. The thread aggregate is `refreshThreadAggregate`
 (`lib/data/repositories/thread_aggregate.dart`, 4a), shared with
 `removeLocalMailbox`.
 
@@ -1767,14 +1954,17 @@ The line numbers below are from before the split (`33c67b4`).
   `_maybeReconcileImapFlagsMailbox` (1591).
 - `_backfillSizes` / `_backfillImapSizes` (1711), headers only.
 - `_reconcileDeletedImap` (2068) and `_adoptImapMovedRow` (2160), which
-  become absence and carry-over rules.
+  became the absence rule (4a) and the carry-over (`_carryOverMovedRow`,
+  2c).
 - UIDVALIDITY reset (1310), per §6.
 - `_upsertJmapEmails` (3796), `notFound` handling (3302), `destroyed` →
   `_deleteJmapEmailById` (3428, 3480).
 - `_pruneJmapMailboxToServerIds` (3541), `_maybeReconcileJmapMailbox`
   (3586), `_reconcileJmapFlagsForMailbox` (3683).
 - `removeLocalMailbox` / `pruneLocalMailboxes`
-  (`mailbox_repository_impl.dart:1399`, 585), which become `srv_gone`.
+  (`mailbox_repository_impl.dart:1399`, 585), which mark the mail
+  `srv_gone` since 4a (`markFolderGone`, logged `mailbox.removed_gone`
+  since 6b).
 - `clearForResync` / `clearMailboxForResync` (9631, 9663), mark and sweep
   since 6a (the sweep is the full sync's absence rule).
 - `_backfillAddressHeaders` (9413), headers only.
@@ -1783,16 +1973,21 @@ The line numbers below are from before the split (`33c67b4`).
 - `_storeSentCopyLocally` (7427), a server fact from APPENDUID.
 - `_maybeDissolveLocalMessage` (5519), replaced by the in-place match
   (`_matchArrival`, 4b).
+- Folder listings (`syncMailboxes`), through the mailbox writer's gate
+  (5a).
 - `BodyCacheService` (foreground and background isolate) reaches body
   healing and the header backfill through its own repository instance.
 
 **Flush → op state and confirmed `srv_` facts**
 - `_applyPendingChangeImap` (6523), `_settleImapChange` (6461) and
   `_recordChangeError` (4073), which become the outcome table.
-- `_remapEmailAfterImapMove` (6822) and `_rekeyEmailRow` (985), which become
-  location updates.
+- `_remapEmailAfterImapMove` (6822) and `_rekeyEmailRow` (985), which became
+  location updates (`_relocateEmailRow`, 2b; `relocate`, 4a).
 - `_retryImapMoveByMessageId` (6721).
-- `_applyPendingChangeJmap` (7152) and `_repointSnoozedPlaceholder` (7071).
+- `_applyPendingChangeJmap` (7152); `_repointSnoozedPlaceholder` (7071) is
+  gone (5a: the Snoozed folder is a queued create).
+- The folder flush (`_flushMailboxOps`, 5a/5b) and its acks
+  (`MailboxStateWriter.ack`, `ackDelete`, `serverPathChanged`).
 
 **User actions → ops (and local-only attributes)**
 - `setFlag` / `_setFlagNow` (4503, 4564) and `markAllAsRead` (4691).
@@ -1800,20 +1995,24 @@ The line numbers below are from before the split (`33c67b4`).
   (4891, 5005).
 - `snoozeEmail` / `_snoozeRow` (5206, 5228) and `wakeUpEmails` /
   `_unsnoozeRow` (5324, 5385).
-- `restoreLocalSnooze` (5370), which becomes an op.
+- `restoreLocalSnooze` (5370), which only restores the local-only
+  `snoozed_from_mailbox_path` since 4a (the snooze itself folds).
 - Sieve `_enqueueSieveMove/Delete/Flags` (6011–6087).
-- `_mirror*ToCounterparts` (5447–5691) and `_dropStaleCounterpartRow`
-  (5682), which become shadow ops.
+- `_mirror*ToCounterparts` (5447–5691), shadow ops since 4b;
+  `_dropStaleCounterpartRow` (5682) is gone (5b: a stand-in folder).
 - `cancelPendingChange` (5181) and `retryMutation` (9588).
 - Mailbox create, rename, move and delete
-  (`mailbox_repository_impl.dart:600–1356`, rename rewrites at 1161).
+  (`mailbox_repository_impl.dart:600–1356`, rename rewrites at 1161), ops
+  since phase 5.
 
 **Local row creation**
 - `_createLocalSelfMessages` (7495) and the virtual Sent copy in
   `_storeSentCopyLocally` (7427).
 
-**Removed**
-- `restoreEmails` (5769), replaced by discarding or inverting the op.
+**Removed or kept**
+- `restoreEmails` (5769) was to be replaced by discarding or inverting the
+  op; it stays for rows the clean-up rule deleted (4b), writing through
+  `restoreRow` (6a). Rarely needed: a hidden row still exists.
 
 **Derived (unchanged, they read the effective columns)**
 - `_updateThread` (347), `_reconcileSourceThreads` (430) and
