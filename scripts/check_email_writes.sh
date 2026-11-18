@@ -7,14 +7,20 @@
 # migrations (the members of lib/data/db/database.dart listed in
 # `migrations` below) are exempt from both.
 #
-# 1. The keyword overlay columns — is_seen, is_flagged, snoozed_until, their
-#    srv_/local_ pairs and srv_keywords_seq — are written nowhere else. No
+# 1. The overlay columns — keywords: is_seen, is_flagged, snoozed_until,
+#    their srv_/local_ pairs and srv_keywords_seq; location (phase 4a):
+#    mailbox_path, srv_mailbox_path, local_mailbox_path, local_hidden,
+#    srv_gone and srv_location_seq — are written nowhere else. No
 #    allow-list, no opt-out. It fails on
 #      - one of them named in an `EmailsCompanion(…)`, `.insert(…)` or
-#        `.custom(…)` (also across lines), unless `const Value.absent()`;
+#        `.custom(…)` (also across lines), unless `const Value.absent()`
+#        (`mailboxPath` excepted in `.insert(…)`, where it is required: a
+#        new row has no pending move, and an insert trigger records it as
+#        the server's folder);
 #      - srvIsSeen/srvIsFlagged/srvSnoozedUntil/srvKeywordsSeq/localIsSeen/
-#        localIsFlagged/localSnoozedUntil given a `Value(…)` anywhere (only
-#        emails rows have these names);
+#        localIsFlagged/localSnoozedUntil/srvMailboxPath/localMailboxPath/
+#        localHidden/srvGone/srvLocationSeq given a `Value(…)` anywhere
+#        (only emails rows have these names);
 #      - SQL, in any letter case: `UPDATE [OR …] emails … SET <column> =`
 #        (the SET list up to WHERE, also across string literals and lines,
 #        also with the column quoted), `INSERT … INTO emails (…)` with one in
@@ -23,11 +29,18 @@
 #        interpolated (`${_db.emails.actualTableName}`);
 #      - in a member on the allow-list of check 2: a whole-row
 #        `.toCompanion(`, a `copyWith(…)` naming one (not on a thread
-#        companion, which has an `isFlagged` of its own), and a Drift
-#        insert/write/replace into emails whose argument is not an
-#        `EmailsCompanion…(…)` literal, `withServerKeywords(…)` or a local
-#        variable initialised with one of these (an `Email` data row carries
-#        every column).
+#        companion, which has an `isFlagged` and a `mailboxPath` of its
+#        own), and a Drift insert/write/replace into emails whose argument
+#        is not an `EmailsCompanion(…)` / `EmailsCompanion.custom(…)`
+#        literal, `newRow(…)` / `withServerLocation(…)` or a local variable
+#        initialised with one of these (an `Email` data row carries every
+#        column, and an `EmailsCompanion.insert(…)` the shown folder, which
+#        an upsert would write over a pending move). `newRow` and
+#        `withServerLocation` only as the argument of a plain `.insert(…)`
+#        without `mode:` / `onConflict:` (an upsert or replace would reset
+#        the overlay of a row that exists); no `replace` at all.
+#    SQL split into adjacent string literals ("UPDATE " + "emails …", also
+#    across a line break) is read joined.
 #
 # 2. Every other write of `emails` — `EmailsCompanion`, `.toCompanion(`,
 #    Drift's update/into/delete/insert/replace on `emails` (also in a batch,
@@ -62,39 +75,26 @@ migrations='
 lib/data/db/database.dart|_upgradeSteps
 lib/data/db/database.dart|_backfillSrvLocation
 lib/data/db/database.dart|_overlayKeywords
+lib/data/db/database.dart|_overlayLocation
+lib/data/db/database.dart|_createLocationOverlaySchema
 '
 
 # file | member | reason
 allowed='
-# Row inserts and upserts of server headers. The keyword columns come only
-# from EmailStateWriter.withServerKeywords (check 1). Phase 4 gives the
-# server-write gate an insert form for the location group too.
-lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|IMAP new-mail upsert (phase 4)
-lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|JMAP upsert (phase 4)
-lib/data/repositories/email_repository_impl/local_rows.dart|_storeSentCopyLocally|virtual Sent copy, create_local (phase 4)
-lib/data/repositories/email_repository_impl/local_rows.dart|_createLocalSelfMessages|virtual self-send rows, create_local (phase 4)
-lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo brings a gone row back (phase 4: a hidden row is never gone)
-# Optimistic location writes (mailbox_path) and the local-only
-# snoozed_from_mailbox_path. Phase 4 overlays location: local_mailbox_path
-# comes from the fold, and these become ops.
-lib/data/repositories/email_repository_impl/user_actions.dart|_applyLocalMove|optimistic move (phase 4)
-lib/data/repositories/email_repository_impl/user_actions.dart|_applyLocalSnooze|optimistic snooze (phase 4)
-lib/data/repositories/email_repository_impl/user_actions.dart|_applyLocalUnsnooze|optimistic unsnooze (phase 4)
-lib/data/repositories/email_repository_impl/user_actions.dart|_wakeUpEmails|snoozed_from_mailbox_path, local-only (phase 4)
-lib/data/repositories/email_repository_impl/user_actions.dart|_restoreLocalSnooze|snoozed_from_mailbox_path, local-only (phase 4)
-lib/data/repositories/email_repository_impl/change_failures.dart|_revertFailedLocation|a failed move/snooze shows the mail where it was (phase 4: the op stops folding)
-lib/data/repositories/email_repository_impl/sieve.dart|_enqueueSieveMove|the local result of a Sieve fileinto (phase 4)
-lib/data/repositories/email_repository_impl/flush_jmap.dart|_repointSnoozedPlaceholder|Snoozed placeholder gets its JMAP id (phase 5: rewrites op dests)
-# Server location facts (srv_mailbox_path, srv_uid, srv_uid_validity,
-# srv_jmap_id, uid). Phase 4 moves them behind the gate with the location
-# group.
-lib/data/repositories/email_repository_impl/row_identity.dart|_relocateEmailRow|a move remap or body healing learned the new UID (phase 4)
-lib/data/repositories/email_repository_impl/row_identity.dart|_releaseImapLocation|another row holds the location now (phase 4)
-lib/data/repositories/mailbox_repository_impl.dart|_applyImapPathRewrite|a folder rename moves shown and server paths (phase 5)
+# Row inserts of new rows and the header columns of existing ones. The
+# overlay columns come only from EmailStateWriter.newRow /
+# withServerLocation (check 1); an existing row is written with an
+# EmailsCompanion naming no overlay column. Phase 4b turns the virtual
+# rows and Undo into create_local steps and parked ops.
+lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|IMAP new-mail fetch: new rows and headers (phase 4b)
+lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|JMAP Email/get: new rows and headers (phase 4b)
+lib/data/repositories/email_repository_impl/local_rows.dart|_storeSentCopyLocally|virtual Sent copy, create_local (phase 4b)
+lib/data/repositories/email_repository_impl/local_rows.dart|_createLocalSelfMessages|virtual self-send rows, create_local (phase 4b)
+lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo brings a row back that sync cleaned up (phase 4b)
 '
 
 files=$(grep -rlE --include='*.dart' \
-  'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|toCompanion\(' \
+  'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq|toCompanion\(' \
   "$dir" | grep -v '\.g\.dart$' \
   | grep -v 'lib/data/repositories/email_state_writer\.dart$' || true)
 
@@ -115,9 +115,11 @@ for f in $files; do
         if (rows[i] == "") continue
         mig[rows[i]] = 1
       }
-      cols = "(srv_|local_)?(is_seen|is_flagged|snoozed_until)|srv_keywords_seq"
-      names = "(isSeen|isFlagged|snoozedUntil|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil)"
-      srvLocal = "(srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil)"
+      cols = "(srv_|local_)?(is_seen|is_flagged|snoozed_until|mailbox_path)|srv_keywords_seq|local_hidden|srv_gone|srv_location_seq"
+      srvLocal = "(srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq)"
+      # In an EmailsCompanion.insert(…) the shown folder is required.
+      namesInsert = "(isSeen|isFlagged|snoozedUntil|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq)"
+      names = "(mailboxPath|isSeen|isFlagged|snoozedUntil|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq)"
       # The table in lower-cased SQL: emails, "emails", or interpolated.
       table = "(\"?emails\"?|`emails`|\\$\\{[^}]*emails[^}]*\\})([^a-z0-9_]|$)"
       updSql = "update[[:space:]]+(or[[:space:]]+[a-z]+[[:space:]]+)?" table
@@ -135,9 +137,9 @@ for f in $files; do
     }
     # The value expressions of a call argument [a]: inner parentheses
     # emptied, named arguments dropped, a conditional split into its two
-    # branches. Each must be a companion literal, withServerKeywords(…) or
-    # a variable holding one.
-    function rowArgOk(a,   flat, i, c, d, parts, n, k, v, q, branches, m, j) {
+    # branches. Each must be an EmailsCompanion(…) / .custom(…) literal,
+    # newRow(…) / withServerLocation(…) or a variable holding one.
+    function rowArgOk(a, method,   flat, i, c, d, parts, n, k, v, q, branches, m, j, plain) {
       flat = ""; d = 0
       for (i = 1; i <= length(a); i++) {
         c = substr(a, i, 1)
@@ -146,6 +148,16 @@ for f in $files; do
         if (d == 0) flat = flat c
       }
       n = split(flat, parts, ",")
+      # A new row (newRow / withServerLocation) only through a plain
+      # insert: an upsert or a replace would reset the overlay columns of
+      # a row that exists (and a replace deletes it, its body cascading).
+      plain = (method == "insert")
+      for (k = 1; k <= n; k++) {
+        v = parts[k]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        if (v ~ /^(mode|onConflict):/) plain = 0
+      }
+      if (method == "replace") return 0
       for (k = 1; k <= n; k++) {
         v = parts[k]
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
@@ -156,9 +168,10 @@ for f in $files; do
         for (j = 1; j <= m; j++) {
           v = branches[j]
           gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-          if (v ~ /^(const[[:space:]]+)?EmailsCompanion(\.[a-z]+)?\(\)$/) continue
-          if (v ~ /withServerKeywords\(\)$/) continue
+          if (v ~ /^(const[[:space:]]+)?EmailsCompanion(\.custom)?\(\)$/) continue
+          if (plain && v ~ /^(EmailStateWriter\.)?(newRow|withServerLocation)\(\)$/) continue
           if (v ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && (v in compVar)) continue
+          if (plain && v ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && (v in rowVar)) continue
           return 0
         }
       }
@@ -171,7 +184,7 @@ for f in $files; do
     }
     # A closing brace at indent 0 ends the type or top-level function (not
     # the `}) async {` of a signature).
-    /^};?[[:space:]]*$/ { inType = 0; member = ""; split("", compVar) }
+    /^};?[[:space:]]*$/ { inType = 0; member = ""; split("", compVar); split("", rowVar) }
     {
       decl = 0
       if (!inType && $0 ~ /^[A-Za-z_@]/) decl = 1
@@ -193,7 +206,7 @@ for f in $files; do
           # A signature continued on the next line.
           member = "(signature)"; sigNext = 1
         }
-        if (member != before) split("", compVar)
+        if (member != before) { split("", compVar); split("", rowVar) }
       } else if (sigNext && match($0, /[A-Za-z_][A-Za-z0-9_]*(<[^()]*>)?\(/)) {
         member = substr($0, RSTART, RLENGTH)
         sub(/<.*$/, "", member); sub(/\($/, "", member)
@@ -214,6 +227,17 @@ for f in $files; do
       sub(/^[[:space:]]*\/\/.*$/, "", code); sub(/[[:space:]]\/\/.*$/, "", code)
       sql = tolower(code)
       gsub(/\[|\]/, "", sql)
+      # Adjacent string literals (an UPDATE split as "UPDATE " + "emails",
+      # also without the +) read as one, also across a line break (sqlJ:
+      # the last literal of the line above joined with the first one of this line).
+      gsub(/['"'"'"][[:space:]]*\+?[[:space:]]*['"'"'"]/, "", sql)
+      cur = sql
+      startsLit = sub(/^[[:space:]]*\+?[[:space:]]*['"'"'"]/, "", cur)
+      sqlJ = (prevLitEnd && startsLit) ? prevLit cur : sql
+      t = sql
+      prevLitEnd = sub(/['"'"'"][[:space:]]*,?[[:space:]]*\+?[[:space:]]*$/, "", t)
+      if (match(t, /['"'"'"][^'"'"'"]*$/)) t = substr(t, RSTART + 1)
+      prevLit = t
     }
 
     # ── Check 1: the overlay columns ──────────────────────────────────────
@@ -223,13 +247,14 @@ for f in $files; do
       if (!inComp) {
         if (match(rest, /(^|[^A-Za-z0-9_])EmailsCompanion(\.insert|\.custom)?\(/)) {
           inComp = 1; depth = 0
+          compNames = (substr(rest, RSTART, RLENGTH) ~ /\.insert\($/) ? namesInsert : names
           rest = substr(rest, RSTART + RLENGTH - 1)
         }
       }
       if (inComp) {
         probe = rest
-        gsub(names ":[[:space:]]*const[[:space:]]+Value\\.absent\\(\\)", "", probe)
-        if (probe ~ ("(^|[^A-Za-z0-9_.])" names ":")) report("overlay", $0)
+        gsub(compNames ":[[:space:]]*const[[:space:]]+Value\\.absent\\(\\)", "", probe)
+        if (probe ~ ("(^|[^A-Za-z0-9_.])" compNames ":")) report("overlay", $0)
         m = length(rest)
         for (i = 1; i <= m; i++) {
           c = substr(rest, i, 1)
@@ -267,10 +292,11 @@ for f in $files; do
       report("overlay", $0)
     }
     # Companion variables of an allowed member, for the argument check.
-    allowedHere && match($0, /(final|var)[[:space:]]+([A-Za-z_][A-Za-z0-9_<>?]*[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(const[[:space:]]+)?(EmailsCompanion|EmailStateWriter\.withServerKeywords|withServerKeywords)/) {
+    allowedHere && match($0, /(final|var)[[:space:]]+([A-Za-z_][A-Za-z0-9_<>?]*[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(const[[:space:]]+)?(EmailsCompanion(\.custom)?\(|(EmailStateWriter\.)?(newRow|withServerLocation)\()/) {
       v = substr($0, RSTART, RLENGTH)
+      isRow = (v ~ /(newRow|withServerLocation)\($/)
       sub(/[[:space:]]*=.*$/, "", v); sub(/^.*[[:space:]]/, "", v)
-      compVar[v] = 1
+      if (isRow) rowVar[v] = 1; else compVar[v] = 1
     }
     # The argument of a Drift insert/write/replace into emails, in an
     # allowed member: no data row.
@@ -281,13 +307,15 @@ for f in $files; do
         p = index(rest, "emails)")
         rest = substr(rest, p + 7)
       }
-      if (!inArg && line ~ /(insert|update|replace|insertAllOnConflictUpdate)\([[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?emails[[:space:]]*,/) {
+      if (!inArg && match(line, /(insert|update|replace|insertAllOnConflictUpdate)\([[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?emails[[:space:]]*,/)) {
+        argMethod = substr(line, RSTART, RLENGTH); sub(/\(.*$/, "", argMethod)
         p = index(rest, "emails,")
         if (p == 0) p = index(rest, "emails ,")
         if (p > 0) { inArg = 1; adepth = 1; argText = ""; argStart = FNR; argLine = $0; rest = substr(rest, p + 7) }
       }
       if (pendArg && !inArg) {
         if (match(rest, /\.(insert|insertOnConflictUpdate|insertOne|insertReturning|replace|write)\(/)) {
+          argMethod = substr(rest, RSTART + 1, RLENGTH - 2)
           pendArg = 0; inArg = 1; adepth = 1; argText = ""; argStart = FNR; argLine = $0
           rest = substr(rest, RSTART + RLENGTH)
         } else if (FNR - pendStart > 8) pendArg = 0
@@ -301,7 +329,7 @@ for f in $files; do
             adepth--
             if (adepth == 0) {
               inArg = 0
-              if (!rowArgOk(argText)) print "overlay\t" FILENAME ":" argStart ": [" member "] " argLine
+              if (!rowArgOk(argText, argMethod)) print "overlay\t" FILENAME ":" argStart ": [" member "] " argLine
               break
             }
           }
@@ -313,6 +341,8 @@ for f in $files; do
     # SQL: the SET list of an UPDATE emails, the column list of an INSERT.
     {
       s = sql
+      if (!inSet && !inIns && s !~ updSql && s !~ insSql \
+          && (sqlJ ~ updSql || sqlJ ~ insSql)) s = sqlJ
       # String literals split over lines read as one; quoted names unquoted.
       gsub(/['"'"'"][[:space:]]*,?[[:space:]]*$/, "", s); gsub(/^[[:space:]]*['"'"'"]/, " ", s)
       if (!inSet && !inIns) {
@@ -360,6 +390,7 @@ for f in $files; do
       if (line ~ /managers\.emails/) w = 1
       if (line ~ /updates:[[:space:]]*\{[^}]*emails/) w = 1
       if (sql ~ updSql || sql ~ insSql || sql ~ delSql) w = 1
+      if (sqlJ ~ updSql || sqlJ ~ insSql || sqlJ ~ delSql) w = 1
       # Backstop: a bare reference to the table that is not a read.
       if (!w && match(joined, dbRef "([^A-Za-z0-9_.]|$)")) {
         headText = substr(joined, 1, RSTART)
@@ -394,9 +425,11 @@ overlay=$(printf '%s' "$overlay" | grep -v '^$' | sort -u || true)
 other=$(printf '%s' "$other" | grep -v '^$' | sort -u || true)
 status=0
 if [ -n "$overlay" ]; then
-  echo "ERROR: the read/star/snooze columns (is_seen, is_flagged, snoozed_until,"
-  echo "their srv_/local_ pairs, srv_keywords_seq) are written only by the email"
-  echo "state writer and migrations (see SYNC.md \"Email state writer\"):"
+  echo "ERROR: the overlay columns (read/star/snooze: is_seen, is_flagged,"
+  echo "snoozed_until, their srv_/local_ pairs, srv_keywords_seq; location:"
+  echo "mailbox_path, srv_mailbox_path, local_mailbox_path, local_hidden,"
+  echo "srv_gone, srv_location_seq) are written only by the email state writer"
+  echo "and migrations (see SYNC.md \"Email state writer\"):"
   printf '%s\n' "$overlay"
   status=1
 fi

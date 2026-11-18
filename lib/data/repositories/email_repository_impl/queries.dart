@@ -10,6 +10,11 @@ part of '../email_repository_impl.dart';
 const _emailListOrderSql =
     'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
 
+/// Not a hidden row: one deleted for good, or gone on the server, has the
+/// empty string as its `mailbox_path` (SYNC-REDESIGN.md §2). Queries that
+/// filter by a folder exclude it already; the others add this.
+Expression<bool> _visible($EmailsTable t) => t.mailboxPath.equals('').not();
+
 /// Escapes characters that would break out of a JSON string literal.
 String _jsonEsc(String s) => s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
 
@@ -182,10 +187,13 @@ extension _Queries on EmailRepositoryImpl {
     });
   }
 
+  /// The mail [emailId], or null when it is gone or hidden (deleted for
+  /// good, or no longer on the server): the detail view and a notification
+  /// tap show "deleted" then (SYNC-REDESIGN.md §2).
   Future<model.Email?> _getEmail(String emailId) async {
     final row = await (_db.select(
       _db.emails,
-    )..where((t) => t.id.equals(emailId)))
+    )..where((t) => t.id.equals(emailId) & _visible(t)))
         .getSingleOrNull();
     return row == null ? null : _toModel(row);
   }
@@ -198,7 +206,9 @@ extension _Queries on EmailRepositoryImpl {
     final row = await (_db.select(_db.emails)
           ..where(
             (t) =>
-                t.accountId.equals(accountId) & t.messageId.equals(messageId),
+                t.accountId.equals(accountId) &
+                t.messageId.equals(messageId) &
+                _visible(t),
           )
           ..orderBy([
             if (preferMailboxPath != null)
@@ -327,7 +337,8 @@ extension _Queries on EmailRepositoryImpl {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
 
-    final extraConditions = StringBuffer();
+    // Not a hidden row (SYNC-REDESIGN.md §2).
+    final extraConditions = StringBuffer(" AND e.mailbox_path <> ''");
     final extraVars = <Variable<String>>[];
     if (accountId != null) {
       extraConditions.write(' AND e.account_id = ?');
@@ -365,7 +376,7 @@ extension _Queries on EmailRepositoryImpl {
   }) async {
     final rows = await (_db.select(_db.emails)
           ..where((t) {
-            final fe = _filterGroup(filter, t);
+            final fe = _filterGroup(filter, t) & _visible(t);
             if (accountId == null) return fe;
             return t.accountId.equals(accountId) & fe;
           })
@@ -496,9 +507,9 @@ extension _Queries on EmailRepositoryImpl {
     final pattern = '%${address.toLowerCase()}%';
     final select = _db.select(_db.emails)
       ..where((t) {
-        Expression<bool> condition = const Constant(true);
+        Expression<bool> condition = _visible(t);
         if (accountId != null) {
-          condition = t.accountId.equals(accountId);
+          condition = condition & t.accountId.equals(accountId);
         }
         condition = condition &
             (t.fromJson.like(pattern) |
@@ -540,8 +551,8 @@ extension _Queries on EmailRepositoryImpl {
 
     final rows = await (_db.select(_db.emails)
           ..where((t) {
-            Expression<bool> cond = const Constant(true);
-            if (accountId != null) cond = t.accountId.equals(accountId);
+            Expression<bool> cond = _visible(t);
+            if (accountId != null) cond = cond & t.accountId.equals(accountId);
             cond = cond &
                 (t.fromJson.like(pattern) |
                     t.toAddresses.like(pattern) |
@@ -638,7 +649,10 @@ extension _Queries on EmailRepositoryImpl {
     // same-second copies it only makes the order deterministic.
     return (_db.select(_db.emails)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.threadId.equals(threadId),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.threadId.equals(threadId) &
+                _visible(t),
           )
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),

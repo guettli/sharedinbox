@@ -260,6 +260,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
     // arrives (see [_maybeDissolveLocalMessage]). Skip queuing here (#545).
     if (email?.isLocal ?? false) {
       await _writeOwnKeywords(resourceId, changeType, payload);
+      await _writeOwnLocation(resourceId, changeType, payload);
       return false;
     }
     // A JMAP mail whose server id is not known cannot be changed on the
@@ -280,12 +281,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
       );
       if (email != null) {
         await _writeOwnKeywords(resourceId, changeType, payload);
+        await _writeOwnLocation(resourceId, changeType, payload);
       }
       return false;
     }
-    final placement = _placementChangeTypes.contains(changeType);
-    final at = _imapLocationOf(email);
-    if (placement) _noteLocationEdit(resourceId, at);
     payload = _stampJmapId(payload, email?.srvJmapId);
     payload = await _stampUidValidity(accountId, resourceId, payload);
     payload = await _markUidAfterQueuedMove(resourceId, payload);
@@ -361,10 +360,6 @@ extension _ChangeQueue on EmailRepositoryImpl {
     (Zone.current[_captureOpsKey] as Map<String, List<int>>?)
         ?.putIfAbsent(resourceId, () => [])
         .add(seq);
-    // Again after the insert: a FETCH that started during the awaits above
-    // took its sequence after the first note and read the queue before this
-    // row existed, so without this the change could flush unseen by it.
-    if (placement) _noteLocationEdit(resourceId, at);
     final bulk = _bulkScope;
     if (bulk != null) {
       bulk.kickedAccounts.add(accountId);
@@ -407,6 +402,29 @@ extension _ChangeQueue on EmailRepositoryImpl {
       flagged: local.flagged,
       snoozedUntil: local.snoozedUntil,
     );
+  }
+
+  /// The folder effect of a [changeType] change with [payload] on row
+  /// [resourceId], which has no server copy to queue it for: a move, snooze
+  /// or unsnooze puts it in the destination as its own folder. (A delete of
+  /// such a row deletes it, see [_UserActions._deleteRow].)
+  Future<void> _writeOwnLocation(
+    String resourceId,
+    String changeType,
+    String payload,
+  ) async {
+    Map<String, dynamic>? decoded;
+    try {
+      decoded = jsonDecode(payload) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+    final local = foldLocation([
+      FoldOp(seq: 0, type: changeType, payload: decoded, state: _pendingState),
+    ]);
+    final path = local.mailboxPath;
+    if (path == null) return;
+    await _state.writeOwnLocation(resourceId, path);
   }
 
   /// Deletes failed changes of [resourceId] that a new [changeType] change
@@ -718,6 +736,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
         if (count == 0) return false;
         if (_locationChangeTypes.contains(row.changeType)) {
           await _unmarkAfterCancelledMove(row);
+          await _restoreSnoozedFromAfterCancel(row);
         }
         await _refoldAndRethread(row.resourceId);
         return true;
@@ -757,9 +776,28 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (count == 0) return false;
     if (_locationChangeTypes.contains(changeType)) {
       await _unmarkAfterCancelledMove(row);
+      await _restoreSnoozedFromAfterCancel(row);
     }
     await _refoldAndRethread(emailId);
     return true;
+  }
+
+  /// After [cancelled], a queued move, snooze or unsnooze, was cancelled
+  /// (Undo): its fold is gone, so the row shows its earlier folder and
+  /// snooze again; the local-only folder it was snoozed from comes back
+  /// from the payload (none when it was not snoozed before).
+  Future<void> _restoreSnoozedFromAfterCancel(
+    PendingChangeRow cancelled,
+  ) async {
+    final payload = _decodePayload(cancelled);
+    if (payload == null) return;
+    final prevFrom = payload['prevSnoozedFrom'];
+    await _state.writeSnoozedFrom(
+      cancelled.resourceId,
+      payload['prevSnoozedUntil'] != null && prevFrom is String
+          ? prevFrom
+          : null,
+    );
   }
 
   /// After [cancelled], a queued move, was cancelled (Undo), the changes
@@ -827,10 +865,22 @@ extension _ChangeQueue on EmailRepositoryImpl {
       (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(row.id))).go();
 
   /// Settles a claimed [row] the server applied: `acked` when it changes
-  /// read/star/snooze state, so it keeps showing until a later read
-  /// confirms it ([EmailStateWriter.ack]); deleted otherwise, as before.
-  Future<void> _settleApplied(PendingChangeRow row) async {
-    if (await _state.ack(row)) return;
+  /// read/star/snooze state or the folder, so it keeps showing until a
+  /// later read confirms it ([EmailStateWriter.ack], which also records what
+  /// the server confirmed: [confirmedMailboxPath], [confirmedGone]); deleted
+  /// otherwise, as before.
+  Future<void> _settleApplied(
+    PendingChangeRow row, {
+    String? confirmedMailboxPath,
+    bool confirmedGone = false,
+  }) async {
+    if (await _state.ack(
+      row,
+      confirmedMailboxPath: confirmedMailboxPath,
+      confirmedGone: confirmedGone,
+    )) {
+      return;
+    }
     await _deletePendingChange(row);
   }
 
@@ -913,12 +963,6 @@ extension _ChangeQueue on EmailRepositoryImpl {
       _changeCtrl.add(row.accountId);
       return;
     }
-    final placement = _placementChangeTypes.contains(row.changeType);
-    final at = _imapLocationOf(
-      await (_db.select(_db.emails)..where((t) => t.id.equals(row.resourceId)))
-          .getSingleOrNull(),
-    );
-    if (placement) _noteLocationEdit(row.resourceId, at);
     await _db.transaction(() async {
       final current = await (_db.select(_db.pendingChanges)
             ..where((t) => t.id.equals(id) & t.state.equals(_failedState)))
@@ -941,18 +985,17 @@ extension _ChangeQueue on EmailRepositoryImpl {
             ),
           );
       await _deletePendingChange(current);
-      // The retried change folds again.
+      // The retried change folds again: the folder, read/star and snooze.
       await _refoldAndRethread(current.resourceId);
     });
-    if (placement) _noteLocationEdit(row.resourceId, at);
     _changeCtrl.add(row.accountId);
   }
 
-  /// Re-applies the optimistic local part of a failed [row] that is being
-  /// retried, without queueing or mirroring anything: for a
-  /// move/snooze/unsnooze the destination, when the mail is (again) at the
-  /// change's source. Leaves the mail alone otherwise. Read/star/snooze
-  /// values come back with the fold of the retried change.
+  /// Re-applies the local-only part of a failed [row] that is being
+  /// retried, without queueing or mirroring anything: the folder a snooze
+  /// came from, when the mail is (again) at the change's source. The folder
+  /// and the read/star/snooze values come back with the fold of the
+  /// retried change.
   Future<void> _reapplyRetriedChange(PendingChangeRow row) async {
     final Map<String, dynamic> payload;
     try {
@@ -970,15 +1013,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
     final dest = payload['dest'];
     if (src is! String || dest is! String) return;
     if (!await _isAtLocation(email, src)) return;
-    final target = await _resolveSnoozedPlaceholder(email.accountId, dest);
-    switch (row.changeType) {
-      case 'move':
-        await _applyLocalMove(email, target);
-      case 'snooze':
-        await _applyLocalSnooze(email, target);
-      case 'unsnooze':
-        await _applyLocalUnsnooze(email, target);
-    }
+    await _state.writeSnoozedFrom(
+      email.id,
+      row.changeType == 'snooze' ? email.mailboxPath : null,
+    );
   }
 
   Stream<List<model.PendingChange>> _observePendingChanges(String accountId) {

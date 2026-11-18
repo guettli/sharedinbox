@@ -504,6 +504,7 @@ void main() {
           final shown = (await repo.getEmail(emailId))!;
           await db.delete(db.pendingChanges).go();
           final read = await EmailStateWriter(db).beginRead(accountId);
+          await read.writeLocation(emailId, shown.mailboxPath);
           await read.write(
             emailId,
             ServerKeywords(
@@ -672,83 +673,113 @@ void main() {
     });
   });
 
-  test('Undo cancels the change mirrored to a paired account too', () async {
-    // The same mailbox seen through IMAP and JMAP: a move is mirrored.
-    await accounts.addAccount(
-      const Account(
-        id: 'imap-p',
-        displayName: 'Bob',
-        email: 'bob@example.com',
-        imapHost: 'mail.example.com',
-        smtpHost: 'smtp.example.com',
-      ),
-      'pw',
-    );
-    await accounts.addAccount(
-      const Account(
-        id: 'jmap-p',
-        displayName: 'Bob',
-        email: 'bob@example.com',
-        type: AccountType.jmap,
-        jmapUrl: 'https://mail.example.com/.well-known/jmap',
-      ),
-      'pw',
-    );
-    for (final (acc, path, role) in [
-      ('imap-p', 'INBOX', 'inbox'),
-      ('imap-p', 'Archive', 'archive'),
-      ('jmap-p', 'mbx-inbox', 'inbox'),
-      ('jmap-p', 'mbx-archive', 'archive'),
-    ]) {
-      await db.into(db.mailboxes).insert(
-            MailboxesCompanion.insert(
-              id: '$acc:$path',
-              accountId: acc,
-              path: path,
-              name: path,
-              role: Value(role),
-            ),
-          );
-    }
-    for (final (id, acc, path, mid) in [
-      ('imap-p:5', 'imap-p', 'INBOX', '<pair@example.com>'),
-      ('jmap-p:e1', 'jmap-p', 'mbx-inbox', 'pair@example.com'),
-    ]) {
-      await db.into(db.emails).insert(
-            EmailsCompanion.insert(
-              id: id,
-              accountId: acc,
-              mailboxPath: path,
-              uid: id == 'imap-p:5' ? 5 : 0,
-              receivedAt: DateTime(2024),
-              messageId: Value(mid),
-              srvJmapId: Value(id == 'jmap-p:e1' ? 'e1' : null),
-            ),
-          );
-    }
-    final original = (await repo.getEmail('imap-p:5'))!;
-    final (_, ops) =
-        await repo.captureOps(() => repo.moveEmail('imap-p:5', 'Archive'));
-    expect(ops.keys, containsAll(['imap-p:5', 'jmap-p:e1']));
-    final undo = container.read(undoServiceProvider.notifier);
-    await undo.pushAction(
-      UndoAction(
-        id: 'undo-pair',
-        accountId: 'imap-p',
-        type: UndoType.move,
-        emailIds: const ['imap-p:5'],
-        sourceMailboxPath: 'INBOX',
-        destinationMailboxPath: 'Archive',
-        originalEmails: [original],
-        opSeqs: ops,
-      ),
-    );
+  // The twin's mirrored move either waits in the queue (cancelled with the
+  // original) or is being sent already (then it needs its own reverse move).
+  for (final twinSent in [false, true]) {
+    test(
+        'Undo of a move mirrored to a paired account '
+        '(${twinSent ? 'twin already sent' : 'nothing sent'})', () async {
+      // The same mailbox seen through IMAP and JMAP: a move is mirrored.
+      await accounts.addAccount(
+        const Account(
+          id: 'imap-p',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'mail.example.com',
+          smtpHost: 'smtp.example.com',
+        ),
+        'pw',
+      );
+      await accounts.addAccount(
+        const Account(
+          id: 'jmap-p',
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          type: AccountType.jmap,
+          jmapUrl: 'https://mail.example.com/.well-known/jmap',
+        ),
+        'pw',
+      );
+      for (final (acc, path, role) in [
+        ('imap-p', 'INBOX', 'inbox'),
+        ('imap-p', 'Archive', 'archive'),
+        ('jmap-p', 'mbx-inbox', 'inbox'),
+        ('jmap-p', 'mbx-archive', 'archive'),
+      ]) {
+        await db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$acc:$path',
+                accountId: acc,
+                path: path,
+                name: path,
+                role: Value(role),
+              ),
+            );
+      }
+      for (final (id, acc, path, mid) in [
+        ('imap-p:5', 'imap-p', 'INBOX', '<pair@example.com>'),
+        ('jmap-p:e1', 'jmap-p', 'mbx-inbox', 'pair@example.com'),
+      ]) {
+        await db.into(db.emails).insert(
+              EmailsCompanion.insert(
+                id: id,
+                accountId: acc,
+                mailboxPath: path,
+                uid: id == 'imap-p:5' ? 5 : 0,
+                receivedAt: DateTime(2024),
+                messageId: Value(mid),
+                srvJmapId: Value(id == 'jmap-p:e1' ? 'e1' : null),
+              ),
+            );
+      }
+      final original = (await repo.getEmail('imap-p:5'))!;
+      final (_, ops) =
+          await repo.captureOps(() => repo.moveEmail('imap-p:5', 'Archive'));
+      expect(ops.keys, containsAll(['imap-p:5', 'jmap-p:e1']));
+      final undo = container.read(undoServiceProvider.notifier);
+      await undo.pushAction(
+        UndoAction(
+          id: 'undo-pair',
+          accountId: 'imap-p',
+          type: UndoType.move,
+          emailIds: const ['imap-p:5'],
+          sourceMailboxPath: 'INBOX',
+          destinationMailboxPath: 'Archive',
+          originalEmails: [original],
+          opSeqs: ops,
+        ),
+      );
 
-    await undo.undo();
+      if (twinSent) {
+        // A flush of the JMAP account claimed the twin's move: it cannot be
+        // cancelled any more.
+        await (db.update(db.pendingChanges)
+              ..where((t) => t.resourceId.equals('jmap-p:e1')))
+            .write(
+          const PendingChangesCompanion(
+            state: Value('inflight'),
+            attempts: Value(1),
+          ),
+        );
+      }
 
-    // Nothing reached the server: nothing left to send, for either account.
-    expect(await db.select(db.pendingChanges).get(), isEmpty);
-    expect((await repo.getEmail('imap-p:5'))!.mailboxPath, 'INBOX');
-    expect((await repo.getEmail('jmap-p:e1'))!.mailboxPath, 'mbx-inbox');
-  });
+      await undo.undo();
+
+      expect((await repo.getEmail('imap-p:5'))!.mailboxPath, 'INBOX');
+      expect((await repo.getEmail('jmap-p:e1'))!.mailboxPath, 'mbx-inbox');
+      final left = await db.select(db.pendingChanges).get();
+      if (!twinSent) {
+        // Nothing reached the server: nothing left to send, for either
+        // account.
+        expect(left, isEmpty);
+        return;
+      }
+      // The twin moves back on its server too.
+      expect(
+        [for (final c in left) '${c.resourceId} ${c.changeType} ${c.state}'],
+        ['jmap-p:e1 move inflight', 'jmap-p:e1 move pending'],
+      );
+      expect(left.last.payload, contains('"dest":"mbx-inbox"'));
+    });
+  }
 }

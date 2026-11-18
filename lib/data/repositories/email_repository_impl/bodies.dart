@@ -437,6 +437,7 @@ extension _Bodies on EmailRepositoryImpl {
     required String fetchedMessageId,
   }) async {
     final serverPath = emailRow.imapServerPath;
+    final healSeq = await _state.nextReadSeq();
     final resolvedUid = await _searchUidByMessageId(
       client,
       serverPath,
@@ -447,9 +448,9 @@ extension _Bodies on EmailRepositoryImpl {
         id: emailId,
         newUid: resolvedUid,
         newMailboxPath: serverPath,
+        seq: healSeq,
         // Behind a queued move the row keeps showing the mail where the
         // user put it; only its server location is corrected.
-        keepShownWhileMovedOn: true,
       );
       log(
         'getEmailBody: mis-bound row $emailId is at UID $resolvedUid in '

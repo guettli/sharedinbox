@@ -139,18 +139,25 @@ extension _ChangeFailures on EmailRepositoryImpl {
   }
 
   /// Re-folds row [emailId] ([EmailStateWriter.refold]) after its ops
-  /// changed, and refreshes its thread when what the app shows changed.
+  /// changed, and refreshes its thread when what the app shows changed: in
+  /// the folder it showed in before and in the one it shows in now.
   Future<void> _refoldAndRethread(String emailId) async {
-    if (!await _state.refold(emailId)) return;
+    final refold = await _state.refoldRow(emailId);
+    if (refold == null || !refold.changed) return;
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (email == null) return;
-    await _updateThread(
-      email.accountId,
-      email.mailboxPath,
-      email.threadId ?? email.id,
-    );
+    final threadId = email.threadId ?? email.id;
+    if (refold.before != refold.after) {
+      await _reconcileSourceThreads(
+        email.accountId,
+        refold.before,
+        email.id,
+        threadId,
+      );
+    }
+    await _updateThread(email.accountId, email.mailboxPath, threadId);
   }
 
   /// Called (inside the transaction that marked [row] failed, or discarded
@@ -280,22 +287,30 @@ extension _ChangeFailures on EmailRepositoryImpl {
   /// copy that mail's flags onto it, and the user's changes would act on
   /// it (#1268). If the mail is in a third folder, sync shows it there.
   /// The failed change itself stays on the Pending Changes screen; changes
-  /// queued behind it find no mail and fail there too. Returns the dropped
-  /// row, or null; the caller logs it with [_logGoneRowDropped] once the
-  /// transaction has committed.
+  /// queued behind it find no mail and fail there too. Returns the row when
+  /// it was deleted, or null (also when a change of it keeps it, hidden);
+  /// the caller logs it with [_logGoneRowDropped] once the transaction has
+  /// committed.
   Future<Email?> _dropGoneRow(PendingChangeRow failed) async {
-    if (!_locationChangeTypes.contains(failed.changeType)) return null;
+    // A delete for good whose folder is gone: its row is hidden by it, and
+    // once the change is settled nothing would hide it any more.
+    if (!_placementChangeTypes.contains(failed.changeType)) return null;
     final email = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(failed.resourceId)))
         .getSingleOrNull();
     if (email == null || !_sameMessage(failed, email.messageId)) return null;
-    await _state.deleteRow(email.id);
+    // The server has no copy here: marked gone (hidden), and deleted only
+    // when no change of it is left (clean-up rule); one with a change still
+    // queued keeps its row and body until that change settles.
+    final read = await _state.beginRead(email.accountId);
+    await read.markGone([email.id]);
+    final deleted = await _state.cleanUpGone(email.accountId);
     await _updateThread(
       email.accountId,
       email.mailboxPath,
       email.threadId ?? email.id,
     );
-    return email;
+    return deleted.contains(email.id) ? email : null;
   }
 
   /// App Log line for a row [_dropGoneRow] removed: the mail vanishes from
@@ -308,6 +323,8 @@ extension _ChangeFailures on EmailRepositoryImpl {
     required String why,
   }) {
     if (dropped == null) return;
+    // The user deleted it: removing the row is what they asked for.
+    if (failed.changeType == 'delete') return;
     unawaited(
       _appLogger?.warn(
         'pending_change.local_row_removed',
@@ -401,13 +418,13 @@ extension _ChangeFailures on EmailRepositoryImpl {
     );
     final prevFrom = payload['prevSnoozedFrom'] as String?;
     final target = await _resolveSnoozedPlaceholder(row.accountId, src);
-    await (_db.update(_db.emails)..where((t) => t.id.equals(email.id))).write(
-      // The snooze state itself comes back with the fold: the failed
-      // change no longer folds, so the row shows the server's snooze.
-      EmailsCompanion(
-        mailboxPath: Value(target),
-        snoozedFromMailboxPath: Value(prevUntil == null ? null : prevFrom),
-      ),
+    // The folder and the snooze state come back with the fold: the failed
+    // change (and its dependents) no longer fold, so the row shows the
+    // server's ([_refoldAndRethread], after this, refreshes the threads).
+    // Only the local-only folder it was snoozed from is restored here.
+    await _state.writeSnoozedFrom(
+      email.id,
+      prevUntil == null ? null : prevFrom,
     );
     if (isImap) {
       await _pointLaterChangesAtSource(
@@ -418,14 +435,6 @@ extension _ChangeFailures on EmailRepositoryImpl {
         shownIn: shownIn,
       );
     }
-    final threadId = email.threadId ?? email.id;
-    await _reconcileSourceThreads(
-      row.accountId,
-      email.mailboxPath,
-      email.id,
-      threadId,
-    );
-    await _updateThread(row.accountId, target, threadId);
     // Read/star changes made while the mail was shown elsewhere may have
     // failed as well, and the reconcile they made due was for that folder.
     await _makeFlagReconcileDue(row.accountId, target, jmap: !isImap);

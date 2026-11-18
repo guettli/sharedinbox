@@ -47,6 +47,59 @@ extension _Sync on EmailRepositoryImpl {
     }
   }
 
+  /// Refreshes the thread aggregate of row [emailId] in the folder it shows
+  /// now.
+  Future<void> _rethreadRow(String emailId) async {
+    final row = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(emailId)))
+        .getSingleOrNull();
+    if (row == null) return;
+    await _updateThread(row.accountId, row.mailboxPath, row.threadId ?? row.id);
+  }
+
+  /// After a read marked the rows [marked] (of [rows], as read before) gone
+  /// on the server ([KeywordRead.markGone]): applies the clean-up rule
+  /// ([EmailStateWriter.cleanUpGone], which deletes every gone row of
+  /// [accountId] without a change left), refreshes the threads of the
+  /// folders they were shown in, and logs each row kept because the user
+  /// still has a change queued for it (App Log warn
+  /// `email.server_gone_with_changes`): sync no longer deletes such a row,
+  /// so the change stays visible until it applies or fails (#1239).
+  Future<void> _settleGoneRows(
+    String accountId,
+    List<Email> rows,
+    Set<String> marked,
+  ) async {
+    final deleted = (await _state.cleanUpGone(accountId)).toSet();
+    final kept = <(Email, List<PendingChangeRow>)>[];
+    for (final row in rows) {
+      if (!marked.contains(row.id)) continue;
+      await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
+      if (deleted.contains(row.id)) continue;
+      final live = await _liveChanges(row.id);
+      // The user's own delete for good: nothing to warn about.
+      if (live.every((c) => c.changeType == 'delete')) continue;
+      kept.add((row, live));
+    }
+    for (final (row, live) in kept) {
+      unawaited(
+        _appLogger?.warn(
+          'email.server_gone_with_changes',
+          'The server no longer has "${row.subject ?? '(no subject)'}" '
+              '(was in ${row.srvMailboxPath ?? row.mailboxPath}); kept here '
+              'while ${live.length} queued change(s) of it are applied or '
+              'fail',
+          accountId: accountId,
+          emailId: row.id,
+          mailboxPath: row.mailboxPath,
+          data: {
+            'changes': [for (final c in live) '#${c.id} ${c.changeType}'],
+          },
+        ),
+      );
+    }
+  }
+
   /// Opportunistic backfill for address headers stored only since a later
   /// schema: Reply-To (#919), so mail cached before replies to the right
   /// address, and Bcc (#1097). Fills only empty columns, from the body's
@@ -122,6 +175,7 @@ extension _Sync on EmailRepositoryImpl {
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
+        // A row the user still has a change for stays (clean-up rule).
         await _state.deleteRowsOf(accountId);
         // NB: pending_changes are deliberately NOT deleted here. A queued
         // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
@@ -160,6 +214,7 @@ extension _Sync on EmailRepositoryImpl {
         // before clearing; anything still queued (offline) survives and is
         // retried on the next sync, its payload carrying the uid/id needed to
         // apply it even though the email row was deleted.
+        // A row the user still has a change for stays (clean-up rule).
         await _state.deleteRowsOf(accountId, mailboxPath: mailboxPath);
         await (_db.delete(_db.threads)
               ..where(

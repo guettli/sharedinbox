@@ -16,6 +16,7 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
@@ -1177,39 +1178,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 parentId: Value(d.parentId),
               ),
             );
-        await (_db.update(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(d.accountId) &
-                    t.mailboxPath.equals(d.path),
-              ))
-            .write(EmailsCompanion(mailboxPath: Value(rewrittenPath)));
         // The server location follows the folder (a server fact, not a
-        // re-key). A row that still records a location under the new
-        // path (that folder did not exist on the server) is stale: it
-        // gives the location up, so one location keeps one row.
-        released += await _db.customUpdate(
-          'UPDATE emails SET srv_mailbox_path = NULL, srv_uid = NULL, '
-          'srv_uid_validity = NULL '
-          'WHERE account_id = ?1 AND srv_mailbox_path = ?2 '
-          'AND srv_uid IN (SELECT srv_uid FROM emails '
-          'WHERE account_id = ?1 AND srv_mailbox_path = ?3 '
-          'AND srv_uid IS NOT NULL)',
-          variables: [
-            Variable.withString(d.accountId),
-            Variable.withString(rewrittenPath),
-            Variable.withString(d.path),
-          ],
-          updates: {_db.emails},
-          updateKind: UpdateKind.update,
-        );
-        await (_db.update(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(d.accountId) &
-                    t.srvMailboxPath.equals(d.path),
-              ))
-            .write(EmailsCompanion(srvMailboxPath: Value(rewrittenPath)));
+        // re-key), and so do the queued changes naming it and the folder
+        // the rows show. A row that still records a location under the new
+        // path (that folder did not exist on the server) is stale: it gives
+        // the location up, so one location keeps one row.
+        released += await EmailStateWriter(_db, appLogger: _appLogger)
+            .renameFolder(d.accountId, d.path, rewrittenPath);
         await (_db.update(_db.threads)
               ..where(
                 (t) =>
@@ -1447,14 +1422,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
 /// Deletes the local cache rows that belong to a single mailbox that no
 /// longer exists on the server.
 ///
-/// Removes the row in `mailboxes`, every `emails` row whose `mailboxPath`
-/// matches (which cascades into `email_bodies`), every `threads` row, the
-/// IMAP per-mailbox checkpoint in `sync_states`. Queued `pending_changes`
-/// whose JSON payload references the path as `mailboxPath`, `src` or `dest`
-/// are not deleted but marked failed (they can no longer apply, and must not
+/// Removes the row in `mailboxes`, every `threads` row, the IMAP
+/// per-mailbox checkpoint in `sync_states`. Queued `pending_changes` whose
+/// JSON payload references the path as `mailboxPath`, `src` or `dest` are
+/// not deleted but marked failed (they can no longer apply, and must not
 /// protect anything from sync), so the user sees them on the Pending Changes
-/// screen; each is logged to [appLogger] as a warning. Idempotent — safe to
-/// call when nothing matches.
+/// screen; each is logged to [appLogger] as a warning. The mails the server
+/// had in the folder are marked gone and deleted unless a change is still
+/// in flight or acked for them ([EmailStateWriter.markFolderGone]); a mail
+/// the user moved into the folder shows in its source again, where the
+/// server still has it (its failed move no longer folds, #1239).
+/// Idempotent — safe to call when nothing matches.
 Future<void> removeLocalMailbox(
   AppDatabase db,
   String accountId,
@@ -1462,8 +1440,9 @@ Future<void> removeLocalMailbox(
   AppLogger? appLogger,
 }) async {
   final failed = <PendingChangeRow>[];
+  var kept = <String>{};
+  final writer = EmailStateWriter(db, appLogger: appLogger);
   await db.transaction(() async {
-    await EmailStateWriter(db).deleteRowsOf(accountId, mailboxPath: path);
     await (db.delete(db.threads)
           ..where(
             (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),
@@ -1505,9 +1484,20 @@ Future<void> removeLocalMailbox(
       failed.add(row);
     }
     // A failed change no longer folds: a mail it showed elsewhere shows the
-    // server's read/star/snooze state again.
-    await EmailStateWriter(db)
-        .refoldAll([for (final row in failed) row.resourceId]);
+    // server's folder and read/star/snooze state again.
+    final shownElsewhere =
+        await writer.refoldAll([for (final row in failed) row.resourceId]);
+    kept = await writer.markFolderGone(accountId, path);
+    for (final row in await (db.select(db.emails)
+          ..where((t) => t.id.isIn(shownElsewhere)))
+        .get()) {
+      await refreshThreadAggregate(
+        db,
+        accountId,
+        row.mailboxPath,
+        row.threadId ?? row.id,
+      );
+    }
 
     await (db.delete(db.mailboxes)
           ..where(
@@ -1515,6 +1505,19 @@ Future<void> removeLocalMailbox(
           ))
         .go();
   });
+  if (kept.isNotEmpty) {
+    unawaited(
+      appLogger?.warn(
+        'email.server_gone_with_changes',
+        'The folder "$path" was removed on the server: ${kept.length} '
+            'mail(s) of it are kept, hidden, while a change of them is being '
+            'sent or confirmed',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'emailIds': kept.take(100).toList()},
+      ),
+    );
+  }
   for (final row in failed) {
     unawaited(
       appLogger?.warn(

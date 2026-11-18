@@ -102,7 +102,9 @@ extension _UserActions on EmailRepositoryImpl {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
-    if (row == null) return;
+    // A hidden row (deleted for good, or gone on the server) takes no
+    // action (SYNC-REDESIGN.md §2).
+    if (row == null || row.mailboxPath.isEmpty) return;
 
     // Reduce the request to only the flags that actually change. Callers such
     // as the detail-screen auto-mark-on-open (`lib/di.dart`) fire
@@ -274,10 +276,16 @@ extension _UserActions on EmailRepositoryImpl {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
-    if (row == null) return;
-    if (row.mailboxPath == destMailboxPath) return;
-
-    await _moveRow(row, destMailboxPath);
+    // A hidden row takes no action.
+    if (row == null || row.mailboxPath.isEmpty) return;
+    if (row.mailboxPath != destMailboxPath) {
+      await _moveRow(row, destMailboxPath);
+    }
+    // Also when the row is in the destination already: Undo's reverse move
+    // finds it there once cancelling the original put it back (the folder
+    // is the fold of its queued changes), and a counterpart whose mirrored
+    // change could not be cancelled (sent already) still needs its reverse
+    // move. A counterpart already there is skipped.
     await _mirrorMoveToCounterparts(
       row.accountId,
       row.messageId,
@@ -294,6 +302,8 @@ extension _UserActions on EmailRepositoryImpl {
     String event = 'email.move',
   }) async {
     if (row.mailboxPath == destMailboxPath) return;
+    // A hidden row takes no action: an Undo would record '' as its source.
+    if (row.mailboxPath.isEmpty) return;
     final emailId = row.id;
     final srcMailboxPath = row.mailboxPath;
     final account = (await _bulkAccount(row.accountId))!;
@@ -360,17 +370,13 @@ extension _UserActions on EmailRepositoryImpl {
     );
   }
 
-  /// The optimistic local part of a move of [row] to [destMailboxPath]: the
-  /// row shows in the destination at once. No change is queued here (see
-  /// [_moveRow]); the end of its snooze comes with the fold of the queued
-  /// move (`clearSnooze`).
+  /// The local part of a move of [row] to [destMailboxPath], after the move
+  /// was queued: the row already shows in the destination (the fold of the
+  /// queued move, `local_mailbox_path`), and so does the end of its snooze
+  /// (`clearSnooze`). Here only the local-only snooze source is cleared and
+  /// the threads of both folders refreshed.
   Future<void> _applyLocalMove(Email row, String destMailboxPath) async {
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(
-        mailboxPath: Value(destMailboxPath),
-        snoozedFromMailboxPath: const Value(null),
-      ),
-    );
+    await _state.writeSnoozedFrom(row.id, null);
     await _reconcileSourceThreads(
       row.accountId,
       row.mailboxPath,
@@ -495,6 +501,8 @@ extension _UserActions on EmailRepositoryImpl {
   /// mirror to counterpart accounts (see [_Counterparts._mirrorDeleteToCounterparts]).
   Future<String?> _deleteRow(Email row) async {
     final emailId = row.id;
+    // Already hidden (deleted for good, or gone on the server).
+    if (row.mailboxPath.isEmpty) return null;
     final account = (await _bulkAccount(row.accountId))!;
 
     // Move to Trash when possible so the user can recover the message.
@@ -533,29 +541,20 @@ extension _UserActions on EmailRepositoryImpl {
       ),
     );
 
-    if (account.type == account_model.AccountType.jmap) {
-      await _enqueueChange(
-        account.id,
-        emailId,
-        'delete',
-        jsonEncode(<String, dynamic>{}),
-      );
-      await _state.deleteRow(emailId);
-      await _updateThread(
-        row.accountId,
-        row.mailboxPath,
-        row.threadId ?? emailId,
-      );
-      return null;
-    }
-
-    await _enqueueChange(
+    // The queued delete folds into the row as `local_hidden`: it is hidden,
+    // not deleted, so its body survives a failure or an Undo, and a late
+    // sync answer finds it (SYNC-REDESIGN.md §2). It is deleted once the
+    // server confirms the mail is gone. A row with no server copy queues
+    // nothing and is deleted at once.
+    final queued = await _enqueueChange(
       account.id,
       emailId,
       'delete',
-      jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
+      account.type == account_model.AccountType.jmap
+          ? jsonEncode(<String, dynamic>{})
+          : jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
     );
-    await _state.deleteRow(emailId);
+    if (!queued) await _state.deleteRow(emailId);
     await _updateThread(
       row.accountId,
       row.mailboxPath,
@@ -587,6 +586,8 @@ extension _UserActions on EmailRepositoryImpl {
   /// Snoozes a single [row] on its own account: moves it to that account's
   /// Snoozed mailbox, records [until] locally and enqueues the protocol change.
   Future<void> _snoozeRow(Email row, DateTime until) async {
+    // A hidden row takes no action.
+    if (row.mailboxPath.isEmpty) return;
     final accountId = row.accountId;
     final destPath = await _snoozedMailboxPath(accountId);
 
@@ -600,9 +601,7 @@ extension _UserActions on EmailRepositoryImpl {
           ))
         .go();
 
-    // Optimistic local update.
-    await _applyLocalSnooze(row, destPath);
-
+    // Folds into the row: the Snoozed folder and the wake-up time.
     await _enqueueChange(
       accountId,
       row.id,
@@ -618,6 +617,7 @@ extension _UserActions on EmailRepositoryImpl {
         ..._prevSnooze(row),
       }),
     );
+    await _applyLocalSnooze(row, destPath);
 
     unawaited(
       _appLogger?.info(
@@ -637,16 +637,12 @@ extension _UserActions on EmailRepositoryImpl {
     );
   }
 
-  /// The optimistic local part of snoozing [row] into [destPath]. No change
-  /// is queued here (see [_snoozeRow]); the wake-up time comes with the fold
-  /// of the queued snooze.
+  /// The local part of snoozing [row] into [destPath], after the snooze was
+  /// queued: the folder and the wake-up time come with the fold of the
+  /// queued snooze; here the local-only folder it came from is recorded and
+  /// the threads of both folders refreshed.
   Future<void> _applyLocalSnooze(Email row, String destPath) async {
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(
-        mailboxPath: Value(destPath),
-        snoozedFromMailboxPath: Value(row.mailboxPath),
-      ),
-    );
+    await _state.writeSnoozedFrom(row.id, row.mailboxPath);
     await _updateThread(
       row.accountId,
       row.mailboxPath,
@@ -684,7 +680,9 @@ extension _UserActions on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.snoozedUntil.isSmallerOrEqualValue(now),
+                t.snoozedUntil.isSmallerOrEqualValue(now) &
+                // Not a hidden row (deleted for good, or gone).
+                t.mailboxPath.equals('').not(),
           ))
         .get();
 
@@ -712,9 +710,7 @@ extension _UserActions on EmailRepositoryImpl {
       // its place; its stale snooze is dropped, and so is the server-side
       // `snz:` keyword sync would otherwise keep reading back.
       if (!_isSnoozedPath(row.mailboxPath, snoozedPath)) {
-        await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-          const EmailsCompanion(snoozedFromMailboxPath: Value(null)),
-        );
+        await _state.writeSnoozedFrom(row.id, null);
         // Folds as "not snoozed".
         await _enqueueChange(
           accountId,
@@ -748,9 +744,7 @@ extension _UserActions on EmailRepositoryImpl {
           ..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
     if (row == null) return;
-    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId))).write(
-      EmailsCompanion(snoozedFromMailboxPath: Value(fromMailboxPath)),
-    );
+    await _state.writeSnoozedFrom(emailId, fromMailboxPath);
     if (await _hasNoServerCopy(row)) {
       await _state.writeOwn(emailId, snoozedUntil: until);
     }
@@ -759,6 +753,8 @@ extension _UserActions on EmailRepositoryImpl {
   /// Un-snoozes a single [row] on its own account: moves it back to that
   /// account's Inbox, clears the snooze columns and enqueues the change.
   Future<void> _unsnoozeRow(Email row) async {
+    // A hidden row takes no action.
+    if (row.mailboxPath.isEmpty) return;
     final accountId = row.accountId;
 
     // Per instructions: "get to inbox moved by app".
@@ -801,16 +797,12 @@ extension _UserActions on EmailRepositoryImpl {
     );
   }
 
-  /// The optimistic local part of un-snoozing [row] back to [dest]. No change
-  /// is queued here (see [_unsnoozeRow]); the end of the snooze comes with
-  /// the fold of the queued unsnooze.
+  /// The local part of un-snoozing [row] back to [dest], after the unsnooze
+  /// was queued: the folder and the end of the snooze come with its fold;
+  /// here the local-only snooze source is cleared and the threads of both
+  /// folders refreshed.
   Future<void> _applyLocalUnsnooze(Email row, String dest) async {
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(
-        mailboxPath: Value(dest),
-        snoozedFromMailboxPath: const Value(null),
-      ),
-    );
+    await _state.writeSnoozedFrom(row.id, null);
     await _updateThread(
       row.accountId,
       row.mailboxPath,
@@ -874,15 +866,24 @@ extension _UserActions on EmailRepositoryImpl {
         return;
       }
     }
+    final exists = await (_db.selectOnly(_db.emails)
+              ..addColumns([_db.emails.id])
+              ..where(_db.emails.id.equals(e.id)))
+            .getSingleOrNull() !=
+        null;
+    // A row that is still there (hidden by a delete that was sent already,
+    // or shown where a queued move puts it) keeps its state: the fold of
+    // its changes decides where it shows.
+    if (exists) {
+      await _refoldAndRethread(e.id);
+      return;
+    }
     final imapKnown = srvPath != null && srvUid != null;
-    final restored = EmailsCompanion.insert(
-      id: e.id,
-      accountId: e.accountId,
-      mailboxPath: e.mailboxPath,
-      uid: e.uid,
+    final restored = EmailsCompanion(
+      uid: Value(e.uid),
       subject: Value(e.subject),
       sentAt: Value(e.sentAt),
-      receivedAt: e.receivedAt,
+      receivedAt: Value(e.receivedAt),
       fromJson: Value(jsonEncode(e.from)),
       toAddresses: Value(jsonEncode(e.to)),
       ccJson: Value(jsonEncode(e.cc)),
@@ -898,37 +899,36 @@ extension _UserActions on EmailRepositoryImpl {
       snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
       isLocal: Value(e.isLocal),
       isVirtualSentCopy: Value(e.isVirtualSentCopy),
-      srvMailboxPath: imapKnown ? Value(srvPath) : const Value.absent(),
       srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
       srvUidValidity:
           imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
       srvJmapId: srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
     );
-    final exists = await (_db.selectOnly(_db.emails)
-              ..addColumns([_db.emails.id])
-              ..where(_db.emails.id.equals(e.id)))
-            .getSingleOrNull() !=
-        null;
-    // A row that is still there keeps its read/star/snooze state. A row
-    // brought back takes the snapshot's as the server's, stamped 0 so any
-    // read corrects it: the snapshot shows what the app showed, which may
-    // be the user's pending value, so the next sync reads the server's
-    // (the flag reconcile is made due). Its queued changes fold over it.
-    await _db.into(_db.emails).insertOnConflictUpdate(
-          exists
-              ? restored
-              : EmailStateWriter.withServerKeywords(
-                  restored,
-                  ServerKeywords(
-                    seen: e.isSeen,
-                    flagged: e.isFlagged,
-                    snoozedUntil: e.snoozedUntil,
-                  ),
-                  seq: 0,
-                ),
+    // A row brought back takes the snapshot's read/star/snooze state and
+    // folder as the server's, stamped 0 so any read corrects them: the
+    // snapshot shows what the app showed, which may be the user's pending
+    // value, so the next sync reads the server's (the flag reconcile is
+    // made due). Its queued changes fold over it.
+    await _db.into(_db.emails).insert(
+          EmailStateWriter.newRow(
+            restored,
+            id: e.id,
+            accountId: e.accountId,
+            // Where the snapshot says the server has it (a snapshot taken
+            // behind a queued move shows the destination, but the server
+            // still had it in the source); the shown folder would record
+            // a location without a UID that no sync could ever confirm.
+            mailboxPath: e.srvMailboxPath ?? e.mailboxPath,
+            keywords: ServerKeywords(
+              seen: e.isSeen,
+              flagged: e.isFlagged,
+              snoozedUntil: e.snoozedUntil,
+            ),
+            seq: 0,
+          ),
         );
-    if (!exists) await _state.makeFlagReconcileDue(e.id);
+    await _state.makeFlagReconcileDue(e.id);
     await _state.refold(e.id);
-    await _updateThread(e.accountId, e.mailboxPath, e.threadId ?? e.id);
+    await _rethreadRow(e.id);
   }
 }

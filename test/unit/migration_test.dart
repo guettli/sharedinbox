@@ -20,7 +20,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 72);
+      expect(db.schemaVersion, 73);
       await db.close();
     });
 
@@ -214,6 +214,15 @@ void main() {
       expect(
         await _tableColumns(db, 'pending_changes'),
         containsAll(['ack_seq', 'contradicted_seq']), // v72
+      );
+      expect(
+        await _tableColumns(db, 'emails'),
+        containsAll([
+          'local_mailbox_path',
+          'local_hidden',
+          'srv_gone',
+          'srv_location_seq',
+        ]), // v73
       );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
@@ -413,7 +422,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -454,7 +463,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -485,7 +494,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -523,7 +532,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -564,7 +573,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -612,7 +621,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -660,7 +669,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -710,7 +719,7 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -728,6 +737,8 @@ void main() {
 
       final rawDb = sqlite.sqlite3.open(dbFile.path)
         ..execute('DROP INDEX emails_srv_imap_location;')
+        ..execute('DROP INDEX emails_srv_mailbox;')
+        ..execute('DROP TRIGGER emails_srv_mailbox_path_default;')
         ..execute('DROP INDEX emails_srv_jmap_id;')
         ..execute('ALTER TABLE emails DROP COLUMN srv_mailbox_path;')
         ..execute('ALTER TABLE emails DROP COLUMN srv_uid;')
@@ -818,11 +829,12 @@ void main() {
       expect(rows['acc-i:Old:7'], ('New', 7, 888, null));
       expect(rows['acc-i:odd'], ('Archive', 8, null, null));
       expect(rows['acc-i:New:9'], ('New', 9, 888, null));
-      expect(rows['acc-i:Old:9'], (null, null, null, null));
+      // v73 records the shown folder as the server's where none was known.
+      expect(rows['acc-i:Old:9'], ('New', null, null, null));
       expect(rows['acc-i:Archive:10'], ('Archive', 10, null, null));
       expect(rows['acc-i:Old2:10'], ('Archive', 10, null, null));
-      expect(rows['acc-j:Mabc'], (null, null, null, 'Mabc'));
-      expect(rows['acc-i:__local__:<m@x>'], (null, null, null, null));
+      expect(rows['acc-j:Mabc'], ('mb-inbox', null, null, 'Mabc'));
+      expect(rows['acc-i:__local__:<m@x>'], ('INBOX', null, null, null));
 
       final indexes = await db
           .customSelect(
@@ -843,7 +855,7 @@ void main() {
         throwsA(anything),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -1043,7 +1055,7 @@ void main() {
       expect(action.originalEmails[0].srvUidValidity, 55);
 
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -1216,7 +1228,175 @@ void main() {
           .get();
       expect(index, hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
+      await db.close();
+    });
+
+    test(
+        'v72→v73 overlays the location: srv_mailbox_path everywhere, the '
+        'queued moves folded', () async {
+      final dbFile = File('test_migration_v72_location.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      rawDb
+        ..execute('DROP TRIGGER emails_srv_mailbox_path_default;')
+        ..execute('DROP INDEX emails_srv_mailbox;')
+        ..execute('DROP INDEX emails_srv_gone;');
+      for (final column in [
+        'local_mailbox_path',
+        'local_hidden',
+        'srv_gone',
+        'srv_location_seq',
+      ]) {
+        rawDb.execute('ALTER TABLE emails DROP COLUMN $column;');
+      }
+      void email(
+        String id,
+        String account,
+        String path, {
+        String? srvPath,
+      }) =>
+          rawDb.execute(
+            'INSERT INTO emails (id, account_id, mailbox_path, uid, '
+            'received_at, srv_mailbox_path, srv_uid) '
+            'VALUES (?, ?, ?, 1, 0, ?, ?)',
+            [
+              id,
+              account,
+              path,
+              srvPath,
+              if (account == 'acc-i' && srvPath != null)
+                int.parse(id.split('-').last)
+              else
+                null,
+            ],
+          );
+      void change(
+        int id,
+        String email,
+        String type,
+        String payload, {
+        String state = 'pending',
+        String account = 'acc-i',
+      }) =>
+          rawDb.execute(
+            'INSERT INTO pending_changes (id, account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, attempts, state) '
+            "VALUES (?, ?, 'Email', ?, ?, ?, 0, 0, ?)",
+            [id, account, email, type, payload, state],
+          );
+      // IMAP, untouched.
+      email('e-1', 'acc-i', 'INBOX', srvPath: 'INBOX');
+      // IMAP, moved to Archive, the move still queued.
+      email('e-2', 'acc-i', 'Archive', srvPath: 'INBOX');
+      change(1, 'e-2', 'move', '{"mailboxPath":"INBOX","dest":"Archive"}');
+      // JMAP (no server folder recorded), moved, the move still queued.
+      email('e-3', 'acc-j', 'trash-id');
+      change(
+        2,
+        'e-3',
+        'move',
+        '{"src":"inbox-id","dest":"trash-id"}',
+        account: 'acc-j',
+      );
+      // JMAP, untouched.
+      email('e-4', 'acc-j', 'inbox-id');
+      // A failed move does not fold: the mail shows the server's folder.
+      email('e-5', 'acc-i', 'Archive', srvPath: 'INBOX');
+      change(
+        3,
+        'e-5',
+        'move',
+        '{"mailboxPath":"INBOX","dest":"Archive"}',
+        state: 'failed',
+      );
+      // An acked snooze whose destination is not where the server has it
+      // keeps folding, as at runtime, until a read settles it; its old
+      // (keyword) contradiction is forgotten.
+      email('e-6', 'acc-j', 'inbox-id');
+      change(
+        4,
+        'e-6',
+        'snooze',
+        '{"src":"inbox-id","dest":"snoozed-id",'
+            '"until":"2027-01-15T08:00:00.000Z"}',
+        state: 'acked',
+        account: 'acc-j',
+      );
+      rawDb
+        ..execute(
+          'UPDATE pending_changes SET contradicted_seq = 5 WHERE id = 4',
+        )
+        ..execute('PRAGMA user_version = 72;')
+        ..close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      Future<Map<String, Object?>> row(String id) async =>
+          (await db.customSelect(
+            'SELECT mailbox_path, srv_mailbox_path, local_mailbox_path, '
+            'local_hidden, srv_gone, srv_location_seq '
+            'FROM emails WHERE id = ?',
+            variables: [Variable.withString(id)],
+          ).getSingle())
+              .data;
+
+      expect(await row('e-1'), {
+        'mailbox_path': 'INBOX',
+        'srv_mailbox_path': 'INBOX',
+        'local_mailbox_path': null,
+        'local_hidden': 0,
+        'srv_gone': 0,
+        'srv_location_seq': 0,
+      });
+      expect(await row('e-2'), containsPair('local_mailbox_path', 'Archive'));
+      expect(await row('e-2'), containsPair('mailbox_path', 'Archive'));
+      expect(await row('e-2'), containsPair('srv_mailbox_path', 'INBOX'));
+      expect(await row('e-3'), containsPair('srv_mailbox_path', 'inbox-id'));
+      expect(await row('e-3'), containsPair('local_mailbox_path', 'trash-id'));
+      expect(await row('e-3'), containsPair('mailbox_path', 'trash-id'));
+      expect(await row('e-4'), containsPair('srv_mailbox_path', 'inbox-id'));
+      expect(await row('e-5'), containsPair('mailbox_path', 'INBOX'));
+      expect(await row('e-5'), containsPair('local_mailbox_path', null));
+      expect(await row('e-6'), containsPair('mailbox_path', 'snoozed-id'));
+      final ops = await db.select(db.pendingChanges).get();
+      expect(ops.map((o) => o.id), [1, 2, 3, 4]);
+      expect(ops.last.contradictedSeq, isNull);
+      // e-3 (JMAP, its server folder newly recorded) shows where its move
+      // puts it, as before; e-5's failed move no longer shows; e-6 shows
+      // its acked snooze: noted in the App Log.
+      final logs = await db
+          .customSelect(
+            'SELECT account_id, data_json FROM app_logs '
+            "WHERE event = 'migration.location_overlay' ORDER BY account_id",
+          )
+          .get();
+      expect(logs.map((l) => l.read<String>('account_id')), ['acc-i', 'acc-j']);
+      expect(logs.first.read<String>('data_json'), contains('"emailId":"e-5"'));
+
+      // A row inserted without a server folder gets the one it shows.
+      await db.customStatement(
+        'INSERT INTO emails (id, account_id, mailbox_path, uid, received_at) '
+        "VALUES ('e-7', 'acc-j', 'inbox-id', 0, 0)",
+      );
+      expect(await row('e-7'), containsPair('srv_mailbox_path', 'inbox-id'));
+      final index = await db
+          .customSelect(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name IN ('emails_srv_mailbox', 'emails_srv_gone')",
+          )
+          .get();
+      expect(index, hasLength(2));
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 73);
       await db.close();
     });
 
@@ -1327,7 +1507,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 72);
+      expect(version.read<int>('user_version'), 73);
     });
 
     test(

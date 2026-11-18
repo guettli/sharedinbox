@@ -63,14 +63,11 @@ extension _LocalRows on EmailRepositoryImpl {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-      final copy = EmailsCompanion.insert(
-        id: emailId,
-        accountId: accountId,
-        mailboxPath: mailboxPath,
-        uid: uid ?? 0,
+      final copy = EmailsCompanion(
+        uid: Value(uid ?? 0),
         subject: Value(draft.subject),
         sentAt: Value(now),
-        receivedAt: now,
+        receivedAt: Value(now),
         fromJson: Value(_encodeModelAddresses([draft.from])),
         toAddresses: Value(_encodeModelAddresses(draft.to)),
         ccJson: Value(_encodeModelAddresses(draft.cc)),
@@ -81,23 +78,30 @@ extension _LocalRows on EmailRepositoryImpl {
         messageId: Value(mid),
         isLocal: Value(isLocal),
         isVirtualSentCopy: Value(isLocal),
-        srvMailboxPath: Value(uid == null ? null : mailboxPath),
         srvUid: Value(uid),
         srvUidValidity: Value(uidValidity),
         srvJmapId: Value(uid == null ? jmapId : null),
       );
       // You wrote it — mirrors the \Seen flag the APPEND sets, and never
       // nags with an unread badge on your own mail. A row sync already
-      // stored keeps the state the server-write gate gave it.
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            known == null
-                ? EmailStateWriter.withServerKeywords(
-                    copy,
-                    _ownMailKeywords,
-                    seq: 0,
-                  )
-                : copy,
-          );
+      // stored keeps the state (and folder) the server-write gate gave it.
+      // A virtual copy (no server location yet) has the Sent folder as its
+      // own folder.
+      if (known == null) {
+        await _db.into(_db.emails).insert(
+              EmailStateWriter.newRow(
+                copy,
+                id: emailId,
+                accountId: accountId,
+                mailboxPath: mailboxPath,
+                keywords: _ownMailKeywords,
+                seq: 0,
+              ),
+            );
+      } else {
+        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+            .write(copy);
+      }
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
               emailId: emailId,
@@ -166,15 +170,12 @@ extension _LocalRows on EmailRepositoryImpl {
           return;
         }
         await _db.into(_db.emails).insert(
-              EmailStateWriter.withServerKeywords(
-                EmailsCompanion.insert(
-                  id: emailId,
-                  accountId: account.id,
-                  mailboxPath: inbox.path,
-                  uid: 0,
+              EmailStateWriter.newRow(
+                EmailsCompanion(
+                  uid: const Value(0),
                   subject: Value(draft.subject),
                   sentAt: Value(now),
-                  receivedAt: now,
+                  receivedAt: Value(now),
                   fromJson: Value(_encodeModelAddresses([draft.from])),
                   toAddresses: Value(_encodeModelAddresses(draft.to)),
                   ccJson: Value(_encodeModelAddresses(draft.cc)),
@@ -184,9 +185,13 @@ extension _LocalRows on EmailRepositoryImpl {
                   messageId: Value(mid),
                   isLocal: const Value(true),
                 ),
+                id: emailId,
+                accountId: account.id,
+                // A virtual row has no server copy: its folder and its
+                // read/star/snooze values are its own.
+                mailboxPath: inbox.path,
                 // Self-sent: you wrote it, so don't nag with an unread badge.
-                // A virtual row has no server copy: its values are its own.
-                _ownMailKeywords,
+                keywords: _ownMailKeywords,
                 seq: 0,
               ),
             );
@@ -220,6 +225,7 @@ extension _LocalRows on EmailRepositoryImpl {
           ..where(
             _db.emails.accountId.equals(accountId) &
                 _db.emails.isLocal.equals(false) &
+                _db.emails.mailboxPath.equals('').not() &
                 (_db.emails.messageId.equals(mid) |
                     _db.emails.messageId.equals('<$mid>')),
           ))

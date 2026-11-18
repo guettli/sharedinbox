@@ -55,6 +55,7 @@ import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show removeLocalMailbox;
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 
 part 'email_repository_impl/bodies.dart';
 part 'email_repository_impl/change_failures.dart';
@@ -160,24 +161,8 @@ class EmailRepositoryImpl implements EmailRepository {
   bool _bodyClientBusy = false;
   Timer? _bodyClientIdleTimer;
 
-  /// Bumped, synchronously, when a move, snooze, unsnooze or delete is
-  /// queued ([_SyncImap._noteLocationEdit]); while a new-mail FETCH runs,
-  /// [_localEditByLocation] remembers the value by the IMAP location
-  /// (account, folder, UID) the edited mail had, with its row's id. Once
-  /// such a change is flushed no row is found there, and a FETCH answer
-  /// about that location predating the edit would add the mail again
-  /// (#1269). Read/star/snooze values need no such guard: the `keywords`
-  /// overlay orders reads by the persistent read sequence
-  /// ([EmailStateWriter]).
-  ///
-  /// In memory, so per isolate: a background (WorkManager) sync in another
-  /// isolate does not see the UI's edits and relies on the queue check alone.
-  int _localEditSeq = 0;
-  final Map<_ImapLocation, (int, String)> _localEditByLocation = {};
-  int _activeFetches = 0;
-
   /// The email state writer (SYNC-REDESIGN.md §2): the only writer of the
-  /// read/star/snooze columns.
+  /// read/star/snooze and location columns.
   final EmailStateWriter _state;
 
   /// The sampled overlay consistency check after each sync run

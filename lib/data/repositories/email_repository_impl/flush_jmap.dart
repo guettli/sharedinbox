@@ -51,15 +51,35 @@ extension _FlushJmap on EmailRepositoryImpl {
         // the Email checkpoint untouched — the next `Email/changes` sync
         // reconciles this mutation together with any concurrent server changes
         // (re-applying our own change is idempotent).
-        await _applyPendingChangeJmap(jmap, row);
-        await _settleApplied(row);
+        final placed = await _applyPendingChangeJmap(jmap, row);
+        final before = await (_db.select(_db.emails)
+              ..where((t) => t.id.equals(row.resourceId)))
+            .getSingleOrNull();
+        // What the server confirmed becomes its state at once (stamped with
+        // the ack): the mailbox a move put the mail in (`mailboxIds` is
+        // replaced), or that a delete destroyed it.
+        await _settleApplied(
+          row,
+          confirmedMailboxPath: placed,
+          confirmedGone: row.changeType == 'delete',
+        );
+        // Usually the row shows there already (the move folded); not when
+        // it showed under the Snoozed placeholder.
+        if (placed != null && before != null && before.mailboxPath != placed) {
+          await _updateThread(
+            before.accountId,
+            before.mailboxPath,
+            before.threadId ?? before.id,
+          );
+          await _rethreadRow(before.id);
+        }
         applied++;
         blocked.remove(row.resourceId);
       } on JmapSetItemException catch (e) {
         if (e.type == 'notFound' && row.changeType == 'delete') {
           // The mail is already gone: the delete's intent is satisfied.
           blocked.remove(row.resourceId);
-          await _deletePendingChange(row);
+          await _settleApplied(row, confirmedGone: true);
           log('JMAP change ${row.id} skipped: message already gone ($e)');
           unawaited(
             _appLogger?.info(
@@ -79,6 +99,22 @@ extension _FlushJmap on EmailRepositoryImpl {
         // `notFound`: the mail is gone, there is no place to go back to.
         if (!await _markChangeFailed(row, e, revert: e.type != 'notFound')) {
           continue;
+        }
+        if (e.type == 'notFound') {
+          // The server has no such Email: the row is gone, hidden now that
+          // the failed change no longer folds, and deleted with its last
+          // live change (the failed one stays listed).
+          final read = await _state.beginRead(account.id);
+          final gone = await (_db.select(_db.emails)
+                ..where((t) => t.id.equals(row.resourceId)))
+              .getSingleOrNull();
+          if (gone != null) {
+            await _settleGoneRows(
+              account.id,
+              [gone],
+              await read.markGone([gone.id]),
+            );
+          }
         }
         log('JMAP permanent error for change ${row.id}: $e');
         unawaited(
@@ -225,20 +261,9 @@ extension _FlushJmap on EmailRepositoryImpl {
         if (mailbox != null) {
           await _db.into(_db.mailboxes).insertOnConflictUpdate(mailbox);
         }
-        await (_db.update(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.mailboxPath.equals(_snoozedPlaceholder),
-              ))
-            .write(EmailsCompanion(mailboxPath: Value(snoozedId)));
-        await (_db.update(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.snoozedFromMailboxPath.equals(_snoozedPlaceholder),
-              ))
-            .write(EmailsCompanion(snoozedFromMailboxPath: Value(snoozedId)));
+        // The queued changes naming the placeholder name the folder now,
+        // and so do the rows they put there (their fold).
+        await _state.renameFolder(accountId, _snoozedPlaceholder, snoozedId);
         final placeholderThreads = _db.select(_db.threads)
           ..where(
             (t) =>
@@ -297,7 +322,9 @@ extension _FlushJmap on EmailRepositoryImpl {
   ///
   /// Throws [JmapSetItemException] on a permanent per-item rejection
   /// (`notUpdated`/`notDestroyed`), or [JmapException] on any other error.
-  Future<void> _applyPendingChangeJmap(
+  /// Sends [row] to the server. Returns the mailbox a move, snooze or
+  /// unsnooze put the mail in (the server confirmed it), else null.
+  Future<String?> _applyPendingChangeJmap(
     JmapClient jmap,
     PendingChangeRow row,
   ) async {
@@ -309,6 +336,7 @@ extension _FlushJmap on EmailRepositoryImpl {
           ...extra,
         };
 
+    String? placed;
     List<dynamic> responses;
     switch (row.changeType) {
       case 'flag_seen':
@@ -344,7 +372,7 @@ extension _FlushJmap on EmailRepositoryImpl {
           for (final k in (payload['keywords'] as List<dynamic>).cast<String>())
             'keywords/${_imapFlagToJmapKeyword(k)}': true,
         };
-        if (update.isEmpty) return;
+        if (update.isEmpty) return null;
         responses = await jmap.call([
           [
             'Email/set',
@@ -381,6 +409,7 @@ extension _FlushJmap on EmailRepositoryImpl {
             '0',
           ],
         ]);
+        placed = destMailboxId;
 
       case 'delete':
         responses = await jmap.call([
@@ -441,6 +470,7 @@ extension _FlushJmap on EmailRepositoryImpl {
             '0',
           ],
         ]);
+        placed = destMailboxId;
 
       case 'unsnooze':
         final destMailboxId = payload['dest'] as String;
@@ -471,10 +501,11 @@ extension _FlushJmap on EmailRepositoryImpl {
             '0',
           ],
         ]);
+        placed = destMailboxId;
 
       case 'clear_snooze':
         final removals = await _jmapSnoozeKeywordRemovals(jmap, jmapEmailId);
-        if (removals.isEmpty) return;
+        if (removals.isEmpty) return null;
         responses = await jmap.call([
           [
             'Email/set',
@@ -486,7 +517,7 @@ extension _FlushJmap on EmailRepositoryImpl {
         ]);
 
       default:
-        return;
+        return null;
     }
 
     final result = _responseArgs(responses, 0, 'Email/set');
@@ -508,5 +539,6 @@ extension _FlushJmap on EmailRepositoryImpl {
         err['description'] as String?,
       );
     }
+    return placed;
   }
 }

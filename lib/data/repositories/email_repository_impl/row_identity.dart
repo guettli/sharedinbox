@@ -4,24 +4,12 @@ part of '../email_repository_impl.dart';
 // server location, carrying a vanished row over to its moved copy and merging
 // duplicate rows.
 
-/// An IMAP server location: account, folder and UID.
-typedef _ImapLocation = (String, String, int);
-
 /// Where to ask the IMAP server for a row's message: its recorded server
 /// location, which behind a queued move differs from the folder it is shown
 /// in. Rows without one (none recorded yet) fall back to the shown values.
 extension on Email {
   String get imapServerPath => srvMailboxPath ?? mailboxPath;
   int get imapServerUid => srvUid ?? uid;
-}
-
-/// Where the server has [row]'s mail as far as sync knows, as the key of
-/// [EmailRepositoryImpl._localEditByLocation]; null for a row without a known IMAP location.
-_ImapLocation? _imapLocationOf(Email? row) {
-  final path = row?.srvMailboxPath;
-  final uid = row?.srvUid;
-  if (row == null || path == null || uid == null) return null;
-  return (row.accountId, path, uid);
 }
 
 /// The condition of [_RowIdentity._rowAtImapLocation].
@@ -45,9 +33,12 @@ Expression<bool> _atImapLocation(
 
 extension _RowIdentity on EmailRepositoryImpl {
   /// Records that the server has the mail of row [id] at [newUid] in
-  /// [newMailboxPath] now: its `uid`, the shown `mailboxPath` and the
-  /// server location (`srv_mailbox_path` / `srv_uid` / `srv_uid_validity`),
-  /// and the UIDs in its queued IMAP changes. The row keeps its id
+  /// [newMailboxPath] now: its `uid` and server location
+  /// (`srv_mailbox_path` / `srv_uid` / `srv_uid_validity`,
+  /// [EmailStateWriter.relocate]), and the UIDs in its queued IMAP changes.
+  /// The folder it shows follows, unless a later move, snooze or unsnooze of
+  /// the mail is still queued (#1276): the fold of the location overlay
+  /// keeps showing that one's destination. The row keeps its id
   /// (SYNC-REDESIGN.md §6), so its body, downloaded attachments, queued
   /// changes, logs, threads and Undo history stay attached as they are.
   /// Shared by [_FlushImap._relocateEmailAfterImapMove] and the body-fetch identity
@@ -56,8 +47,8 @@ extension _RowIdentity on EmailRepositoryImpl {
     required String id,
     required int newUid,
     required String newMailboxPath,
-    bool keepShownWhileMovedOn = false,
     bool mergeDuplicate = false,
+    int? seq,
   }) async {
     var displaced = const <Email>[];
     Email? merged;
@@ -107,27 +98,6 @@ extension _RowIdentity on EmailRepositoryImpl {
           existing.threadId ?? existing.id,
         );
       }
-      // After a move: when a later move, snooze or unsnooze of the mail is
-      // still queued (it starts in this move's destination), the row
-      // already shows the mail where that one puts it and keeps doing so;
-      // only its server location follows the server (#1276). Read in this
-      // transaction, so an Undo or another move made meanwhile is kept.
-      var movedOn = false;
-      if (keepShownWhileMovedOn) {
-        final queued = await (_db.select(_db.pendingChanges)
-              ..where(
-                (t) =>
-                    t.resourceId.equals(id) &
-                    t.state.isIn(_liveStates) &
-                    t.changeType.isIn(_locationChangeTypes),
-              ))
-            .get();
-        movedOn = queued.any((c) {
-          final p = _decodePayload(c);
-          return (p?['mailboxPath'] ?? p?['src']) == newMailboxPath;
-        });
-      }
-
       // Another row still records the location the server just gave this
       // mail: that record is stale (one location holds one message).
       displaced = await _releaseImapLocation(
@@ -138,17 +108,12 @@ extension _RowIdentity on EmailRepositoryImpl {
         exceptId: id,
       );
 
-      await (_db.update(_db.emails)..where((t) => t.id.equals(id))).write(
-        EmailsCompanion(
-          uid: Value(newUid),
-          // The shown folder stays behind a later queued move; the server
-          // location always follows the server.
-          mailboxPath: movedOn ? const Value.absent() : Value(newMailboxPath),
-          srvMailboxPath: Value(newMailboxPath),
-          srvUid: Value(newUid),
-          srvUidValidity: Value(newUidValidity),
-          srvJmapId: const Value(null),
-        ),
+      await _state.relocate(
+        id,
+        mailboxPath: newMailboxPath,
+        uid: newUid,
+        uidValidity: newUidValidity,
+        seq: seq,
       );
       await _rewritePendingChangeUids(
         resourceId: id,
@@ -295,10 +260,11 @@ extension _RowIdentity on EmailRepositoryImpl {
             ..limit(1))
           .getSingleOrNull();
 
-  /// Clears the recorded server location of the rows other than [exceptId]
-  /// that hold this IMAP location, because the server just gave it to
-  /// [exceptId]'s mail: one location holds one message. Returns those rows
-  /// (log them with [_logLocationReleased] after the transaction).
+  /// Clears the recorded UID of the rows other than [exceptId] that hold
+  /// this IMAP location ([EmailStateWriter.releaseLocation]), because the
+  /// server just gave it to [exceptId]'s mail: one location holds one
+  /// message. Returns those rows (log them with [_logLocationReleased] after
+  /// the transaction).
   Future<List<Email>> _releaseImapLocation(
     String accountId,
     String mailboxPath,
@@ -318,15 +284,7 @@ extension _RowIdentity on EmailRepositoryImpl {
             ),
           ))
         .get();
-    for (final row in rows) {
-      await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-        const EmailsCompanion(
-          srvMailboxPath: Value(null),
-          srvUid: Value(null),
-          srvUidValidity: Value(null),
-        ),
-      );
-    }
+    await _state.releaseLocation([for (final row in rows) row.id]);
     return rows;
   }
 
@@ -376,6 +334,8 @@ extension _RowIdentity on EmailRepositoryImpl {
                 t.accountId.equals(row.accountId) &
                 t.serverEmailId.equals(serverEmailId) &
                 t.isLocal.equals(false) &
+                // Not one the server no longer has either.
+                t.srvGone.equals(false) &
                 t.id.equals(row.id).not(),
           )
           ..limit(2))
@@ -432,7 +392,7 @@ extension _RowIdentity on EmailRepositoryImpl {
       if (newPath == null || newUid == null) return gone;
       final rowChanges = await _liveChanges(current.id);
       final copyChanges = await _liveChanges(dup.id);
-      if (current.mailboxPath != vanishedFrom ||
+      if (current.srvMailboxPath != vanishedFrom ||
           rowChanges.any((c) => _locationChangeTypes.contains(c.changeType)) ||
           copyChanges.any((c) => c.state == _inflightState)) {
         return later;
