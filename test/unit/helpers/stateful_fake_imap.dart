@@ -2,7 +2,8 @@ import 'dart:collection';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 
-import '../fake_imap.dart' show FakeImapClient, StaleAnswerHook, StoreAndMove;
+import '../fake_imap.dart'
+    show FakeImapClient, StaleAnswerHook, StoreAndMove, fakeMailbox;
 
 /// One message on a [StatefulFakeImapServer].
 class FakeServerMessage {
@@ -79,6 +80,40 @@ class StatefulFakeImapServer with StaleAnswerHook {
 
   final Map<String, FakeServerFolder> folders = {};
   final List<FakeServerHit> hits = [];
+
+  /// When it returns true for a folder path, `CREATE` / `RENAME` to that
+  /// path is refused with `NO [CANNOT]`: a permanent server error.
+  bool Function(String path)? refusesFolder;
+
+  /// UIDVALIDITY of the next folder a `CREATE` makes.
+  int nextUidValidity = 900;
+
+  /// Every `CREATE` and `RENAME` an app connection sent, as
+  /// `CREATE <path>` / `RENAME <from>-><to>`.
+  final List<String> folderCommands = [];
+
+  /// Another client creates (or this test sets up) folder [path].
+  FakeServerFolder addFolder(String path) =>
+      folders[path] = FakeServerFolder(path, nextUidValidity++);
+
+  /// Another client renames folder [from] to [to], with its subfolders
+  /// (`/` is the hierarchy separator; messages, UIDs and UIDVALIDITY kept).
+  void renameFolder(String from, String to) {
+    for (final path in folders.keys.toList()) {
+      if (path != from && !path.startsWith('$from/')) continue;
+      final old = folders.remove(path)!;
+      final newPath = '$to${path.substring(from.length)}';
+      final renamed = FakeServerFolder(newPath, old.uidValidity)
+        ..uidNext = old.uidNext
+        ..highestModSeq = old.highestModSeq;
+      renamed.messages.addAll(old.messages);
+      folders[newPath] = renamed;
+    }
+  }
+
+  /// When set, a `CREATE` fails with a plain `NO` (no response code): a
+  /// failure that may pass, retried.
+  bool failCreates = false;
 
   /// When it returns true for a message, every `STORE` and `MOVE` touching
   /// it is refused with `NO`: a permanent server error.
@@ -212,6 +247,67 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
         throw _no('NO [CANNOT] refused by the test server');
       }
     }
+  }
+
+  @override
+  Future<List<imap.Mailbox>> listMailboxes({
+    String path = '""',
+    bool recursive = false,
+    List<String>? mailboxPatterns,
+    List<String>? selectionOptions,
+    List<imap.ReturnOption>? returnOptions,
+  }) =>
+      _answer('LIST', [
+        for (final f in server.folders.values)
+          imap.Mailbox(
+            encodedName: f.path.split('/').last,
+            encodedPath: f.path,
+            pathSeparator: '/',
+            flags: [],
+          ),
+      ]);
+
+  @override
+  Future<imap.Mailbox> createMailbox(String path) async {
+    server.folderCommands.add('CREATE $path');
+    if (server.folders.containsKey(path)) {
+      throw _no('NO [ALREADYEXISTS] Mailbox already exists');
+    }
+    if (server.refusesFolder?.call(path) ?? false) {
+      throw _no('NO [CANNOT] Invalid mailbox name');
+    }
+    if (server.failCreates) throw _no('NO Server busy, try again later');
+    server.addFolder(path);
+    return _answer('CREATE', fakeMailbox(path));
+  }
+
+  @override
+  Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
+    final from = box.encodedPath;
+    server.folderCommands.add('RENAME $from->$newName');
+    if (!server.folders.containsKey(from)) {
+      throw _no('NO [NONEXISTENT] Mailbox does not exist');
+    }
+    if (server.folders.containsKey(newName)) {
+      throw _no('NO [ALREADYEXISTS] Mailbox already exists');
+    }
+    if (server.refusesFolder?.call(newName) ?? false) {
+      throw _no('NO [CANNOT] Invalid mailbox name');
+    }
+    server.renameFolder(from, newName);
+    return _answer('RENAME', fakeMailbox(newName));
+  }
+
+  @override
+  Future<imap.Mailbox> statusMailbox(
+    imap.Mailbox box,
+    List<imap.StatusFlags> flags,
+  ) async {
+    final folder = server.folders[box.encodedPath];
+    if (folder == null) throw _no('NO [NONEXISTENT] Mailbox does not exist');
+    return box
+      ..messagesExists = folder.messages.length
+      ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length;
   }
 
   @override

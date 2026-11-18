@@ -497,6 +497,17 @@ void main() {
                   srvJmapId: const Value('e101'),
                 ),
               );
+          // The server's Snoozed folder is known (its JMAP id stands in
+          // here), so no folder create is queued.
+          await db.into(db.mailboxes).insert(
+                MailboxesCompanion.insert(
+                  id: 'jmap1:Snoozed',
+                  accountId: accountId,
+                  path: 'Snoozed',
+                  name: 'Snoozed',
+                  role: const Value('snoozed'),
+                ),
+              );
         }
         // The queued changes reached the server and a sync read the mail
         // back: the changes are gone and the server has their effect.

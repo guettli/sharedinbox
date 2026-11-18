@@ -28,6 +28,7 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 import 'package:sharedinbox/ui/utils/global_email_search.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
@@ -5798,8 +5799,9 @@ void main() {
 
       await r.emails.snoozeEmail('jmap-1:e1', DateTime(2030));
 
-      // The cleanup would otherwise strip the keyword this snooze adds.
-      expect(await _changeTypes(r.db), ['snooze']);
+      // The cleanup would otherwise strip the keyword this snooze adds. No
+      // Snoozed folder is known yet: its creation is queued first.
+      expect(await _changeTypes(r.db), ['create_mailbox', 'snooze']);
     });
 
     test('IMAP clear_snooze on a vanished message logs a warning', () async {
@@ -8619,11 +8621,24 @@ void main() {
             'until': '2026-05-10T15:00:00.000',
           }),
         );
+        // The local Snoozed folder the snooze waits for, with its queued
+        // create (as `snoozeEmail` and the v75 migration queue it).
+        await MailboxStateWriter(r.db).ensureLocal(
+          accountId: 'jmap-1',
+          path: 'Snoozed',
+          name: 'Snoozed',
+          role: 'snoozed',
+        );
 
         await r.emails.flushPendingChanges('jmap-1', 'pw');
 
-        // Change successfully applied — removed from queue.
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // Both applied: the snooze is gone from the queue, the folder
+        // create waits (acked) for a folder listing to confirm it.
+        expect(
+          (await r.db.select(r.db.pendingChanges).get())
+              .map((c) => (c.changeType, c.state)),
+          [('create_mailbox', 'acked')],
+        );
 
         // Look the folder up, create it (Mailbox/set), then Email/set into it.
         String method(int i) =>

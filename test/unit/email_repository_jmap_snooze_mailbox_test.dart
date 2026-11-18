@@ -1,9 +1,10 @@
 // Snoozing on a JMAP account that has no Snoozed mailbox yet — every fresh
-// account. The optimistic local move parks the row under the placeholder
-// path `Snoozed`; the flush must turn that into a real mailbox id before it
-// sends `Email/set`, or the server reads `Snoozed` as an id and rejects the
-// snooze, which the queue then drops. `snoozed` is not a registered JMAP
-// role and Stalwart refuses it, so creation falls back to a plain folder.
+// account. The snooze queues a `create_mailbox` op for a local `Snoozed`
+// folder (SYNC-REDESIGN.md §7, phase 5a) and folds the mail into it; the
+// snooze waits for the create, whose ack names the server's id in it before
+// `Email/set` is sent (the server would read `Snoozed` as an id and reject
+// it). `snoozed` is not a registered JMAP role and Stalwart refuses it, so
+// creation falls back to a plain folder.
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
@@ -265,58 +267,41 @@ void main() {
     await r.db.close();
   });
 
-  test('placeholder rows are re-pointed when the mailbox is already known',
-      () async {
-    final calls = <JmapCall>[];
-    final r = await seeded(_server(calls));
-    await parkUnderPlaceholder(r, 'e1');
-    // A mailbox sync learned the Snoozed folder after e1 was parked.
-    await r.db.into(r.db.mailboxes).insert(
-          MailboxesCompanion.insert(
-            id: '${_jmapAccount.id}:mbox-known',
-            accountId: _jmapAccount.id,
-            path: 'mbox-known',
-            name: 'Snoozed',
-          ),
-        );
-    await r.db.into(r.db.pendingChanges).insert(
-          PendingChangesCompanion.insert(
-            accountId: _jmapAccount.id,
-            resourceType: 'Email',
-            resourceId: '${_jmapAccount.id}:e1',
-            changeType: 'snooze',
-            payload: '{"uid":0,"src":"$_inbox","dest":"Snoozed",'
-                '"until":"2026-11-01T00:00:00.000"}',
-            createdAt: DateTime.now(),
-          ),
-        );
-
-    await r.emails.flushPendingChanges(_jmapAccount.id, 'pw');
-
-    expect(calls.where((c) => c.method.startsWith('Mailbox/')), isEmpty);
-    expect(emailSetUpdates(calls).single['mailboxIds/mbox-known'], isTrue);
-    final rows = await r.db.select(r.db.emails).get();
-    expect(
-      rows.where((e) => e.mailboxPath == 'Snoozed'),
-      isEmpty,
-    );
-    expect(await threadPaths(r), ['mbox-known']);
-
-    await r.db.close();
-  });
-
-  test('a mailbox that cannot be created keeps the snooze queued', () async {
+  test(
+      'a Snoozed folder the server refuses fails the snooze with it, and the '
+      'mail shows in the inbox again', () async {
     final calls = <JmapCall>[];
     final r = await seeded(_server(calls, rejectAllCreates: true));
 
     await r.emails.snoozeEmail('${_jmapAccount.id}:e1', DateTime(2026, 11));
+    expect(
+      (await (r.db.select(r.db.emails)
+                ..where((t) => t.id.equals('${_jmapAccount.id}:e1')))
+              .getSingle())
+          .mailboxPath,
+      'Snoozed',
+    );
     await r.emails.flushPendingChanges(_jmapAccount.id, 'pw');
 
     expect(emailSetUpdates(calls), isEmpty);
-    final pending = await r.db.select(r.db.pendingChanges).get();
-    expect(pending.single.changeType, 'snooze');
-    expect(pending.single.attempts, 1);
-    expect(pending.single.lastError, contains('Snoozed mailbox'));
+    final changes = await (r.db.select(r.db.pendingChanges)
+          ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+        .get();
+    expect(
+      changes.map((c) => (c.changeType, c.state)),
+      [('create_mailbox', 'failed'), ('snooze', 'failed')],
+    );
+    expect(changes.last.lastError, contains('could not be created'));
+    final row = await (r.db.select(r.db.emails)
+          ..where((t) => t.id.equals('${_jmapAccount.id}:e1')))
+        .getSingle();
+    expect(row.mailboxPath, _inbox);
+    expect(row.snoozedUntil, isNull);
+    // The folder that was never created is not listed.
+    final shown = await MailboxRepositoryImpl(r.db, r.accounts)
+        .observeMailboxes(_jmapAccount.id)
+        .first;
+    expect(shown.map((m) => m.path), [_inbox]);
 
     await r.db.close();
   });
@@ -337,18 +322,27 @@ void main() {
     await r.db.close();
   });
 
-  test('an unsnooze from the placeholder leaves the server Snoozed mailbox',
-      () async {
+  test(
+      'a snooze and an unsnooze queued offline go to the Snoozed folder the '
+      'server already has, and the unsnooze leaves it', () async {
     final calls = <JmapCall>[];
     final r = await seeded(_server(calls, mailboxes: _withSnoozed));
+
+    await r.emails.snoozeEmail('${_jmapAccount.id}:e1', DateTime(2030));
     await queueUnsnooze(r, 'e1');
 
     await r.emails.flushPendingChanges(_jmapAccount.id, 'pw');
 
-    final update = emailSetUpdates(calls).single;
-    expect(update['mailboxIds/$_inbox'], isTrue);
-    expect(update.containsKey('mailboxIds/mbox-old'), isTrue);
-    expect(update['mailboxIds/mbox-old'], isNull);
+    // The create found the server's folder (no Mailbox/set) and named its
+    // id in both changes.
+    expect(calls.where((c) => c.method == 'Mailbox/set'), isEmpty);
+    final updates = emailSetUpdates(calls);
+    expect(updates, hasLength(2));
+    expect(updates.first['mailboxIds/mbox-old'], isTrue);
+    expect(updates.last['mailboxIds/$_inbox'], isTrue);
+    expect(updates.last.containsKey('mailboxIds/mbox-old'), isTrue);
+    expect(updates.last['mailboxIds/mbox-old'], isNull);
+    expect(await unsettledChanges(r.db), isEmpty);
 
     await r.db.close();
   });

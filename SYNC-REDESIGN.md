@@ -1,6 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **chosen direction, partly implemented** (phases 0–4, see §8). Goal: make offline-first (the rules in
+Status: **chosen direction, partly implemented** (phases 0–4 and 5a, see §8). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -1268,8 +1268,126 @@ a counterpart that does not know a folder hides its twin (shadow
 `delete` with `awayFrom`) rather than parking a move on the folder's
 creation.
 
+As implemented, phase 5 is two PRs; 5a is done:
+1. **5a (done, schema v75):** the mailbox op infrastructure, create and
+   rename, the Snoozed folder, and moves into a folder not created yet.
+   SYNC.md §6b describes the behaviour.
+   - **Schema.** `mailboxes` gets `srv_name`, `local_name`, `is_local` and
+     `srv_seq` (the stamp of `srv_name`, as `srv_location_seq` for mail);
+     `name` is effective, `COALESCE(local_name, srv_name)`; `display_path`
+     is derived from the effective names. Mailbox ops are rows of
+     `pending_changes` with `resource_type = 'Mailbox'` and
+     `resource_id` = `mailboxes.id`: `create_mailbox` (`name`, `parent`
+     path, `role`) and `rename_mailbox` (`name`). Mailbox ids are frozen
+     like mail ids: sync looks rows up by `path` (new rows get
+     `account:path`, or a random id when a renamed row keeps that one), so
+     an ack never re-keys a row or its ops. No `local_hidden`, no parent
+     overlay yet (5b).
+   - **Migration.** `srv_name` = `name` for every row (no mailbox op
+     existed). For each JMAP account with a queued snooze or unsnooze into
+     the `Snoozed` stand-in, a local `Snoozed` row (role `snoozed`) and its
+     `create_mailbox`: the flush no longer resolves the stand-in.
+   - **Mailbox state writer** (`lib/data/repositories/mailbox_state_writer.dart`,
+     the only writer of `mailboxes`): `createLocal` (one local row and op
+     per uncached level; IMAP stand-in path = the likely server path, JMAP
+     `~new:<random>`), `enqueueRename` (supersedes a queued or failed
+     rename; back to the server's name queues nothing), `ensureLocal`
+     (the Snoozed folder), the fold (`foldMailboxName`, `displayPaths`,
+     `localMailboxShown` in `lib/data/db/mailbox_fold.dart`), the gate
+     (`writeServer`: monotonic by `srv_seq`, `is_local = 0` for a listed
+     folder, settles acked ops; `prunable`, `renamedAwaySince`), the flush
+     outcomes (`ack`, `fail` with the dependents, `discard`, `retry`,
+     `failOpsOfRemoved`, `failOrphanedWaiting`) and `serverPathChanged`.
+   - **Flush** (`flush_mailbox.dart`, a part of the email repository so it
+     shares the claim, lease, token and outcome helpers): mailbox ops of
+     the account first, in `seq` order, then the mail changes. The
+     outcomes of §5 apply; a refusal fails the op and its dependents. A
+     clash on the first try is refused, not adopted (#1242: "a server-side
+     name clash becomes a FailedMutation"); a try after one that may have
+     been sent, or a role-create, looks the folder up first (§5
+     idempotency).
+   - **Ack.** Acked with `ack_seq`; the confirmed name, `is_local = 0` and
+     a new server path are written at once, stamped. A path change
+     (`serverPathChanged`) moves the row's `path`, its subfolders (IMAP),
+     the JMAP children's `parentId`, queued creates naming it as parent,
+     threads and checkpoints, and calls `EmailStateWriter.renameFolder`.
+     The acked op is settled by the next folder listing started after the
+     ack (agree: dropped; contradict twice: dropped, `op.contradicted`).
+   - **`renameFolder` and the Snoozed placeholder** (point 2 of the brief).
+     `renameFolder` is no longer called for a user action, only by the
+     mailbox writer when the server confirmed a path (the IMAP rename's
+     ack, a create's server id). It no longer writes `local_mailbox_path`
+     or the effective folder of a pending move: it writes the server fact
+     (`srv_mailbox_path`), re-points the queued payloads naming the folder
+     (op data, §2 "rewrites the dest of the queued ops and re-folds") and
+     re-folds their rows, so the folder a pending move shows comes from
+     the fold. `_resolveJmapSnoozedMailbox` and `_repointSnoozedPlaceholder`
+     are gone: a JMAP snooze without a known Snoozed folder queues its
+     `create_mailbox` and waits for it. Decision: the queued payloads are
+     still rewritten at the ack rather than resolved through an alias in
+     the fold: an alias table would have to be applied at about 50 payload
+     reads in the flush, the settle rules and Undo, and dropped only when
+     no op or Undo action names the old path any more.
+   - **Moves into a folder not created yet** (point 3, brought forward from
+     5b because an offline create is unusable without it): a mail change
+     naming an `is_local` folder is held by the flush
+     (`_holdForLocalFolders`, uncharged, with the mail's later changes)
+     instead of a `parked` state with promotion; the create's ack re-points
+     it, so the same flush sends it. A failed, discarded or lost create
+     fails it (`pending_change.folder_not_created`).
+   - **Server-side changes** (point 5, for 5a's ops). A listing never
+     prunes a local folder or one written after it started, and does not
+     store again a path an acked IMAP rename moved away from (`fromPath`);
+     a folder the server dropped fails its queued folder ops and the
+     changes naming it (`pending_change.folder_removed`, listed).
+   - **Enforcement.** `check_email_writes.sh` check 3: `mailboxes` is
+     written only by the mailbox writer and the migrations (`_upgradeSteps`,
+     `_overlayMailboxes`), fixtures in `test_check_email_writes.sh`. The
+     email allow-list is unchanged (`renameFolder` was in the writer
+     already). `MailboxStateWriter.consistencyProblems` / `checkAndRepair`,
+     run by tests and by `OverlayConsistencySampler` after a sync run (all
+     mailboxes of the account, repaired by a re-fold).
+   - **App Log.** New: `mailbox.create`, `mailbox.rename` (info),
+     `pending_change.folder_not_created`, `mailbox.local_merged`,
+     `op.contradicted` for a folder; `pending_change.rejected`,
+     `pending_change.folder_removed` and `pending_change.folder_renamed`
+     now also for folder ops.
+   - **Tests.** `mailbox_ops_test.dart` (the fold and display paths;
+     IMAP on the stateful fake, which now has CREATE/RENAME/LIST/STATUS:
+     offline create then move then flush, a refused create failing the
+     move and Retry, a clash, Discard, delete of a local folder, offline
+     rename with a move queued into the folder, a stale listing racing the
+     rename's ack, a folder deleted on the server with a queued rename, a
+     folder another client created; contradiction; JMAP: create, move,
+     flush with the server's id, a refused create, rename and its
+     settle), the rewritten create/rename tests of
+     `mailbox_repository_impl_test.dart`, the JMAP Snoozed tests, the v75
+     migration test, and the Stalwart backend tests (IMAP and JMAP:
+     create, move into it and rename offline, flushed; a JMAP clash).
+   - **Review fixes** (second commit, SYNC.md §6b "Review fixes"): local
+     folders are never synced or removed as gone; the IMAP separator only
+     from LIST; lost or in-flight renames protect their folder and are
+     completed by the listing; read-confirmed creates settle on the next
+     listing; stand-in paths resolved after the ack; removed folders fail
+     queued child creates and drop their acked ops; Retry of a create
+     brings its failed changes back; a listing never adopts a never-sent
+     create (a clash stays a visible failure); `check_email_writes.sh`
+     check 3 also catches the table's own write methods and `this._db.`.
+2. **5b (left):** folder move and delete as ops (`move_mailbox`,
+   `delete_mailbox`, mailbox `local_hidden` and a parent overlay, with
+   Undo where it applies); turning the flush-time hold into the `parked`
+   state with promotion on the create's ack if the Pending Changes screen
+   should say "waiting for folder"; the counterpart (a twin hidden by a
+   shadow `delete` with `awayFrom` becomes a move parked on the folder's
+   creation); IMAP Snoozed folder creation as an op (the snooze flush
+   still creates it); a server-side rename seen as delete + create on
+   IMAP (the queued changes of the old path fail rather than follow).
+
 **Phase 6 — clean-up.** Remove the remaining guard helpers, such as
 `_pendingDeleteOrMoveUids` and the per-path queue checks, and update SYNC.md.
+Also left for it after 5a: mark-and-sweep for force resync (§6), which
+still deletes the mailbox rows without ops; the three allow-listed
+new-row inserts of `emails`.
 
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
@@ -1337,7 +1455,8 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | `change_queue.dart` | Flush and user actions: the op table (enqueue, claim, lease, Undo `captureOps` / `cancelOps`, `cancelPendingChange`, `retryMutation`) |
 | `change_failures.dart` | Flush: `_recordChangeError`, stuck and failed changes, reverting failed flag and location changes |
 | `flush_imap.dart` | Flush: `_applyPendingChangeImap`, `_settleImapChange`, `_remapEmailAfterImapMove`, `_retryImapMoveByMessageId` |
-| `flush_jmap.dart` | Flush: `_applyPendingChangeJmap`, `_repointSnoozedPlaceholder` |
+| `flush_jmap.dart` | Flush: `_applyPendingChangeJmap` (`_repointSnoozedPlaceholder` gone in 5a) |
+| `flush_mailbox.dart` | Flush: mailbox ops (`_flushMailboxOps`, 5a) and the hold of mail changes that need a folder not created yet |
 | `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, `restoreEmails` |
 | `counterparts.dart` | User actions: `_mirror*ToCounterparts` and `_dropStaleCounterpartRow` (shadow ops since 4b); sync: `_matchArrival` (the in-place match, 4b) |
 | `sieve.dart` | User actions: Sieve `_enqueueSieveMove/Delete/Flags` |
@@ -1356,7 +1475,9 @@ rule and the server location facts (`relocate`, `releaseLocation`,
 expiry, the shadow-op lifecycle and the appear side of carry-over, and
 `scripts/check_email_writes.sh` lists the members that
 still write `emails` themselves (allow-list, with the phase that moves
-each). The thread aggregate is `refreshThreadAggregate`
+each). Since 5a the mailbox state writer
+(`lib/data/repositories/mailbox_state_writer.dart`) is the only writer of
+`mailboxes` (check 3 of the same script). The thread aggregate is `refreshThreadAggregate`
 (`lib/data/repositories/thread_aggregate.dart`, 4a), shared with
 `removeLocalMailbox`.
 

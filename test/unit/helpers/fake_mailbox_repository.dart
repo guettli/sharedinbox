@@ -15,6 +15,8 @@ class FakeMailboxRepositoryBase implements MailboxRepository {
   Stream<List<Mailbox>> observeMailboxes(String? accountId) =>
       Stream.value(mailboxes);
   @override
+  Stream<String> get onChangesQueued => const Stream.empty();
+  @override
   Future<int> syncMailboxes(String accountId) async => 0;
   @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>

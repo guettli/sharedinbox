@@ -330,6 +330,8 @@ String kindLabel(String kind) {
     'delete' => 'Delete',
     'append' => 'Append',
     'clear_snooze' => 'Clear snooze',
+    'create_mailbox' => 'Create folder',
+    'rename_mailbox' => 'Rename folder',
     _ => kind,
   };
 }
@@ -364,6 +366,12 @@ String describeChange(PendingChange change) {
     case 'delete':
       final from = _string(payload['mailboxPath']);
       return from != null ? 'Delete from $from' : 'Delete';
+    case 'create_mailbox':
+      final name = _string(payload['name']);
+      return name != null ? 'Create folder "$name"' : 'Create folder';
+    case 'rename_mailbox':
+      final name = _string(payload['name']);
+      return name != null ? 'Rename folder to "$name"' : 'Rename folder';
     default:
       return kindLabel(change.kind);
   }
@@ -393,9 +401,11 @@ class _EmailIdentity extends StatelessWidget {
   final PendingChange change;
   final EmailRepository repo;
 
-  String get _fallback => change.resourceType == 'Email'
-      ? 'email ${change.resourceId}'
-      : '${change.resourceType} ${change.resourceId}';
+  String get _fallback => switch (change.resourceType) {
+        'Email' => 'email ${change.resourceId}',
+        'Mailbox' => 'folder',
+        _ => '${change.resourceType} ${change.resourceId}',
+      };
 
   @override
   Widget build(BuildContext context) {

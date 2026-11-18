@@ -697,5 +697,117 @@ class EmailStateWriter {
 }
 EOF
 
+# ── Check 3: mailboxes ──────────────────────────────────────────────────────
+expect fail 'a MailboxesCompanion outside the mailbox state writer' \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> _x() => _db.into(_db.mailboxes).insert(
+        MailboxesCompanion.insert(id: id, accountId: a, path: p, name: n),
+      );
+}
+EOF
+
+expect fail 'a Drift delete of mailboxes, the table on the next line' \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> clearForResync(String accountId) async {
+    await (_db.delete(
+      _db.mailboxes,
+    )..where((t) => t.accountId.equals(accountId)))
+        .go();
+  }
+}
+EOF
+
+expect fail 'raw SQL split over string literals, any case' \
+  "$repo/flush_jmap.dart" 'mailboxes is written' <<'EOF'
+extension _FlushJmap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customUpdate(
+        'update '
+        'mailboxes set name = ?1 WHERE id = ?2',
+      );
+}
+EOF
+
+expect fail 'a mailboxes write in database.dart outside the migrations' \
+  data/db/database.dart 'mailboxes is written' <<'EOF'
+class AppDatabase {
+  Future<void> _overlayMailboxes() async {
+    await customStatement('UPDATE mailboxes SET srv_name = name');
+  }
+
+  Future<void> renameEverything() async {
+    await customStatement('UPDATE mailboxes SET name = path');
+  }
+}
+EOF
+
+expect fail "the table's own deleteWhere" \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => _db.mailboxes.deleteWhere((t) => t.id.equals(id));
+}
+EOF
+
+expect fail "the table's own insertOne" \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => _db.mailboxes.insertOne(row);
+}
+EOF
+
+expect fail 'an update behind this._db.' \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => (update(this._db.mailboxes)..where((t) => t.id.equals(i)))
+      .write(row);
+}
+EOF
+
+expect pass 'a read through the table getter' \
+  data/repositories/mailbox_repository_impl.dart <<'EOF'
+class MailboxRepositoryImpl {
+  MailboxRow x(QueryRow r) => _db.mailboxes.map(r.data);
+}
+EOF
+
+expect pass 'mailbox writes in the mailbox state writer' \
+  data/repositories/mailbox_state_writer.dart <<'EOF'
+class MailboxStateWriter {
+  Future<void> x() => _db.customUpdate('UPDATE mailboxes SET name = ?1');
+  Future<void> y() => _db.into(_db.mailboxes).insert(MailboxesCompanion());
+}
+EOF
+
+expect pass 'the migrations of database.dart' data/db/database.dart <<'EOF'
+class AppDatabase {
+  Future<void> _upgradeSteps(Migrator m, int from) async {
+    await customStatement('UPDATE mailboxes SET display_path = path');
+  }
+
+  Future<void> _overlayMailboxes() async {
+    await customStatement('UPDATE mailboxes SET srv_name = name');
+    await customStatement('INSERT OR IGNORE INTO mailboxes (id) VALUES (1)');
+  }
+}
+EOF
+
+expect pass 'reads of mailboxes and the sync_log_mailboxes table' \
+  data/repositories/sync_log_repository_impl.dart <<'EOF'
+class SyncLogRepositoryImpl {
+  Stream<void> x() => _db.customSelect(
+        'SELECT * FROM mailboxes m',
+        readsFrom: {_db.mailboxes, _db.pendingChanges},
+      ).watch();
+  Future<void> y() => _db.into(_db.syncLogMailboxes).insert(
+        SyncLogMailboxesCompanion.insert(syncLogId: 1, mailboxPath: 'x'),
+      );
+  Future<void> z() => _db.customStatement(
+        'DELETE FROM sync_log_mailboxes WHERE sync_log_id = 1',
+      );
+  // UPDATE mailboxes in a comment is prose.
+}
+EOF
+
 echo "check_email_writes.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

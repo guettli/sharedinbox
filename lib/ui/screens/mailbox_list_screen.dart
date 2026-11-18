@@ -534,6 +534,8 @@ class _FailedMutationBanner extends StatelessWidget {
       'flag_seen' || 'flag_flagged' || 'add_keywords' => 'flag change',
       'move' => 'move',
       'delete' => 'deletion',
+      'create_mailbox' => 'folder creation',
+      'rename_mailbox' => 'folder rename',
       _ => 'change',
     };
     final label =

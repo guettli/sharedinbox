@@ -34,6 +34,10 @@ class Mailbox {
   // e.g. "inbox", "sent", "drafts", "junk", "trash", "archive"
   final String? role;
 
+  /// Created on this device and not on the server yet (its creation is
+  /// queued): no mail of it can be synced.
+  final bool isLocal;
+
   const Mailbox({
     required this.id,
     required this.accountId,
@@ -44,6 +48,7 @@ class Mailbox {
     String? displayPath,
     this.parentId,
     this.role,
+    this.isLocal = false,
   }) : displayPath = displayPath ?? path;
 
   Mailbox copyWith({
@@ -56,6 +61,7 @@ class Mailbox {
     int? unreadCount,
     int? totalCount,
     String? role,
+    bool? isLocal,
   }) {
     return Mailbox(
       id: id ?? this.id,
@@ -67,6 +73,7 @@ class Mailbox {
       unreadCount: unreadCount ?? this.unreadCount,
       totalCount: totalCount ?? this.totalCount,
       role: role ?? this.role,
+      isLocal: isLocal ?? this.isLocal,
     );
   }
 
@@ -81,6 +88,7 @@ class Mailbox {
       unreadCount: json['unreadCount'] as int,
       totalCount: json['totalCount'] as int,
       role: json['role'] as String?,
+      isLocal: json['isLocal'] as bool? ?? false,
     );
   }
 
@@ -95,6 +103,7 @@ class Mailbox {
       'unreadCount': unreadCount,
       'totalCount': totalCount,
       'role': role,
+      'isLocal': isLocal,
     };
   }
 }

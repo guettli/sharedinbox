@@ -284,6 +284,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
         return 'unsnooze';
       case 'clear_snooze':
         return 'snooze cleanup';
+      case createMailboxOp:
+        return 'folder creation';
+      case renameMailboxOp:
+        return 'folder rename';
       default:
         return '"${row.changeType}" change';
     }
@@ -342,6 +346,9 @@ extension _ChangeQueue on EmailRepositoryImpl {
     // server id is not known, has no server copy to change yet: the change
     // is parked, folds like any other and is sent once the server copy is
     // matched in place (SYNC-REDESIGN.md §6).
+    // A screen opened before a folder's create was acked may still name
+    // its stand-in path: the change names the server's folder instead.
+    payload = await _withFoldersResolved(accountId, payload);
     final parked = email != null && await _hasNoServerCopy(email);
     if (!parked) {
       payload = _stampJmapId(payload, email?.srvJmapId);
@@ -465,6 +472,29 @@ extension _ChangeQueue on EmailRepositoryImpl {
     }
     _changeCtrl.add(accountId);
     return true;
+  }
+
+  /// [payload] with each folder it names (`dest`, `src`, `mailboxPath`)
+  /// that no mailbox has resolved to the path the folder has now
+  /// ([MailboxStateWriter.resolveStandIn]); unchanged when none needs it.
+  Future<String> _withFoldersResolved(String accountId, String payload) async {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(payload);
+    } catch (_) {
+      return payload;
+    }
+    if (decoded is! Map<String, dynamic>) return payload;
+    var changed = false;
+    for (final key in emailOpFolderKeys) {
+      final path = decoded[key];
+      if (path is! String) continue;
+      final resolved = await _mailboxState.resolveStandIn(accountId, path);
+      if (resolved == null || resolved == path) continue;
+      decoded[key] = resolved;
+      changed = true;
+    }
+    return changed ? jsonEncode(decoded) : payload;
   }
 
   /// Whether [row] has no server copy a change could be sent for: a local
@@ -1089,6 +1119,20 @@ extension _ChangeQueue on EmailRepositoryImpl {
   }
 
   Future<void> _discardMutation(int id) async {
+    final mailboxOp = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) => t.id.equals(id) & t.resourceType.equals(mailboxResourceType),
+          ))
+        .getSingleOrNull();
+    if (mailboxOp != null) {
+      // A folder op: discarding a create of a folder made offline removes
+      // the folder, and what waits for it fails (SYNC-REDESIGN.md §7).
+      _mailboxState.logDependents(
+        mailboxOp,
+        await _mailboxState.discard(mailboxOp),
+      );
+      return;
+    }
     final discarded = await _db.transaction(() async {
       final row = await (_db.select(_db.pendingChanges)
             ..where((t) => t.id.equals(id)))
@@ -1130,6 +1174,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (row.state != _failedState) {
       // Still queued: it keeps its place, so newer changes stay newer and a
       // change being flushed right now is not queued twice. Just flush soon.
+      _changeCtrl.add(row.accountId);
+      return;
+    }
+    if (row.resourceType == mailboxResourceType) {
+      // A retried folder create brings back the mail changes that failed
+      // with it.
+      for (final id in await _mailboxState.retry(row)) {
+        await _retryMutation(id);
+      }
       _changeCtrl.add(row.accountId);
       return;
     }

@@ -534,8 +534,11 @@ extension _Counterparts on EmailRepositoryImpl {
     required String? role,
     required String name,
   }) async {
+    // Only folders the server has: a folder created offline (or whose
+    // create failed, hidden) is no place a server-side move can have put
+    // the mail (SYNC-REDESIGN.md §7).
     final mailboxes = await (_db.select(_db.mailboxes)
-          ..where((t) => t.accountId.equals(accountId)))
+          ..where((t) => t.accountId.equals(accountId) & t.isLocal.not()))
         .get();
     final lowerName = name.toLowerCase();
     for (final m in mailboxes) {

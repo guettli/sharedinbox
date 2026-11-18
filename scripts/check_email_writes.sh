@@ -64,6 +64,20 @@
 # their own, so a write cannot borrow the name of an allowed member above
 # it. An entry that matches no write fails too.
 #
+# 3. The `mailboxes` table (phase 5a, SYNC-REDESIGN.md §7: the mailbox
+#    overlay `srv_name`, `local_name`, `name`, `is_local`, `srv_seq`, and
+#    `display_path` derived from it) is written only by the mailbox state
+#    writer (lib/data/repositories/mailbox_state_writer.dart) and the
+#    migrations (`_upgradeSteps`, `_overlayMailboxes` of database.dart). No
+#    allow-list, no opt-out. It fails on a `MailboxesCompanion`, Drift's
+#    into/update/delete on `mailboxes` (also in a batch, also behind
+#    `this._db.`), the table's own write methods (`mailboxes.deleteWhere(`,
+#    `.insertOne(`, ...), the table manager,
+#    `updates: {…}` naming it, and raw SQL in any letter case (`UPDATE [OR …]
+#    mailboxes`, `INSERT … INTO mailboxes`, `REPLACE INTO mailboxes`,
+#    `DELETE FROM mailboxes`, also split over adjacent string literals).
+#    `sync_log_mailboxes` is another table.
+#
 # Usage: scripts/check_email_writes.sh [dir]   (default: lib)
 set -euo pipefail
 
@@ -421,6 +435,56 @@ while IFS='|' read -r file member _; do
   fi
 done <<< "$allowed"
 
+# ── Check 3: mailboxes ─────────────────────────────────────────────────────
+mailbox_files=$(grep -rlE --include='*.dart' \
+  'MailboxesCompanion|mailboxes|MAILBOXES|Mailboxes' "$dir" \
+  | grep -v '\.g\.dart$' \
+  | grep -v 'lib/data/repositories/mailbox_state_writer\.dart$' || true)
+mailbox_writes=""
+for f in $mailbox_files; do
+  rel="lib/${f#"${dir%/}/"}"
+  mailbox_writes+=$(awk -v rel="$rel" '
+    BEGIN { mig["_upgradeSteps"] = 1; mig["_overlayMailboxes"] = 1 }
+    # The member a line belongs to: the last declaration at indent 0 or 2.
+    /^(  )?[A-Za-z_][A-Za-z0-9_<>?, .]*[[:space:]][A-Za-z_][A-Za-z0-9_]*\(/ {
+      if (match($0, /[A-Za-z_][A-Za-z0-9_]*\(/)) {
+        member = substr($0, RSTART, RLENGTH - 1)
+      }
+    }
+    {
+      code = $0
+      sub(/^[[:space:]]*\/\/.*$/, "", code)
+      sub(/[[:space:]]\/\/ .*$/, "", code)
+      # SQL split over adjacent string literals reads as one.
+      joined = code
+      if (prev ~ /'"'"'[[:space:]]*$/ && code ~ /^[[:space:]]*'"'"'/) {
+        joined = prev code
+        gsub(/'"'"'[[:space:]]*'"'"'/, "", joined)
+      }
+      prev = code
+      hit = 0
+      if (code ~ /(^|[^A-Za-z0-9_])MailboxesCompanion/) hit = 1
+      if (code ~ /(into|update|delete)\(([A-Za-z_]+\.)*mailboxes[),]/) hit = 1
+      if (code ~ /\.(insert|insertAll|insertAllOnConflictUpdate|insertOnConflictUpdate|update|replace|replaceAll|delete|deleteWhere|deleteAll)\(([A-Za-z_]+\.)*mailboxes[),]/) hit = 1
+      # Write methods of the table itself (_db.mailboxes.deleteWhere and co).
+      if (code ~ /(^|[^A-Za-z0-9_])mailboxes\.(insert[A-Za-z]*|replace[A-Za-z]*|update[A-Za-z]*|delete[A-Za-z]*)\(/) hit = 1
+      if (code ~ /managers\.mailboxes/) hit = 1
+      if (code ~ /updates:[^}]*(^|[^A-Za-z0-9_])mailboxes([^A-Za-z0-9_]|$)/) hit = 1
+      # A bare table reference on its own line: the argument of a Drift
+      # write whose call starts on the line before.
+      if (code ~ /^[[:space:]]*([A-Za-z_]+\.)*mailboxes,?[[:space:]]*$/ && prevcode ~ /(into|update|delete)\($/) hit = 1
+      prevcode = code
+      u = toupper(joined)
+      if (u ~ /(UPDATE([[:space:]]+OR[[:space:]]+[A-Z]+)?|INTO|DELETE[[:space:]]+FROM)[[:space:]]+"?MAILBOXES"?([^A-Z0-9_]|$)/) hit = 1
+      if (!hit) next
+      if (rel == "lib/data/db/database.dart" && (member in mig)) next
+      print rel ":" FNR ": " $0
+    }
+  ' "$f")
+  mailbox_writes+=$'\n'
+done
+mailbox_writes=$(printf '%s' "$mailbox_writes" | grep -v '^$' | sort -u || true)
+
 overlay=$(printf '%s' "$overlay" | grep -v '^$' | sort -u || true)
 other=$(printf '%s' "$other" | grep -v '^$' | sort -u || true)
 status=0
@@ -444,6 +508,12 @@ if [ -n "$stale" ]; then
   echo "ERROR: allow-list entries in scripts/check_email_writes.sh that match no"
   echo "write any more (remove them):"
   printf '%s' "$stale"
+  status=1
+fi
+if [ -n "$mailbox_writes" ]; then
+  echo "ERROR: mailboxes is written only by the mailbox state writer and"
+  echo "migrations (see SYNC.md \"Mailbox ops\"):"
+  printf '%s\n' "$mailbox_writes"
   status=1
 fi
 [ "$status" -eq 0 ] && echo "Email write check passed."

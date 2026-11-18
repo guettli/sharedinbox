@@ -272,6 +272,7 @@ class AccountSyncManager {
   final Map<String, _SyncLoop> _active = {};
   StreamSubscription<List<Account>>? _accountsSub;
   StreamSubscription<String>? _onChangesSub;
+  StreamSubscription<String>? _onFolderChangesSub;
 
   final _syncPhaseCtrl = StreamController<(String, bool)>.broadcast();
 
@@ -285,6 +286,10 @@ class AccountSyncManager {
 
   void start() {
     _onChangesSub = _emails.onChangesQueued.listen((accountId) {
+      _active[accountId]?.kick();
+    });
+    // A queued folder create or rename is flushed by the same cycle.
+    _onFolderChangesSub = _mailboxes.onChangesQueued.listen((accountId) {
       _active[accountId]?.kick();
     });
 
@@ -339,6 +344,7 @@ class AccountSyncManager {
   void dispose() {
     unawaited(_accountsSub?.cancel());
     unawaited(_onChangesSub?.cancel());
+    unawaited(_onFolderChangesSub?.cancel());
     for (final s in _active.values) {
       s.stop();
     }
@@ -1841,6 +1847,9 @@ Future<_FolderSyncOutcome> _syncFolders({
     // Skip folders that just duplicate other folders (Gmail's "All Mail"),
     // otherwise every message is downloaded twice (#691).
     if (isDuplicateOfOtherFolders(mailbox)) continue;
+    // A folder created offline has no server copy to sync yet: the flush
+    // creates it first (SYNC-REDESIGN.md §7).
+    if (mailbox.isLocal) continue;
     attempted++;
     final mailboxStart = DateTime.now();
     try {

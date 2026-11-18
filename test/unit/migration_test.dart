@@ -20,7 +20,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 74);
+      expect(db.schemaVersion, 75);
       await db.close();
     });
 
@@ -232,6 +232,10 @@ void main() {
         await _tableColumns(db, 'mailboxes'),
         contains('unread_seq'), // v74
       );
+      expect(
+        await _tableColumns(db, 'mailboxes'),
+        containsAll(['srv_name', 'local_name', 'is_local', 'srv_seq']), // v75
+      );
 
       // v5, v6, v7, v12, v17, v19, v21: new tables.
       final allTables = await db
@@ -430,7 +434,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -471,7 +475,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -502,7 +506,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -540,7 +544,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -581,7 +585,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -629,7 +633,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -677,7 +681,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -727,7 +731,7 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -863,7 +867,7 @@ void main() {
         throwsA(anything),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -1063,7 +1067,7 @@ void main() {
       expect(action.originalEmails[0].srvUidValidity, 55);
 
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -1236,7 +1240,7 @@ void main() {
           .get();
       expect(index, hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -1404,7 +1408,88 @@ void main() {
           .get();
       expect(index, hasLength(2));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
+      await db.close();
+    });
+
+    test(
+        'v74→v75 overlays the mailbox names and queues the Snoozed folder a '
+        'JMAP snooze waits for', () async {
+      final dbFile = File('test_migration_v74_mailboxes.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
+      await seedAccountRow(fresh, 'acc-k', accountType: 'jmap');
+      await seedAccountRow(fresh, 'acc-u', accountType: 'jmap');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      for (final column in ['srv_name', 'local_name', 'is_local', 'srv_seq']) {
+        rawDb.execute('ALTER TABLE mailboxes DROP COLUMN $column;');
+      }
+      void mailbox(String account, String path, String name) => rawDb.execute(
+            'INSERT INTO mailboxes (id, account_id, path, name) '
+            'VALUES (?, ?, ?, ?)',
+            ['$account:$path', account, path, name],
+          );
+      void snooze(String account, String dest) => rawDb.execute(
+            'INSERT INTO pending_changes (account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, state) '
+            "VALUES (?, 'Email', ?, 'snooze', ?, 0, 'pending')",
+            [
+              account,
+              '$account:~e1',
+              '{"uid":0,"src":"inbox","dest":"$dest",'
+                  '"until":"2030-01-01T00:00:00.000"}',
+            ],
+          );
+      mailbox('acc-i', 'INBOX', 'INBOX');
+      mailbox('acc-j', 'inbox', 'Inbox');
+      mailbox('acc-k', 'inbox', 'Inbox');
+      // Queued before the Snoozed folder was known: the stand-in.
+      snooze('acc-j', 'Snoozed');
+      // IMAP: `Snoozed` is the folder's path, created by the snooze's flush.
+      snooze('acc-i', 'Snoozed');
+      // The folder known: nothing to convert.
+      snooze('acc-k', 'mbx-snoozed');
+      // Only an unsnooze out of the stand-in: no folder to create.
+      rawDb.execute(
+        'INSERT INTO pending_changes (account_id, resource_type, '
+        'resource_id, change_type, payload, created_at, state) '
+        "VALUES ('acc-u', 'Email', 'acc-u:~e1', 'unsnooze', "
+        '\'{"uid":0,"src":"Snoozed","dest":"inbox"}\', 0, \'pending\')',
+      );
+      rawDb.execute('PRAGMA user_version = 74;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      final mailboxes = await db.select(db.mailboxes).get();
+      for (final m in mailboxes.where((m) => !m.isLocal)) {
+        expect(m.srvName, m.name);
+      }
+      final snoozed = mailboxes.singleWhere((m) => m.isLocal);
+      expect(
+        (snoozed.accountId, snoozed.path, snoozed.name, snoozed.role),
+        ('acc-j', 'Snoozed', 'Snoozed', 'snoozed'),
+      );
+      final creates = await (db.select(db.pendingChanges)
+            ..where((t) => t.resourceType.equals('Mailbox')))
+          .get();
+      expect(
+        creates.map((c) => (c.accountId, c.resourceId, c.changeType, c.state)),
+        [('acc-j', snoozed.id, 'create_mailbox', 'pending')],
+      );
+      expect(jsonDecode(creates.single.payload), {
+        'name': 'Snoozed',
+        'role': 'snoozed',
+      });
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 75);
       await db.close();
     });
 
@@ -1515,7 +1600,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 74);
+      expect(version.read<int>('user_version'), 75);
     });
 
     test(

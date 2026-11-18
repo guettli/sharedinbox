@@ -7,6 +7,7 @@ import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import '../db_test_helper.dart';
 import '../recording_app_log_repository.dart';
@@ -30,7 +31,12 @@ class StatefulImapRig {
 
   final StatefulFakeImapServer server;
   final AppDatabase db;
+  late final AccountRepositoryImpl accounts;
   late final EmailRepositoryImpl emails;
+
+  /// The mailbox repository on the same database and server (folder
+  /// listings, and the folder actions it queues).
+  late final MailboxRepositoryImpl mailboxes;
   DateTime now = DateTime.utc(2026, 11, 16, 12);
 
   /// The repository's cache folder (attachment downloads), a fresh temp
@@ -46,7 +52,14 @@ class StatefulImapRig {
   }) async {
     final rig = StatefulImapRig._(server, openTestDatabase());
     final db = rig.db;
-    final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
+    final accounts =
+        rig.accounts = AccountRepositoryImpl(db, FakeSecureStorage());
+    rig.mailboxes = MailboxRepositoryImpl(
+      db,
+      accounts,
+      imapConnect: (_, __, ___) async => server.connect(),
+      appLogger: appLogger,
+    );
     rig.emails = EmailRepositoryImpl(
       db,
       accounts,
@@ -70,6 +83,7 @@ class StatefulImapRig {
               accountId: statefulRigAccount.id,
               path: path,
               name: path,
+              srvName: Value(path),
               role: Value(role),
             ),
           );

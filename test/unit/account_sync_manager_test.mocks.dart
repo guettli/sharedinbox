@@ -187,6 +187,12 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
   }
 
   @override
+  _i6.Stream<String> get onChangesQueued => (super.noSuchMethod(
+        Invocation.getter(#onChangesQueued),
+        returnValue: _i6.Stream<String>.empty(),
+      ) as _i6.Stream<String>);
+
+  @override
   _i6.Stream<List<_i2.Mailbox>> observeMailboxes(String? accountId) =>
       (super.noSuchMethod(
         Invocation.method(
