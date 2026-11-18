@@ -64,11 +64,13 @@
 # their own, so a write cannot borrow the name of an allowed member above
 # it. An entry that matches no write fails too.
 #
-# 3. The `mailboxes` table (phase 5a, SYNC-REDESIGN.md §7: the mailbox
-#    overlay `srv_name`, `local_name`, `name`, `is_local`, `srv_seq`, and
-#    `display_path` derived from it) is written only by the mailbox state
-#    writer (lib/data/repositories/mailbox_state_writer.dart) and the
-#    migrations (`_upgradeSteps`, `_overlayMailboxes` of database.dart). No
+# 3. The `mailboxes` table (phases 5a and 5b, SYNC-REDESIGN.md §7: the
+#    mailbox overlay `srv_name`, `local_name`, `name`, `is_local`, `srv_seq`,
+#    `local_parent`, `local_hidden`, and `display_path` derived from it) is
+#    written only by the mailbox state writer
+#    (lib/data/repositories/mailbox_state_writer.dart) and the migrations
+#    (`_upgradeSteps`, `_overlayMailboxes`, `_queueSnoozedCreates` of
+#    database.dart). No
 #    allow-list, no opt-out. It fails on a `MailboxesCompanion`, Drift's
 #    into/update/delete on `mailboxes` (also in a batch, also behind
 #    `this._db.`), the table's own write methods (`mailboxes.deleteWhere(`,
@@ -444,7 +446,7 @@ mailbox_writes=""
 for f in $mailbox_files; do
   rel="lib/${f#"${dir%/}/"}"
   mailbox_writes+=$(awk -v rel="$rel" '
-    BEGIN { mig["_upgradeSteps"] = 1; mig["_overlayMailboxes"] = 1 }
+    BEGIN { mig["_upgradeSteps"] = 1; mig["_overlayMailboxes"] = 1; mig["_queueSnoozedCreates"] = 1 }
     # The member a line belongs to: the last declaration at indent 0 or 2.
     /^(  )?[A-Za-z_][A-Za-z0-9_<>?, .]*[[:space:]][A-Za-z_][A-Za-z0-9_]*\(/ {
       if (match($0, /[A-Za-z_][A-Za-z0-9_]*\(/)) {

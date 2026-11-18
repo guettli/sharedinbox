@@ -792,6 +792,36 @@ class AppDatabase {
 }
 EOF
 
+expect pass 'the v76 Snoozed create of the migrations' data/db/database.dart <<'EOF'
+class AppDatabase {
+  Future<void> _queueSnoozedCreates(String accountType) async {
+    await customStatement(
+      'INSERT INTO mailboxes (id, account_id, path, name, '
+      "role, display_path, local_name, is_local) VALUES (?1, ?2, 'Snoozed', "
+      "'Snoozed', 'snoozed', 'Snoozed', 'Snoozed', 1)",
+      [id, accountId],
+    );
+  }
+}
+EOF
+
+expect fail 'the folder overlay (local_hidden) written outside the writer' \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> hide(String id) => _db.customUpdate(
+        'UPDATE mailboxes SET local_hidden = 1 WHERE id = ?1',
+      );
+}
+EOF
+
+expect fail 'a parent overlay written by the flush' \
+  "$repo/flush_mailbox.dart" 'mailboxes is written' <<'EOF'
+extension _FlushMailbox on EmailRepositoryImpl {
+  Future<void> x() => (_db.update(_db.mailboxes)..where((t) => t.id.equals(i)))
+      .write(MailboxesCompanion(parentId: Value(p)));
+}
+EOF
+
 expect pass 'reads of mailboxes and the sync_log_mailboxes table' \
   data/repositories/sync_log_repository_impl.dart <<'EOF'
 class SyncLogRepositoryImpl {

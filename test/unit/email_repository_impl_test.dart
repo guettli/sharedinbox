@@ -4277,7 +4277,8 @@ void main() {
         expect(await unsettledChanges(r.db), isEmpty);
         // Source mailbox extracted from 'src', not 'mailboxPath'.
         expect(spy.selectedMailbox, 'INBOX');
-        expect(spy.createdMailbox, 'Snoozed');
+        // The Snoozed folder's create is its own queued op (phase 5b).
+        expect(spy.createdMailbox, isNull);
         expect(spy.movedToMailbox, 'Snoozed');
       },
     );
@@ -4879,7 +4880,10 @@ void main() {
       expect(email.mailboxPath, 'Snoozed');
       expect(email.snoozedFromMailboxPath, 'INBOX');
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
+      // The Snoozed folder's create is its own queued op (phase 5b).
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.resourceType.equals('Email')))
+          .get();
       expect(changes, hasLength(1));
       expect(changes.first.changeType, 'snooze');
       expect(changes.first.payload, contains('2026-05-10T15:00:00.000'));
@@ -5720,7 +5724,9 @@ void main() {
           );
 
       await r.emails.snoozeEmail('acc-1:Archive:5', DateTime(2030));
-      final snooze = await r.db.select(r.db.pendingChanges).getSingle();
+      final snooze = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.resourceType.equals('Email')))
+          .getSingle();
       expect(
         (jsonDecode(snooze.payload) as Map<String, dynamic>)['messageId'],
         '<m1@example.com>',
@@ -5967,7 +5973,10 @@ void main() {
 
       // Each account got exactly one pending change on its own queue.
       final srcChanges = await (r.db.select(r.db.pendingChanges)
-            ..where((t) => t.accountId.equals('imap-p')))
+            ..where(
+              (t) =>
+                  t.accountId.equals('imap-p') & t.resourceType.equals('Email'),
+            ))
           .get();
       expect(srcChanges, hasLength(1));
       expect(srcChanges.first.changeType, 'snooze');
@@ -6095,7 +6104,9 @@ void main() {
 
       await r.emails.snoozeEmail('imap-p:5', DateTime(2026, 5, 10, 15));
 
-      final changes = await r.db.select(r.db.pendingChanges).get();
+      final changes = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.resourceType.equals('Email')))
+          .get();
       expect(changes, hasLength(1));
       expect(changes.first.accountId, 'imap-p');
     });

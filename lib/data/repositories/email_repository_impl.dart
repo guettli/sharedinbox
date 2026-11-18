@@ -44,6 +44,7 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/imap_expunge.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
+import 'package:sharedinbox/data/imap/message_id_search.dart';
 import 'package:sharedinbox/data/imap/object_id.dart';
 import 'package:sharedinbox/data/imap/object_id_fetch.dart';
 import 'package:sharedinbox/data/imap/preview_fetch.dart';
@@ -55,6 +56,7 @@ import 'package:sharedinbox/data/repositories/email_ids.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show
+        folderHasMailText,
         imapMailboxFor,
         imapPathSeparator,
         imapSeparatorOf,

@@ -29,6 +29,7 @@ class PendingChange {
     this.stuck = false,
     this.nextTry,
     this.parked = false,
+    this.waitingForFolder,
   });
 
   final int id;
@@ -70,6 +71,11 @@ class PendingChange {
   /// delivery, a JMAP mail whose server id is unknown): the change shows
   /// locally and is sent once the server copy is found.
   final bool parked;
+
+  /// The name of a folder created offline (not on the server yet) that the
+  /// change needs: it waits for the folder's creation and is sent right
+  /// after it (SYNC.md §6b). Derived when read; the change stays queued.
+  final String? waitingForFolder;
 
   bool get hasError => lastError != null;
 }

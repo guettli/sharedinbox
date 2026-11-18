@@ -654,6 +654,525 @@ void main() {
     });
   });
 
+  group('fold (5b)', () {
+    test('the latest foldable move gives the parent; a foldable delete hides',
+        () {
+      MailboxFoldOp op(int seq, String type, String state, {String? parent}) =>
+          MailboxFoldOp(
+            seq: seq,
+            type: type,
+            name: null,
+            state: state,
+            parent: parent,
+          );
+      expect(foldMailboxParent(const []), isNull);
+      expect(
+        foldMailboxParent([
+          op(2, moveMailboxOp, 'pending', parent: ''),
+          op(1, moveMailboxOp, 'acked', parent: 'Archive'),
+        ]),
+        '',
+      );
+      expect(
+        foldMailboxParent([
+          op(1, moveMailboxOp, 'acked', parent: 'Archive'),
+          op(2, moveMailboxOp, 'failed', parent: 'Other'),
+        ]),
+        'Archive',
+      );
+      expect(foldMailboxHidden([op(1, deleteMailboxOp, 'stuck')]), isTrue);
+      expect(foldMailboxHidden([op(1, deleteMailboxOp, 'failed')]), isFalse);
+      expect(
+        mailboxReadAgrees(
+          op(1, moveMailboxOp, 'acked', parent: ''),
+          'Work',
+        ),
+        isTrue,
+        reason: 'top level: no server parent',
+      );
+      expect(
+        mailboxReadAgrees(
+          op(1, moveMailboxOp, 'acked', parent: 'Archive'),
+          'Work',
+          srvParent: 'Other',
+        ),
+        isFalse,
+      );
+    });
+
+    test(
+        'IMAP display paths: a pending move puts the folder and its '
+        'subfolders below the new parent', () {
+      final paths = displayPaths(
+        const [
+          DisplayPathRow(path: 'Archive', name: 'Archive'),
+          DisplayPathRow(path: 'Work', name: 'Work', localParent: 'Archive'),
+          DisplayPathRow(path: 'Work/2026', name: '2026'),
+          DisplayPathRow(
+            path: 'Archive/Old',
+            name: 'Old',
+            localParent: '',
+          ),
+        ],
+        jmap: false,
+      );
+      expect(paths, {
+        'Archive': 'Archive',
+        'Work': 'Archive/Work',
+        'Work/2026': 'Archive/Work/2026',
+        'Archive/Old': 'Old',
+      });
+    });
+  });
+
+  group('IMAP move and delete (5b)', () {
+    late RecordingAppLogRepository logs;
+
+    setUp(() async => logs = await openRigInboxArchive());
+    tearDown(() => db.close());
+
+    Future<void> flush() => emails.flushPendingChanges(_acc.id, 'pw');
+    Future<void> offlineFlush() => EmailRepositoryImpl(
+          db,
+          rig.accounts,
+          imapConnect: (_, __, ___) =>
+              Future.error(const SocketException('offline')),
+        ).flushPendingChanges(_acc.id, 'pw');
+    Future<List<String>> shownFolders() async => [
+          for (final m in await rig.mailboxes.observeMailboxes(_acc.id).first)
+            m.displayPath,
+        ];
+    Iterable<String> events() => logs.rows.map((r) => r.event);
+    Future<MailboxRow> folder(String id) =>
+        (db.select(db.mailboxes)..where((t) => t.id.equals(id))).getSingle();
+    Future<Email> mail(String messageId) =>
+        (db.select(db.emails)..where((t) => t.messageId.equals(messageId)))
+            .getSingle();
+
+    Future<void> addWork() async {
+      server
+        ..addFolder('Work')
+        ..addFolder('Work/2026')
+        ..deliver('Work/2026', 'w@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Work/2026');
+    }
+
+    test(
+        'offline move shows the folder and its subfolders below the new '
+        'parent at once; the flush renames it on the server; ids stay',
+        () async {
+      await addWork();
+      final work = await rig.mailboxes.observeMailboxes(_acc.id).first.then(
+            (all) => all.singleWhere((m) => m.path == 'Work'),
+          );
+      final child = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Work/2026');
+
+      final moved = await rig.mailboxes
+          .moveMailbox(_acc.id, 'Work', newParentDisplayPath: 'Archive');
+      expect(moved.displayPath, 'Archive/Work');
+      expect(
+        await shownFolders(),
+        containsAll(['Archive/Work', 'Archive/Work/2026']),
+      );
+      await offlineFlush();
+      expect(server.folderCommands, isEmpty);
+
+      await flush();
+
+      expect(server.folderCommands, ['RENAME Work->Archive/Work']);
+      expect((await folder(work.id)).path, 'Archive/Work');
+      expect((await folder(child.id)).path, 'Archive/Work/2026');
+      expect((await mail('w@test')).srvMailboxPath, 'Archive/Work/2026');
+      expect(await _ops(db), [('move_mailbox', 'acked')]);
+      await _expectConsistent(db);
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      expect(
+        await shownFolders(),
+        containsAll(['Archive/Work', 'Archive/Work/2026']),
+      );
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a listing while the move is being sent prunes neither the folder '
+        'nor its subfolders', () async {
+      await addWork();
+      await rig.mailboxes
+          .moveMailbox(_acc.id, 'Work', newParentDisplayPath: 'Archive');
+      // The RENAME reached the server, the flush has not settled it yet.
+      server.renameFolder('Work', 'Archive/Work');
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.changeType.equals('move_mailbox')))
+          .write(
+        PendingChangesCompanion(
+          state: const Value('inflight'),
+          claimToken: const Value('other-flush'),
+          leaseUntil: Value(DateTime(2099)),
+        ),
+      );
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      final paths = (await db.select(db.mailboxes).get()).map((m) => m.path);
+      expect(paths, containsAll(['Work', 'Work/2026']));
+      expect(
+        await db.select(db.emails).get(),
+        contains(predicate<Email>((e) => e.messageId == 'w@test')),
+      );
+      expect(events(), isNot(contains('pending_change.folder_removed')));
+    });
+
+    test(
+        'offline delete hides the folder at once (lists, sync); the flush '
+        'deletes it; a stale listing does not bring it back', () async {
+      server.addFolder('Old');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      final old = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Old');
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Old');
+
+      expect(await shownFolders(), isNot(contains('Old')));
+      expect((await folder(old.id)).localHidden, isTrue);
+      // A hidden folder is not synced (nothing selected, nothing changes).
+      await emails.syncEmails(_acc.id, 'Old');
+      expect((await folder(old.id)).localHidden, isTrue);
+      await offlineFlush();
+      expect(server.folders.keys, contains('Old'));
+
+      var flushed = false;
+      server.beforeAnswer = (command) async {
+        if (flushed || !command.startsWith('LIST')) return;
+        flushed = true;
+        // The listing's answer (with "Old") is fixed; the delete lands now.
+        await flush();
+      };
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      server.beforeAnswer = null;
+
+      expect(flushed, isTrue);
+      expect(server.folderCommands, ['DELETE Old']);
+      expect(
+        (await db.select(db.mailboxes).get()).map((m) => m.path),
+        isNot(contains('Old')),
+      );
+      expect(await _ops(db), [('delete_mailbox', 'acked')]);
+      await _expectConsistent(db);
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a delete waits for the mail changes queued before it: the mail '
+        'moved out is moved first, then the folder goes, in one flush',
+        () async {
+      server
+        ..addFolder('Box')
+        ..deliver('Box', 'b@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Box');
+      await emails.moveEmail((await mail('b@test')).id, 'INBOX');
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Box');
+      await flush();
+
+      expect(server.find('b@test')!.folder.path, 'INBOX');
+      expect(server.folders.keys, isNot(contains('Box')));
+      expect((await mail('b@test')).mailboxPath, 'INBOX');
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a folder that has mail on the server is not deleted without the '
+        "user's yes: a failed change, the folder shows again; Discard",
+        () async {
+      server
+        ..addFolder('Full')
+        ..deliver('Full', 'f@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      // The cached count said 0 (not synced): no removeEmails.
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Full');
+      await flush();
+
+      final change = await db.select(db.pendingChanges).getSingle();
+      expect((change.changeType, change.state), ('delete_mailbox', 'failed'));
+      expect(change.lastError, contains('not empty'));
+      expect(server.find('f@test')!.folder.path, 'Full');
+      expect(await shownFolders(), contains('Full'));
+      expect(events(), contains('pending_change.rejected'));
+      await _expectConsistent(db);
+
+      await emails.discardMutation(change.id);
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+      expect(await shownFolders(), contains('Full'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'with removeEmails the folder goes with its mail; a mail change '
+        'queued after the delete naming it fails, listed', () async {
+      server
+        ..addFolder('Junkish')
+        ..deliver('Junkish', 'j@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Junkish');
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Junkish', removeEmails: true);
+      // A stale screen moves a mail into it after the delete.
+      await emails.moveEmail((await rowOfA()).id, 'Junkish');
+      await flush();
+
+      expect(server.folders.keys, isNot(contains('Junkish')));
+      expect(server.find('a@test')!.folder.path, 'INBOX');
+      final move = (await db.select(db.pendingChanges).get())
+          .singleWhere((o) => o.changeType == 'move');
+      expect((move.state, move.lastError), ('failed', 'folder deleted'));
+      expect((await rowOfA()).mailboxPath, 'INBOX');
+      expect(events(), contains('pending_change.folder_removed'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'Undo before the flush cancels a delete (nothing reaches the '
+        'server); after it, a move is moved back', () async {
+      server.addFolder('Keep');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      final keep = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Keep');
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Keep');
+      expect(await rig.mailboxes.undoFolderChange(_acc.id, keep.id), isTrue);
+      expect(await shownFolders(), contains('Keep'));
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+
+      await rig.mailboxes
+          .moveMailbox(_acc.id, 'Keep', newParentDisplayPath: 'Archive');
+      await flush();
+      expect(server.folders.keys, contains('Archive/Keep'));
+      expect(await rig.mailboxes.undoFolderChange(_acc.id, keep.id), isTrue);
+      expect(await shownFolders(), contains('Keep'));
+      await flush();
+      expect(server.folders.keys, contains('Keep'));
+      expect((await folder(keep.id)).path, 'Keep');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      await _expectConsistent(db);
+
+      // A delete that was sent cannot be undone.
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Keep');
+      await db.customStatement('UPDATE pending_changes SET attempts = 1');
+      expect(await rig.mailboxes.undoFolderChange(_acc.id, keep.id), isFalse);
+    });
+
+    test(
+        'a folder another client deleted while our delete is queued: the '
+        'delete counts as done, nothing fails', () async {
+      server.addFolder('Gone');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Gone');
+      server.deleteFolder('Gone');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(await _ops(db), [('delete_mailbox', 'acked')]);
+      expect(events(), contains('mailbox.delete_found_done'));
+      expect(events(), isNot(contains('pending_change.folder_removed')));
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      await flush();
+      expect(server.folderCommands, isEmpty);
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a subfolder deleted, then its parent: the flush deletes the '
+        'subfolder first', () async {
+      await addWork();
+      await rig.mailboxes
+          .deleteMailbox(_acc.id, 'Work/2026', removeEmails: true);
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Work');
+      await flush();
+
+      expect(server.folderCommands, ['DELETE Work/2026', 'DELETE Work']);
+      expect(server.folders.keys, unorderedEquals(['INBOX', 'Archive']));
+      await _expectConsistent(db);
+    });
+
+    test('a folder with subfolders that show is not deleted', () async {
+      await addWork();
+      await expectLater(
+        rig.mailboxes.deleteMailbox(_acc.id, 'Work'),
+        throwsA(predicate((e) => '$e'.contains('subfolders'))),
+      );
+      expect(await db.select(db.pendingChanges).get(), isEmpty);
+    });
+
+    test(
+        'a move into a folder created offline waits for its create; a failed '
+        'create fails the move and the folder shows where it was', () async {
+      server.addFolder('Work');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await rig.mailboxes.createMailbox(_acc.id, 'Projects');
+      await rig.mailboxes
+          .moveMailbox(_acc.id, 'Work', newParentDisplayPath: 'Projects');
+      expect(await shownFolders(), contains('Projects/Work'));
+
+      await flush();
+      expect(
+        server.folderCommands,
+        ['CREATE Projects', 'RENAME Work->Projects/Work'],
+      );
+      await _expectConsistent(db);
+
+      server.refusesFolder = (path) => path == 'Bad';
+      await rig.mailboxes.createMailbox(_acc.id, 'Bad');
+      await rig.mailboxes.moveMailbox(
+        _acc.id,
+        'Projects/Work',
+        newParentDisplayPath: 'Bad',
+      );
+      await flush();
+      final ops = (await db.select(db.pendingChanges).get())
+          .where((o) => o.state == 'failed')
+          .map((o) => o.changeType);
+      expect(ops, unorderedEquals(['create_mailbox', 'move_mailbox']));
+      expect(await shownFolders(), contains('Projects/Work'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a folder another client renamed (same UIDVALIDITY): its mail and '
+        'the changes queued for it follow instead of failing', () async {
+      server
+        ..addFolder('Work')
+        ..deliver('Work', 'w@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Work');
+      final work = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Work');
+      await emails.moveEmail((await rowOfA()).id, 'Work');
+      server.renameFolder('Work', 'Job');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect((await folder(work.id)).path, 'Job');
+      expect((await mail('w@test')).srvMailboxPath, 'Job');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(move.state, 'pending');
+      expect(move.payload, contains('"dest":"Job"'));
+      expect(events(), contains('mailbox.renamed_elsewhere'));
+      await flush();
+      expect(server.find('a@test')!.folder.path, 'Job');
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a folder another client renamed under a new UIDVALIDITY is '
+        'recognised by its Message-IDs', () async {
+      server
+        ..addFolder('Work')
+        ..deliver('Work', 'w@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Work');
+      final work = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Work');
+      await emails.moveEmail((await rowOfA()).id, 'Work');
+      // Renamed, with a fresh UIDVALIDITY (as Stalwart does).
+      final old = server.folders.remove('Work')!;
+      server.addFolder('Job')
+        ..messages.addAll(old.messages)
+        ..uidNext = old.uidNext;
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect((await folder(work.id)).path, 'Job');
+      expect((await mail('w@test')).srvMailboxPath, 'Job');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(
+        (move.state, move.payload.contains('"dest":"Job"')),
+        (
+          'pending',
+          true,
+        ),
+      );
+      expect(
+        logs.rows
+            .singleWhere((r) => r.event == 'mailbox.renamed_elsewhere')
+            .message,
+        contains('Message-ID'),
+      );
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a folder gone with another of a different UIDVALIDITY new: no '
+        'match, the changes queued for it fail visibly', () async {
+      server.addFolder('Work');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Work');
+      await emails.moveEmail((await rowOfA()).id, 'Work');
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Job');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(
+        (move.state, move.lastError),
+        ('failed', 'folder removed on the server'),
+      );
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'the Pending Changes list says which folder created offline a '
+        'change waits for', () async {
+      await rig.mailboxes.createMailbox(_acc.id, 'Projects');
+      await emails.moveEmail((await rowOfA()).id, 'Projects');
+
+      final listed = await emails.observePendingChanges(_acc.id).first;
+
+      expect(
+        listed.map((c) => (c.kind, c.waitingForFolder)),
+        [('create_mailbox', null), ('move', 'Projects')],
+      );
+      await flush();
+      expect(
+        (await emails.observePendingChanges(_acc.id).first)
+            .map((c) => c.waitingForFolder),
+        everyElement(isNull),
+      );
+    });
+
+    test(
+        'a snooze without a Snoozed folder queues its create; the flush '
+        'creates it before the snooze, never on the side', () async {
+      await emails.snoozeEmail(
+        (await rowOfA()).id,
+        DateTime.utc(2026, 12),
+      );
+      expect(await _ops(db), [
+        ('create_mailbox', 'pending'),
+        ('snooze', 'pending'),
+      ]);
+
+      await flush();
+
+      expect(server.folderCommands, ['CREATE Snoozed']);
+      expect(server.find('a@test')!.folder.path, 'Snoozed');
+      await _expectConsistent(db);
+    });
+  });
+
   group('JMAP', () {
     final cacheDir = useJmapTestEnv('mailbox_ops_');
     const jmapAccount = Account(
@@ -829,6 +1348,130 @@ void main() {
       expect(shown.singleWhere((m) => m.path == 'archive').name, 'Old');
       await _expectConsistent(r.db);
     });
+
+    test(
+        'offline move shows the folder below its new parent; the flush sets '
+        'parentId; the next listing settles it', () async {
+      server.addElsewhere('work', 'Work');
+      await mailboxes.syncMailboxes(jmapAccount.id);
+
+      final moved = await mailboxes.moveMailbox(
+        jmapAccount.id,
+        'work',
+        newParentDisplayPath: 'Archive',
+      );
+      expect((moved.parentId, moved.displayPath), ('archive', 'Archive/Work'));
+      server.offline = true;
+      await flush();
+      expect(server.mailboxes['work']!['parentId'], isNull);
+      server.offline = false;
+
+      await flush();
+
+      expect(server.mailboxes['work']!['parentId'], 'archive');
+      expect(await _ops(r.db), [('move_mailbox', 'acked')]);
+      await _expectConsistent(r.db);
+      await mailboxes.syncMailboxes(jmapAccount.id);
+      expect(await _ops(r.db), isEmpty);
+      final shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(
+        shown.singleWhere((m) => m.path == 'work').displayPath,
+        'Archive/Work',
+      );
+      await _expectConsistent(r.db);
+    });
+
+    test(
+        'a move into a folder created offline waits for it and names its '
+        'server id', () async {
+      server.addElsewhere('work', 'Work');
+      await mailboxes.syncMailboxes(jmapAccount.id);
+      final projects =
+          await mailboxes.createMailbox(jmapAccount.id, 'Projects');
+      await mailboxes.moveMailbox(
+        jmapAccount.id,
+        'work',
+        newParentDisplayPath: 'Projects',
+      );
+
+      await flush();
+
+      final id = server.created.single;
+      expect(server.mailboxes['work']!['parentId'], id);
+      final row = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.id.equals(projects.id)))
+          .getSingle();
+      expect(row.path, id);
+      await _expectConsistent(r.db);
+    });
+
+    test(
+        'offline delete hides the folder; the flush destroys it with its '
+        'mail when the user said so; a stale full listing does not bring '
+        'it back', () async {
+      server.addElsewhere('old', 'Old');
+      await mailboxes.syncMailboxes(jmapAccount.id);
+      await insertJmapEmailRow(r.db, jmapAccount.id, 'e2', mailboxPath: 'old');
+
+      await mailboxes.deleteMailbox(
+        jmapAccount.id,
+        'old',
+        removeEmails: true,
+      );
+      var shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(shown.map((m) => m.path), isNot(contains('old')));
+
+      await flush();
+
+      expect(server.destroyed, ['old']);
+      expect(server.destroyRemovedEmails, [true]);
+      expect(
+        (await r.db.select(r.db.mailboxes).get()).map((m) => m.path),
+        isNot(contains('old')),
+      );
+      expect(await _ops(r.db), [('delete_mailbox', 'acked')]);
+
+      // A full listing whose answer predates the destroy (its read
+      // sequence is older than the ack's) still lists the folder.
+      server.mailboxes['old'] = {'id': 'old', 'name': 'Old'};
+      await r.db.customStatement(
+        "DELETE FROM sync_states WHERE resource_type = 'Mailbox'",
+      );
+      final later = await EmailStateWriter(r.db).nextReadSeq() + 5;
+      await r.db.customStatement(
+        'UPDATE pending_changes SET ack_seq = $later '
+        "WHERE change_type = 'delete_mailbox'",
+      );
+      await mailboxes.syncMailboxes(jmapAccount.id);
+      shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(shown.map((m) => m.path), isNot(contains('old')));
+      expect(await _ops(r.db), [('delete_mailbox', 'acked')]);
+      server.mailboxes.remove('old');
+      await _expectConsistent(r.db);
+    });
+
+    test(
+        'a delete the server refuses (mail in it, not confirmed) fails, the '
+        'folder shows again; Retry hides it again', () async {
+      server.addElsewhere('full', 'Full');
+      server.hasEmail.add('full');
+      await mailboxes.syncMailboxes(jmapAccount.id);
+
+      await mailboxes.deleteMailbox(jmapAccount.id, 'full');
+      await flush();
+
+      final change = await r.db.select(r.db.pendingChanges).getSingle();
+      expect((change.changeType, change.state), ('delete_mailbox', 'failed'));
+      expect(change.lastError, contains('mailboxHasEmail'));
+      var shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(shown.map((m) => m.path), contains('full'));
+      await _expectConsistent(r.db);
+
+      await r.emails.retryMutation(change.id);
+      shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(shown.map((m) => m.path), isNot(contains('full')));
+      await _expectConsistent(r.db);
+    });
   });
 }
 
@@ -850,6 +1493,14 @@ class _JmapFolders {
   }
 
   bool refuseCreate = false;
+
+  /// Mailboxes that have mail: a destroy without `onDestroyRemoveEmails`
+  /// is refused (`mailboxHasEmail`).
+  final Set<String> hasEmail = {};
+
+  /// The mailboxes destroyed, and each destroy's `onDestroyRemoveEmails`.
+  final List<String> destroyed = [];
+  final List<bool> destroyRemovedEmails = [];
   final Map<String, Map<String, dynamic>> mailboxes = {
     'inbox': {'id': 'inbox', 'name': 'Inbox', 'role': 'inbox'},
     'archive': {'id': 'archive', 'name': 'Archive', 'role': 'archive'},
@@ -860,6 +1511,9 @@ class _JmapFolders {
 
   /// What each state change did: (state after, mailbox id, created?).
   final List<(int, String, bool)> _changes = [];
+
+  /// The mailboxes destroyed: (state after, mailbox id).
+  final List<(int, String)> _destroyedAt = [];
 
   http.Response? _raw(http.BaseRequest request) {
     if (offline) throw const SocketException('offline');
@@ -909,7 +1563,10 @@ class _JmapFolders {
               for (final c in changed)
                 if (!c.$3) c.$2,
             }.toList(),
-            'destroyed': <String>[],
+            'destroyed': [
+              for (final (state, id) in _destroyedAt)
+                if (state > since) id,
+            ],
           },
           call.callId,
         ];
@@ -943,6 +1600,27 @@ class _JmapFolders {
             updated[key] = null;
           }
         }
+        final destroy = call.args['destroy'] as List<dynamic>?;
+        final notDestroyed = <String, dynamic>{};
+        final destroyedIds = <String>[];
+        for (final id in destroy ?? const []) {
+          final removeEmails = call.args['onDestroyRemoveEmails'] == true;
+          if (!mailboxes.containsKey(id)) {
+            notDestroyed[id as String] = {'type': 'notFound'};
+            continue;
+          }
+          if (hasEmail.contains(id) && !removeEmails) {
+            notDestroyed[id as String] = {'type': 'mailboxHasEmail'};
+            continue;
+          }
+          mailboxes.remove(id);
+          destroyed.add(id as String);
+          destroyRemovedEmails.add(removeEmails);
+          _destroyedAt.add((_state + 1, id));
+          destroyedIds.add(id);
+        }
+        if (notDestroyed.isNotEmpty) result['notDestroyed'] = notDestroyed;
+        if (destroyedIds.isNotEmpty) result['destroyed'] = destroyedIds;
         if (notCreated.isNotEmpty) result['notCreated'] = notCreated;
         if (createdIds.isNotEmpty) result['created'] = createdIds;
         if (updated.isNotEmpty) result['updated'] = updated;

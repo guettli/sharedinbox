@@ -211,7 +211,11 @@ String _newClaimToken() => List.generate(
       (_) => _claimRandom.nextInt(16).toRadixString(16),
     ).join();
 
-model.PendingChange _toPendingChange(PendingChangeRow r) => model.PendingChange(
+model.PendingChange _toPendingChange(
+  PendingChangeRow r, [
+  Map<String, String> localFolders = const {},
+]) =>
+    model.PendingChange(
       id: r.id,
       accountId: r.accountId,
       kind: r.changeType,
@@ -226,7 +230,34 @@ model.PendingChange _toPendingChange(PendingChangeRow r) => model.PendingChange(
       stuck: r.state == _stuckState,
       nextTry: r.state == _stuckState ? r.leaseUntil : null,
       parked: r.state == _parkedState,
+      waitingForFolder: _waitingForFolder(r, localFolders),
     );
+
+/// The name of the folder created offline that queued change [r] waits for
+/// ([localFolders]: path → name of the account's folders without a server
+/// copy), or null.
+String? _waitingForFolder(
+  PendingChangeRow r,
+  Map<String, String> localFolders,
+) {
+  if (localFolders.isEmpty) return null;
+  if (r.state != _pendingState && r.state != _stuckState) return null;
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(r.payload);
+  } catch (_) {
+    return null;
+  }
+  if (decoded is! Map<String, dynamic>) return null;
+  final keys = r.resourceType == mailboxResourceType
+      ? const [mailboxOpParent]
+      : emailOpFolderKeys;
+  for (final key in keys) {
+    final name = localFolders[decoded[key]];
+    if (name != null) return name;
+  }
+  return null;
+}
 
 extension _ChangeQueue on EmailRepositoryImpl {
   /// The JMAP Email id a queued change of [row] addresses: the one stamped
@@ -288,6 +319,10 @@ extension _ChangeQueue on EmailRepositoryImpl {
         return 'folder creation';
       case renameMailboxOp:
         return 'folder rename';
+      case moveMailboxOp:
+        return 'folder move';
+      case deleteMailboxOp:
+        return 'folder delete';
       default:
         return '"${row.changeType}" change';
     }
@@ -1272,7 +1307,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
             (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
-        .map((rows) => rows.map(_toPendingChange).toList());
+        .asyncMap(_withWaitingFolders);
   }
 
   Stream<List<model.PendingChange>> _observeAllPendingChanges() {
@@ -1283,6 +1318,25 @@ extension _ChangeQueue on EmailRepositoryImpl {
             (t) => OrderingTerm.asc(t.id),
           ]))
         .watch()
-        .map((rows) => rows.map(_toPendingChange).toList());
+        .asyncMap(_withWaitingFolders);
+  }
+
+  /// [rows] as models, each change that needs a folder created offline
+  /// marked as waiting for it ([model.PendingChange.waitingForFolder]).
+  Future<List<model.PendingChange>> _withWaitingFolders(
+    List<PendingChangeRow> rows,
+  ) async {
+    final local = <String, Map<String, String>>{};
+    for (final r in await _db
+        .customSelect(
+          'SELECT account_id, path, name FROM mailboxes WHERE is_local = 1',
+        )
+        .get()) {
+      (local[r.read<String>('account_id')] ??= {})[r.read<String>('path')] =
+          r.read<String>('name');
+    }
+    return [
+      for (final r in rows) _toPendingChange(r, local[r.accountId] ?? const {}),
+    ];
   }
 }

@@ -77,6 +77,10 @@ class FakeMailboxRepositoryBase implements MailboxRepository {
   }) async {}
 
   @override
+  Future<bool> undoFolderChange(String accountId, String mailboxId) async =>
+      true;
+
+  @override
   Future<Mailbox> moveMailbox(
     String accountId,
     String mailboxPath, {

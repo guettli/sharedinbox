@@ -370,6 +370,22 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
           ),
         )),
       ) as _i6.Future<_i2.Mailbox>);
+
+  @override
+  _i6.Future<bool> undoFolderChange(
+    String? accountId,
+    String? mailboxId,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #undoFolderChange,
+          [
+            accountId,
+            mailboxId,
+          ],
+        ),
+        returnValue: _i6.Future<bool>.value(false),
+      ) as _i6.Future<bool>);
 }
 
 /// A class which mocks [EmailRepository].

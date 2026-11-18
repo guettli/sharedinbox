@@ -30,10 +30,26 @@ class MailboxOpRefused implements Exception {
   String toString() => message;
 }
 
+/// What [MailboxStateWriter.undoLatest] did.
+enum MailboxUndo {
+  /// The folder had no move or delete to undo.
+  nothing,
+
+  /// The op was never sent and is gone: the server never learns of it.
+  cancelled,
+
+  /// The move may have reached the server: a move back is queued.
+  reversed,
+
+  /// The delete may have reached the server: it cannot be undone.
+  tooLate,
+}
+
 /// SQL (correlated on the `mailboxes` alias [m]): whether the mailbox shows.
 /// A mailbox created offline shows only while its `create_mailbox` op folds
-/// ([localMailboxShown]).
-String mailboxShownSql(String m) =>
+/// ([localMailboxShown]); a mailbox with a queued delete shows nowhere
+/// (`local_hidden`, [foldMailboxHidden]).
+String mailboxShownSql(String m) => 'NOT $m.local_hidden AND '
     'NOT ($m.is_local AND NOT EXISTS (SELECT 1 FROM pending_changes p '
     "WHERE p.resource_id = $m.id AND p.change_type = '$createMailboxOp' "
     'AND p.state IN ($_foldableSql)))';
@@ -187,38 +203,121 @@ class MailboxStateWriter {
     return null;
   }
 
-  /// The paths of [accountId]'s folders a rename of which is being sent:
-  /// a mail change naming one waits, or it would name a folder the server
-  /// is just renaming.
-  Future<Set<String>> pathsBeingRenamed(String accountId) async => {
-        for (final op in await (_db.select(_db.pendingChanges)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.resourceType.equals(mailboxResourceType) &
-                    t.changeType.equals(renameMailboxOp) &
-                    t.state.equals('inflight'),
-              ))
-            .get())
-          if (await rowById(op.resourceId) case final row?) row.path,
-      };
+  /// The paths of [accountId]'s folders a rename, move or delete of which
+  /// is being sent, with their subfolders on IMAP (a rename or move takes
+  /// them along): a mail change naming one waits, or it would name a
+  /// folder the server is just renaming, moving or deleting.
+  Future<Set<String>> pathsBeingRenamed(String accountId) async {
+    final paths = <String>{
+      for (final op in await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.resourceType.equals(mailboxResourceType) &
+                  t.changeType.isIn(
+                    const [renameMailboxOp, moveMailboxOp, deleteMailboxOp],
+                  ) &
+                  t.state.equals('inflight'),
+            ))
+          .get())
+        if (await rowById(op.resourceId) case final row?) row.path,
+    };
+    if (paths.isEmpty || await _isJmap(accountId)) return paths;
+    final separator = await imapSeparator(accountId);
+    return {
+      ...paths,
+      for (final r in await _rowsOf(accountId))
+        if (paths.any((p) => r.path.startsWith('$p$separator'))) r.path,
+    };
+  }
 
-  /// Whether a mail change of [accountId] naming folder [path] is being
-  /// sent right now (another flush): a rename of the folder waits for it.
-  Future<bool> mailChangeInFlightFor(String accountId, String path) async {
+  /// Whether [path] is [folder] or (IMAP, with [separator]) one of its
+  /// subfolders.
+  static bool _isAtOrBelow(String path, String folder, String? separator) =>
+      path == folder ||
+      (separator != null && path.startsWith('$folder$separator'));
+
+  /// Whether a mail change of [accountId] naming folder [path] (or, on
+  /// IMAP, a subfolder of it) is being sent right now (another flush): a
+  /// rename, move or delete of the folder waits for it.
+  Future<bool> mailChangeInFlightFor(String accountId, String path) =>
+      mailChangeQueuedFor(accountId, path, states: const ['inflight']);
+
+  /// Whether a mail change of [accountId] in one of [states] (and queued
+  /// before op [before], when given) names folder [path] or, on IMAP, a
+  /// subfolder of it.
+  Future<bool> mailChangeQueuedFor(
+    String accountId,
+    String path, {
+    required List<String> states,
+    int? before,
+  }) async {
+    final separator =
+        await _isJmap(accountId) ? null : await imapSeparator(accountId);
     for (final op in await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.resourceType.equals(mailboxResourceType).not() &
-                t.state.equals('inflight'),
+                t.state.isIn(states) &
+                (before == null
+                    ? const Constant(true)
+                    : t.id.isSmallerThanValue(before)),
           ))
         .get()) {
       final payload = _payloadOf(op);
-      if (emailOpFolderKeys.any((k) => payload?[k] == path)) return true;
+      for (final key in emailOpFolderKeys) {
+        final named = payload?[key];
+        if (named is String && _isAtOrBelow(named, path, separator)) {
+          return true;
+        }
+      }
     }
     return false;
   }
+
+  /// Whether a subfolder (on the server) of [mailbox] has a folder op
+  /// queued before op [before] that is not done yet (queued, being sent,
+  /// stuck): a delete of [mailbox] waits for it (a subfolder being moved
+  /// out or deleted first).
+  Future<bool> subfolderOpQueued(
+    MailboxRow mailbox, {
+    required int before,
+  }) async {
+    final jmap = await _isJmap(mailbox.accountId);
+    final separator = await imapSeparator(mailbox.accountId);
+    for (final r in await _rowsOf(mailbox.accountId)) {
+      final child = jmap
+          ? r.parentId == mailbox.path
+          : r.path.startsWith('${mailbox.path}$separator');
+      if (!child) continue;
+      final queued = (await _opsOf(r.id)).any(
+        (o) =>
+            o.id < before &&
+            const ['pending', 'inflight', 'stuck'].contains(o.state),
+      );
+      if (queued) return true;
+    }
+    return false;
+  }
+
+  /// The folders of [accountId] with a delete queued, being sent or stuck,
+  /// by path, with the id of that delete: a mail change queued after it
+  /// that names the folder waits until it settles (an Undo's move back
+  /// into the folder must not be sent and then deleted with it); once the
+  /// delete is done it fails, listed ("folder deleted").
+  Future<Map<String, int>> pathsBeingDeleted(String accountId) async => {
+        for (final op in await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.resourceType.equals(mailboxResourceType) &
+                    t.changeType.equals(deleteMailboxOp) &
+                    t.state.isIn(const ['pending', 'inflight', 'stuck']),
+              ))
+            .get())
+          if (await rowById(op.resourceId) case final row?) row.path: op.id,
+      };
 
   /// A free `mailboxes.id` for a new row at [path]: `account:path` as
   /// sync has always made them, or a random one when a renamed row keeps
@@ -267,7 +366,13 @@ class MailboxStateWriter {
               (r) =>
                   shown.contains(r.id) &&
                   r.name == segment &&
-                  (jmap ? r.parentId == parentPath : r.path == imapPath),
+                  (jmap
+                      ? effectiveMailboxParent(
+                            parentId: r.parentId,
+                            localParent: r.localParent,
+                          ) ==
+                          parentPath
+                      : r.path == imapPath),
             )
             .firstOrNull;
         if (existing != null) {
@@ -367,6 +472,216 @@ class MailboxStateWriter {
         await _refoldRow(row.id);
       });
 
+  /// The folder of counterpart account [accountId] that stands for a
+  /// folder called [name] (role [role]) which another account's move
+  /// ([primarySeq]) puts a shared server mail into, while [accountId] does
+  /// not know that folder yet (SYNC-REDESIGN.md §6, §7; phase 5b): a local
+  /// row whose `create_mailbox` is a shadow of [primarySeq], never sent
+  /// (the other account creates or has the folder on the shared server).
+  /// The twin's shadow move names its path and so waits on it, shown
+  /// there. A listing that finds the folder adopts the row
+  /// ([writeServer]); one that started after the primary's ack and does
+  /// not, drops it ([dropOrphanedCounterpartFolders]). Reuses such a row
+  /// already made for the name. Returns its path.
+  Future<String> ensureCounterpartFolder({
+    required String accountId,
+    required String name,
+    required String? role,
+    required int primarySeq,
+  }) =>
+      _db.transaction(() async {
+        for (final r in await _rowsOf(accountId)) {
+          if (!r.isLocal || r.localHidden || r.name != name) continue;
+          if (await _counterpartCreateOf(r.id) != null) return r.path;
+        }
+        final jmap = await _isJmap(accountId);
+        final path = jmap ? '$localJmapMailboxPrefix${_hex(32)}' : name;
+        if (await rowByPath(accountId, path) != null) {
+          // A folder of this account has the path the stand-in would get
+          // (hidden or failed): the twin waits under a random one.
+          return _insertCounterpartFolder(
+            accountId,
+            '$localJmapMailboxPrefix${_hex(32)}',
+            name,
+            role,
+            primarySeq,
+          );
+        }
+        return _insertCounterpartFolder(
+          accountId,
+          path,
+          name,
+          role,
+          primarySeq,
+        );
+      });
+
+  Future<String> _insertCounterpartFolder(
+    String accountId,
+    String path,
+    String name,
+    String? role,
+    int primarySeq,
+  ) async {
+    final id = await _freeId(accountId, path);
+    await _db.into(_db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: id,
+            accountId: accountId,
+            path: path,
+            name: name,
+            localName: Value(name),
+            isLocal: const Value(true),
+            role: Value(role),
+            displayPath: Value(name),
+          ),
+        );
+    await _db.into(_db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: accountId,
+            resourceType: mailboxResourceType,
+            resourceId: id,
+            changeType: createMailboxOp,
+            payload: _createPayload(name, null, role),
+            createdAt: _now(),
+            state: const Value('shadow'),
+            origin: Value(EmailStateWriter.shadowOrigin(primarySeq)),
+          ),
+        );
+    await _refoldRow(id);
+    await rebuildDisplayPaths(accountId);
+    _log(
+      (logger) => logger.info(
+        'mailbox.counterpart_folder',
+        'Showing "$name" for a mail another account moved into a folder of '
+            'that name, which this account has not listed yet',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'primaryChangeId': primarySeq},
+      ),
+    );
+    return path;
+  }
+
+  /// The counterpart shadow create of mailbox [mailboxId] (shadow, or
+  /// acked with its primary), or null.
+  Future<PendingChangeRow?> _counterpartCreateOf(String mailboxId) async =>
+      (await _opsOf(mailboxId))
+          .where(
+            (o) =>
+                o.changeType == createMailboxOp &&
+                (o.origin?.startsWith('counterpart:') ?? false) &&
+                const ['shadow', 'acked'].contains(o.state),
+          )
+          .firstOrNull;
+
+  /// Drops the counterpart shadow creates of mailbox [mailboxId]: a
+  /// listing found the folder on the server.
+  Future<void> _dropShadowCreates(String mailboxId) async {
+    final dropped = await (_db.delete(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceType.equals(mailboxResourceType) &
+                t.resourceId.equals(mailboxId) &
+                t.changeType.equals(createMailboxOp) &
+                t.origin.like('counterpart:%'),
+          ))
+        .go();
+    if (dropped > 0) await _refoldRow(mailboxId);
+  }
+
+  /// A counterpart's stand-in folder ([ensureCounterpartFolder]) of
+  /// [accountId] called [name] (below [parentId] on JMAP) that a listing
+  /// lists at [path], which no row has: the row takes that path (its id
+  /// stays; the twin's shadow move follows, [serverPathChanged]). Returns
+  /// whether one was adopted.
+  Future<bool> _adoptCounterpartFolder(
+    String accountId,
+    String path,
+    String name,
+    String? parentId,
+  ) async {
+    final jmap = await _isJmap(accountId);
+    final candidates = <MailboxRow>[];
+    for (final r in await _rowsOf(accountId)) {
+      if (!r.isLocal || r.name != name) continue;
+      if (jmap && r.parentId != parentId) continue;
+      if (await _counterpartCreateOf(r.id) != null) candidates.add(r);
+    }
+    if (candidates.length != 1) return false;
+    final local = candidates.single;
+    await serverPathChanged(accountId, local.path, path);
+    _log(
+      (logger) => logger.warn(
+        'mailbox.counterpart_folder_adopted',
+        'The folder "$name" shown for a counterpart\'s move is the server\'s '
+            'folder now; the mail waiting for it follows',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'from': local.path, 'to': path, 'mailboxId': local.id},
+      ),
+    );
+    return true;
+  }
+
+  /// Drops [accountId]'s counterpart stand-in folders that will not be
+  /// found: their shadow create was dropped with its primary (the move it
+  /// stood for failed or was undone), or, with [listedSeq], a listing
+  /// started after the primary's ack did not find the folder. The row
+  /// goes (a mail still shown in it shows where its account has it once
+  /// its own shadow settles); App Log warn `mailbox.counterpart_folder_dropped`.
+  Future<void> dropOrphanedCounterpartFolders(
+    String accountId, {
+    int? listedSeq,
+  }) =>
+      _db.transaction(() async {
+        for (final r in await _rowsOf(accountId)) {
+          if (!r.isLocal) continue;
+          final ops = await _opsOf(r.id);
+          final creates =
+              ops.where((o) => o.changeType == createMailboxOp).toList();
+          final counterpart = creates
+              .where((o) => o.origin?.startsWith('counterpart:') ?? false)
+              .toList();
+          if (creates.length != counterpart.length) continue;
+          final live = counterpart.where(
+            (o) =>
+                o.state == 'shadow' ||
+                (o.state == 'acked' &&
+                    (listedSeq == null || (o.ackSeq ?? 0) >= listedSeq)),
+          );
+          if (live.isNotEmpty) continue;
+          // Created by sync for the counterpart, never by the user: with
+          // no create left the row is dropped.
+          if (creates.isEmpty && ops.isNotEmpty) continue;
+          for (final o in counterpart) {
+            await _deleteOp(o.id);
+          }
+          // Changes the user queued for it on this account fail, listed.
+          final dependents = <PendingChangeRow>[];
+          await _failDependentsOf(
+            r,
+            'the folder "${r.name}" was not found on the server',
+            dependents,
+          );
+          logDependents(null, dependents);
+          await (_db.delete(_db.mailboxes)..where((t) => t.id.equals(r.id)))
+              .go();
+          _log(
+            (logger) => logger.warn(
+              'mailbox.counterpart_folder_dropped',
+              'Removed the folder "${r.name}" shown for another account\'s '
+                  'move: ${counterpart.isEmpty ? 'that move ended' : 'the '
+                      'server does not list it'}',
+              accountId: accountId,
+              mailboxPath: r.path,
+              data: {'mailboxId': r.id},
+            ),
+          );
+        }
+        await rebuildDisplayPaths(accountId);
+      });
+
   /// Queues a create of local [row] again (its earlier one failed or was
   /// lost), replacing the failed ones.
   Future<void> _queueCreate(
@@ -439,6 +754,157 @@ class MailboxStateWriter {
         return (await rowById(row.id))!;
       });
 
+  /// The parent `path` the server has [row] below (null: top level): the
+  /// JMAP `parentId`, or on IMAP the path up to its last [separator].
+  static String? serverParentOf(
+    MailboxRow row, {
+    required bool jmap,
+    required String separator,
+  }) {
+    if (jmap) return row.parentId;
+    final cut = row.path.lastIndexOf(separator);
+    return cut <= 0 ? null : row.path.substring(0, cut);
+  }
+
+  /// The parent `path` [row] shows below now (null: top level): its
+  /// pending move's, else the server's ([serverParentOf]).
+  Future<String?> shownParentOf(MailboxRow row) async {
+    final local = row.localParent;
+    if (local != null) return local.isEmpty ? null : local;
+    return serverParentOf(
+      row,
+      jmap: await _isJmap(row.accountId),
+      separator: await imapSeparator(row.accountId),
+    );
+  }
+
+  /// Moves [row] below [parentPath] (the top level when null) locally and
+  /// queues the move (`move_mailbox`, phase 5b): it shows there at once,
+  /// with its subfolders. A queued move of it that was never sent, and a
+  /// failed one, is replaced; one that may have reached the server stays
+  /// and the new one follows it. Back below the server's parent with
+  /// nothing sent, no op is needed. Returns the row and the id of the op
+  /// queued (null when none was).
+  Future<({MailboxRow row, int? op})> enqueueMove(
+    MailboxRow row,
+    String? parentPath,
+  ) =>
+      _db.transaction(() async {
+        final from = await shownParentOf((await rowById(row.id))!);
+        await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceType.equals(mailboxResourceType) &
+                    t.resourceId.equals(row.id) &
+                    t.changeType.equals(moveMailboxOp) &
+                    (t.state.equals('failed') |
+                        (t.state.equals('pending') & t.attempts.equals(0))),
+              ))
+            .go();
+        final current = (await rowById(row.id))!;
+        final live = (await _opsOf(row.id))
+            .where((o) => foldableOpStates.contains(o.state))
+            .toList();
+        final server = serverParentOf(
+          current,
+          jmap: await _isJmap(row.accountId),
+          separator: await imapSeparator(row.accountId),
+        );
+        final backToServer = !current.isLocal &&
+            server == parentPath &&
+            !live.any((o) => o.changeType == moveMailboxOp);
+        int? op;
+        if (!backToServer) {
+          op = await _insertOp(
+            row.accountId,
+            row.id,
+            moveMailboxOp,
+            jsonEncode(
+              {mailboxOpParent: parentPath, mailboxOpFromParent: from},
+            ),
+          );
+        }
+        await _refoldRow(row.id);
+        await rebuildDisplayPaths(row.accountId);
+        return (row: (await rowById(row.id))!, op: op);
+      });
+
+  /// Deletes [row] locally and queues the delete (`delete_mailbox`, phase
+  /// 5b): the folder is hidden at once (`local_hidden`), everywhere. With
+  /// [removeEmails] the server deletes the mail it has with it (the user
+  /// confirmed); without, a folder that has mail on the server is refused
+  /// and shows again. A queued delete of it stays (returned); a failed one
+  /// is replaced. Returns the op's id.
+  Future<int> enqueueDelete(MailboxRow row, {required bool removeEmails}) =>
+      _db.transaction(() async {
+        final ops = await _opsOf(row.id);
+        final live = ops
+            .where(
+              (o) =>
+                  o.changeType == deleteMailboxOp &&
+                  foldableOpStates.contains(o.state),
+            )
+            .firstOrNull;
+        if (live != null) return live.id;
+        await (_db.delete(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.resourceType.equals(mailboxResourceType) &
+                    t.resourceId.equals(row.id) &
+                    t.changeType.equals(deleteMailboxOp) &
+                    t.state.equals('failed'),
+              ))
+            .go();
+        final op = await _insertOp(
+          row.accountId,
+          row.id,
+          deleteMailboxOp,
+          jsonEncode({mailboxOpRemoveEmails: removeEmails}),
+        );
+        await _refoldRow(row.id);
+        await rebuildDisplayPaths(row.accountId);
+        return op;
+      });
+
+  /// Undo of the latest folder move or delete of [row] (phase 5b): one that
+  /// was never sent (queued, no attempt) is cancelled, so the folder shows
+  /// where, and as, the server has it; a move that may have reached the
+  /// server is followed by a move back to the parent it showed below
+  /// before ([enqueueMove]). A delete that may have reached the server
+  /// cannot be undone (its mail may be gone): [MailboxUndo.tooLate].
+  Future<MailboxUndo> undoLatest(MailboxRow row) async {
+    final latest = (await _opsOf(row.id))
+        .where(
+          (o) =>
+              (o.changeType == moveMailboxOp ||
+                  o.changeType == deleteMailboxOp) &&
+              o.state != 'failed',
+        )
+        .lastOrNull;
+    if (latest == null) return MailboxUndo.nothing;
+    final cancelled = await _db.transaction(() async {
+      final count = await (_db.delete(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.id.equals(latest.id) &
+                  t.state.equals('pending') &
+                  t.attempts.equals(0),
+            ))
+          .go();
+      if (count == 0) return false;
+      await _refoldRow(row.id);
+      await rebuildDisplayPaths(row.accountId);
+      return true;
+    });
+    if (cancelled) return MailboxUndo.cancelled;
+    if (latest.changeType == deleteMailboxOp) return MailboxUndo.tooLate;
+    await enqueueMove(
+      (await rowById(row.id))!,
+      _payloadOf(latest)?[mailboxOpFromParent] as String?,
+    );
+    return MailboxUndo.reversed;
+  }
+
   static String _createPayload(String name, String? parent, String? role) =>
       jsonEncode({
         mailboxOpName: name,
@@ -474,20 +940,27 @@ class MailboxStateWriter {
 
   // ── The fold ───────────────────────────────────────────────────────────
 
-  /// Recomputes `local_name` (and the effective `name`) of mailbox
-  /// [mailboxId] from its foldable ops, then the account's display paths.
+  /// Recomputes `local_name` (and the effective `name`), `local_parent`
+  /// and `local_hidden` of mailbox [mailboxId] from its foldable ops, then
+  /// the account's display paths.
   Future<void> refold(String mailboxId) => _db.transaction(() async {
         final row = await _refoldRow(mailboxId);
         if (row != null) await rebuildDisplayPaths(row.accountId);
       });
 
   Future<MailboxRow?> _refoldRow(String mailboxId) async {
-    final ops = await _opsOf(mailboxId);
-    final local = foldMailboxName(ops.map(_foldOpOf));
+    final ops = (await _opsOf(mailboxId)).map(_foldOpOf).toList();
+    final local = foldMailboxName(ops);
     await _db.customUpdate(
       'UPDATE mailboxes SET local_name = ?1, '
-      'name = COALESCE(?1, srv_name, name) WHERE id = ?2',
-      variables: [Variable<String>(local), Variable.withString(mailboxId)],
+      'name = COALESCE(?1, srv_name, name), local_parent = ?2, '
+      'local_hidden = ?3 WHERE id = ?4',
+      variables: [
+        Variable<String>(local),
+        Variable<String>(foldMailboxParent(ops)),
+        Variable.withBool(foldMailboxHidden(ops)),
+        Variable.withString(mailboxId),
+      ],
       updates: {_db.mailboxes},
       updateKind: UpdateKind.update,
     );
@@ -498,6 +971,7 @@ class MailboxStateWriter {
   /// value ([displayPaths]) changed.
   Future<void> rebuildDisplayPaths(String accountId) async {
     final rows = await _rowsOf(accountId);
+    final jmap = await _isJmap(accountId);
     final derived = displayPaths(
       [
         for (final r in rows)
@@ -506,10 +980,14 @@ class MailboxStateWriter {
             name: r.name,
             localName: r.localName,
             srvName: r.srvName,
-            parentId: r.parentId,
+            parentId: effectiveMailboxParent(
+              parentId: r.parentId,
+              localParent: r.localParent,
+            ),
+            localParent: jmap ? null : r.localParent,
           ),
       ],
-      jmap: await _isJmap(accountId),
+      jmap: jmap,
       separator: await imapSeparator(accountId),
     );
     for (final r in rows) {
@@ -545,7 +1023,10 @@ class MailboxStateWriter {
     String? displayPath,
   }) =>
       _db.transaction(() async {
-        final row = await rowByPath(accountId, path);
+        final row = await rowByPath(accountId, path) ??
+            (await _adoptCounterpartFolder(accountId, path, name, parentId)
+                ? await rowByPath(accountId, path)
+                : null);
         if (row == null) {
           await _db.into(_db.mailboxes).insert(
                 MailboxesCompanion.insert(
@@ -572,9 +1053,11 @@ class MailboxStateWriter {
             unreadSeq: Value(unreadSeq),
             totalCount: Value(totalCount),
             role: Value(role),
-            parentId: Value(parentId),
           ),
         );
+        // The name and the parent: only when no later read or ack wrote
+        // them (a stale listing must not put a confirmed rename or move
+        // back).
         if (readSeq < row.srvSeq) return;
         if (row.isLocal && await _hasUnsentCreate(row.id)) {
           // Created offline and never sent: the server's folder at this
@@ -584,16 +1067,31 @@ class MailboxStateWriter {
         }
         await _db.customUpdate(
           'UPDATE mailboxes SET srv_name = ?1, srv_seq = ?2, is_local = 0, '
-          'name = COALESCE(local_name, ?1) WHERE id = ?3',
+          'name = COALESCE(local_name, ?1), parent_id = ?4 WHERE id = ?3',
           variables: [
             Variable.withString(name),
             Variable.withInt(readSeq),
             Variable.withString(row.id),
+            Variable<String>(parentId),
           ],
           updates: {_db.mailboxes},
           updateKind: UpdateKind.update,
         );
-        await _settleAcked(row.id, name, readSeq);
+        // A counterpart's stand-in for this folder is the server's now.
+        await _dropShadowCreates(row.id);
+        final jmap = await _isJmap(accountId);
+        await _settleAcked(
+          row.id,
+          name,
+          readSeq,
+          srvParent: jmap
+              ? parentId
+              : serverParentOf(
+                  row,
+                  jmap: false,
+                  separator: await imapSeparator(accountId),
+                ),
+        );
       });
 
   /// Whether mailbox [mailboxId] has a create that is queued and was never
@@ -630,12 +1128,26 @@ class MailboxStateWriter {
         }
       });
 
-  /// Renames a listing proves done although their answer was lost: a
-  /// queued rename that may have been sent (attempts) of a folder the
-  /// listing [listedPaths] (started at [readSeq]) no longer has, while it
-  /// has the path the rename gives. It is acked as if answered (path,
-  /// subfolders and mail follow, [serverPathChanged]). Returns the paths
-  /// moved, old → new.
+  /// After a folder listing started at [readSeq]: drops [accountId]'s acked
+  /// deletes acked before it (the listing no longer had to be kept from
+  /// bringing the folder back, [renamedAwaySince]; a folder it lists anyway
+  /// is a new one another client made).
+  Future<void> settleAckedDeletes(String accountId, int readSeq) =>
+      _db.customUpdate(
+        'DELETE FROM pending_changes WHERE account_id = ?1 '
+        "AND resource_type = '$mailboxResourceType' "
+        "AND change_type = '$deleteMailboxOp' AND state = 'acked' "
+        'AND ack_seq < ?2',
+        variables: [Variable.withString(accountId), Variable.withInt(readSeq)],
+        updates: {_db.pendingChanges},
+        updateKind: UpdateKind.delete,
+      );
+
+  /// IMAP renames and moves a listing proves done although their answer
+  /// was lost: a queued rename or move that may have been sent (attempts)
+  /// of a folder the listing [listedPaths] no longer has, while it has the
+  /// path the op gives. It is acked as if answered (path, subfolders and
+  /// mail follow, [serverPathChanged]). Returns the paths moved, old → new.
   Future<Map<String, String>> completeLostRenames(
     String accountId,
     Set<String> listedPaths,
@@ -648,16 +1160,27 @@ class MailboxStateWriter {
       final lost = ops
           .where(
             (o) =>
-                o.changeType == renameMailboxOp &&
+                (o.changeType == renameMailboxOp ||
+                    o.changeType == moveMailboxOp) &&
                 o.attempts > 0 &&
                 const ['pending', 'stuck'].contains(o.state),
           )
           .firstOrNull;
-      final name = lost == null ? null : _payloadOf(lost)?[mailboxOpName];
-      if (lost == null || name is! String) continue;
+      if (lost == null) continue;
       final cut = row.path.lastIndexOf(separator);
-      final target =
-          cut < 0 ? name : '${row.path.substring(0, cut)}$separator$name';
+      final String target;
+      final String name;
+      if (lost.changeType == moveMailboxOp) {
+        name = cut < 0 ? row.path : row.path.substring(cut + separator.length);
+        final parent = _payloadOf(lost)?[mailboxOpParent] as String?;
+        target = parent == null ? name : '$parent$separator$name';
+      } else {
+        final renamed = _payloadOf(lost)?[mailboxOpName];
+        if (renamed is! String) continue;
+        name = renamed;
+        target =
+            cut < 0 ? name : '${row.path.substring(0, cut)}$separator$name';
+      }
       if (!listedPaths.contains(target)) continue;
       final done = await _db.transaction(() async {
         final count = await (_db.update(_db.pendingChanges)
@@ -678,11 +1201,17 @@ class MailboxStateWriter {
       _log(
         (logger) => logger.warn(
           'mailbox.rename_found_done',
-          'The rename of "${row.path}" to "$name" reached the server although '
-              'its answer was lost; the folder and its mail follow',
+          'The ${_describe(lost)} of "${row.path}" to "$target" reached the '
+              'server although its answer was lost; the folder and its mail '
+              'follow',
           accountId: accountId,
           mailboxPath: target,
-          data: {'from': row.path, 'to': target, 'changeId': lost.id},
+          data: {
+            'from': row.path,
+            'to': target,
+            'changeId': lost.id,
+            'changeType': lost.changeType,
+          },
         ),
       );
     }
@@ -694,13 +1223,20 @@ class MailboxStateWriter {
   Future<void> _settleAcked(
     String mailboxId,
     String srvName,
-    int readSeq,
-  ) async {
-    final acked = (await _opsOf(mailboxId))
-        .where((o) => o.state == 'acked' && (o.ackSeq ?? 0) < readSeq);
+    int readSeq, {
+    required String? srvParent,
+  }) async {
+    final acked = (await _opsOf(mailboxId)).where(
+      (o) =>
+          o.state == 'acked' &&
+          (o.ackSeq ?? 0) < readSeq &&
+          // An acked delete is settled by the listing as a whole
+          // ([settleAckedDeletes]).
+          o.changeType != deleteMailboxOp,
+    );
     var changed = false;
     for (final op in acked) {
-      if (mailboxReadAgrees(_foldOpOf(op), srvName)) {
+      if (mailboxReadAgrees(_foldOpOf(op), srvName, srvParent: srvParent)) {
         await _deleteOp(op.id);
         changed = true;
         continue;
@@ -718,15 +1254,22 @@ class MailboxStateWriter {
       _log(
         (logger) => logger.warn(
           'op.contradicted',
-          'The server calls the folder "$srvName" after a confirmed '
-              '${_describe(op)}; showing the server\'s name',
+          op.changeType == moveMailboxOp
+              ? 'The server has the folder "$srvName" below '
+                  '"${srvParent ?? '(top level)'}" after a confirmed '
+                  '${_describe(op)}; showing it where the server has it'
+              : 'The server calls the folder "$srvName" after a confirmed '
+                  '${_describe(op)}; showing the server\'s name',
           accountId: op.accountId,
           mailboxPath: row?.path,
           data: {
             'changeId': op.id,
             'changeType': op.changeType,
             'name': _payloadOf(op)?[mailboxOpName],
+            if (op.changeType == moveMailboxOp)
+              'parent': _payloadOf(op)?[mailboxOpParent],
             'serverName': srvName,
+            if (op.changeType == moveMailboxOp) 'serverParent': srvParent,
           },
         ),
       );
@@ -747,18 +1290,38 @@ class MailboxStateWriter {
     int readSeq,
   ) async {
     final out = <MailboxRow>[];
-    for (final r in await _rowsOf(accountId)) {
-      if (keepPaths.contains(r.path) || r.isLocal || r.srvSeq > readSeq) {
-        continue;
-      }
-      final maybeRenamed = (await _opsOf(r.id)).any(
+    final rows = await _rowsOf(accountId);
+    final jmap = await _isJmap(accountId);
+    final separator = await imapSeparator(accountId);
+    // On IMAP a rename or move takes the subfolders along: they are not
+    // gone either while it may have reached the server.
+    final moving = <String>[];
+    for (final r in rows) {
+      final maybeMoved = (await _opsOf(r.id)).any(
         (o) =>
-            o.changeType == renameMailboxOp &&
+            (o.changeType == renameMailboxOp ||
+                o.changeType == moveMailboxOp) &&
             (o.state == 'inflight' ||
                 (o.attempts > 0 &&
                     const ['pending', 'stuck'].contains(o.state))),
       );
-      if (maybeRenamed) continue;
+      if (maybeMoved) moving.add(r.path);
+    }
+    for (final r in rows) {
+      if (keepPaths.contains(r.path) || r.isLocal || r.srvSeq > readSeq) {
+        continue;
+      }
+      if (moving.contains(r.path)) continue;
+      if (!jmap && moving.any((p) => r.path.startsWith('$p$separator'))) {
+        continue;
+      }
+      // A delete being sent: its flush settles it. A queued one the
+      // listing proves done is settled by the removal
+      // ([failOpsOfRemoved]).
+      final deleting = (await _opsOf(r.id)).any(
+        (o) => o.changeType == deleteMailboxOp && o.state == 'inflight',
+      );
+      if (deleting) continue;
       out.add(r);
     }
     return out;
@@ -822,6 +1385,8 @@ class MailboxStateWriter {
     required String serverPath,
     required String serverName,
     bool readConfirmed = false,
+    bool jmapParentConfirmed = false,
+    String? serverParent,
   }) async {
     var released = 0;
     final ok = await _db.transaction(() async {
@@ -833,7 +1398,8 @@ class MailboxStateWriter {
         if (claimed.changeType == createMailboxOp) {
           payload[_localPathKey] = row.path;
         }
-        if (claimed.changeType == renameMailboxOp) {
+        if (claimed.changeType == renameMailboxOp ||
+            claimed.changeType == moveMailboxOp) {
           final older = await (_db.select(_db.pendingChanges)
                 ..where(
                   (t) =>
@@ -890,6 +1456,11 @@ class MailboxStateWriter {
         updates: {_db.mailboxes},
         updateKind: UpdateKind.update,
       );
+      if (jmapParentConfirmed) {
+        // A JMAP move: the server put the folder below [serverParent].
+        await (_db.update(_db.mailboxes)..where((t) => t.id.equals(mailboxId)))
+            .write(MailboxesCompanion(parentId: Value(serverParent)));
+      }
       // Older acked ops of the mailbox no longer show anywhere: this one
       // names the whole folder.
       await _db.customUpdate(
@@ -921,6 +1492,47 @@ class MailboxStateWriter {
     }
     return ok;
   }
+
+  /// Settles [claimed], a `delete_mailbox` the server applied (or found
+  /// done: the folder was gone already): `acked` with `ack_seq` and the
+  /// folder's path as `fromPath`, so a listing that started before the ack
+  /// does not bring the folder back ([renamedAwaySince]); the next listing
+  /// drops it ([settleAckedDeletes]). The caller then removes the folder's
+  /// cache (`removeLocalMailbox`, which keeps this op). With [claimed] not
+  /// being sent (a queued delete a listing proves done), [owned] is false.
+  /// Returns the folder's path, or null when the flush no longer owned the
+  /// claim.
+  Future<String?> ackDelete(PendingChangeRow claimed, {bool owned = true}) =>
+      _db.transaction(() async {
+        final ackSeq = await _emails.nextReadSeq();
+        final row = await rowById(claimed.resourceId);
+        final payload = _payloadOf(claimed) ?? {};
+        if (row != null) payload[mailboxOpFromPath] = [row.path];
+        final count = await (_db.update(_db.pendingChanges)
+              ..where(
+                (t) => owned
+                    ? _ownsClaim(t, claimed)
+                    : t.id.equals(claimed.id) &
+                        t.state.isIn(const ['pending', 'stuck']),
+              ))
+            .write(
+          PendingChangesCompanion(
+            state: const Value('acked'),
+            ackSeq: Value(ackSeq),
+            contradictedSeq: const Value(null),
+            leaseUntil: const Value(null),
+            claimToken: const Value(null),
+            lastError: const Value(null),
+            payload: Value(jsonEncode(payload)),
+          ),
+        );
+        if (count == 0) return null;
+        if (row == null) {
+          await _deleteOp(claimed.id);
+          return null;
+        }
+        return row.path;
+      });
 
   /// Marks [op] `failed` with [error]: the server refused it, or (with
   /// [claimed] false) the folder is gone. A failed op stops folding: a
@@ -991,8 +1603,11 @@ class MailboxStateWriter {
       final payload = _payloadOf(op);
       final bool depends;
       if (op.resourceType == mailboxResourceType) {
+        // Its own ops, creates of subfolders in it, and moves of other
+        // folders into it.
         depends = op.resourceId == row.id ||
-            (op.changeType == createMailboxOp &&
+            ((op.changeType == createMailboxOp ||
+                    op.changeType == moveMailboxOp) &&
                 payload?[mailboxOpParent] == row.path);
         if (depends && op.resourceId != row.id) childRows.add(op.resourceId);
       } else {
@@ -1270,8 +1885,9 @@ class MailboxStateWriter {
   ]) async {
     final row = await rowByPath(accountId, path);
     final failed = <PendingChangeRow>[];
-    // The folder's own ops, and creates of subfolders below it (on IMAP a
-    // CREATE of one would bring the removed folder back).
+    // The folder's own ops, and creates of subfolders below it and moves
+    // of folders into it (on IMAP a CREATE or RENAME of one would bring the
+    // removed folder back).
     final ops = [
       if (row != null) ...await _opsOf(row.id),
       for (final o in await (_db.select(_db.pendingChanges)
@@ -1279,7 +1895,7 @@ class MailboxStateWriter {
               (t) =>
                   t.accountId.equals(accountId) &
                   t.resourceType.equals(mailboxResourceType) &
-                  t.changeType.equals(createMailboxOp),
+                  t.changeType.isIn(const [createMailboxOp, moveMailboxOp]),
             ))
           .get())
         if (_payloadOf(o)?[mailboxOpParent] == path) o,
@@ -1287,6 +1903,22 @@ class MailboxStateWriter {
     for (final op in ops) {
       if (!const ['pending', 'stuck'].contains(op.state)) continue;
       if (failed.any((f) => f.id == op.id)) continue;
+      if (op.changeType == deleteMailboxOp && op.resourceId == row?.id) {
+        // The folder is gone, as its queued delete wanted: done, not
+        // failed (§5 "satisfied").
+        if (await ackDelete(op, owned: false) == null) continue;
+        _log(
+          (logger) => logger.warn(
+            'mailbox.delete_found_done',
+            'The folder "$path" is gone on the server: its queued delete '
+                'counts as done',
+            accountId: accountId,
+            mailboxPath: path,
+            data: {'changeId': op.id, 'attempts': op.attempts},
+          ),
+        );
+        continue;
+      }
       final dependents = await fail(op, why, claimed: false);
       if (dependents == null) continue;
       failed
@@ -1378,7 +2010,8 @@ class MailboxStateWriter {
     );
   }
 
-  /// The queued creates of [accountId] whose parent is [from] name [to].
+  /// The queued creates and moves of [accountId] whose parent is [from]
+  /// name [to] (a move's Undo parent too); the moved folders re-fold.
   Future<void> _repointMailboxOps(
     String accountId,
     String from,
@@ -1389,20 +2022,27 @@ class MailboxStateWriter {
             (t) =>
                 t.accountId.equals(accountId) &
                 t.resourceType.equals(mailboxResourceType) &
-                t.changeType.equals(createMailboxOp),
+                t.changeType.isIn(const [createMailboxOp, moveMailboxOp]),
           ))
         .get();
     for (final op in ops) {
       final payload = _payloadOf(op);
-      if (payload == null || payload[mailboxOpParent] != from) continue;
-      payload[mailboxOpParent] = to;
+      if (payload == null) continue;
+      var changed = false;
+      for (final key in const [mailboxOpParent, mailboxOpFromParent]) {
+        if (payload[key] != from) continue;
+        payload[key] = to;
+        changed = true;
+      }
+      if (!changed) continue;
       await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
           .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+      if (op.changeType == moveMailboxOp) await _refoldRow(op.resourceId);
       _log(
         (logger) => logger.warn(
           'pending_change.folder_renamed',
-          'A queued folder creation below "$from" is below "$to" now: the '
-              'server gave the parent folder that path',
+          'A queued ${_describe(op)} naming "$from" as parent names "$to" '
+              'now: the server gave the parent folder that path',
           accountId: accountId,
           data: {'changeId': op.id, 'from': from, 'to': to},
         ),
@@ -1488,7 +2128,9 @@ class MailboxStateWriter {
   /// server: `removeLocalMailbox`).
   Future<void> deleteRow(String accountId, String path) async {
     // Its acked ops have nothing left to settle against; failed ones stay
-    // listed for the user.
+    // listed for the user. An acked delete stays until the next listing
+    // ([settleAckedDeletes]): it keeps a stale one from bringing the
+    // folder back.
     final row = await rowByPath(accountId, path);
     if (row != null) {
       await (_db.delete(_db.pendingChanges)
@@ -1496,7 +2138,8 @@ class MailboxStateWriter {
               (t) =>
                   t.resourceType.equals(mailboxResourceType) &
                   t.resourceId.equals(row.id) &
-                  t.state.equals('acked'),
+                  t.state.equals('acked') &
+                  t.changeType.equals(deleteMailboxOp).not(),
             ))
           .go();
     }
@@ -1518,14 +2161,6 @@ class MailboxStateWriter {
         updates: {_db.mailboxes},
         updateKind: UpdateKind.delete,
       );
-
-  /// The server-first JMAP folder move (phase 5b makes it an op): the
-  /// server put [row] below [parentPath].
-  Future<void> writeServerParent(MailboxRow row, String? parentPath) async {
-    await (_db.update(_db.mailboxes)..where((t) => t.id.equals(row.id)))
-        .write(MailboxesCompanion(parentId: Value(parentPath)));
-    await rebuildDisplayPaths(row.accountId);
-  }
 
   // ── Consistency ────────────────────────────────────────────────────────
 
@@ -1558,9 +2193,18 @@ class MailboxStateWriter {
     }
     for (final r in rows) {
       final own = byMailbox.remove(r.id) ?? const [];
-      final fold = foldMailboxName(own.map(_foldOpOf));
+      final foldOps = own.map(_foldOpOf).toList();
+      final fold = foldMailboxName(foldOps);
       if (fold != r.localName) {
         problems.add('${r.id}: local_name ${r.localName} != fold $fold');
+      }
+      final parent = foldMailboxParent(foldOps);
+      if (parent != r.localParent) {
+        problems.add('${r.id}: local_parent ${r.localParent} != fold $parent');
+      }
+      final hidden = foldMailboxHidden(foldOps);
+      if (hidden != r.localHidden) {
+        problems.add('${r.id}: local_hidden ${r.localHidden} != fold $hidden');
       }
       final effective = r.localName ?? r.srvName;
       if (effective != null && effective != r.name) {
@@ -1573,6 +2217,8 @@ class MailboxStateWriter {
     for (final entry in byMailbox.entries) {
       for (final op in entry.value) {
         if (op.state == 'failed') continue;
+        // Kept after its folder went, until the next listing.
+        if (op.state == 'acked' && op.changeType == deleteMailboxOp) continue;
         problems.add('${entry.key}: ${op.changeType} op ${op.id} '
             '(${op.state}) without its mailbox');
       }
@@ -1584,6 +2230,9 @@ class MailboxStateWriter {
   /// `overlay.inconsistent`) and repaired by a re-fold of every mailbox of
   /// the account. Mailboxes are few, so all of them are checked.
   Future<List<String>> checkAndRepair(String accountId) async {
+    // A counterpart's stand-in whose shadow create went with its move (in
+    // another isolate) is no inconsistency: it is dropped first.
+    await dropOrphanedCounterpartFolders(accountId);
     final problems = await consistencyProblems(accountId: accountId);
     if (problems.isEmpty) return problems;
     _log(
@@ -1619,6 +2268,8 @@ class MailboxStateWriter {
   static String _describe(PendingChangeRow op) => switch (op.changeType) {
         createMailboxOp => 'folder creation',
         renameMailboxOp => 'folder rename',
+        moveMailboxOp => 'folder move',
+        deleteMailboxOp => 'folder delete',
         'move' => 'move',
         'snooze' => 'snooze',
         'unsnooze' => 'unsnooze',
@@ -1635,12 +2286,18 @@ class MailboxStateWriter {
   }
 }
 
-MailboxFoldOp _foldOpOf(PendingChangeRow op) => MailboxFoldOp(
-      seq: op.id,
-      type: op.changeType,
-      name: _payloadOf(op)?[mailboxOpName] as String?,
-      state: op.state,
-    );
+MailboxFoldOp _foldOpOf(PendingChangeRow op) {
+  final payload = _payloadOf(op);
+  return MailboxFoldOp(
+    seq: op.id,
+    type: op.changeType,
+    name: payload?[mailboxOpName] as String?,
+    state: op.state,
+    parent: op.changeType == moveMailboxOp
+        ? (payload?[mailboxOpParent] as String? ?? '')
+        : null,
+  );
+}
 
 Map<String, dynamic>? _payloadOf(PendingChangeRow op) {
   try {

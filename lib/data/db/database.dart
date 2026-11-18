@@ -111,6 +111,16 @@ class Mailboxes extends Table {
   TextColumn get localName => text().nullable()();
   BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
   IntColumn get srvSeq => integer().withDefault(const Constant(0))();
+  // Added in schema v76 (phase 5b): folder move and delete as ops.
+  // [localHidden]: the fold of a queued `delete_mailbox` op; a hidden
+  // mailbox shows nowhere (lists, counts, pickers, sync). [localParent]:
+  // the fold of the latest queued `move_mailbox` op, the new parent's
+  // `path` (`''` for the top level; null: none). [parentId] stays the
+  // parent the server gave (JMAP; a create's parent until its ack); the
+  // parent a folder shows below is [localParent] when set, else
+  // [parentId] (`effectiveMailboxParent`).
+  BoolColumn get localHidden => boolean().withDefault(const Constant(false))();
+  TextColumn get localParent => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -2065,6 +2075,18 @@ class AppDatabase extends _$AppDatabase {
       }
       await _overlayMailboxes();
     }
+    if (from < 76 && await _tableExists(this, 'mailboxes')) {
+      // Folder move and delete as ops (phase 5b of SYNC-REDESIGN.md).
+      for (final column in [
+        mailboxes.localHidden,
+        mailboxes.localParent,
+      ]) {
+        await _addColumnIfMissing(m, mailboxes, column);
+      }
+      // IMAP: the snooze's flush no longer creates the Snoozed folder; a
+      // snooze queued before into a folder not cached waits for its create.
+      await _queueSnoozedCreates('imap');
+    }
   }
 
   /// Schema v75: every cached mailbox came from the server, so its name is
@@ -2077,18 +2099,27 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'UPDATE mailboxes SET srv_name = name WHERE srv_name IS NULL',
     );
+    await _queueSnoozedCreates('jmap');
+  }
+
+  /// For each account of [accountType] with a snooze queued into the
+  /// literal `Snoozed` path while no mailbox has that path: a local
+  /// `Snoozed` row (role `snoozed`) and its queued `create_mailbox`, which
+  /// the snooze waits for (v75 for JMAP, v76 for IMAP).
+  Future<void> _queueSnoozedCreates(String accountType) async {
     if (!await _tableExists(this, 'pending_changes') ||
         !await _tableExists(this, 'accounts')) {
       return;
     }
     final accounts = await customSelect(
       'SELECT DISTINCT p.account_id AS account_id FROM pending_changes p '
-      "JOIN accounts a ON a.id = p.account_id AND a.account_type = 'jmap' "
+      'JOIN accounts a ON a.id = p.account_id AND a.account_type = ?1 '
       "WHERE p.state IN ('pending', 'inflight', 'stuck', 'parked') "
       // A snooze into the stand-in needs the folder; an unsnooze out of it
       // alone does not (the mail never got there: nothing to create).
       "AND p.change_type = 'snooze' "
       "AND p.payload LIKE '%\"dest\":\"Snoozed\"%'",
+      variables: [Variable.withString(accountType)],
     ).get();
     for (final r in accounts) {
       final accountId = r.read<String>('account_id');

@@ -6,6 +6,7 @@
 
 import 'dart:io';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -56,6 +57,45 @@ void main() {
   ) =>
       EmailRepositoryImpl(r.db, r.accounts, imapConnect: testImapConnect)
           .flushPendingChanges('test', user.password);
+
+  // An email repository on [r]'s database, with a temporary cache folder.
+  EmailRepositoryImpl emailsOf(
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      MailboxRepositoryImpl mailboxes,
+    }) r,
+  ) {
+    final cache = Directory.systemTemp.createTempSync('mailbox_imap_');
+    addTearDown(() => cache.deleteSync(recursive: true));
+    return EmailRepositoryImpl(
+      r.db,
+      r.accounts,
+      imapConnect: testImapConnect,
+      getCacheDir: () async => cache,
+    );
+  }
+
+  // Deletes the folders called one of [names] an earlier run left (with
+  // their mail, subfolders first) and flushes: deletes are queued.
+  Future<void> dropFolders(
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      MailboxRepositoryImpl mailboxes,
+    }) r,
+    Set<String> names,
+  ) async {
+    await r.mailboxes.syncMailboxes('test');
+    final stale = (await r.mailboxes.observeMailboxes('test').first)
+        .where((m) => names.contains(m.name))
+        .toList()
+      ..sort((a, b) => b.displayPath.length.compareTo(a.displayPath.length));
+    for (final m in stale) {
+      await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
+    }
+    await flush(r);
+  }
 
   test('syncMailboxes stores mailboxes from IMAP in DB', () async {
     final r = makeRepo();
@@ -111,6 +151,8 @@ void main() {
       for (final m in stale) {
         await r.mailboxes.deleteMailbox('test', m.path);
       }
+      // Deletes are queued (phase 5b): the flush sends them.
+      await flush(r);
     }
 
     await dropProjects();
@@ -142,6 +184,7 @@ void main() {
       for (final m in all.where((m) => m.displayPath == folderName)) {
         await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
       }
+      await flush(r);
     }
 
     await dropFolder();
@@ -169,15 +212,18 @@ void main() {
           ),
         );
 
-    // Without removeEmails (the dialog said "empty") the mail is kept.
-    await expectLater(
-      r.mailboxes.deleteMailbox('test', folder.path),
-      throwsA(isA<Exception>()),
-    );
+    // Without removeEmails (the dialog said "empty") the mail is kept: the
+    // queued delete is refused by the flush, a failed change, and the
+    // folder shows again.
+    await r.mailboxes.deleteMailbox('test', folder.path);
+    await flush(r);
+    final refused = await r.db.select(r.db.pendingChanges).getSingle();
+    expect((refused.changeType, refused.state), ('delete_mailbox', 'failed'));
     final kept = await r.mailboxes.observeMailboxes('test').first;
     expect(kept.map((m) => m.path), contains(folder.path));
 
     await r.mailboxes.deleteMailbox('test', folder.path, removeEmails: true);
+    await flush(r);
 
     final local = await (r.db.select(r.db.emails)
           ..where((t) => t.mailboxPath.equals(folder.path)))
@@ -203,29 +249,13 @@ void main() {
       'offline: create a folder, move a mail into it and rename it; the '
       'flush does all three on the server', () async {
     final r = makeRepo();
-    final cache = Directory.systemTemp.createTempSync('p5_imap_');
-    addTearDown(() => cache.deleteSync(recursive: true));
-    final emails = EmailRepositoryImpl(
-      r.db,
-      r.accounts,
-      imapConnect: testImapConnect,
-      getCacheDir: () async => cache,
-    );
+    final emails = emailsOf(r);
     await r.accounts.addAccount(account, user.password);
     const created = 'P5Offline';
     const renamed = 'P5Renamed';
+    Future<void> drop() => dropFolders(r, const {created, renamed});
 
-    Future<void> dropFolders() async {
-      await r.mailboxes.syncMailboxes('test');
-      final all = await r.mailboxes.observeMailboxes('test').first;
-      for (final m in all.where(
-        (m) => m.name == created || m.name == renamed,
-      )) {
-        await r.mailboxes.deleteMailbox('test', m.path, removeEmails: true);
-      }
-    }
-
-    await dropFolders();
+    await drop();
     try {
       final client = await connectImap(env: env, user: user);
       try {
@@ -262,7 +292,169 @@ void main() {
       await emails.syncEmails('test', renamed);
       expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
     } finally {
-      await dropFolders();
+      await drop();
+    }
+  });
+  // #1242 phase 5b on IMAP: offline, a folder is moved below another and a
+  // second one is deleted after its mail was moved out. The flush sends the
+  // move (RENAME, the folder's mail follows), the mail move, then the
+  // DELETE, in that order; no mail is lost.
+  test(
+      'offline: move a folder, move the mail out of another and delete it; '
+      'the flush does it all on the server', () async {
+    final r = makeRepo();
+    final emails = emailsOf(r);
+    await r.accounts.addAccount(account, user.password);
+    const parent = 'P5bParent';
+    const moved = 'P5bMoved';
+    const doomed = 'P5bDoomed';
+    Future<void> drop() => dropFolders(r, const {parent, moved, doomed});
+
+    await drop();
+    try {
+      final client = await connectImap(env: env, user: user);
+      try {
+        for (final f in const [parent, moved, doomed]) {
+          await client.createMailbox(f);
+        }
+        await appendMessage(
+          client,
+          subject: 'p5b-in-moved',
+          userEmail: user.email,
+          mailboxPath: moved,
+        );
+        await appendMessage(
+          client,
+          subject: 'p5b-rescued',
+          userEmail: user.email,
+          mailboxPath: doomed,
+        );
+      } finally {
+        await client.logout();
+      }
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', moved);
+      await emails.syncEmails('test', doomed);
+      final inMoved = (await emails.observeEmails('test', moved).first).single;
+      final rescued = (await emails.observeEmails('test', doomed).first).single;
+      final movedRow = (await r.mailboxes.observeMailboxes('test').first)
+          .singleWhere((m) => m.path == moved);
+
+      final shown = await r.mailboxes
+          .moveMailbox('test', moved, newParentDisplayPath: parent);
+      expect(shown.displayPath, '$parent/$moved');
+      await emails.moveEmail(rescued.id, 'INBOX');
+      await r.mailboxes.deleteMailbox('test', doomed);
+      expect(
+        (await r.mailboxes.observeMailboxes('test').first).map((m) => m.path),
+        isNot(contains(doomed)),
+      );
+
+      await flush(r);
+
+      final check = await connectImap(env: env, user: user);
+      try {
+        final boxes = (await check.listMailboxes(recursive: true))
+            .map((b) => b.path)
+            .toList();
+        expect(boxes, contains('$parent/$moved'));
+        expect(boxes, isNot(contains(moved)));
+        expect(boxes, isNot(contains(doomed)));
+        final box = await check.selectMailboxByPath('$parent/$moved');
+        expect(box.messagesExists, 1);
+      } finally {
+        await check.logout();
+      }
+      final row = (await r.mailboxes.observeMailboxes('test').first)
+          .singleWhere((m) => m.id == movedRow.id);
+      expect(row.path, '$parent/$moved');
+      final mail = (await emails.getEmail(inMoved.id))!;
+      expect(mail.mailboxPath, '$parent/$moved');
+      expect((await emails.getEmail(rescued.id))!.mailboxPath, 'INBOX');
+
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', 'INBOX');
+      await emails.syncEmails('test', '$parent/$moved');
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.state.isIn(const ['acked']).not()))
+            .get(),
+        isEmpty,
+      );
+      final inbox = await emails.observeEmails('test', 'INBOX').first;
+      expect(inbox.map((e) => e.subject), contains('p5b-rescued'));
+    } finally {
+      await drop();
+    }
+  });
+
+  // IMAP has no folder ids: a folder another client renames lists as one
+  // gone and one new. Stalwart gives the renamed folder a new UIDVALIDITY,
+  // so the listing recognises it by the Message-IDs it holds, and a move
+  // queued into it follows instead of failing (phase 5b).
+  test('a folder another client renames: a move queued into it follows',
+      () async {
+    final r = makeRepo();
+    final emails = emailsOf(r);
+    await r.accounts.addAccount(account, user.password);
+    const before = 'P5bWork';
+    const after = 'P5bJob';
+    Future<void> drop() => dropFolders(r, const {before, after});
+
+    await drop();
+    try {
+      final client = await connectImap(env: env, user: user);
+      try {
+        await client.createMailbox(before);
+        await appendMessage(
+          client,
+          subject: 'p5b-rn-in-work',
+          userEmail: user.email,
+          mailboxPath: before,
+        );
+        await appendMessage(client, subject: 'p5b-rn', userEmail: user.email);
+      } finally {
+        await client.logout();
+      }
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', before);
+      await emails.syncEmails('test', 'INBOX');
+      final mail = (await emails.observeEmails('test', 'INBOX').first)
+          .singleWhere((e) => e.subject == 'p5b-rn');
+      final folder = (await r.mailboxes.observeMailboxes('test').first)
+          .singleWhere((m) => m.path == before);
+      await emails.moveEmail(mail.id, before);
+
+      // Another client renames the folder before our flush.
+      final other = await connectImap(env: env, user: user);
+      try {
+        final box =
+            (await other.listMailboxes()).singleWhere((b) => b.path == before);
+        await other.renameMailbox(box, after);
+      } finally {
+        await other.logout();
+      }
+      await r.mailboxes.syncMailboxes('test');
+
+      final row = (await r.mailboxes.observeMailboxes('test').first)
+          .singleWhere((m) => m.id == folder.id);
+      expect(row.path, after);
+      final move = await (r.db.select(r.db.pendingChanges)
+            ..where((t) => t.changeType.equals('move')))
+          .getSingle();
+      expect(move.state, 'pending');
+      expect(move.payload, contains('"dest":"$after"'));
+
+      await flush(r);
+      final check = await connectImap(env: env, user: user);
+      try {
+        final box = await check.selectMailboxByPath(after);
+        expect(box.messagesExists, 2);
+      } finally {
+        await check.logout();
+      }
+    } finally {
+      await drop();
     }
   });
 }

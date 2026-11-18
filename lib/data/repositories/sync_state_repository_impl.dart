@@ -13,9 +13,10 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
 
   @override
   Future<List<MailboxSyncState>> statesForAccount(String accountId) async {
+    // Not a folder being deleted (phase 5b): it shows nowhere.
     final mailboxRows = await (_db.select(
       _db.mailboxes,
-    )..where((t) => t.accountId.equals(accountId)))
+    )..where((t) => t.accountId.equals(accountId) & t.localHidden.not()))
         .get();
 
     // Not the hidden rows (deleted for good, or gone on the server, waiting

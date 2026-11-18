@@ -54,14 +54,18 @@ abstract class MailboxRepository {
     String newName,
   );
 
-  /// Deletes the mailbox with [mailboxPath] under [accountId] on the server
-  /// and removes its local cache (emails, threads, sync state).
+  /// Deletes the mailbox with [mailboxPath] under [accountId], offline too:
+  /// it is hidden at once and the delete on the server is queued; once the
+  /// server confirmed it, its local cache (emails, threads, sync state)
+  /// goes. A folder created offline that is not on the server yet only
+  /// gives up its creation. A folder with subfolders is refused (delete
+  /// them first).
   ///
   /// With [removeEmails] the mail it contains is deleted too (mail that is
   /// also in another JMAP mailbox stays there) — pass it only when the user
   /// confirmed deleting mail. Without it a folder that is not empty on the
-  /// server is refused, so mail that arrived after a stale "empty" count
-  /// is never deleted silently.
+  /// server is refused (a failed change, the folder shows again), so mail
+  /// that arrived after a stale "empty" count is never deleted silently.
   Future<void> deleteMailbox(
     String accountId,
     String mailboxPath, {
@@ -69,11 +73,18 @@ abstract class MailboxRepository {
   });
 
   /// Moves the mailbox with [mailboxPath] under [accountId] to live under
-  /// [newParentDisplayPath] (null for top level). The leaf name is preserved.
-  /// Returns the updated [Mailbox].
+  /// [newParentDisplayPath] (null for top level), offline too: it shows
+  /// there at once and the move on the server is queued. The leaf name is
+  /// preserved. Returns the updated [Mailbox].
   Future<Mailbox> moveMailbox(
     String accountId,
     String mailboxPath, {
     required String? newParentDisplayPath,
   });
+
+  /// Undoes the latest move or delete of the folder [mailboxId] of
+  /// [accountId]: one not sent yet is cancelled; a move already sent is
+  /// moved back. Returns false when it can no longer be undone (a delete
+  /// that may have reached the server).
+  Future<bool> undoFolderChange(String accountId, String mailboxId);
 }

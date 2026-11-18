@@ -511,6 +511,7 @@ if header :contains "subject" "lunch" {
     Future<void> dropArchive(
       MailboxRepositoryImpl mailboxes,
       String accountId,
+      Future<void> Function() flush,
     ) async {
       final client = await connectImap(env: env, user: user);
       try {
@@ -521,12 +522,18 @@ if header :contains "subject" "lunch" {
       await mailboxes.syncMailboxes(accountId);
       final old = await mailboxes.findMailboxByRole(accountId, 'archive');
       if (old != null) await mailboxes.deleteMailbox(accountId, old.path);
+      // Deletes are queued (phase 5b): the flush sends them.
+      await flush();
     }
 
     await appendToInbox('archive-me');
     final r = makeRepo();
     final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
-    await dropArchive(r.mailboxes, 'test-jmap');
+    await dropArchive(
+      r.mailboxes,
+      'test-jmap',
+      () => r.emails.flushPendingChanges('test-jmap', user.password),
+    );
     try {
       // Created locally at once (offline-first); the flush creates it on
       // the server, then moves the mail that waited for it.
@@ -559,7 +566,11 @@ if header :contains "subject" "lunch" {
           await r.emails.observeEmails('test-jmap', synced.path).first;
       expect(archived.map((e) => e.subject), ['archive-me']);
     } finally {
-      await dropArchive(r.mailboxes, 'test-jmap');
+      await dropArchive(
+        r.mailboxes,
+        'test-jmap',
+        () => r.emails.flushPendingChanges('test-jmap', user.password),
+      );
     }
   });
 
@@ -586,6 +597,7 @@ if header :contains "subject" "lunch" {
       for (final m in stale) {
         await r.mailboxes.deleteMailbox('test-jmap', m.path);
       }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
     }
 
     await dropProjects();
@@ -643,6 +655,7 @@ if header :contains "subject" "lunch" {
         await r.mailboxes
             .deleteMailbox('test-jmap', m.path, removeEmails: true);
       }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
     }
 
     await dropFolder();
@@ -709,6 +722,7 @@ if header :contains "subject" "lunch" {
 
     await r.mailboxes
         .deleteMailbox('test-jmap', folder.path, removeEmails: true);
+    await r.emails.flushPendingChanges('test-jmap', user.password);
 
     final localEmails = await (r.db.select(r.db.emails)
           ..where((t) => t.mailboxPath.equals(folder.path)))
@@ -762,6 +776,7 @@ if header :contains "subject" "lunch" {
         await r.mailboxes
             .deleteMailbox('test-jmap', m.path, removeEmails: true);
       }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
     }
 
     await dropFolders();
@@ -818,6 +833,109 @@ if header :contains "subject" "lunch" {
       final change = await r.db.select(r.db.pendingChanges).getSingle();
       expect((change.changeType, change.state), ('create_mailbox', 'failed'));
     } finally {
+      await dropFolders();
+    }
+  });
+  // #1242 phase 5b on JMAP: offline, a folder is moved below another and a
+  // second one is deleted after its mail was moved out. The flush sends the
+  // move (Mailbox/set parentId), the mail move, then the destroy; a folder
+  // with mail is refused without the user's yes (mailboxHasEmail).
+  test(
+      'offline: move a folder, move the mail out of another and delete it; '
+      'the flush does it all on the server', () async {
+    final r = makeRepo();
+    final inboxId = await setupAndGetInboxId(r.db, r.accounts, r.mailboxes);
+    const parent = 'P5bParent';
+    const moved = 'P5bMoved';
+    const doomed = 'P5bDoomed';
+    const full = 'P5bFull';
+
+    Future<void> dropFolders() async {
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final all = (await r.mailboxes.observeMailboxes('test-jmap').first)
+          .where((m) => const [parent, moved, doomed, full].contains(m.name))
+          .toList()
+        // Children first: JMAP refuses to destroy a mailbox with children.
+        ..sort((a, b) => b.displayPath.length.compareTo(a.displayPath.length));
+      for (final m in all) {
+        await r.mailboxes
+            .deleteMailbox('test-jmap', m.path, removeEmails: true);
+      }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+    }
+
+    await dropFolders();
+    try {
+      for (final name in const [parent, moved, doomed, full]) {
+        await r.mailboxes.createMailbox('test-jmap', name);
+      }
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final byName = {
+        for (final m in await r.mailboxes.observeMailboxes('test-jmap').first)
+          m.name: m,
+      };
+      await appendToInbox('p5b-rescued');
+      await appendToInbox('p5b-kept');
+      await r.emails.syncEmails('test-jmap', inboxId);
+      final inbox = await r.emails.observeEmails('test-jmap', inboxId).first;
+      final rescued = inbox.singleWhere((e) => e.subject == 'p5b-rescued');
+      final kept = inbox.singleWhere((e) => e.subject == 'p5b-kept');
+      await r.emails.moveEmail(rescued.id, byName[doomed]!.path);
+      await r.emails.moveEmail(kept.id, byName[full]!.path);
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+
+      // Offline: the folder moves below the parent; the mail moves out of
+      // the doomed folder, which is then deleted; the full one is deleted
+      // without the user's yes for its mail.
+      final shown = await r.mailboxes.moveMailbox(
+        'test-jmap',
+        byName[moved]!.path,
+        newParentDisplayPath: parent,
+      );
+      expect(shown.displayPath, '$parent/$moved');
+      await r.emails.moveEmail(rescued.id, inboxId);
+      await r.mailboxes.deleteMailbox('test-jmap', byName[doomed]!.path);
+      await r.mailboxes.deleteMailbox('test-jmap', byName[full]!.path);
+      expect(
+        (await r.mailboxes.observeMailboxes('test-jmap').first)
+            .map((m) => m.name),
+        isNot(anyOf(contains(doomed), contains(full))),
+      );
+
+      await r.emails.flushPendingChanges('test-jmap', user.password);
+
+      final ops = await r.db.select(r.db.pendingChanges).get();
+      final refused = ops.singleWhere((o) => o.state == 'failed');
+      expect(refused.changeType, 'delete_mailbox');
+      expect(refused.resourceId, byName[full]!.id);
+      expect(refused.lastError, contains('mailboxHasEmail'));
+
+      await r.mailboxes.syncMailboxes('test-jmap');
+      final after = {
+        for (final m in await r.mailboxes.observeMailboxes('test-jmap').first)
+          m.name: m,
+      };
+      expect(after[moved]!.parentId, byName[parent]!.path);
+      expect(after[moved]!.displayPath, '$parent/$moved');
+      expect(after.keys, isNot(contains(doomed)));
+      expect(after.keys, contains(full), reason: 'refused: shows again');
+      await r.emails.syncEmails('test-jmap', inboxId);
+      expect(
+        (await r.emails.observeEmails('test-jmap', inboxId).first)
+            .map((e) => e.subject),
+        contains('p5b-rescued'),
+      );
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.state.isIn(const ['acked', 'failed']).not()))
+            .get(),
+        isEmpty,
+      );
+    } finally {
+      await r.db.customStatement(
+        "DELETE FROM pending_changes WHERE state = 'failed'",
+      );
       await dropFolders();
     }
   });

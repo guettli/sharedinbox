@@ -240,6 +240,9 @@ String attemptsLabel(PendingChange change) {
   if (change.failed) return 'failed after $n attempts';
   if (change.sending) return 'sending…';
   if (change.parked) return 'waiting for the server copy of this mail';
+  if (change.waitingForFolder case final folder?) {
+    return 'waiting for folder "$folder" to be created';
+  }
   if (change.stuck) {
     final next = change.nextTry?.toLocal();
     if (next == null) return 'not synced yet';
@@ -332,6 +335,8 @@ String kindLabel(String kind) {
     'clear_snooze' => 'Clear snooze',
     'create_mailbox' => 'Create folder',
     'rename_mailbox' => 'Rename folder',
+    'move_mailbox' => 'Move folder',
+    'delete_mailbox' => 'Delete folder',
     _ => kind,
   };
 }
@@ -372,6 +377,16 @@ String describeChange(PendingChange change) {
     case 'rename_mailbox':
       final name = _string(payload['name']);
       return name != null ? 'Rename folder to "$name"' : 'Rename folder';
+    case 'move_mailbox':
+      // The parent is a folder path (on JMAP an opaque id): shown only to
+      // tell the top level apart.
+      return payload.containsKey('parent') && payload['parent'] == null
+          ? 'Move folder to the top level'
+          : 'Move folder';
+    case 'delete_mailbox':
+      return payload['removeEmails'] == true
+          ? 'Delete folder and its mail'
+          : 'Delete folder';
     default:
       return kindLabel(change.kind);
   }

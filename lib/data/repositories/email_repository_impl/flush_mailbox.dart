@@ -21,16 +21,23 @@ extension _FlushMailbox on EmailRepositoryImpl {
   /// (connection lost after sending: kept, and the next try looks first).
   /// An op whose folder or parent folder is not created yet waits. Returns
   /// how many were applied.
+  ///
+  /// With [onlyDeletes] (the pass after the mail changes) only deletes are
+  /// sent: one that waited for the mail changes queued before it.
   Future<int> _flushMailboxOps(
     account_model.Account account,
-    String password,
-  ) async {
+    String password, {
+    bool onlyDeletes = false,
+  }) async {
     final now = _now();
     final rows = await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
                 t.accountId.equals(account.id) &
                 t.resourceType.equals(mailboxResourceType) &
+                (onlyDeletes
+                    ? t.changeType.equals(deleteMailboxOp)
+                    : const Constant(true)) &
                 (t.state.equals(_pendingState) |
                     (t.state.equals(_stuckState) &
                         t.leaseUntil.isSmallerOrEqualValue(now))),
@@ -71,10 +78,12 @@ extension _FlushMailbox on EmailRepositoryImpl {
     try {
       for (final snapshot in rows) {
         if (blocked.contains(snapshot.resourceId)) continue;
-        if (snapshot.changeType == renameMailboxOp) {
-          // A mail change naming the folder is being sent by another flush
-          // with the old path: the rename waits for it (nothing charged),
-          // or that change would name a folder the server just renamed.
+        if (const [renameMailboxOp, moveMailboxOp, deleteMailboxOp]
+            .contains(snapshot.changeType)) {
+          // A mail change naming the folder (or a subfolder) is being sent
+          // by another flush with the old path: the rename, move or delete
+          // waits for it (nothing charged), or that change would name a
+          // folder the server just renamed, moved or deleted.
           final folder = await _mailboxState.rowById(snapshot.resourceId);
           if (folder != null &&
               await _mailboxState.mailChangeInFlightFor(
@@ -95,6 +104,58 @@ extension _FlushMailbox on EmailRepositoryImpl {
         try {
           if (mailbox == null) {
             throw MailboxOpRefused('the folder no longer exists');
+          }
+          if (row.changeType == deleteMailboxOp) {
+            final gone = await _applyMailboxDelete(
+              row,
+              mailbox,
+              client: client,
+              jmap: jmap,
+            );
+            if (!gone) {
+              // Changes queued before it, or a subfolder's ops, go first.
+              await _unclaimPendingChange(row);
+              blocked.add(row.resourceId);
+              continue;
+            }
+            final path = await _mailboxState.ackDelete(row);
+            if (path == null) continue;
+            applied++;
+            // The folder is gone on the server: its cache goes, the
+            // changes still naming it fail (listed), and its mail is
+            // marked gone (kept while a change of it is unsettled).
+            await removeLocalMailbox(
+              _db,
+              account.id,
+              path,
+              appLogger: _appLogger,
+              deletedByUser: true,
+            );
+            continue;
+          }
+          if (row.changeType == moveMailboxOp) {
+            final moved = await _applyMailboxMove(
+              row,
+              mailbox,
+              client: client,
+              jmap: jmap,
+            );
+            if (moved == null) {
+              // Its folder or its new parent is not on the server yet.
+              await _unclaimPendingChange(row);
+              blocked.add(row.resourceId);
+              continue;
+            }
+            if (await _mailboxState.ack(
+              row,
+              serverPath: moved.path,
+              serverName: mailbox.srvName ?? mailbox.name,
+              jmapParentConfirmed: jmap != null,
+              serverParent: moved.parent,
+            )) {
+              applied++;
+            }
+            continue;
           }
           final done = await _applyMailboxOp(
             row,
@@ -175,6 +236,10 @@ extension _FlushMailbox on EmailRepositoryImpl {
       ...await _mailboxState.localPaths(accountId),
       ...await _mailboxState.pathsBeingRenamed(accountId),
     };
+    // Folders being deleted: a change queued after the delete that names
+    // one waits for it (phase 5b); one queued before goes first (the
+    // delete waits for it instead).
+    final deleting = await _mailboxState.pathsBeingDeleted(accountId);
     final held = <String>{};
     final out = <PendingChangeRow>[];
     for (final row in rows) {
@@ -185,6 +250,14 @@ extension _FlushMailbox on EmailRepositoryImpl {
         continue;
       }
       if (emailOpFolderKeys.any((k) => waitFor.contains(payload[k]))) {
+        held.add(row.resourceId);
+        continue;
+      }
+      final afterDelete = emailOpFolderKeys.any((k) {
+        final deleteSeq = deleting[payload[k]];
+        return deleteSeq != null && deleteSeq < row.id;
+      });
+      if (afterDelete) {
         held.add(row.resourceId);
         continue;
       }
@@ -310,14 +383,28 @@ extension _FlushMailbox on EmailRepositoryImpl {
     parts[parts.length - 1] = name;
     final to = parts.join(separator);
     if (to == from) return (path: from, name: name, read: false);
+    await _renameImapTo(client, row, from, to, name, separator);
+    return (path: to, name: name, read: false);
+  }
+
+  /// IMAP `RENAME` of folder [from] (with its subfolders) to [to], for a
+  /// rename or a move ([row]): a try after one that may have been sent
+  /// looks first; after a refusal the listing tells a clash, a folder gone
+  /// and a rename found done apart.
+  Future<void> _renameImapTo(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    String from,
+    String to,
+    String name,
+    String separator,
+  ) async {
     Future<bool> done() async {
       final list = await client.listMailboxes(recursive: true);
       return list.any((m) => m.path == to) && !list.any((m) => m.path == from);
     }
 
-    if (row.attempts > 0 && await done()) {
-      return (path: to, name: name, read: false);
-    }
+    if (row.attempts > 0 && await done()) return;
     try {
       // IMAP RENAME's second argument is the full destination path.
       await client.renameMailbox(imapMailboxFor(from, separator), to);
@@ -326,7 +413,7 @@ extension _FlushMailbox on EmailRepositoryImpl {
       final list = await client.listMailboxes(recursive: true);
       final hasFrom = list.any((m) => m.path == from);
       final hasTo = list.any((m) => m.path == to);
-      if (hasTo && !hasFrom) return (path: to, name: name, read: false);
+      if (hasTo && !hasFrom) return;
       if (hasTo) {
         throw MailboxOpRefused('a folder named "$name" already exists');
       }
@@ -336,11 +423,157 @@ extension _FlushMailbox on EmailRepositoryImpl {
         );
       }
       if (isImapPermanentRefusal(e)) {
-        throw MailboxOpRefused('the server refused the new name: $e');
+        throw MailboxOpRefused('the server refused it: $e');
       }
       rethrow;
     }
-    return (path: to, name: name, read: false);
+  }
+
+  /// Sends folder move [row] of [mailbox] over [client] (IMAP: `RENAME` to
+  /// the new parent's path and the leaf, its subfolders follow) or [jmap]
+  /// (`Mailbox/set` `parentId`). Returns the folder's server path and its
+  /// new parent's path (null: top level), or null when it waits: the
+  /// folder, or the folder it moves into, is not on the server yet.
+  Future<({String path, String? parent})?> _applyMailboxMove(
+    PendingChangeRow row,
+    MailboxRow mailbox, {
+    required imap.ImapClient? client,
+    required JmapClient? jmap,
+  }) async {
+    if (mailbox.isLocal) return null;
+    final payload = _decodePayload(row) ?? const <String, dynamic>{};
+    var parent = payload[mailboxOpParent] as String?;
+    if (parent != null) {
+      final resolved =
+          await _mailboxState.resolveStandIn(row.accountId, parent);
+      if (resolved == null &&
+          (jmap != null || parent.startsWith(localJmapMailboxPrefix))) {
+        throw MailboxOpRefused(
+          'the folder it is moved into does not exist any more',
+        );
+      }
+      // IMAP: a parent path no folder is cached for (a namespace prefix)
+      // is the server's to judge.
+      parent = resolved ?? parent;
+      final target = await _mailboxState.rowByPath(row.accountId, parent);
+      if (target != null && target.isLocal) return null;
+      if (target != null && target.localHidden) {
+        throw MailboxOpRefused('the folder it is moved into is being deleted');
+      }
+    }
+    if (jmap != null) {
+      final responses = await jmap.call([
+        [
+          'Mailbox/set',
+          {
+            'accountId': jmap.accountId,
+            'update': {
+              mailbox.path: {'parentId': parent},
+            },
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Mailbox/set');
+      final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
+      final err = notUpdated?[mailbox.path] as Map<String, dynamic>?;
+      if (err != null) throw MailboxOpRefused(jmapMailboxSetErrorText(err));
+      return (path: mailbox.path, parent: parent);
+    }
+    final imapClient = client!;
+    final from = mailbox.path;
+    final separator = await imapPathSeparator(imapClient);
+    await _mailboxState.recordImapSeparator(row.accountId, separator);
+    final cut = from.lastIndexOf(separator);
+    final leaf = cut < 0 ? from : from.substring(cut + separator.length);
+    final to = parent == null ? leaf : '$parent$separator$leaf';
+    if (to == from) return (path: from, parent: parent);
+    if (parent != null &&
+        (parent == from || parent.startsWith('$from$separator'))) {
+      throw MailboxOpRefused('a folder cannot be moved into itself');
+    }
+    await _renameImapTo(imapClient, row, from, to, leaf, separator);
+    return (path: to, parent: parent);
+  }
+
+  /// Sends folder delete [row] of [mailbox] over [client] (IMAP `DELETE`)
+  /// or [jmap] (`Mailbox/set` `destroy`). With the payload's
+  /// `removeEmails` the mail it has goes with it (the user confirmed);
+  /// without, a folder that has mail on the server is refused, so mail
+  /// that arrived (or was moved in) after the user's look is never deleted
+  /// silently. A folder already gone counts as done (§5 "satisfied").
+  /// Returns false when it waits: a change queued before it names the
+  /// folder or a subfolder (its mail is moved out or in first), or an op of
+  /// a subfolder queued before it is not done yet.
+  Future<bool> _applyMailboxDelete(
+    PendingChangeRow row,
+    MailboxRow mailbox, {
+    required imap.ImapClient? client,
+    required JmapClient? jmap,
+  }) async {
+    if (mailbox.isLocal) return false;
+    if (await _mailboxState.mailChangeQueuedFor(
+          row.accountId,
+          mailbox.path,
+          states: const [_pendingState, _inflightState, _stuckState],
+          before: row.id,
+        ) ||
+        await _mailboxState.subfolderOpQueued(mailbox, before: row.id)) {
+      return false;
+    }
+    final payload = _decodePayload(row) ?? const <String, dynamic>{};
+    final removeEmails = payload[mailboxOpRemoveEmails] == true;
+    if (jmap != null) {
+      final responses = await jmap.call([
+        [
+          'Mailbox/set',
+          {
+            'accountId': jmap.accountId,
+            'destroy': [mailbox.path],
+            if (removeEmails) 'onDestroyRemoveEmails': true,
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Mailbox/set');
+      final err = (result['notDestroyed']
+          as Map<String, dynamic>?)?[mailbox.path] as Map<String, dynamic>?;
+      if (err == null || err['type'] == 'notFound') return true;
+      throw MailboxOpRefused(jmapMailboxSetErrorText(err));
+    }
+    final imapClient = client!;
+    final path = mailbox.path;
+    final folders = await imapClient.listMailboxes(recursive: true);
+    final separator = imapSeparatorOf(folders);
+    await _mailboxState.recordImapSeparator(row.accountId, separator);
+    if (!folders.any((m) => m.path == path)) return true;
+    if (folders.any((m) => m.path.startsWith('$path$separator'))) {
+      // IMAP DELETE would leave them (or the server refuses): the app
+      // deletes a folder only once its subfolders are gone.
+      throw MailboxOpRefused('the folder still has subfolders on the server');
+    }
+    final box = imapMailboxFor(path, separator);
+    try {
+      if (!removeEmails) {
+        final status =
+            await imapClient.statusMailbox(box, [imap.StatusFlags.messages]);
+        if (status.messagesExists > 0) {
+          throw MailboxOpRefused(folderHasMailText);
+        }
+      }
+      await imapClient.deleteMailbox(box);
+    } on MailboxOpRefused {
+      rethrow;
+    } catch (e) {
+      if (!imapClient.isConnected || isImapConnectionLost(e)) rethrow;
+      final list = await imapClient.listMailboxes(recursive: true);
+      if (!list.any((m) => m.path == path)) return true;
+      if (isImapPermanentRefusal(e)) {
+        throw MailboxOpRefused('the server refused it: $e');
+      }
+      rethrow;
+    }
+    return true;
   }
 
   /// The outcome of create [row] of [mailbox] that needs no server call:

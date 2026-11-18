@@ -346,8 +346,15 @@ Future<void> _promptMove(
       newParentDisplayPath: destination,
     );
     if (!context.mounted) return;
+    final messenger = context.appMessenger();
     context.showAppSnackBar(
       'Folder moved under "$destination"',
+      // Offline too: the move is queued (phase 5b); Undo cancels it, or
+      // moves the folder back once it was sent.
+      action: SnackBarAction(
+        label: 'Undo',
+        onPressed: () => _undoFolderChange(messenger, repo, accountId, mailbox),
+      ),
     );
   } catch (e, stack) {
     if (!context.mounted) return;
@@ -398,10 +405,10 @@ Future<void> _promptDelete(
   }
   final count = mailbox.totalCount;
   final content = count == 0
-      ? 'Delete the empty folder "${mailbox.displayPath}"? '
-          'This cannot be undone.'
+      ? 'Delete the empty folder "${mailbox.displayPath}"?'
       : 'Delete "${mailbox.displayPath}"? It contains '
-          '$count ${count == 1 ? 'mail' : 'mails'}. This cannot be undone.';
+          '$count ${count == 1 ? 'mail' : 'mails'}, which '
+          '${count == 1 ? 'is' : 'are'} deleted with it.';
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -432,8 +439,18 @@ Future<void> _promptDelete(
       removeEmails: count > 0,
     );
     if (!context.mounted) return;
+    final messenger = context.appMessenger();
     context.showAppSnackBar(
       'Folder "${mailbox.name}" deleted',
+      // Offline too: the delete is queued (phase 5b); Undo cancels it while
+      // it has not been sent.
+      action: mailbox.isLocal
+          ? null
+          : SnackBarAction(
+              label: 'Undo',
+              onPressed: () =>
+                  _undoFolderChange(messenger, repo, accountId, mailbox),
+            ),
     );
   } catch (e, stack) {
     if (!context.mounted) return;
@@ -443,6 +460,37 @@ Future<void> _promptDelete(
       // Long enough to read the reason; the App Log keeps it afterwards.
       duration: const Duration(seconds: 10),
       event: 'mailbox.delete_failed',
+      accountId: accountId,
+      mailboxPath: mailbox.path,
+      error: e,
+      stack: stack,
+    );
+  }
+}
+
+/// Undo of a folder move or delete ([MailboxRepository.undoFolderChange]);
+/// says so when a delete went to the server already.
+Future<void> _undoFolderChange(
+  AppMessenger messenger,
+  MailboxRepository repo,
+  String accountId,
+  Mailbox mailbox,
+) async {
+  try {
+    final undone = await repo.undoFolderChange(accountId, mailbox.id);
+    if (undone) return;
+    messenger.show(
+      'Too late to undo: the folder was deleted on the server',
+      level: AppLogLevel.warn,
+      event: 'mailbox.undo_too_late',
+      accountId: accountId,
+      mailboxPath: mailbox.path,
+    );
+  } catch (e, stack) {
+    messenger.show(
+      'Could not undo: ${userErrorMessage(e)}',
+      level: AppLogLevel.error,
+      event: 'mailbox.undo_failed',
       accountId: accountId,
       mailboxPath: mailbox.path,
       error: e,
