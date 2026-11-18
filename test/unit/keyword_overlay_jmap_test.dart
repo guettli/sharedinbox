@@ -61,19 +61,11 @@ void main() {
             case 'Email/changes':
               final updated = changed;
               changed = [];
-              return [
-                'Email/changes',
-                {
-                  'accountId': _jmapAccountId,
-                  'oldState': 's0',
-                  'newState': 's0',
-                  'hasMoreChanges': false,
-                  'created': <String>[],
-                  'updated': updated,
-                  'destroyed': <String>[],
-                },
-                call.callId,
-              ];
+              return jmapEmailChangesResponse(
+                accountId: _jmapAccountId,
+                updated: updated,
+                callId: call.callId,
+              );
             case 'Email/get':
               return jmapEmailGetResponse(
                 accountId: _jmapAccountId,

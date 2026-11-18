@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/repositories/sync_state_repository.dart';
@@ -17,9 +18,14 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
     )..where((t) => t.accountId.equals(accountId)))
         .get();
 
-    final emailRows = await (_db.select(
-      _db.emails,
-    )..where((t) => t.accountId.equals(accountId)))
+    // Not the hidden rows (deleted for good, or gone on the server, waiting
+    // for their changes to settle): their `mailbox_path` is '' and would
+    // show as a phantom folder (SYNC-REDESIGN.md §2).
+    final emailRows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) & t.mailboxPath.equals('').not(),
+          ))
         .get();
 
     final emailIdSubquery = _db.selectOnly(_db.emails)

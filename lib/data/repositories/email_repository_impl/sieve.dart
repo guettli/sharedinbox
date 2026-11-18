@@ -268,9 +268,7 @@ extension _Sieve on EmailRepositoryImpl {
         supersedeFailures: false,
       );
     }
-    await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(mailboxPath: Value(destPath)),
-    );
+    // The queued move folds into the row: it shows in [destPath].
     await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
     await _updateThread(account.id, destPath, row.threadId ?? row.id);
   }
@@ -279,24 +277,18 @@ extension _Sieve on EmailRepositoryImpl {
     account_model.Account account,
     Email row,
   ) async {
-    if (account.type == account_model.AccountType.jmap) {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'delete',
-        jsonEncode(<String, dynamic>{}),
-        supersedeFailures: false,
-      );
-    } else {
-      await _enqueueChange(
-        account.id,
-        row.id,
-        'delete',
-        jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
-        supersedeFailures: false,
-      );
-    }
-    await _state.deleteRow(row.id);
+    // The queued delete folds into the row: it is hidden until the server
+    // confirms the mail is gone. A row with no server copy is deleted.
+    final queued = await _enqueueChange(
+      account.id,
+      row.id,
+      'delete',
+      account.type == account_model.AccountType.jmap
+          ? jsonEncode(<String, dynamic>{})
+          : jsonEncode({'uid': row.uid, 'mailboxPath': row.mailboxPath}),
+      supersedeFailures: false,
+    );
+    if (!queued) await _state.deleteRow(row.id);
     await _updateThread(account.id, row.mailboxPath, row.threadId ?? row.id);
   }
 

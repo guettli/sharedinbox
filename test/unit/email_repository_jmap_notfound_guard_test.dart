@@ -172,12 +172,29 @@ void main() {
   });
 
   // An explicit `destroyed` is the server being authoritative rather than
-  // merely silent, so it still deletes. Keeping the row there would leave
-  // mail in the list that no longer exists anywhere.
-  test('an explicitly destroyed id is deleted even with a queued move',
+  // merely silent, so the row is marked gone and hidden. Since phase 4a of
+  // SYNC-REDESIGN.md it is not deleted while a change of the user's is
+  // queued (#1239): the change keeps its row until it applies or fails.
+  test('an explicitly destroyed id with a queued move is kept, marked gone',
       () async {
     final r = await seeded(_server(destroyed: ['e1']));
     await queueChange(r, changeType: 'move', payload: '{"dest":"Archive"}');
+
+    await r.emails.syncEmails(_jmapAccount.id, _mailbox);
+
+    final row = (await r.db.select(r.db.emails).get())
+        .singleWhere((e) => e.srvJmapId == 'e1');
+    expect(row.srvGone, isTrue);
+    expect(
+      (await r.db.select(r.db.pendingChanges).getSingle()).state,
+      'pending',
+    );
+
+    await r.db.close();
+  });
+
+  test('an explicitly destroyed id without a change is deleted', () async {
+    final r = await seeded(_server(destroyed: ['e1']));
 
     await r.emails.syncEmails(_jmapAccount.id, _mailbox);
 

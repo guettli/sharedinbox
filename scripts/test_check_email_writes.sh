@@ -98,18 +98,18 @@ extension _LocalRows on EmailRepositoryImpl {
 EOF
 
 expect fail 'the opt-out comment does not cover check 1' \
-  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() => _db.customUpdate(
+  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() => _db.customUpdate(
         'UPDATE emails SET is_flagged = 0', // not an emails write
       );
 }
 EOF
 
 expect fail 'a whole-row toCompanion write in an allowed member' \
-  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove(Email row) async {
+  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally(Email row) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
         .write(row.toCompanion(false)); // not an emails write
   }
@@ -166,10 +166,14 @@ Future<void> purgeFolder(AppDatabase db) async {
 EOF
 
 expect fail 'a stale allow-list entry (the member lost its write)' \
-  "$repo/sieve.dart" 'match no' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'match no' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
     await _state.deleteRow(row.id);
+  }
+
+  Future<void> _createLocalSelfMessages() async {
+    await _db.into(_db.emails).insert(EmailStateWriter.newRow(c));
   }
 }
 EOF
@@ -220,9 +224,9 @@ extension _FlushImap on EmailRepositoryImpl {
 EOF
 
 expect fail 'EmailsCompanion.custom naming an overlay column' \
-  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion.custom(isSeen: const Constant(true)),
     );
@@ -253,11 +257,11 @@ extension _SyncImap on EmailRepositoryImpl {
 EOF
 
 expect fail 'an Email data row written by update(…).write' \
-  "$repo/sieve.dart" 'read/star/snooze' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove(Email row) async {
+  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally(Email row) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
-        .write(row.copyWith(mailboxPath: destPath));
+        .write(row.copyWith(subject: s));
   }
 }
 EOF
@@ -304,11 +308,11 @@ extension _Queries on EmailRepositoryImpl {
 EOF
 
 expect fail 'a getter after an allowed member does not borrow its name' \
-  "$repo/sieve.dart" 'emails is written only' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(mailboxPath: Value(destPath)),
+      EmailsCompanion(subject: Value(s)),
     );
   }
 
@@ -317,11 +321,11 @@ extension _Sieve on EmailRepositoryImpl {
 EOF
 
 expect fail 'a field after an allowed member does not borrow its name' \
-  "$repo/sieve.dart" 'emails is written only' <<'EOF'
-class Sieve {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
+class LocalRows {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(mailboxPath: Value(destPath)),
+      EmailsCompanion(subject: Value(s)),
     );
   }
 
@@ -330,11 +334,11 @@ class Sieve {
 EOF
 
 expect fail 'a signature over two lines after an allowed member' \
-  "$repo/sieve.dart" 'emails is written only' <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(mailboxPath: Value(destPath)),
+      EmailsCompanion(subject: Value(s)),
     );
   }
 
@@ -347,11 +351,11 @@ extension _Sieve on EmailRepositoryImpl {
 EOF
 
 expect fail 'an annotated member after an allowed member' \
-  "$repo/sieve.dart" 'emails is written only' <<'EOF'
-class Sieve {
-  Future<void> _enqueueSieveMove() async {
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
+class LocalRows {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
-      EmailsCompanion(mailboxPath: Value(destPath)),
+      EmailsCompanion(subject: Value(s)),
     );
   }
 
@@ -405,35 +409,133 @@ expect pass 'companion variables, conditional rows, a thread copyWith' \
   "$repo/sync_imap.dart" <<'EOF'
 extension _SyncImap on EmailRepositoryImpl {
   Future<void> _fetchAndUpsertImapGuarded() async {
-    final upsert = EmailsCompanion.insert(
-      id: emailId,
+    final headers = EmailsCompanion(
+      uid: Value(uid),
       subject: Value(subject),
+      snoozedFromMailboxPath: Value(p),
     );
-    await _db.into(_db.emails).insertOnConflictUpdate(
+    await _db.into(_db.emails).insert(
           isNew
-              ? EmailStateWriter.withServerKeywords(
-                  upsert,
-                  keywords,
+              ? EmailStateWriter.newRow(
+                  headers,
+                  id: emailId,
+                  mailboxPath: mailboxPath,
+                  keywords: keywords,
                   seq: read.seq,
                 )
-              : upsert,
+              : EmailStateWriter.withServerLocation(headers, p, seq: 0),
         );
+    await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+        .write(headers);
     final t = ThreadsCompanion(id: Value(id)).copyWith(isFlagged: Value(f));
+    final u = ThreadsCompanion(mailboxPath: Value(p));
   }
 }
 EOF
 
-# ── Near-misses that must pass ──────────────────────────────────────────────
-expect pass 'allowed member writing a location column' \
-  "$repo/sieve.dart" <<'EOF'
-extension _Sieve on EmailRepositoryImpl {
-  Future<void> _enqueueSieveMove() async {
+expect pass 'the shown folder of a new row, in an EmailsCompanion.insert' \
+  "$repo/local_rows.dart" <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
+    final row = EmailStateWriter.withServerLocation(
+      EmailsCompanion.insert(
+        id: emailId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        uid: 0,
+        receivedAt: now,
+      ),
+      mailboxPath,
+      seq: 0,
+    );
+    await _db.into(_db.emails).insert(row);
+  }
+
+  Future<void> _createLocalSelfMessages() async {
+    await _db.into(_db.emails).insert(EmailStateWriter.newRow(c));
+  }
+}
+EOF
+
+# ── Check 1 for the location overlay (phase 4a) ─────────────────────────────
+expect fail 'mailboxPath in an EmailsCompanion, even in an allowed member' \
+  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(mailboxPath: Value(destPath)),
     );
   }
 }
 EOF
+
+expect fail 'srvMailboxPath given a Value' \
+  "$repo/row_identity.dart" 'read/star/snooze' <<'EOF'
+extension _RowIdentity on EmailRepositoryImpl {
+  Future<void> _x() async {
+    final c = EmailsCompanion.insert(
+      id: id,
+      mailboxPath: p,
+      srvMailboxPath: Value(p),
+    );
+  }
+}
+EOF
+
+expect fail 'localHidden in a copyWith of an allowed member' \
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
+    final c = headers.copyWith(localHidden: const Value(false));
+    await _db.into(_db.emails).insert(EmailStateWriter.newRow(c));
+  }
+}
+EOF
+
+expect fail 'raw UPDATE emails SET mailbox_path' \
+  "$repo/flush_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _FlushJmap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customUpdate(
+        'UPDATE emails SET mailbox_path = ?1 WHERE mailbox_path = ?2',
+      );
+}
+EOF
+
+expect fail 'srv_gone in a SET list over string literals' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _x() => _db.customUpdate(
+        'UPDATE emails SET preview = ?1, '
+        'srv_gone = 1 WHERE id = ?2',
+      );
+}
+EOF
+
+expect fail 'an upsert of an EmailsCompanion.insert in an allowed member' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    final upsert = EmailsCompanion.insert(
+      id: emailId,
+      mailboxPath: mailboxPath,
+    );
+    await _db.into(_db.emails).insertOnConflictUpdate(upsert);
+  }
+}
+EOF
+
+expect fail 'withServerKeywords alone does not place a new row' \
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
+    await _db.into(_db.emails).insert(
+          EmailStateWriter.withServerKeywords(row, keywords, seq: 0),
+        );
+  }
+}
+EOF
+
+# ── Near-misses that must pass ──────────────────────────────────────────────
 
 expect pass 'reads, other tables and models' "$repo/queries.dart" <<'EOF'
 extension _Queries on EmailRepositoryImpl {
@@ -466,11 +568,13 @@ expect pass 'Value.absent() for an overlay column' \
   "$repo/sync_imap.dart" <<'EOF'
 extension _SyncImap on EmailRepositoryImpl {
   Future<void> _fetchAndUpsertImapGuarded() async {
-    final upsert = EmailsCompanion.insert(
-      id: emailId,
+    final headers = EmailsCompanion(
+      subject: Value(subject),
       isSeen: const Value.absent(),
+      mailboxPath: const Value.absent(),
     );
-    await _db.into(_db.emails).insertOnConflictUpdate(upsert);
+    await (_db.update(_db.emails)..where((t) => t.id.equals(id)))
+        .write(headers);
   }
 }
 EOF

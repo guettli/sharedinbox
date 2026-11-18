@@ -449,7 +449,6 @@ extension _Bodies on EmailRepositoryImpl {
         newMailboxPath: serverPath,
         // Behind a queued move the row keeps showing the mail where the
         // user put it; only its server location is corrected.
-        keepShownWhileMovedOn: true,
       );
       log(
         'getEmailBody: mis-bound row $emailId is at UID $resolvedUid in '

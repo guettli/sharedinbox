@@ -141,6 +141,8 @@ void main() {
         .write(
       EmailsCompanion(
         mailboxPath: const Value('Snoozed'),
+        // As shown (no queued snooze folds here): the parked folder.
+        srvMailboxPath: const Value('Snoozed'),
         snoozedUntil: Value(DateTime(2026, 11)),
         snoozedFromMailboxPath: const Value(_inbox),
       ),

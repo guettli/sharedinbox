@@ -14,6 +14,7 @@ import 'package:sharedinbox/data/imap/imap_client_factory.dart'
     show ImapConnectFn;
 import 'package:sharedinbox/data/jmap/jmap_client.dart' show JmapException;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
@@ -1321,6 +1322,21 @@ void main() {
         await email('acc-1:Old:5', 'Old', 'Old', 5);
         // Shown in Archive behind a queued move; the server has it in Old.
         await email('acc-1:Old:6', 'Archive', 'Old', 6);
+        await db.into(db.pendingChanges).insert(
+              PendingChangesCompanion.insert(
+                accountId: 'acc-1',
+                resourceType: 'Email',
+                resourceId: 'acc-1:Old:6',
+                changeType: 'move',
+                payload: jsonEncode({
+                  'uid': 6,
+                  'mailboxPath': 'Old',
+                  'dest': 'Archive',
+                }),
+                createdAt: DateTime(2026),
+              ),
+            );
+        await EmailStateWriter(db).refold('acc-1:Old:6');
         // A stale row still recording UID 6 in a "Chef" that did not exist.
         await email('acc-1:Chef:6', 'Chef', 'Chef', 6);
 
@@ -1332,7 +1348,13 @@ void main() {
         };
         expect(rows['acc-1:Old:5'], ('Chef', 'Chef', 5));
         expect(rows['acc-1:Old:6'], ('Archive', 'Chef', 6));
-        expect(rows['acc-1:Chef:6'], ('Chef', null, null));
+        // It gives the location up (its UID); the folder it was in stays.
+        expect(rows['acc-1:Chef:6'], ('Chef', 'Chef', null));
+        // The queued move's source follows the rename too.
+        expect(
+          (await db.select(db.pendingChanges).getSingle()).payload,
+          contains('"mailboxPath":"Chef"'),
+        );
       });
 
       test(

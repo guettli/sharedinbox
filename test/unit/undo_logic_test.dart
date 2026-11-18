@@ -504,6 +504,7 @@ void main() {
           final shown = (await repo.getEmail(emailId))!;
           await db.delete(db.pendingChanges).go();
           final read = await EmailStateWriter(db).beginRead(accountId);
+          await read.writeLocation(emailId, shown.mailboxPath);
           await read.write(
             emailId,
             ServerKeywords(

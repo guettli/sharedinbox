@@ -192,6 +192,25 @@ class Emails extends Table {
   // (SYNC-REDESIGN.md §4.2–§4.3).
   IntColumn get srvKeywordsSeq => integer().withDefault(const Constant(0))();
 
+  // Added in schema v73: the `location` overlay (SYNC-REDESIGN.md §2,
+  // phase 4a). The folder the app shows ([mailboxPath]) is the empty string
+  // when the row is hidden ([localHidden], or [srvGone] with no pending
+  // move), else `COALESCE(local_mailbox_path, srv_mailbox_path)`.
+  // [srvMailboxPath] (v70) is the server's folder (IMAP path or JMAP mailbox
+  // id; for a row without a server copy, its own folder); [localMailboxPath]
+  // the destination of the row's pending move, snooze or unsnooze (NULL:
+  // none); [localHidden] a pending delete for good; [srvGone] that the
+  // server no longer has the mail. All are written by `EmailStateWriter`
+  // together with [mailboxPath]. A row that is [srvGone] is deleted once it
+  // has no pending, in-flight, stuck or acked change left.
+  TextColumn get localMailboxPath => text().nullable()();
+  BoolColumn get localHidden => boolean().withDefault(const Constant(false))();
+  BoolColumn get srvGone => boolean().withDefault(const Constant(false))();
+  // The read sequence of the server read (or ack) that last wrote the
+  // location group ([srvMailboxPath], [srvGone]); an older read no longer
+  // writes it (SYNC-REDESIGN.md §4.2–§4.3).
+  IntColumn get srvLocationSeq => integer().withDefault(const Constant(0))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -907,6 +926,30 @@ class AppDatabase extends _$AppDatabase {
         'ON pending_changes (resource_id, state);',
       );
 
+  /// Schema v73, the `location` overlay: an index for the folder-scoped
+  /// sync scans, which read `srv_mailbox_path` (the IMAP location index is
+  /// partial, and JMAP rows have no UID), and a trigger that records the
+  /// shown folder as the server's for a row inserted without one (a new row
+  /// has no pending move), so `srv_mailbox_path` is never NULL.
+  Future<void> _createLocationOverlaySchema() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS emails_srv_mailbox ON emails '
+      '(account_id, srv_mailbox_path);',
+    );
+    // The clean-up rule looks for gone rows at every flush.
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS emails_srv_gone ON emails (account_id) '
+      'WHERE srv_gone = 1;',
+    );
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS emails_srv_mailbox_path_default
+      AFTER INSERT ON emails WHEN new.srv_mailbox_path IS NULL BEGIN
+        UPDATE emails SET srv_mailbox_path = new.mailbox_path
+        WHERE rowid = new.rowid;
+      END
+    ''');
+  }
+
   Future<void> _createSrvLocationIndexes() async {
     await customStatement(
       'CREATE UNIQUE INDEX IF NOT EXISTS emails_srv_imap_location ON emails '
@@ -1057,6 +1100,7 @@ class AppDatabase extends _$AppDatabase {
           await _createListOrderIndexes();
           await _createSrvLocationIndexes();
           await _createPendingChangesResourceIndex();
+          await _createLocationOverlaySchema();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -1939,6 +1983,135 @@ class AppDatabase extends _$AppDatabase {
       }
       await _overlayKeywords();
     }
+    if (from < 73 && await _tableExists(this, 'emails')) {
+      // The `location` overlay (phase 4a of SYNC-REDESIGN.md).
+      for (final column in [
+        emails.localMailboxPath,
+        emails.localHidden,
+        emails.srvGone,
+        emails.srvLocationSeq,
+      ]) {
+        await _addColumnIfMissing(m, emails, column);
+      }
+      await _overlayLocation();
+      await _createLocationOverlaySchema();
+    }
+  }
+
+  /// Schema v73: the folder a row shows becomes `COALESCE(local, srv)`.
+  /// `srv_mailbox_path` is kept by sync since v70 for IMAP rows; a row
+  /// without one (a JMAP row, a local virtual row, a row whose location
+  /// another took over) gets the source of its first queued move, snooze or
+  /// unsnooze, else the folder it shows. The queued changes are folded once
+  /// into `local_mailbox_path` / `local_hidden` (and the keyword columns
+  /// again). An acked change whose destination is not where the server has
+  /// the mail is dropped: before v73 only its keyword part was tracked, and
+  /// folding its folder now would move the mail back. A row without a queued
+  /// location change shows the server's folder.
+  Future<void> _overlayLocation() async {
+    final hasQueue = await _tableExists(this, 'pending_changes');
+    if (hasQueue) {
+      // The first queued placement change of a row without a server folder
+      // names where the server has it.
+      final firsts = await customSelect('''
+        SELECT p.resource_id, p.payload FROM pending_changes p
+        JOIN emails e ON e.id = p.resource_id
+        WHERE e.srv_mailbox_path IS NULL
+          AND p.state IN ('pending', 'inflight', 'stuck')
+          AND p.change_type IN ('move', 'snooze', 'unsnooze')
+        ORDER BY p.id
+      ''').get();
+      final done = <String>{};
+      for (final r in firsts) {
+        final id = r.read<String>('resource_id');
+        if (!done.add(id)) continue;
+        Map<String, dynamic>? payload;
+        try {
+          final decoded = jsonDecode(r.read<String>('payload'));
+          if (decoded is Map<String, dynamic>) payload = decoded;
+        } catch (_) {}
+        final src = payload?['mailboxPath'] ?? payload?['src'];
+        if (src is! String || src.isEmpty) continue;
+        await customStatement(
+          'UPDATE emails SET srv_mailbox_path = ?1 WHERE id = ?2',
+          [src, id],
+        );
+      }
+    }
+    await customStatement(
+      'UPDATE emails SET srv_mailbox_path = mailbox_path '
+      'WHERE srv_mailbox_path IS NULL',
+    );
+    if (hasQueue) {
+      final rows = await customSelect('''
+        SELECT p.id, p.resource_id, p.change_type, p.payload, p.state,
+          e.srv_mailbox_path
+        FROM pending_changes p
+        JOIN emails e ON e.id = p.resource_id
+        WHERE p.state IN ('pending', 'inflight', 'stuck', 'acked')
+        ORDER BY p.id
+      ''').get();
+      final opsByRow = <String, List<FoldOp>>{};
+      for (final r in rows) {
+        Map<String, dynamic>? payload;
+        try {
+          final decoded = jsonDecode(r.read<String>('payload'));
+          if (decoded is Map<String, dynamic>) payload = decoded;
+        } catch (_) {}
+        final id = r.read<String>('resource_id');
+        final type = r.read<String>('change_type');
+        final state = r.read<String>('state');
+        final srv = r.read<String>('srv_mailbox_path');
+        if (state == 'acked' &&
+            locationColumnsOf(type, payload).isNotEmpty &&
+            payload?['dest'] != srv) {
+          await customStatement(
+            'DELETE FROM pending_changes WHERE id = ?1',
+            [r.read<int>('id')],
+          );
+          continue;
+        }
+        (opsByRow[id] ??= []).add(
+          FoldOp(
+            seq: r.read<int>('id'),
+            type: type,
+            payload: payload,
+            state: state,
+          ),
+        );
+      }
+      for (final MapEntry(key: id, value: ops) in opsByRow.entries) {
+        final keywords = foldKeywords(ops);
+        final location = foldLocation(ops);
+        final snooze = keywords.snoozedUntil;
+        await customStatement(
+          '''
+          UPDATE emails SET
+            local_is_seen = ?1, local_is_flagged = ?2, local_snoozed_until = ?3,
+            is_seen = COALESCE(?1, srv_is_seen),
+            is_flagged = COALESCE(?2, srv_is_flagged),
+            snoozed_until = NULLIF(COALESCE(?3, srv_snoozed_until), 0),
+            local_mailbox_path = ?4, local_hidden = ?5
+          WHERE id = ?6
+          ''',
+          [
+            _sqlBool(keywords.seen),
+            _sqlBool(keywords.flagged),
+            snooze == null ? null : snooze.millisecondsSinceEpoch ~/ 1000,
+            location.mailboxPath,
+            _sqlBool(location.hidden),
+            id,
+          ],
+        );
+      }
+    }
+    // Only the rows whose shown folder changes are written.
+    await customStatement('''
+      UPDATE emails SET mailbox_path = CASE WHEN local_hidden THEN ''
+        ELSE COALESCE(local_mailbox_path, srv_mailbox_path) END
+      WHERE mailbox_path IS NOT (CASE WHEN local_hidden THEN ''
+        ELSE COALESCE(local_mailbox_path, srv_mailbox_path) END)
+    ''');
   }
 
   static int? _sqlBool(bool? value) => value == null ? null : (value ? 1 : 0);

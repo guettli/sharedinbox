@@ -270,6 +270,9 @@ extension _SyncJmap on EmailRepositoryImpl {
     var drained = false;
     var restartedOnce = false;
     final seenIds = <String>{};
+    // Taken before the first `Email/query`: the prune below applies the
+    // absence it finds only to rows no later read (or ack) placed.
+    final enumeration = await _state.beginRead(accountId);
 
     while (pages < _jmapFullSyncPagesPerRun) {
       // Anchor-based once we have an anchor (resumed, or after page one of a
@@ -443,6 +446,7 @@ extension _SyncJmap on EmailRepositoryImpl {
         accountId,
         mailboxJmapId,
         seenIds,
+        read: enumeration,
       );
     }
     log(
@@ -599,35 +603,11 @@ extension _SyncJmap on EmailRepositoryImpl {
       }
 
       if (missing.isEmpty) continue;
-      // Guarded: a row carrying any unflushed user edit is held back, so a
-      // queued change always has a row to apply to. Not a promise the mail
-      // survives — the unguarded `destroyed` loop below deletes it once the
-      // server reports it explicitly, and the periodic prune clears it
-      // otherwise. It delays deletion until something else confirms it.
-      //
-      // The guard is "has an unflushed mutation of any kind", not the
-      // move/snooze subset [_pruneJmapMailboxToServerIds] uses. That subset is
-      // right for a *mailbox-scoped* walk, where an optimistic move has
-      // already rewritten `mailboxPath` and makes the row look orphaned from
-      // both folders. This path is keyed by id, so the only thing that matters
-      // is whether the user has an edit in flight — an unflushed star counts
-      // just as much as an unflushed move.
-      //
-      // Deliberately inside the loop: `_upsertJmapEmails` can enqueue changes
-      // of its own via the #545 dissolve, so hoisting this lookup out would
-      // read a stale set.
-      final inFlight = await _rowsWithLiveChanges(accountId);
-      for (final jmapId in missing) {
-        final row = await _rowByJmapId(accountId, jmapId);
-        if (row != null && inFlight.contains(row.id)) {
-          log(
-            'JMAP-sync: Email/get disclaimed $jmapId but an edit is still '
-            'queued for it — keeping the row for now',
-          );
-          continue;
-        }
-        await _deleteJmapEmailById(accountId, jmapId);
-      }
+      // Marked gone, not deleted: a row carrying a change of the user's
+      // (queued, being sent, stuck or acked) stays until that change settles
+      // ([_settleGoneRows]), so a queued change always has a row to apply
+      // to and is never dropped with it (#1239).
+      await _markJmapEmailsGone(accountId, read, missing);
     }
     return (fetched: fetched, bytes: bytes);
   }
@@ -673,6 +653,9 @@ extension _SyncJmap on EmailRepositoryImpl {
     // drained over several small requests that each finish well inside the
     // request timeout.
     for (var page = 0; page < _jmapMaxPagesPerSync; page++) {
+      // Taken before the request: the `destroyed` ids it reports are
+      // applied only to rows whose location no later read (or ack) wrote.
+      final changesRead = await _state.beginRead(accountId);
       var triple = await _jmapEmailChanges(
         jmap,
         state,
@@ -743,9 +726,9 @@ extension _SyncJmap on EmailRepositoryImpl {
       fetched += batched.fetched;
       bytes += batched.bytes;
 
-      for (final jmapId in destroyed) {
-        await _deleteJmapEmailById(accountId, jmapId);
-      }
+      // Marked gone, not deleted: a row with a change of the user's stays
+      // until that change settles (#1239).
+      await _markJmapEmailsGone(accountId, changesRead, destroyed);
 
       // Checkpoint every page. A failure in a later page then costs one page
       // on the next cycle instead of replaying the whole backlog — which is
@@ -788,18 +771,31 @@ extension _SyncJmap on EmailRepositoryImpl {
     );
   }
 
-  /// Deletes the row for a server-side id.
+  /// The server says, as of [read], that it no longer has the Emails
+  /// [jmapIds] (`notFound`, `destroyed`): their rows are marked gone
+  /// ([KeywordRead.markGone]) and deleted once they have no change left
+  /// ([_settleGoneRows]).
   ///
   /// Unlike [_pruneJmapMailboxToServerIds] this needs no `isLocal` guard: that
   /// one walks every row in a mailbox, where local self-sent "virtual" rows
   /// (#545) genuinely appear, whereas this is keyed by an id the server gave
   /// us, and a virtual row records none.
-  Future<void> _deleteJmapEmailById(String accountId, String jmapId) async {
-    final email = await _rowByJmapId(accountId, jmapId);
-    if (email == null) return;
-    final tid = email.threadId ?? email.id;
-    await _state.deleteRow(email.id);
-    await _updateThread(accountId, email.mailboxPath, tid);
+  Future<void> _markJmapEmailsGone(
+    String accountId,
+    KeywordRead read,
+    List<String> jmapIds,
+  ) async {
+    final rows = <Email>[];
+    for (final jmapId in jmapIds) {
+      final row = await _rowByJmapId(accountId, jmapId);
+      if (row != null) rows.add(row);
+    }
+    if (rows.isEmpty) return;
+    await _settleGoneRows(
+      accountId,
+      rows,
+      await read.markGone([for (final row in rows) row.id]),
+    );
   }
 
   Future<void> _clearJmapSyncState(
@@ -826,94 +822,49 @@ extension _SyncJmap on EmailRepositoryImpl {
         .go();
   }
 
-  /// Row ids whose optimistic move, snooze or unsnooze has not been flushed
-  /// yet, so a mailbox-scoped reconciler must not delete them mid-flight: the
-  /// move has already rewritten `mailboxPath`, which makes the row look
-  /// orphaned from the folder it left and the one it has not arrived in.
-  ///
-  /// For a guard that only needs "does the user have an edit in flight", use
-  /// [_rowsWithLiveChanges] — it covers flag edits and deletes too.
-  /// A failed move or snooze is not counted: its row follows the server.
-  Future<Set<String>> _rowsWithUnflushedMoveOrSnooze(String accountId) async {
-    final ids = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.state.isIn(_liveStates) &
-                _db.pendingChanges.changeType.isIn(
-                  const ['move', 'snooze', 'unsnooze'],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    return ids.toSet();
-  }
-
-  /// Row ids on [accountId] with a change still queued (pending, being sent
-  /// or stuck), of any kind: a row the server disclaims is kept while the
-  /// user has an edit in flight for it. A failed change protects nothing.
-  Future<Set<String>> _rowsWithLiveChanges(String accountId) async {
-    final ids = await (_db.selectOnly(_db.pendingChanges)
-          ..addColumns([_db.pendingChanges.resourceId])
-          ..where(
-            _db.pendingChanges.accountId.equals(accountId) &
-                _db.pendingChanges.state.isIn(_liveStates) &
-                _db.pendingChanges.changeType.isIn(
-                  const [
-                    'flag_seen',
-                    'flag_flagged',
-                    'move',
-                    'snooze',
-                    'unsnooze',
-                    'clear_snooze',
-                    'delete',
-                  ],
-                ),
-          ))
-        .map((row) => row.read(_db.pendingChanges.resourceId)!)
-        .get();
-    return ids.toSet();
-  }
-
-  /// Deletes local email rows for [mailboxJmapId] whose id isn't in the
-  /// authoritative [serverIds] set. Returns the number of rows removed.
-  ///
-  /// Mirrors [_SyncImap._reconcileDeletedImap]: skips rows with a pending optimistic
-  /// move/snooze so we don't wipe them mid-flight, and updates affected
-  /// threads. `serverIds` are raw JMAP email ids (no `accountId:` prefix).
+  /// The location read of a complete enumeration of [mailboxJmapId]
+  /// ([serverIds], raw JMAP email ids, `Email/query` sent after [read] was
+  /// taken): every row the server has there (by `srv_mailbox_path`,
+  /// wherever it is shown) is confirmed present, or marked gone when its id
+  /// is not listed; acked changes settle. Mirrors
+  /// [_SyncImap._reconcileDeletedImap]: a row marked gone is deleted only
+  /// once it has no change left ([_settleGoneRows]). Returns the number of
+  /// rows marked gone.
   Future<int> _pruneJmapMailboxToServerIds(
     String accountId,
     String mailboxJmapId,
-    Set<String> serverIds,
-  ) async {
+    Set<String> serverIds, {
+    required KeywordRead read,
+  }) async {
     final localRows = await (_db.select(_db.emails)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.mailboxPath.equals(mailboxJmapId),
+                t.srvMailboxPath.equals(mailboxJmapId) &
+                // Local self-sent "virtual" rows have no server counterpart
+                // and must survive until the real message arrives and
+                // dissolves them (#545). No recorded server id: unknown is
+                // not missing.
+                t.isLocal.equals(false) &
+                t.srvJmapId.isNotNull(),
           ))
         .get();
-
-    final inFlightSet = await _rowsWithUnflushedMoveOrSnooze(accountId);
-
-    final affectedThreads = <String>{};
-    var removed = 0;
-    for (final row in localRows) {
-      // Local self-sent "virtual" rows have no server counterpart and must
-      // survive until the real message arrives and dissolves them (#545).
-      if (row.isLocal) continue;
-      // No recorded server id: unknown is not missing.
-      final jmapId = row.srvJmapId;
-      if (jmapId == null || serverIds.contains(jmapId)) continue;
-      if (inFlightSet.contains(row.id)) continue;
-      affectedThreads.add(row.threadId ?? row.id);
-      await _state.deleteRow(row.id);
-      removed++;
+    final present = [
+      for (final row in localRows)
+        if (serverIds.contains(row.srvJmapId)) row,
+    ];
+    final gone = [
+      for (final row in localRows)
+        if (!serverIds.contains(row.srvJmapId)) row,
+    ];
+    final shown =
+        await read.confirmPresent([for (final row in present) row.id]);
+    for (final id in shown) {
+      await _rethreadRow(id);
     }
-    for (final tid in affectedThreads) {
-      await _updateThread(accountId, mailboxJmapId, tid);
-    }
-    return removed;
+    final marked = await read.markGone([for (final row in gone) row.id]);
+    await _settleGoneRows(accountId, gone, marked);
+    return marked.length;
   }
 
   /// Periodic safety net: at most once per [_jmapReconcileInterval] per
@@ -947,6 +898,7 @@ extension _SyncJmap on EmailRepositoryImpl {
     }
 
     final serverIds = <String>{};
+    final enumeration = await _state.beginRead(accountId);
     int position = 0;
     var pages = 0;
     int? reportedTotal;
@@ -1001,6 +953,7 @@ extension _SyncJmap on EmailRepositoryImpl {
         accountId,
         mailboxJmapId,
         serverIds,
+        read: enumeration,
       );
       if (removed > 0) {
         log(
@@ -1046,7 +999,7 @@ extension _SyncJmap on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.mailboxPath.equals(mailboxJmapId),
+                t.srvMailboxPath.equals(mailboxJmapId),
           ))
         .get();
     if (localRows.isEmpty) return;
@@ -1062,7 +1015,8 @@ extension _SyncJmap on EmailRepositoryImpl {
     ];
     if (toCheck.isEmpty) return;
 
-    final affectedThreads = <String>{};
+    // (shown folder, thread id) of each corrected row.
+    final affectedThreads = <(String, String)>{};
     final sizeById = <String, int>{};
     var corrected = 0;
     for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
@@ -1100,13 +1054,13 @@ extension _SyncJmap on EmailRepositoryImpl {
       }
       for (final id in await read.writeAll(byRow)) {
         final row = rows[id]!;
-        affectedThreads.add(row.threadId ?? row.id);
+        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
         corrected++;
       }
     }
 
-    for (final tid in affectedThreads) {
-      await _updateThread(accountId, mailboxJmapId, tid);
+    for (final (shownIn, tid) in affectedThreads) {
+      await _updateThread(accountId, shownIn, tid);
     }
     await _backfillSizes(sizeById);
     if (corrected > 0) {
@@ -1159,21 +1113,28 @@ extension _SyncJmap on EmailRepositoryImpl {
       // If the mail is no longer in any mailbox, treat it as gone. This
       // shouldn't normally reach us via Email/get (destroyed mails end up in
       // Email/changes.destroyed) but is defensive against unusual server
-      // states where mailboxIds is empty.
+      // states where mailboxIds is empty. Marked gone, not deleted: a row
+      // with a change of the user's stays until that change settles.
       if (mailboxIds == null || mailboxIds.isEmpty) {
         if (existingRow != null) {
-          final tid = existingRow.threadId ?? dbId;
-          final oldMailbox = existingRow.mailboxPath;
-          await _state.deleteRow(dbId);
-          affectedByMailbox.putIfAbsent(oldMailbox, () => {}).add(tid);
+          await _settleGoneRows(
+            accountId,
+            [existingRow],
+            await read.markGone([dbId]),
+          );
         }
         continue;
       }
 
+      // The server's folder: the one recorded when it is still a member
+      // (stable), else the one the row shows (a pending move the server
+      // already reflects), else the mailbox being synced, else any.
       final String mailboxPath;
-      if (existingRow != null &&
+      final recorded = existingRow?.srvMailboxPath;
+      if (recorded != null && mailboxIds.containsKey(recorded)) {
+        mailboxPath = recorded;
+      } else if (existingRow != null &&
           mailboxIds.containsKey(existingRow.mailboxPath)) {
-        // Stable: keep the mailbox we already display it under.
         mailboxPath = existingRow.mailboxPath;
       } else if (currentMailboxJmapId != null &&
           mailboxIds.containsKey(currentMailboxJmapId)) {
@@ -1182,18 +1143,13 @@ extension _SyncJmap on EmailRepositoryImpl {
         mailboxPath = mailboxIds.keys.first;
       }
 
-      // Membership changed: the mail is no longer in the mailbox where the
-      // local row lived (e.g. IMAP "move to Trash" via Thunderbird — #262).
-      // Refresh the thread aggregate for the old mailbox so it no longer
-      // lists this email; the new mailbox is refreshed below via
-      // affectedByMailbox.
-      if (existingRow != null && existingRow.mailboxPath != mailboxPath) {
-        affectedByMailbox
-            .putIfAbsent(existingRow.mailboxPath, () => {})
-            .add(existingRow.threadId ?? dbId);
+      // Membership changed on the server (e.g. IMAP "move to Trash" via
+      // Thunderbird — #262): the location gate below records it; a pending
+      // move of the user's keeps showing over it.
+      if (existingRow != null && recorded != mailboxPath) {
         log(
           'JMAP-sync: mailbox change id=$jmapId '
-          '${existingRow.mailboxPath} → $mailboxPath',
+          '$recorded → $mailboxPath',
         );
       }
 
@@ -1210,7 +1166,6 @@ extension _SyncJmap on EmailRepositoryImpl {
           _parseDate(m['receivedAt'] as String?) ?? DateTime.now();
 
       final jmapThreadId = m['threadId'] as String? ?? dbId;
-      affectedByMailbox.putIfAbsent(mailboxPath, () => {}).add(jmapThreadId);
 
       // JMAP messageId/inReplyTo/references are arrays; join to space-separated.
       final jmapMessageId = _joinJmapStringList(
@@ -1234,14 +1189,11 @@ extension _SyncJmap on EmailRepositoryImpl {
           ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
           : m['subject'] as String?;
 
-      final upsert = EmailsCompanion.insert(
-        id: dbId,
-        accountId: accountId,
-        mailboxPath: mailboxPath,
-        uid: 0, // not used for JMAP accounts
+      final headers = EmailsCompanion(
+        uid: const Value(0), // not used for JMAP accounts
         subject: Value(subject),
         sentAt: Value(sentAt),
-        receivedAt: receivedAt,
+        receivedAt: Value(receivedAt),
         fromJson: Value(from),
         toAddresses: Value(to),
         ccJson: Value(cc),
@@ -1260,18 +1212,34 @@ extension _SyncJmap on EmailRepositoryImpl {
         listUnsubscribeHeader: Value(jmapListUnsubscribe),
         srvJmapId: Value(jmapId),
       );
-      // The read/star/snooze state only through the server-write gate (see
-      // [_SyncImap._fetchAndUpsertImapGuarded]).
-      await _db.into(_db.emails).insertOnConflictUpdate(
-            existingRow == null
-                ? EmailStateWriter.withServerKeywords(
-                    upsert,
-                    keywords,
-                    seq: read.seq,
-                  )
-                : upsert,
-          );
-      if (existingRow != null) await read.write(dbId, keywords);
+      // The read/star/snooze state and the folder only through the
+      // server-write gate (see [_SyncImap._fetchAndUpsertImapGuarded]): a
+      // move or snooze the user made meanwhile keeps showing (#1238).
+      if (existingRow == null) {
+        await _db.into(_db.emails).insert(
+              EmailStateWriter.newRow(
+                headers,
+                id: dbId,
+                accountId: accountId,
+                mailboxPath: mailboxPath,
+                keywords: keywords,
+                seq: read.seq,
+              ),
+            );
+        affectedByMailbox.putIfAbsent(mailboxPath, () => {}).add(jmapThreadId);
+      } else {
+        await (_db.update(_db.emails)..where((t) => t.id.equals(dbId)))
+            .write(headers);
+        final moved = await read.writeLocation(dbId, mailboxPath);
+        await read.write(dbId, keywords);
+        // The thread in the folder it showed in before (also when the
+        // thread id changed) and in the one it shows in now.
+        affectedByMailbox
+            .putIfAbsent(existingRow.mailboxPath, () => {})
+            .add(existingRow.threadId ?? dbId);
+        final shownNow = moved?.after ?? existingRow.mailboxPath;
+        affectedByMailbox.putIfAbsent(shownNow, () => {}).add(jmapThreadId);
+      }
 
       // Cache body if the server included bodyValues in this response.
       if (m.containsKey('bodyValues')) {

@@ -51,6 +51,9 @@ extension _FlushImap on EmailRepositoryImpl {
   Future<int> _flushPendingChanges(String accountId, String password) async {
     await _recoverExpiredLeases(accountId);
     await _state.dropOrphanedAcks(accountId);
+    // Rows gone on the server whose last change settled since (failed or
+    // was discarded): nothing can bring them back (clean-up rule).
+    await _state.cleanUpGone(accountId);
     final now = _now();
     final rows = await (_db.select(_db.pendingChanges)
           // A failed change waits for the user's Retry or Discard; a stuck one
@@ -487,7 +490,8 @@ extension _FlushImap on EmailRepositoryImpl {
   ) async {
     try {
       await _applyPendingChangeImap(client, row);
-      await _settleApplied(row);
+      // A delete for good expunged the mail: gone, as of the ack.
+      await _settleApplied(row, confirmedGone: row.changeType == 'delete');
       return (applied: 1, connectionLost: null);
     } catch (e) {
       if (_isImapConnectionLost(client, e)) {
@@ -1005,10 +1009,13 @@ extension _FlushImap on EmailRepositoryImpl {
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
         .getSingleOrNull();
-    if (row == null) {
-      // Deleted for good meanwhile: its queued delete still needs the UID.
-      final newUid = _resolveCopyUid(moveResult, sourceUid) ??
-          await _uniqueUidOfQueued(client, oldId, destMailboxPath);
+    final copyUid = _resolveCopyUid(moveResult, sourceUid);
+    // Deleted for good meanwhile (gone, or hidden by its queued delete) and
+    // the new UID unknown: its queued delete still needs the UID, and only a
+    // unique match may be trusted with that.
+    if (row == null || (row.localHidden && copyUid == null)) {
+      final newUid =
+          copyUid ?? await _uniqueUidOfQueued(client, oldId, destMailboxPath);
       if (newUid != null) {
         await _repointQueuedChanges(
           oldId: oldId,
@@ -1019,7 +1026,7 @@ extension _FlushImap on EmailRepositoryImpl {
       return true;
     }
 
-    final newUid = _resolveCopyUid(moveResult, sourceUid) ??
+    final newUid = copyUid ??
         await _searchUidByMessageId(
           client,
           destMailboxPath,
@@ -1065,7 +1072,6 @@ extension _FlushImap on EmailRepositoryImpl {
       id: id,
       newUid: newUid,
       newMailboxPath: destMailboxPath,
-      keepShownWhileMovedOn: true,
       mergeDuplicate: mergeDuplicate,
     );
 

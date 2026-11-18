@@ -54,7 +54,6 @@ _SyncLoop._flush() / flushPendingChanges()
         ▼
 pending_changes row acked on success (state = 'acked'): it keeps showing
 until a later server read confirms it, then it is dropped (§6a)
-(a move or delete without a snooze is deleted on success)
 (on a refusal: state = 'failed'; after 5 failures that may pass: 'stuck')
 ```
 
@@ -73,8 +72,9 @@ start()
   ├─ syncMailboxes()         ← detect new/removed mailboxes
   ├─ for each mailbox:
   │    syncEmails()          ← incremental: fetch only UIDs > lastUid
-  │                             deletion reconciliation: remove rows
+  │                             deletion reconciliation: mark rows gone
   │                             whose UID is absent from the server
+  │                             (deleted once no change of theirs is left)
   └─ _idle()                 ← IMAP IDLE for up to 25 min (RFC 2177)
        │                        Wakes on: server EXISTS/EXPUNGE/FLAGS
        │                        or syncNow() signal from UI
@@ -93,22 +93,29 @@ loop, the JMAP loop, and the force-resync-all loop; an explicit single-folder re
 is still honored. The folder itself stays in the list with its server counts.
 
 **Mailbox deletion reconciliation** — mailboxes absent from `LIST` (IMAP) or the
-`Mailbox/get` response (JMAP full sync) are removed locally, along with their cached
-emails, threads, IMAP sync checkpoint and any queued pending changes that referenced them.
+`Mailbox/get` response (JMAP full sync) are removed locally, along with their threads
+and IMAP sync checkpoint. Queued changes that referenced them are marked failed (listed
+on the Pending Changes screen). The mails the server had there are marked gone and
+deleted unless a change of theirs is still in flight or acked (§6a, clean-up rule); a
+mail the user had moved into the folder shows in its source again, where the server
+still has it (its failed move no longer folds).
 If a folder is deleted between mailbox-sync and the per-mailbox email-sync of the same
 cycle, `SELECT` fails with `NO [NONEXISTENT]`; the email loop catches that, prunes the
 local cache, and returns zero instead of surfacing an error. The UI's email list bounces
 the user back to the account's folder list when the currently open folder disappears.
 
 **Row identity** — every `emails` row records where the server has the message:
-`srv_mailbox_path`, `srv_uid` and `srv_uid_validity` (IMAP) or `srv_jmap_id` (JMAP),
-unique per account (schema v70). Sync finds the row of a server message by these
-columns, never by building or parsing the row id, and never by the shown
-`mailbox_path`: behind a queued move that already names the destination, so a
-re-fetch of the source would otherwise insert a second row. Server calls about a row
-(body fetch, attachment download, raw message, JMAP flush) use them too. A row whose
+`srv_mailbox_path`, `srv_uid` and `srv_uid_validity` (IMAP) or `srv_mailbox_path`
+(the mailbox id) and `srv_jmap_id` (JMAP), unique per account (schema v70; the JMAP
+mailbox since v73). Sync finds the row of a server message by these columns, never by
+building or parsing the row id, and never by the shown `mailbox_path`: behind a queued
+move that already names the destination, so a re-fetch of the source would otherwise
+insert a second row. Every folder-scoped sync scan (deletion reconcile, JMAP prune,
+flag reconciles) selects rows by `srv_mailbox_path` too. Server calls about a row
+(body fetch, attachment download, raw message, JMAP flush) use them as well. A row whose
 location is unknown matches a known UIDVALIDITY as well; a row stamped with another
-UIDVALIDITY is another message. Local virtual rows (§8a) have none.
+UIDVALIDITY is another message. Local virtual rows (§8a) have no UID or JMAP id; their
+`srv_mailbox_path` is their own folder.
 
 The row id is **opaque**: a new row (fetch, JMAP upsert, Sent copy, virtual row) gets
 `accountId:~` plus 32 random hex digits (`newEmailId`, `lib/data/repositories/email_ids.dart`),
@@ -148,13 +155,13 @@ mailbox is used as a fallback. Cached bodies, downloaded attachments, queued cha
 logs, threads and Undo history reference the id, so they keep tracking the same physical
 message without a rewrite. A copy sync already stored at the new location with the same
 Message-ID is dropped (App Log warn `email.duplicate_merged`); its queued changes, logs,
-thread and Undo references (and its body, if the kept row has none) move to the kept row. When a later move,
-snooze or unsnooze of the mail is still queued (it starts in this move's destination),
-only the row's UID and server location follow the server: the row keeps showing the
-mail where the user's last move put it (#1276). The body-fetch identity guard (#616)
-relocates a row the same way. Deletion reconciliation
-also skips rows whose move is still queued, so the optimistic local move never gets
-wiped mid-flight.
+thread and Undo references (and its body, if the kept row has none) move to the kept row. Only the row's
+UID and server location follow the server; the folder it shows is the fold of its
+queued changes (§6a), so when a later move, snooze or unsnooze of the mail is still
+queued the row keeps showing the mail where the user's last move put it (#1276). The
+body-fetch identity guard (#616) relocates a row the same way. Deletion reconciliation
+never deletes a row with a queued change, so the optimistic local move never gets wiped
+mid-flight.
 
 **Foreign move** — when another client moves a mail, its UID vanishes from the source
 folder and a new UID appears in the destination. On servers with a move-stable id (RFC 8474
@@ -171,12 +178,13 @@ id), while the other was stored by a recent sync. A change queued on the vanishe
 the move follows the mail to its new UID, stamped with the UIDVALIDITY that UID was learned
 under, and the row keeps showing its queued flag until the change is sent (a newer change
 of the same flag on the other row wins). With no such row, or more than one (e.g. a Gmail
-mail still under two other labels), the vanished row is deleted; so it is when the other
-row's location was recorded under an older UIDVALIDITY of its folder (its UID may name
-another mail). The carry-over waits for a later sync when the user moved the vanished row
-meanwhile or a change of the other row is being sent right now. When the source folder is
-synced before the destination, the row is deleted and the destination's sync stores a new
-row (phase 4's absence rules address that order).
+mail still under two other labels), the vanished row is marked gone (and deleted once
+no change of it is left); so it is when the other row's location was recorded under an
+older UIDVALIDITY of its folder (its UID may name another mail). The carry-over waits for
+a later sync when the user moved the vanished row meanwhile or a change of the other row
+is being sent right now. When the source folder is synced before the destination, the
+row is marked gone and the destination's sync stores a new row (phase 4b's appear side
+of carry-over addresses that order).
 
 A shared move-stable id is taken as "the same mail". That holds for RFC 8474 `EMAILID` and
 Gmail's `X-GM-MSGID`; servers that derive it from a content GUID (Dovecot keeps the GUID on
@@ -185,17 +193,21 @@ mail too: if the original is deleted while exactly one copy exists, the original
 the copy's place. The mail is the same message either way; only the row's history (body,
 Undo, logs) is the original's.
 
-**No resurrection by a late FETCH answer** — the new-mail FETCH does not insert a row for
-a UID whose move, snooze, unsnooze or delete is queued, checked both before the FETCH is
-sent and after its answer arrived. A row the user moved or deleted *while* the answer was
-on its way (and a flush may already have sent) is skipped too, via the in-memory edit
-sequence of `_FetchLocationGuard`, which remembers the server location (account, folder,
-UID) each moved, snoozed, unsnoozed or deleted mail had: its row is gone or relocated by then, and a new row would get a
-new id. The answer predates the change and would bring the mail back as a duplicate in
-its old folder (#1269). A change that is `failed` by the time the
-answer is processed hides nothing (a failed move's revert has already put the row back;
-for a failed delete the answer's copy is inserted again), and neither does one stamped
-with an older UIDVALIDITY.
+**No resurrection by a late FETCH answer** — the new-mail FETCH does not insert a new
+row for a UID whose move, snooze, unsnooze or delete is queued, being sent or acked,
+checked both before the FETCH is sent and after its answer arrived. An applied move or
+delete stays `acked` until a read started after it confirms it (§6a), so a change the
+user made *while* the answer was on its way, and a flush sent meanwhile, is still seen
+after the answer arrived, in every isolate (until phase 4a an in-memory guard did this,
+per repository instance). The answer predates the change and would bring the mail back
+as a duplicate in its old folder (#1269). A row still recorded at that location is not
+skipped: the answer only writes its server columns, and the queued change keeps showing
+over them. A change that is `failed` by the time the answer is processed hides nothing
+(it no longer folds, so the mail shows where the server has it), and neither does one
+stamped with an older UIDVALIDITY. Remaining gap: when a read started after the ack
+settles the change before the stale answer is processed (two syncs of one account at
+once), the answer is stored as a new row, which the next reconcile of that folder marks
+gone.
 
 **IDLE cap** — IDLE sessions are limited to 25 minutes per the RFC. The loop also wakes
 immediately if `syncNow()` is called (e.g. user pulls-to-refresh).
@@ -325,9 +337,9 @@ reaches the server:
 | `lease_until`, `claim_token` | While `inflight`: until when the claim holds, and which flush holds it |
 | `ack_seq`, `contradicted_seq` | While `acked`: the read sequence taken at the ack, and that of the first later read that contradicted it (§6a) |
 
-**Optimistic UI** — every mutation inserts into `pending_changes`; for read, star and
-snooze state the queued change is folded into the row in the same transaction (§6a).
-Location changes (folder) are still written to the row directly. The Drift reactive
+**Optimistic UI** — every mutation inserts into `pending_changes`, and the queued change
+is folded into the row in the same transaction (§6a): read, star and snooze state and,
+since schema v73, the folder (a delete for good hides the row). The Drift reactive
 stream delivers the update to the UI before the network round-trip completes.
 
 **Conflict resolution** — the server always wins once nothing of the user's is queued
@@ -376,11 +388,12 @@ the server; with CONDSTORE, and with JMAP, an unchanged mail is otherwise read a
 every 15 minutes, #1270); a separate `…ReconcileDue:<folder>` marker keeps a reconcile
 already running from overwriting that: a pass clears it only when it ran to the end and
 the marker was not set again meanwhile.
-A failed move, snooze or unsnooze is also undone locally at once: the mail goes back to its
-source folder, and its snooze state comes back with the fold (the payload's
-`prevSnoozedFrom` restores the folder it was snoozed from), and later IMAP flag changes queued for it in the
+A failed move, snooze or unsnooze is also undone locally at once: it no longer folds, so
+the mail shows in the folder the server has it in (its source) and with its snooze state
+(the payload's `prevSnoozedFrom` restores the folder it was snoozed from); a failed
+delete shows the mail again. Later IMAP flag changes queued for it in the
 destination are pointed back at the source UID, and the flag reconcile of the source is
-made due (read/star changes made meanwhile may have failed too). This is skipped when the mail is
+made due (read/star changes made meanwhile may have failed too). The re-pointing is skipped when the mail is
 gone (message gone, UIDVALIDITY reset, JMAP `notFound`), when it is no longer where
 the change put it, or when its source folder was renumbered since. The mail's later
 queued moves, snoozes, unsnoozes and deletes address it where the failed change
@@ -405,15 +418,16 @@ action again (or an Undo) deletes the failed change it replaces; changes the app
 queues on its own (snooze wake-up, local Sieve filters, the #545 replay) never do,
 and the wake-up skips a mail whose move, snooze or unsnooze failed.
 
-Known gaps: a failed **delete** is not undone locally, and a hard-deleted row is not
-fetched back until a force resync. Rows already removed by a reconcile before the
-change failed (IMAP: the source UID is at or below the folder checkpoint; JMAP: the
-mailbox prune) are not recovered either, nor is a mail optimistically moved into a
-folder that was then removed on the server (its row goes with the folder).
+Since schema v73 sync no longer deletes a row the user has a change for (§6a, clean-up
+rule): a mail the server lost while a change of it was queued stays until that change
+applies or fails (App Log warn `email.server_gone_with_changes`), and a delete for good
+hides its row until the server confirms the mail is gone, so a failed delete shows the
+mail again and an Undo that cancels it keeps its body. Known gap: a row the clean-up
+rule already deleted (no change left) is not fetched back until a force resync.
 
 ---
 
-## 6a. Read, star and snooze state: the `keywords` overlay
+## 6a. Read, star and snooze state and folder: the overlays
 
 Schema v72, SYNC-REDESIGN.md §2–§5 (phases 3a and 3b). `is_seen`, `is_flagged` and
 `snoozed_until` are each three columns on `emails`:
@@ -428,36 +442,77 @@ All three are written through the email state writer
 (`lib/data/repositories/email_state_writer.dart`), which sets the effective column in
 the same statement and never rewrites the whole row.
 
+**The `location` overlay** (schema v73, phase 4a): the folder a mail shows in,
+`mailbox_path`, works the same way.
+
+| Column | Written by | Meaning |
+|--------|------------|---------|
+| `srv_mailbox_path` | the server-write gate (and `relocate`, `renameFolder`) | the folder the server has the mail in (IMAP path, JMAP mailbox id); a row without a server copy has its own folder here. Never NULL: an insert trigger records the shown folder for a row inserted without one |
+| `srv_gone` | the gate | the server no longer has the mail (absent from an enumeration of its folder, JMAP `notFound`/`destroyed`, a delete the server confirmed) |
+| `local_mailbox_path` | the fold | the destination of the row's latest queued `move`/`snooze`/`unsnooze` |
+| `local_hidden` | the fold | a queued delete for good |
+| `mailbox_path` | together with either | `''` when `local_hidden`, or `srv_gone` without a `local_mailbox_path`; else `COALESCE(local_mailbox_path, srv_mailbox_path)` |
+| `srv_location_seq` | the gate, acks | the read sequence that last wrote `srv_mailbox_path`/`srv_gone` |
+
+- **Hidden rows.** `''` is no folder, so every folder query skips a hidden row; the
+  others (`getEmail`, searches, lookups by address, Message-ID or thread, the folder
+  statistics, the wake-up) filter it out. A hidden row takes no user action, and its
+  thread is refreshed in the folder it showed in before.
+- **Clean-up rule.** A row that is `srv_gone` and has no pending, in-flight, stuck or
+  acked change is deleted (`cleanUpGone`, after every absence write and at the start of
+  every flush); its body and attachments go with it. A row with such a change stays until
+  the change settles: sync never deletes a row the user has a change for (#1239), and
+  logs it (warn `email.server_gone_with_changes`). A `failed` change stays listed
+  without its row.
+- **Location reads.** IMAP: the new-mail FETCH (a new row with the read's folder, an
+  existing one confirmed there), the deletion reconcile's `UID SEARCH ALL` (rows of the
+  folder by `srv_mailbox_path` confirmed present or marked gone), the move's answer
+  (`relocate`: COPYUID or Message-ID search). JMAP: `Email/get` (`mailboxIds`: the
+  recorded mailbox while it is still a member, else the one shown, the one synced, any),
+  `Email/query` prune, `notFound`, `destroyed`. Each takes its sequence before the
+  request and writes only rows whose `srv_location_seq` is not newer.
+- **Ack.** Moves and deletes are acked like read/star changes (they used to be deleted
+  when applied): what the server confirmed is written at once, stamped with the ack
+  (the JMAP move's mailbox, a delete's gone state; an IMAP move's new UID and folder
+  just before), and the change keeps folding until a read after the ack confirms it.
+  A change with keyword and folder columns (a snooze) waits for both. Absence after
+  the ack settles every acked change of the row; a move dropped that way logs
+  `op.gone` (warn).
+
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
-  overlay it deletes rows (`deleteRow`, `deleteRowsOf`), fills header backfills
-  (`writeHeaders`, `writeSizes`) and does the foreign-move carry-over
-  (`takeOverRow`, a whole-row copy followed by a re-fold).
+  overlays it deletes rows (`deleteRow`, `deleteRowsOf`, `cleanUpGone`), fills header
+  backfills (`writeHeaders`, `writeSizes`), records server location facts
+  (`relocate`, `releaseLocation`, `renameFolder`), the local-only
+  `snoozed_from_mailbox_path` (`writeSnoozedFrom`) and does the foreign-move
+  carry-over (`takeOverRow`, a whole-row copy followed by a re-fold).
   `scripts/check_email_writes.sh` (in `check-layers`, run by `check-fast`, with
   fixture tests in `scripts/test_check_email_writes.sh`) enforces it. Any write of
-  `is_seen`, `is_flagged`, `snoozed_until`, their `srv_`/`local_` columns or
-  `srv_keywords_seq` outside the writer and the migrations (the three members of
-  `database.dart` that write `emails` while upgrading) fails, with no exception: an
-  `EmailsCompanion`/`.insert`/`.custom` naming one, `srvIsSeen: Value(…)` and the
-  like, SQL in any letter case (`UPDATE [OR …] emails … SET`, quoted columns,
-  `INSERT INTO emails (…)` with one or without a column list, the table also
-  interpolated), and in the members allowed to write `emails` a whole-row
-  `toCompanion`, a `copyWith` naming one, or an insert/write whose argument is not a
-  companion literal, `withServerKeywords(…)` or a variable holding one. Any other
-  write of `emails` (companions, Drift `update`/`into`/`delete`/`insert`/`replace`,
-  the table managers, `updates: {…emails…}`, raw SQL, and any other bare reference
-  to the table outside reads, which catches aliases) must be in the writer, the
-  migrations, or a member on the script's allow-list, which names file, method and
-  reason: the row inserts and upserts of sync, the Sent copy, virtual rows and
-  Undo's restore, the optimistic location writes of user actions, the failure revert
-  and Sieve, the Snoozed placeholder and folder rename, and the `srv_` location
-  writes of `row_identity.dart`. Phase 4 (location overlay) and 5 (mailbox ops)
-  empty it; an entry that no longer matches a write fails too. Members are found by
-  indentation; fields, getters, annotations and signatures over two lines end the
-  member above them.
+  `is_seen`, `is_flagged`, `snoozed_until`, their `srv_`/`local_` columns,
+  `srv_keywords_seq`, `mailbox_path`, `srv_mailbox_path`, `local_mailbox_path`,
+  `local_hidden`, `srv_gone` or `srv_location_seq` outside the writer and the
+  migrations (the members of `database.dart` that write `emails` while upgrading)
+  fails, with no exception: an `EmailsCompanion`/`.insert`/`.custom` naming one
+  (`mailboxPath` excepted in `.insert`, where Drift requires it), `srvIsSeen:
+  Value(…)` and the like, SQL in any letter case (`UPDATE [OR …] emails … SET`,
+  quoted columns, `INSERT INTO emails (…)` with one or without a column list, the
+  table also interpolated), and in the members allowed to write `emails` a whole-row
+  `toCompanion`, a `copyWith` naming one, or an insert/write whose argument is not an
+  `EmailsCompanion(…)` literal, `newRow(…)`/`withServerLocation(…)` or a variable
+  holding one (an upsert of an `EmailsCompanion.insert` would write the shown folder
+  over a pending move). Any other write of `emails` (companions, Drift
+  `update`/`into`/`delete`/`insert`/`replace`, the table managers,
+  `updates: {…emails…}`, raw SQL, and any other bare reference to the table outside
+  reads, which catches aliases) must be in the writer, the migrations, or a member on
+  the script's allow-list, which names file, method and reason: since phase 4a only
+  the new-row inserts (and header writes) of the IMAP fetch and the JMAP upsert, the
+  Sent copy, the virtual self-send rows and Undo's restore. An entry that no longer
+  matches a write fails too. Members are found by indentation; fields, getters,
+  annotations and signatures over two lines end the member above them.
 - **Built-in consistency checks.** `EmailStateWriter.consistencyProblems` lists the
-  rows whose effective column is not `COALESCE(local_*, srv_*)` or whose `local_*`
-  is not the fold of the row's foldable changes (so a row without any has all
-  `local_*` NULL). Tests and the fuzzes assert it is empty. The app runs a sample of
+  rows whose effective column is not `COALESCE(local_*, srv_*)` (for `mailbox_path`:
+  `''` when hidden or gone), whose `local_*` is not the fold of the row's foldable
+  changes (so a row without any has all `local_*` NULL and `local_hidden` false), or
+  that have no `srv_mailbox_path`. Tests and the fuzzes assert it is empty. The app runs a sample of
   it after a sync run (`OverlayConsistencySampler`, its own provider in `di.dart`,
   all builds): at most once per 30 minutes per account (the last check is kept in
   memory and in `sync_states` as `Overlay:ConsistencyCheck`, so restarts, the
@@ -503,11 +558,15 @@ the same statement and never rewrites the whole row.
   as pending anywhere; those of a row that no longer exists are deleted at the start
   of the next flush.
 - **Rows without a server copy** (a local virtual row, §8a, or a JMAP mail whose
-  server id is unknown) get no queued change; a read/star/snooze change is stored as
-  their own `srv_*` value.
-- **Undo's restore** of a deleted row stores its snapshot as `srv_*` with stamp 0 and
-  makes the flag reconcile due (the snapshot may show a pending value); a row that
-  still exists keeps its state.
+  server id is unknown) get no queued change; a read/star/snooze change or a move is
+  stored as their own `srv_*` value, and a delete deletes them.
+- **Undo's restore** of a row sync cleaned up stores its snapshot as `srv_*` (folder
+  included) with stamp 0 and makes the flag reconcile due (the snapshot may show a
+  pending value); a row that still exists (also a hidden one) keeps its state and is
+  only re-folded.
+- The v73 upgrade recorded a server folder for every row (JMAP rows, virtual rows and
+  rows whose location another took over had none) and folded the queued moves,
+  snoozes, unsnoozes and deletes into `local_mailbox_path` / `local_hidden`.
 - The v72 upgrade copied each row's values into `srv_*`, folded the queued changes
   into `local_*`, and made the flag reconcile due for the folders of rows with queued
   read/star/snooze changes, whose stored value was the user's, not the server's.
@@ -542,10 +601,16 @@ The UI applies the action inside `EmailRepository.captureOps`, which records the
          recorded falls back to cancelPendingChange(id, 'delete' | 'move' |
          'snooze'), the latest queued change of that type.
 
-2. If the email row was hard-deleted (DELETE action):
+      Cancelling is enough to put the mail back: the folder (and a delete
+      for good's hiding) is the fold of the queued changes (§6a); the
+      folder it was snoozed from comes back from the cancelled payload.
+
+2. If the email row is gone (the server confirmed a delete and the
+   clean-up rule removed it, or it was merged away):
       restoreEmails([original])
          └─ Re-inserts the row with its pre-deletion state,
             placed in the correct mailbox (source if cancelled, dest otherwise).
+            A row that is still there, hidden or not, is only re-folded.
 
 3. moveEmail(id, sourceMailboxPath)
       └─ Optimistic local move back to the original folder.
@@ -554,7 +619,9 @@ The UI applies the action inside `EmailRepository.captureOps`, which records the
 
 4. If step 1 cancelled the action:
       cancelOps(<ids step 3 queued>)
-         └─ The reverse-move from step 3 is redundant; remove exactly it.
+         └─ The reverse-move from step 3 is redundant; remove exactly it
+            (usually there is none: the mail was back in place already).
+            A counterpart's mirrored change is cancelled too.
 ```
 
 The net result is: if the mutation was still in the queue it is silently cancelled with no
@@ -605,8 +672,10 @@ a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
   (`_reconcileDeletedImap`, `_pruneJmapMailboxToServerIds`) skip `is_local` rows.
 - **No outbound mutations**: `_enqueueChange` is a no-op for a local row — there is no
   server message to flag/move/delete yet, so the state stays purely local.
-- **Own read/star/snooze state**: with no queued change to fold, a change on a virtual
-  row is stored as its own `srv_*` value (§6a) until the row dissolves.
+- **Own read/star/snooze state and folder**: with no queued change to fold, a change on
+  a virtual row is stored as its own `srv_*` value (§6a, `srv_mailbox_path` for the
+  folder) until the row dissolves; a delete deletes it. (Phase 4b replaces this with
+  parked changes and matches the arrival in place.)
 - **Dissolve on arrival**: when the real message is synced in, `_maybeDissolveLocalMessage`
   matches it by Message-ID, transfers the star / read-state / folder the user set on the
   virtual copy (queuing the equivalent server mutations so both converge), then deletes

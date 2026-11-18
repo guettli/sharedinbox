@@ -246,7 +246,9 @@ void main() {
 
     await emails.flushPendingChanges(_account.id, 'pw');
 
-    final queued = await db.select(db.pendingChanges).getSingle();
+    // The move itself stays acked until a read confirms it.
+    final queued = (await db.select(db.pendingChanges).get())
+        .singleWhere((c) => c.state != 'acked');
     expect((queued.resourceId, queued.changeType), (id, 'flag_flagged'));
     expect(
       (await db.select(db.notifiedEmails).get()).map((n) => n.emailId),
@@ -283,7 +285,8 @@ void main() {
     await emails.restoreEmails([before]);
 
     final restored = (await rows()).singleWhere((e) => e.id == 'acc-1:old');
-    expect(location(restored), (null, null, null));
+    // No UID: its folder is the one the snapshot shows it in.
+    expect(location(restored), ('INBOX', null, null));
     final kept = (await rows()).singleWhere((e) => e.id == row.id);
     expect(location(kept), ('INBOX', 1, 11));
   });
@@ -295,7 +298,8 @@ void main() {
     await emails.restoreEmails([before]);
 
     final restored = (await rows()).singleWhere((e) => e.id == before.id);
-    expect(location(restored), (null, null, null));
+    // No UID: its folder is the one the snapshot shows it in.
+    expect(location(restored), ('INBOX', null, null));
     final other = (await rows()).singleWhere((e) => e.id == 'acc-1:other');
     expect(location(other), ('INBOX', 1, 11));
   });

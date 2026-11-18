@@ -11,13 +11,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
-import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'helpers/fake_secure_storage.dart';
-import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
 
@@ -29,25 +27,13 @@ void main() {
   late RecordingAppLogRepository logs;
 
   setUp(() async {
-    logs = RecordingAppLogRepository();
-    rig = await StatefulImapRig.open(
-      StatefulFakeImapServer(
-        uidValidityByFolder: {'INBOX': 11, 'Archive': 22, 'Spam': 33},
-        objectIds: true,
-      )
-        ..deliver('INBOX', 'a@test')
-        // So the moved mail gets another UID in Archive than in INBOX.
-        ..deliver('Archive', 'filler@test'),
+    logs = await openRigWithMailA(
+      uidValidityByFolder: {'INBOX': 11, 'Archive': 22, 'Spam': 33},
       folders: [('INBOX', 'inbox'), ('Archive', 'archive'), ('Spam', 'junk')],
-      appLogger: AppLogger(logs),
+      objectIds: true,
     );
-    await emails.syncEmails(_account.id, 'Archive');
   });
   tearDown(() => db.close());
-
-  Future<List<Email>> rowsOfA() =>
-      (db.select(db.emails)..where((t) => t.messageId.equals('a@test'))).get();
-  Future<Email> rowOfA() async => (await rowsOfA()).single;
 
   /// Another client moves a@test to Archive; sync sees Archive first (it
   /// stores a second row there), then INBOX (the mail vanished). Returns
@@ -304,13 +290,14 @@ void main() {
       () async {
     final id = (await rowOfA()).id;
     // Our move reached the server, but its answer was never recorded: the
-    // row shows Archive with the UID it had in INBOX (7 here, so it names
+    // row records Archive with the UID it had in INBOX (7 here, so it names
     // no mail in Archive).
     server.moveElsewhere('a@test', 'Archive');
     await (db.update(db.emails)..where((t) => t.id.equals(id))).write(
       const EmailsCompanion(
         mailboxPath: Value('Archive'),
         uid: Value(7),
+        srvMailboxPath: Value('Archive'),
         srvUid: Value(7),
       ),
     );

@@ -339,8 +339,11 @@ void _knownBugs() {
             await emails.flushPendingChanges(_account.id, 'pw');
           }
           if (command == 'SEARCH ALL (Trash)') {
+            // Shown rows: the deleted one is hidden until this reconcile
+            // confirms it is gone (SYNC.md §6a).
             rowsBeforeReconcile = [
-              for (final r in await _rowsOf(db, 'a@test')) r.id,
+              for (final r in await _rowsOf(db, 'a@test'))
+                if (r.mailboxPath.isNotEmpty) r.id,
             ];
           }
         };
@@ -351,6 +354,11 @@ void _knownBugs() {
           isNull,
           reason: 'race not exercised: the delete was not sent meanwhile',
         );
+        // The reconcile right after held back on the empty search (EXISTS
+        // was read before the expunge); the next one confirms the delete
+        // and the hidden row is cleaned up.
+        await emails.syncEmails(_account.id, 'Trash');
+        expect(await _rowsOf(db, 'a@test'), isEmpty, reason: 'cleaned up');
         expect(
           rowsBeforeReconcile,
           isNotNull,
@@ -427,7 +435,12 @@ void _knownBugs() {
           [for (final r in await _rowsOf(db, 'a@test')) r.mailboxPath],
           ['Trash'],
         );
-        expect(await db.select(db.pendingChanges).get(), isEmpty);
+        // Both moves applied; the second, acked until a read confirms the
+        // location, covers the first.
+        expect(
+          [for (final c in await db.select(db.pendingChanges).get()) c.state],
+          ['acked'],
+        );
       },
     );
 
@@ -467,12 +480,12 @@ void _knownBugs() {
           isFalse,
           reason: 'only a was starred',
         );
-        // The star reached the server; it is acked and shows until a read
-        // confirms it (SYNC-REDESIGN.md §4.5).
+        // The first move and the star reached the server; they are acked
+        // and show until a read confirms them (SYNC-REDESIGN.md §4.5).
         final left = await db.select(db.pendingChanges).get();
         expect(
           [for (final c in left) '${c.changeType} ${c.state}'],
-          ['move failed', 'flag_flagged acked'],
+          ['move acked', 'move failed', 'flag_flagged acked'],
         );
       },
     );
@@ -889,10 +902,15 @@ class _FuzzRun {
     return _flush();
   }
 
+  /// The rows the app shows: not a hidden one (deleted for good, or gone on
+  /// the server, waiting for its changes to settle; SYNC.md §6a).
   Future<List<Email>> _localRows() async {
     final rows = await (_db.select(_db.emails)
           ..where(
-            (t) => t.accountId.equals(_account.id) & t.isLocal.equals(false),
+            (t) =>
+                t.accountId.equals(_account.id) &
+                t.isLocal.equals(false) &
+                t.mailboxPath.equals('').not(),
           )
           ..orderBy([(t) => OrderingTerm.asc(t.id)]))
         .get();

@@ -223,6 +223,20 @@ class UndoService extends Notifier<List<UndoAction>> {
                 await repo.cancelOps(reverse);
               }
             }
+            // A counterpart the reverse step queued nothing for: cancelling
+            // the original already put the mail back (the moved folder is
+            // the fold of its queued changes), so the reverse step found it
+            // in place and mirrored nothing. Its own forward change goes
+            // too, if nothing was sent for it.
+            for (final MapEntry(key: twin, value: forward)
+                in action.opSeqs.entries) {
+              if (twin == currentId ||
+                  action.emailIds.contains(twin) ||
+                  reverseOps.containsKey(twin)) {
+                continue;
+              }
+              await repo.cancelOps(forward);
+            }
           } else {
             await repo.cancelPendingChange(currentId, 'move');
           }

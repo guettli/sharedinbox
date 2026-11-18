@@ -195,6 +195,28 @@ List<dynamic> jmapEmailGetResponse({
   ];
 }
 
+/// An `Email/changes` method response that stays at state `s0` and reports
+/// [updated] and [destroyed] (nothing created, nothing more to come).
+List<dynamic> jmapEmailChangesResponse({
+  required String accountId,
+  List<String> updated = const [],
+  List<String> destroyed = const [],
+  Object? callId = '0',
+}) =>
+    [
+      'Email/changes',
+      {
+        'accountId': accountId,
+        'oldState': 's0',
+        'newState': 's0',
+        'hasMoreChanges': false,
+        'created': <String>[],
+        'updated': updated,
+        'destroyed': destroyed,
+      },
+      callId,
+    ];
+
 /// The value stored under [resourceType] for the one account a test database
 /// holds, or null when nothing has been checkpointed yet.
 Future<String?> jmapStoredSyncState(

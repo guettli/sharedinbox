@@ -1,8 +1,8 @@
-// The `keywords` overlay of SYNC-REDESIGN.md §2–§4, as pure functions: which
-// queued changes (ops) fold into which `local_*` keyword column, the fold
-// itself, and whether a server read agrees with an acked op. No database
-// access here, so the schema migration and the email state writer share it
-// and it is unit-tested on its own.
+// The `keywords` and `location` overlays of SYNC-REDESIGN.md §2–§4, as pure
+// functions: which queued changes (ops) fold into which `local_*` column,
+// the folds themselves, and whether a server read agrees with an acked op.
+// No database access here, so the schema migrations and the email state
+// writer share it and it is unit-tested on its own.
 
 /// `local_snoozed_until` of a row whose latest snooze intent is "not
 /// snoozed" (an unsnooze, a move out of a snooze, a stale snooze cleared).
@@ -142,8 +142,8 @@ DateTime? snoozedUntilFromKeywords(Iterable<String> keywords) {
 }
 
 /// The keyword columns an op of [type] with [payload] writes
-/// (SYNC-REDESIGN.md §3). Location columns are not overlaid yet (phase 4),
-/// so a move, snooze or unsnooze counts here only for its `snoozed_until`.
+/// (SYNC-REDESIGN.md §3). A move, snooze or unsnooze counts here for its
+/// `snoozed_until`; its folder is in [locationColumnsOf].
 Set<KeywordColumn> keywordColumnsOf(
   String type,
   Map<String, dynamic>? payload,
@@ -224,6 +224,122 @@ bool readAgreesWith(FoldOp op, ServerKeywords read) {
     case 'clear_snooze':
     case 'move':
       return read.snoozedUntil == null;
+  }
+  return true;
+}
+
+// ── The `location` overlay (SYNC-REDESIGN.md §2, phase 4a) ─────────────────
+
+/// The location columns of `emails` an op can write: `local_mailbox_path`
+/// (a move, snooze or unsnooze) and `local_hidden` (a delete for good).
+enum LocationColumn { mailboxPath, hidden }
+
+/// The location columns an op of [type] with [payload] writes
+/// (SYNC-REDESIGN.md §3).
+Set<LocationColumn> locationColumnsOf(
+  String type,
+  Map<String, dynamic>? payload,
+) {
+  switch (type) {
+    case 'move':
+    case 'snooze':
+    case 'unsnooze':
+      return payload?['dest'] is String
+          ? const {LocationColumn.mailboxPath}
+          : const {};
+    case 'delete':
+      return const {LocationColumn.hidden};
+  }
+  return const {};
+}
+
+/// Every overlay column (keyword or location) an op writes: an op shadows
+/// another only when it writes all of these.
+Set<Object> overlayColumnsOf(String type, Map<String, dynamic>? payload) => {
+      ...keywordColumnsOf(type, payload),
+      ...locationColumnsOf(type, payload),
+    };
+
+/// The `local_*` location columns of a row: [mailboxPath] null means no
+/// pending move; [hidden] a pending delete for good.
+class LocationLocal {
+  const LocationLocal({this.mailboxPath, this.hidden = false});
+
+  static const none = LocationLocal();
+
+  final String? mailboxPath;
+  final bool hidden;
+
+  bool get isEmpty => mailboxPath == null && !hidden;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LocationLocal &&
+      other.mailboxPath == mailboxPath &&
+      other.hidden == hidden;
+
+  @override
+  int get hashCode => Object.hash(mailboxPath, hidden);
+
+  @override
+  String toString() =>
+      'LocationLocal(mailboxPath: $mailboxPath, hidden: $hidden)';
+}
+
+/// Folds a row's [ops] into its `local_*` location columns, like
+/// [foldKeywords]: the destination of the latest foldable move, snooze or
+/// unsnooze, and whether a delete for good is queued (a hidden row takes no
+/// further user action, so nothing un-hides it).
+LocationLocal foldLocation(Iterable<FoldOp> ops) {
+  String? mailboxPath;
+  var hidden = false;
+  final sorted = [
+    for (final op in ops)
+      if (foldableOpStates.contains(op.state)) op,
+  ]..sort((a, b) => a.seq.compareTo(b.seq));
+  for (final op in sorted) {
+    switch (op.type) {
+      case 'move':
+      case 'snooze':
+      case 'unsnooze':
+        if (op.payload?['dest'] case final String dest) mailboxPath = dest;
+      case 'delete':
+        hidden = true;
+    }
+  }
+  return LocationLocal(mailboxPath: mailboxPath, hidden: hidden);
+}
+
+/// The effective `mailbox_path` of a row (SYNC-REDESIGN.md §2): empty when
+/// hidden (a pending delete, or gone on the server with no pending move),
+/// else the pending move's destination, else the server's folder.
+String effectiveMailboxPath({
+  required String? localMailboxPath,
+  required bool localHidden,
+  required String srvMailboxPath,
+  required bool srvGone,
+}) {
+  if (localHidden) return '';
+  if (srvGone && localMailboxPath == null) return '';
+  return localMailboxPath ?? srvMailboxPath;
+}
+
+/// Whether what sync last recorded about a row's location agrees with the
+/// location part of [op], an acked op: a move, snooze or unsnooze when the
+/// server has the mail in its destination, a delete when the server no
+/// longer has it.
+bool locationAgreesWith(
+  FoldOp op, {
+  required String? srvMailboxPath,
+  required bool srvGone,
+}) {
+  switch (op.type) {
+    case 'move':
+    case 'snooze':
+    case 'unsnooze':
+      return !srvGone && srvMailboxPath == op.payload?['dest'];
+    case 'delete':
+      return srvGone;
   }
   return true;
 }

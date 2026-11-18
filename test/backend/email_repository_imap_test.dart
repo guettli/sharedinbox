@@ -743,9 +743,17 @@ void main() {
       }) r,
       String subject,
     ) async {
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // Everything was sent; the moves stay acked until a read confirms
+      // where the mail is (SYNC.md §6a).
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.state.equals('acked').not()))
+            .get(),
+        isEmpty,
+      );
       await r.emails.syncEmails('test', 'INBOX');
       await r.emails.syncEmails('test', 'Trash');
+      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
 
       final inbox = await r.emails.observeEmails('test', 'INBOX').first;
       expect(inbox.map((e) => e.subject), [subject]);

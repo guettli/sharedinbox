@@ -383,6 +383,13 @@ Future<List<String>> _changeTypes(AppDatabase db) async =>
         .map((c) => c.changeType)
         .toList();
 
+/// The queued changes not applied yet: an applied move or delete stays
+/// `acked` until a later read confirms it (SYNC.md §6a).
+Future<List<PendingChangeRow>> _unsettled(AppDatabase db) async => [
+      for (final c in await db.select(db.pendingChanges).get())
+        if (c.state != 'acked') c,
+    ];
+
 imap.Mailbox _fakeMailbox(String path) => imap.Mailbox(
       encodedName: path,
       encodedPath: path,
@@ -1132,6 +1139,7 @@ void main() {
                 receivedAt: DateTime(2024, 1, uid),
                 threadId: const Value('tid-att'),
                 hasAttachment: Value(att),
+                srvUid: Value(uid),
               ),
             );
       }
@@ -3392,8 +3400,9 @@ void main() {
       final all = await r.db.select(r.db.appLogs).get();
       final deleteRows = all.where((e) => e.event == 'email.delete').toList();
       expect(deleteRows, hasLength(1));
-      // The row is gone, so only the data still names it.
-      expect(deleteRows.single.emailId, isNull);
+      // The row is hidden until the server confirms the delete (and only
+      // then deleted); the data names it either way.
+      expect(deleteRows.single.emailId, 'acc-1:5');
       final data =
           jsonDecode(deleteRows.single.dataJson!) as Map<String, dynamic>;
       expect(data['permanent'], true);
@@ -3470,8 +3479,12 @@ void main() {
       await pumpEventQueue();
 
       expect(dest, isNull);
+      // The deleted rows are hidden until the server confirms the delete.
       final rows = await r.db.select(r.db.emails).get();
-      expect(rows.map((e) => e.id), ['acc-1:2']);
+      expect(
+        rows.where((e) => e.mailboxPath.isNotEmpty).map((e) => e.id),
+        ['acc-1:2'],
+      );
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes.map((c) => c.changeType), ['delete', 'delete']);
       final logs = await r.db.select(r.db.appLogs).get();
@@ -3555,7 +3568,11 @@ void main() {
       await pumpEventQueue();
 
       expect(dest, isNull);
-      expect(await r.db.select(r.db.emails).get(), isEmpty);
+      // Hidden until the server confirms the delete.
+      expect(
+        (await r.db.select(r.db.emails).get()).map((e) => e.mailboxPath),
+        [''],
+      );
       final changes = await r.db.select(r.db.pendingChanges).get();
       expect(changes.map((c) => c.changeType), ['delete']);
     });
@@ -4315,7 +4332,8 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         // Pending change drained.
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        // Applied: acked until a read confirms the new location.
+        expect(await _unsettled(r.db), isEmpty);
 
         // Same row, now at the destination's UID.
         expect(await emailIdAt(r.db, 'Archive', 42), oldId);
@@ -4494,7 +4512,7 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(spy.moves, ['INBOX:5->Trash', 'Trash:42->INBOX']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         final restored =
             await r.emails.getEmail(await emailIdAt(r.db, 'INBOX', 7));
         expect(restored, isNotNull);
@@ -4520,7 +4538,7 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(spy.moves, ['Trash:5->INBOX', 'Trash:205->INBOX']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         expect(await emailIdAt(r.db, 'INBOX', 7), oldId);
       });
 
@@ -4546,7 +4564,7 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(spy.moves, ['INBOX:5->Deleted Items']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         expect(await emailIdAt(r.db, 'Deleted Items', 77), oldId);
         final moved = await r.emails.getEmail(oldId);
         expect(moved, isNotNull);
@@ -4578,7 +4596,7 @@ void main() {
         await r.emails.flushPendingChanges('acc-1', 'pw');
 
         expect(spy.moves, ['INBOX:5->Trash']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         expect(
           await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 42)),
           isNotNull,
@@ -5309,9 +5327,10 @@ void main() {
 
         expect(applied, 1);
         expect(moves, 2, reason: 'no command after the connection was lost');
-        final pending = await (r.db.select(r.db.pendingChanges)
-              ..orderBy([(t) => OrderingTerm.asc(t.id)]))
-            .get();
+        final pending = (await (r.db.select(r.db.pendingChanges)
+                  ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+                .get())
+            .where((p) => p.state != 'acked');
         expect(pending.map((p) => p.resourceId), [
           'acc-1:INBOX:2',
           'acc-1:INBOX:3',
@@ -5362,7 +5381,7 @@ void main() {
 
         expect(spy.calls, ['move INBOX:1,2,3->Trash']);
         expect(spy.selects, ['INBOX']);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         for (final (oldUid, newUid) in [(1, 11), (2, 12), (3, 13)]) {
           // The row keeps its id and records the mail's new UID.
           expect(await emailIdAt(r.db, 'Trash', newUid), 'acc-1:INBOX:$oldUid');
@@ -5388,7 +5407,7 @@ void main() {
           'move INBOX:1,2,3->Trash',
           'move INBOX:2->Trash',
         ]);
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         expect(
           await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 12)),
           isNotNull,
@@ -5488,7 +5507,10 @@ void main() {
           await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 11)),
           isNotNull,
         );
-        final pending = await pendingInOrder(r.db);
+        final pending = [
+          for (final p in await pendingInOrder(r.db))
+            if (p.state != 'acked') p,
+        ];
         expect(pending.map((p) => p.resourceId), [
           'acc-1:INBOX:2',
           'acc-1:INBOX:3',
@@ -5579,7 +5601,7 @@ void main() {
 
         expect(await r.emails.flushPendingChanges('acc-1', 'pw'), 1);
 
-        expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+        expect(await _unsettled(r.db), isEmpty);
         expect(
           await r.emails.getEmail(await emailIdAt(r.db, 'Trash', 77)),
           isNotNull,
@@ -8434,10 +8456,11 @@ void main() {
           (await r.db.select(r.db.pendingChanges).getSingle()).state,
           'failed',
         );
-        // `notFound`: the mail is gone, there is nothing to go back to.
+        // `notFound`: the mail is gone; its row goes with the change's
+        // fold (the failed change stays listed).
         expect(
-          (await r.emails.getEmail('jmap-1:e1'))!.mailboxPath,
-          back ? 'mbx-inbox' : 'mbx-archive',
+          (await r.emails.getEmail('jmap-1:e1'))?.mailboxPath,
+          back ? 'mbx-inbox' : isNull,
         );
       });
     }
@@ -12417,6 +12440,8 @@ void main() {
               createdAt: DateTime.now(),
             ),
           );
+      // As queueing does: the move folds into the row.
+      await EmailStateWriter(r.db).refold(id);
       return r;
     }
 

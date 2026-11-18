@@ -65,7 +65,8 @@ extension _Counterparts on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')) &
+                _visible(t),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -175,7 +176,8 @@ extension _Counterparts on EmailRepositoryImpl {
             (t) =>
                 t.accountId.equals(accountId) &
                 t.isLocal.equals(true) &
-                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')) &
+                _visible(t),
           ))
         .get();
     for (final row in rows) {

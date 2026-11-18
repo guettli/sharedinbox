@@ -9,6 +9,7 @@ import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
 import '../db_test_helper.dart';
+import '../recording_app_log_repository.dart';
 import 'fake_secure_storage.dart';
 import 'stateful_fake_imap.dart';
 
@@ -77,6 +78,36 @@ class StatefulImapRig {
     return rig;
   }
 }
+
+/// Opens [rig] for a test about one mail, `a@test`, in INBOX, with a filler
+/// mail in Archive (so a mail moved there gets another UID than it had in
+/// INBOX) and Archive synced too. The App Log goes to the returned recorder.
+Future<RecordingAppLogRepository> openRigWithMailA({
+  required Map<String, int> uidValidityByFolder,
+  required List<(String, String)> folders,
+  bool objectIds = false,
+}) async {
+  final logs = RecordingAppLogRepository();
+  rig = await StatefulImapRig.open(
+    StatefulFakeImapServer(
+      uidValidityByFolder: uidValidityByFolder,
+      objectIds: objectIds,
+    )
+      ..deliver('INBOX', 'a@test')
+      ..deliver('Archive', 'filler@test'),
+    folders: folders,
+    appLogger: AppLogger(logs),
+  );
+  await rig.emails.syncEmails(statefulRigAccount.id, 'Archive');
+  return logs;
+}
+
+/// The rows of `a@test` ([openRigWithMailA]).
+Future<List<Email>> rowsOfA() =>
+    (db.select(db.emails)..where((t) => t.messageId.equals('a@test'))).get();
+
+/// The one row of `a@test`.
+Future<Email> rowOfA() async => (await rowsOfA()).single;
 
 /// The rig of the running test, opened in its `setUp`; the getters below
 /// read it, so a suite can say `db` and `emails` like any other.
