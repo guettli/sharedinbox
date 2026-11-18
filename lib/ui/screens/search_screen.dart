@@ -183,21 +183,50 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   StreamSubscription<Set<FolderRef>>? _hiddenFoldersSub;
   Set<FolderRef>? _hiddenFolders;
 
-  void _onHiddenFolders(Set<FolderRef> hidden) {
-    final before = _hiddenFolders ?? const <FolderRef>{};
-    _hiddenFolders = hidden;
-    final results = _results;
-    if (results == null || !mounted) return;
-    final newlyHidden = hidden.difference(before);
-    if (newlyHidden.isEmpty && before.difference(hidden).isEmpty) return;
-    final kept = [
-      for (final e in results)
-        if (!newlyHidden
-            .contains((accountId: e.accountId, path: e.mailboxPath)))
-          e,
+  /// A folder showed again while a search was running, which may have
+  /// missed its mail: refresh once that search's results are in.
+  bool _refreshAfterLoad = false;
+
+  /// [emails] less the mail of folders whose delete is queued: applied to
+  /// every result that arrives, so a search that was running when a folder
+  /// was hidden does not bring its mail back.
+  List<Email> _withoutHidden(List<Email> emails) {
+    final hidden = _hiddenFolders;
+    if (hidden == null || hidden.isEmpty) return emails;
+    return [
+      for (final e in emails)
+        if (!hidden.contains((accountId: e.accountId, path: e.mailboxPath))) e,
     ];
-    if (kept.length != results.length) setState(() => _results = kept);
-    unawaited(_refresh());
+  }
+
+  void _onHiddenFolders(Set<FolderRef> hidden) {
+    final before = _hiddenFolders;
+    _hiddenFolders = hidden;
+    if (!mounted) return;
+    final results = _results;
+    if (results != null) {
+      final kept = _withoutHidden(results);
+      if (kept.length != results.length) setState(() => _results = kept);
+    }
+    // The first emission is the state the results were read in.
+    if (before == null) return;
+    final shownAgain = before.difference(hidden).isNotEmpty;
+    final newlyHidden = hidden.difference(before).isNotEmpty;
+    if (!shownAgain && !newlyHidden) return;
+    if (_loading || _loadingMore) {
+      if (shownAgain) _refreshAfterLoad = true;
+      return;
+    }
+    if (results == null) return;
+    // Refill the list (hidden mail dropped) or bring the mail back.
+    unawaited(_refresh(background: true));
+  }
+
+  /// Runs the refresh [_onHiddenFolders] put off while a search ran.
+  void _runRefreshAfterLoad() {
+    if (!_refreshAfterLoad || !mounted) return;
+    _refreshAfterLoad = false;
+    unawaited(_refresh(background: true));
   }
 
   @override
@@ -457,12 +486,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       final (emails, full, fetchLimit) = await _fetchPage(fetch, _limit);
       if (mounted && seq == _searchSeq) {
         setState(() {
-          _results = emails;
+          _results = _withoutHidden(emails);
           _lastPageFull = full;
           _fetchLimit = fetchLimit;
           _resetViewFilters();
           _loading = false;
         });
+        _runRefreshAfterLoad();
       }
     } catch (e, stack) {
       log('$logLabel: $e');
@@ -503,11 +533,12 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
       if (mounted && seq == _searchSeq) {
         setState(() {
-          _results = emails;
+          _results = _withoutHidden(emails);
           _lastPageFull = full;
           _fetchLimit = fetchLimit;
           _loadingMore = false;
         });
+        _runRefreshAfterLoad();
       }
     } catch (e, stack) {
       log('Load more failed: $e');
@@ -538,7 +569,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   /// folder focus changed in advanced mode ([resetLimit], since that is a
   /// different query). The current results stay on screen until the new ones
   /// arrive; a newer search or a reset supersedes it.
-  Future<void> _refresh({bool resetLimit = false}) async {
+  ///
+  /// A [background] refresh (one the user did not ask for: a folder was
+  /// hidden or shown again) fails quietly, logged only.
+  Future<void> _refresh({
+    bool resetLimit = false,
+    bool background = false,
+  }) async {
     final fetch = _activeFetch;
     if (fetch == null || _loading) return;
     final seq = ++_searchSeq;
@@ -554,7 +591,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       );
       if (mounted && seq == _searchSeq) {
         setState(() {
-          _results = emails;
+          _results = _withoutHidden(emails);
           _lastPageFull = full;
           _limit = target;
           _fetchLimit = fetchLimit;
@@ -572,7 +609,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               stack: stack,
             ),
       );
-      if (mounted && seq == _searchSeq) {
+      if (mounted && seq == _searchSeq && !background) {
         context.showAppSnackBar('Could not refresh the search results.');
       }
     }

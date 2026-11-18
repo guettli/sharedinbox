@@ -87,7 +87,11 @@ class BodyCacheService {
         var batchCached = 0;
         final batchFailed = <String>[];
         for (final emailId in candidates) {
-          if (await _getCacheSizeBytes() >= limitBytes) return cached;
+          // Stop short of the limit, so the next run does not evict what
+          // this one fetched (one body may still overshoot the mark).
+          if (await _getCacheSizeBytes() >= _prefetchMark(limitBytes)) {
+            return cached;
+          }
           if (attempts++ > 0 && pauseBetweenFetches > Duration.zero) {
             await Future<void>.delayed(pauseBetweenFetches);
           }
@@ -136,20 +140,34 @@ class BodyCacheService {
         ),
       );
 
-  /// Drops the oldest cached bodies until the cache fits [limitBytes]. A
-  /// virtual row's body (a self-sent note, the virtual Sent copy,
-  /// `is_local`) is never dropped: it is the text the user wrote, with no
-  /// server copy to fetch it from again yet.
+  /// How full prefetching fills the cache: 90 % of [limitBytes], leaving
+  /// room for the bodies opened in between, so a run does not evict what
+  /// the one before it fetched.
+  static int _prefetchMark(int limitBytes) => limitBytes * 9 ~/ 10;
+
+  /// SQL condition (on `email_bodies` alias [b]): a body that cannot be
+  /// fetched again, so it is neither evicted nor counted against the
+  /// limit: a virtual row's (a self-sent note, the virtual Sent copy,
+  /// `is_local`: the text the user wrote, no server copy yet), or one of a
+  /// mail gone on the server but kept for a change of the user's
+  /// (`srv_gone`).
+  static String _protectedSql(String b) =>
+      'EXISTS (SELECT 1 FROM emails pe WHERE pe.id = $b.email_id '
+      'AND (pe.is_local = 1 OR pe.srv_gone = 1))';
+
+  /// Drops the oldest cached bodies until the cache fits [limitBytes],
+  /// never a protected one ([_protectedSql]).
   Future<void> _evictIfNeeded(int limitBytes) async {
     final currentSize = await _getCacheSizeBytes();
     if (currentSize <= limitBytes) return;
 
-    final virtualRows = _db.selectOnly(_db.emails)
-      ..addColumns([_db.emails.id])
-      ..where(_db.emails.isLocal);
     final bodies = await (_db.select(_db.emailBodies)
           ..where(
-            (t) => t.cachedAt.isNotNull() & t.emailId.isNotInQuery(virtualRows),
+            (t) =>
+                t.cachedAt.isNotNull() &
+                CustomExpression<bool>(
+                  'NOT ${_protectedSql(t.aliasedName)}',
+                ),
           )
           ..orderBy([(t) => OrderingTerm.asc(t.cachedAt)]))
         .get();
@@ -180,7 +198,8 @@ class BodyCacheService {
   Future<int> _getCacheSizeBytes() async {
     final result = await _db
         .customSelect(
-          "SELECT COALESCE(SUM(LENGTH(COALESCE(text_body, '')) + LENGTH(COALESCE(html_body, ''))), 0) AS total FROM email_bodies",
+          "SELECT COALESCE(SUM(LENGTH(COALESCE(b.text_body, '')) + LENGTH(COALESCE(b.html_body, ''))), 0) AS total "
+          'FROM email_bodies b WHERE NOT ${_protectedSql('b')}',
         )
         .getSingle();
     return result.read<int>('total');

@@ -1635,6 +1635,7 @@ void main() {
       WidgetTester tester,
       _FolderAwareStructuredRepository repo, {
       FakeMailboxRepository? mailboxes,
+      bool settle = true,
     }) async {
       await tester.pumpWidget(
         ProviderScope(
@@ -1653,7 +1654,7 @@ void main() {
           child: MaterialApp(home: SearchScreen(initialFilter: filter)),
         ),
       );
-      await tester.pumpAndSettle();
+      if (settle) await tester.pumpAndSettle();
     }
 
     Future<void> focusArchive(WidgetTester tester) async {
@@ -1679,6 +1680,9 @@ void main() {
       final mailboxes = FakeMailboxRepository([inboxBox, archiveBox]);
       await pump(tester, repo, mailboxes: mailboxes);
       expect(find.text('a mail 1'), findsOneWidget);
+      // The first emission (nothing hidden) re-runs nothing.
+      mailboxes.hiddenFolders.add({});
+      await tester.pumpAndSettle();
       final calls = repo.calls.length;
 
       // Deleting "Archive" (queued) hides it at once, before the re-query
@@ -1703,6 +1707,32 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('a mail 1'), findsOneWidget);
       expect(repo.calls.length, calls + 2);
+    });
+
+    testWidgets(
+        'a folder hidden while the search is running: its mail stays out of '
+        'the results that arrive (6b)', (tester) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      // The search is under way when the folder is hidden; its answer was
+      // read before (it still has the mail).
+      repo.gate = Completer<void>();
+      final mailboxes = FakeMailboxRepository([inboxBox, archiveBox]);
+      await pump(tester, repo, mailboxes: mailboxes, settle: false);
+      await tester.pump();
+      expect(repo.calls, hasLength(1), reason: 'the search is running');
+      mailboxes.hiddenFolders.add({});
+      await tester.pump();
+      mailboxes.hiddenFolders.add({(accountId: 'acc-1', path: 'a')});
+      await tester.pump();
+      repo.gate!.complete();
+      repo.gate = null;
+      await tester.pumpAndSettle();
+
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      expect(find.text('a mail 1'), findsNothing);
     });
 
     testWidgets('"Only this folder" re-queries that folder', (tester) async {

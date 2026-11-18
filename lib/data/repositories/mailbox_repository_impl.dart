@@ -244,6 +244,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // next to the one moving there (the ack moves that one).
         if (MailboxStateWriter.isRenamedAway(path, arriving, separator) &&
             await _writer.rowByPath(account.id, path) == null) {
+          unawaited(
+            _appLogger?.info(
+              'mailbox.listing_skipped_arriving',
+              'Not storing "$path" from this listing: a rename or move of a '
+                  'folder to it is being sent, and its answer moves the '
+                  'folder there',
+              accountId: account.id,
+              mailboxPath: path,
+            ),
+          );
           continue;
         }
 
@@ -1437,8 +1447,9 @@ Future<void> removeLocalMailbox(
     unawaited(
       appLogger?.warn(
         'mailbox.removed_gone',
-        'The folder "$path" is no longer on the server: removed it and '
-            'the $removed mail(s) cached for it',
+        'The folder "$path" is gone on the server (deleted there, maybe '
+            'through another account of the same mailbox or another client): '
+            'removed it and the $removed mail(s) cached for it',
         accountId: accountId,
         mailboxPath: path,
         data: {'removedEmails': removed, 'kept': kept.length},

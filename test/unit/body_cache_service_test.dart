@@ -125,8 +125,9 @@ void main() {
   });
 
   test(
-      "eviction never drops a virtual row's body (the only copy of the "
-      'text the user wrote)', () async {
+      'eviction never drops a body that cannot be fetched again: a virtual '
+      "row's (the text the user wrote) or a mail's gone on the server",
+      () async {
     await seedEmails(1);
     await db.into(db.emails).insert(
           EmailsCompanion.insert(
@@ -138,7 +139,17 @@ void main() {
             isLocal: const Value(true),
           ),
         );
-    for (final id in ['a:INBOX:1', 'a:~virtual']) {
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'a:~gone',
+            accountId: 'a',
+            mailboxPath: 'INBOX',
+            uid: 7,
+            receivedAt: DateTime.utc(2025),
+            srvGone: const Value(true),
+          ),
+        );
+    for (final id in ['a:INBOX:1', 'a:~virtual', 'a:~gone']) {
       await db.into(db.emailBodies).insert(
             EmailBodiesCompanion.insert(
               emailId: id,
@@ -158,7 +169,7 @@ void main() {
 
     expect(
       (await db.select(db.emailBodies).get()).map((b) => b.emailId),
-      ['a:~virtual'],
+      unorderedEquals(['a:~virtual', 'a:~gone']),
     );
   });
 

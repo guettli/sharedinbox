@@ -1694,24 +1694,40 @@ As implemented, phase 6 is two PRs, both done:
 2. **6b (done, no schema change):** the rest of the phase 6 brief.
    - **Watched email queries and `local_hidden`.** `_visible` (the
      hidden-row filter of §2, which since 5b also hides the mail of a
-     folder whose delete is queued) declares `mailboxes` as a watched table
-     (Drift `CustomExpression.watchedTables`), so a watched query using it
-     (the thread across folders) re-runs when only a folder's
-     `local_hidden` changes, and drops that folder's mail at once. The
+     folder whose delete is queued) is SQL evaluated when a query runs, so
+     a watched query did not re-run when only a folder's `local_hidden`
+     changed. The open thread across folders now combines its rows with
+     the account's hidden folders in Dart and drops that folder's mail at
+     once (the first version made `_visible` watch `mailboxes`, which the
+     review round replaced, below). The
      search screen holds results it read once: it listens to the new
      `MailboxRepository.observeHiddenFolders()` (the set of folders whose
      delete is queued, every account), drops the results in a folder that
      became hidden at once and re-runs the search; when the set shrinks
      (the delete was undone or failed) it re-runs too, so the mail comes
      back. The folder lists filter by folder already.
+     Review round: `_visible` no longer makes a watched query watch
+     `mailboxes` (every listing writes it once per folder, so an open thread
+     re-ran per folder and rebuilt its reply tree): the thread across
+     folders combines its rows with the account's hidden folders in Dart
+     (`_combineLatest`, the hidden set `distinct`). The search screen
+     filters every result that arrives by the hidden set, so a search
+     running when a folder was hidden does not bring its mail back;
+     the first emission refreshes nothing, a folder shown again during a
+     search refreshes after it, and these background refreshes fail
+     without a snackbar.
    - **Counterpart stand-in for a nested folder.** `_mirrorMoveToCounterparts`
      resolves the destination's ancestors on the source account
      (`MailboxStateWriter.ancestorsOf`, by the parent each folder shows
-     below) level by level on the counterpart, each matched by role, then
-     by name among the folders below the level before
-     (`_resolveCounterpartParent`; only folders with a server copy and not
-     being deleted). The destination's own name match is limited to the
-     folders below that parent, so "A/2026" no longer pairs with "B/2026".
+     below) level by level on the counterpart (`_resolveCounterpartParent`;
+     only folders with a server copy and not being deleted): exact role and
+     name anywhere, then the name among the folders below the level
+     before, then the role alone (review fix: role before name took a
+     user's own "Trash" for the counterpart's "Deleted Items"). The
+     destination's own name match is limited to the folders below that
+     parent, and with no known parent (or an ancestor not cached) the
+     destination is matched by role only (review fix), so "A/2026" never
+     pairs with "B/2026".
      With the parent found, the stand-in is made below it
      (`ensureCounterpartFolder(parent:)`): on IMAP at the path the server
      gives the folder (parent, separator, name), on JMAP with a `~new:`
@@ -1736,7 +1752,8 @@ As implemented, phase 6 is two PRs, both done:
      twice** (IMAP; JMAP ids are stable). A listing whose LIST already has
      the new path of a rename or move that is being sent (`inflight`), and
      no longer the old one, does not store a row at the new path or below
-     it (`pathsArrivingByRename`), and does not offer those paths to
+     it (`pathsArrivingByRename`; info `mailbox.listing_skipped_arriving`),
+     and does not offer those paths to
      `_followRenamesElsewhere`; the op's ack then moves the folder there,
      keeping its id. Before, the listing stored a second folder, shown
      next to the moving one until the ack merged them
@@ -1765,9 +1782,15 @@ As implemented, phase 6 is two PRs, both done:
      server copy is gone) and `draft.folder_changed` (the Drafts folder
      changed: drafts uploaded again, queued removals dropped). Info
      `body_cache.evicted`. Fix: the body cache eviction no longer drops a
-     virtual row's body (`is_local`, the text the user wrote, with no
-     server copy to fetch it again). `markFolderGone` returns how many rows
-     it removed with the ones it kept.
+     body that cannot be fetched again (a virtual row's, `is_local`, the
+     text the user wrote; a gone mail's kept for a change, `srv_gone`), and
+     does not count them against the limit; prefetching stops at 90 % of
+     the limit, so a run no longer evicts what the one before fetched.
+     `markFolderGone` returns how many rows it removed with the ones it
+     kept. Only unexpected removals are logged one by one; an ordinary
+     expunge or JMAP `destroyed` is not (SYNC.md §6a). `mailbox.removed_gone`
+     also fires on the paired account when the user deletes the folder on
+     the other one; its wording allows for that.
    - **Tests.** `counterpart_shadow_test.dart` (a nested stand-in on JMAP
      below the parent the counterpart has, not a same-named folder
      elsewhere, never sent, adopted by the nested listing; an unknown
@@ -1778,7 +1801,10 @@ As implemented, phase 6 is two PRs, both done:
      mail and `observeHiddenFolders`), `search_screen_test.dart` (results
      drop a deleted folder's mail before the re-query answers; Undo brings
      it back) and `body_cache_service_test.dart` (a virtual row's body is
-     not evicted).
+     not evicted). Review round: a decoy "Other/2026" with the parent
+     unknown, the IMAP top-level stand-in adopted by name, the parent level
+     matched by name before role, a search running while a folder is hidden,
+     and a path skipped during a rename that is then refused.
 
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
@@ -1883,7 +1909,11 @@ What remains after phase 6, with where it is handled today:
   reconcile marks it gone (4a).
 - **A counterpart stand-in whose parent the counterpart does not know**
   is made at the top level; on JMAP it is not adopted and is dropped by the
-  next listing (6b).
+  next listing (6b). On IMAP it is adopted by its name alone when no
+  stand-in below the listed parent matches; the adoption runs per listed
+  folder, so with two folders of that name in the listing (X/2026 and
+  Y/2026) it binds to the one listed first, which may be the wrong one.
+  The stand-in itself is unique (only one candidate is adopted).
 - **Enforcement is a check, not the schema.** A direct write that slips
   past `check_email_writes.sh` is caught by the sampled consistency checks
   (`OverlayConsistencySampler`, repaired and logged), not refused at
@@ -1922,7 +1952,7 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | `local_rows.dart` | Local row creation: `_storeSentCopyLocally`, `_createLocalSelfMessages` (their row writes through the writer's `insertLocalRow` since 4b) |
 | `send.dart` | Sending (SMTP, JMAP submission, outbox); its row writes go through `local_rows.dart` |
 | `threads.dart` | Derived: `_updateThread`, `_reconcileSourceThreads`, `_sweepOrphanThreads` |
-| `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes); `_visible`, the hidden-row filter, also watches `mailboxes` (6b) |
+| `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes); the open thread filters by the hidden folders in Dart (`_combineLatest`, 6b) |
 | `diagnostics.dart` | Diagnostics and the reliability probe (no row writes) |
 
 The email state writer (§2) is `lib/data/repositories/email_state_writer.dart`

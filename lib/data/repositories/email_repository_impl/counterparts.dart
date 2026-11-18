@@ -450,18 +450,28 @@ extension _Counterparts on EmailRepositoryImpl {
     final ancestors =
         sourceDest == null ? null : await _mailboxState.ancestorsOf(sourceDest);
 
+    // A folder below another one (also when an ancestor is not cached).
+    final nested =
+        sourceDest != null && (ancestors == null || ancestors.isNotEmpty);
+
     for (final row in twins) {
       // The counterpart's folder for the destination's parent; null at the
-      // top level, or when a folder above it is not known there (then the
-      // stand-in is made at the top level, as before 6b).
+      // top level, or when a folder above it is not known there.
       final parent = ancestors == null || ancestors.isEmpty
           ? null
           : await _resolveCounterpartParent(row.accountId, ancestors);
+      // A nested destination whose parent the counterpart does not know is
+      // matched by role only: by name it could pair "A/2026" with
+      // "B/2026". Without a role match the stand-in goes to the top level.
       final counterpartDest = await _resolveCounterpartMailboxPath(
         row.accountId,
         role: destRole,
         name: destName,
-        scoped: parent != null,
+        names: !nested
+            ? _NameScope.anywhere
+            : parent == null
+                ? _NameScope.none
+                : _NameScope.below,
         below: parent,
       );
       if (counterpartDest == null) {
@@ -520,10 +530,15 @@ extension _Counterparts on EmailRepositoryImpl {
   /// then a case-insensitive name match for role-less custom folders. Returns
   /// null when the counterpart has no equivalent mailbox.
   ///
-  /// With [scoped], the name passes look only at the folders shown below
-  /// [below] (the top level when null): a nested folder's name is matched
-  /// below its parent's counterpart, so "A/2026" never pairs with "B/2026"
-  /// (phase 6b). The role passes stay account-wide.
+  /// [names] limits the name passes (phase 6b): [_NameScope.below] looks
+  /// only at the folders shown below [below] (the top level when null), so
+  /// a nested folder's name is matched below its parent's counterpart;
+  /// [_NameScope.none] skips them (a nested folder whose parent the
+  /// counterpart does not know). Then "A/2026" never pairs with "B/2026".
+  /// The role passes stay account-wide. With [namesFirst] (an ancestor
+  /// level) the scoped name passes run before the role-only pass, so a
+  /// user's own "Trash" with subfolders is not taken for the counterpart's
+  /// "Deleted Items".
   ///
   /// The exact pass matters because a role is not unique: Stalwart ships
   /// "Deleted Items" as its trash folder, so a mailbox the user (or a test)
@@ -536,31 +551,45 @@ extension _Counterparts on EmailRepositoryImpl {
     String accountId, {
     required String? role,
     required String name,
-    bool scoped = false,
+    _NameScope names = _NameScope.anywhere,
     String? below,
+    bool namesFirst = false,
   }) async {
     final mailboxes = await _counterpartFolders(accountId);
     final lowerName = name.toLowerCase();
+    final parents = names == _NameScope.below
+        ? await _mailboxState.shownParents(accountId)
+        : null;
+    final scope = [
+      if (names != _NameScope.none)
+        for (final m in mailboxes)
+          if (parents == null || parents[m.path] == below) m,
+    ];
+    String? byName() {
+      for (final m in scope) {
+        if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
+      }
+      for (final m in scope) {
+        if (m.name.toLowerCase() == lowerName) return m.path;
+      }
+      return null;
+    }
+
     if (role != null) {
       for (final m in mailboxes) {
         if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
       }
+    }
+    if (namesFirst) {
+      final named = byName();
+      if (named != null) return named;
+    }
+    if (role != null) {
       for (final m in mailboxes) {
         if (m.role == role) return m.path;
       }
     }
-    final parents = scoped ? await _mailboxState.shownParents(accountId) : null;
-    final scope = [
-      for (final m in mailboxes)
-        if (parents == null || parents[m.path] == below) m,
-    ];
-    for (final m in scope) {
-      if (m.role == role && m.name.toLowerCase() == lowerName) return m.path;
-    }
-    for (final m in scope) {
-      if (m.name.toLowerCase() == lowerName) return m.path;
-    }
-    return null;
+    return byName();
   }
 
   /// The folders of [accountId] a server-side move can have put a mail
@@ -593,12 +622,26 @@ extension _Counterparts on EmailRepositoryImpl {
         accountId,
         role: level.role,
         name: level.name,
-        scoped: true,
+        names: _NameScope.below,
         below: parent,
+        namesFirst: true,
       );
       if (match == null) return null;
       parent = match;
     }
     return parent;
   }
+}
+
+/// Which folders the name passes of
+/// [_Counterparts._resolveCounterpartMailboxPath] look at.
+enum _NameScope {
+  /// Every folder of the account (a top-level destination).
+  anywhere,
+
+  /// The folders shown below a given parent.
+  below,
+
+  /// None: only roles match.
+  none,
 }

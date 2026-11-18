@@ -301,8 +301,10 @@ class DraftRepositoryImpl extends DraftRepository {
         unawaited(
           _appLogger?.warn(
             'draft.server_gone',
-            'Removed the draft "${row.subjectText}": its copy on the server '
-                'is gone (deleted or sent from another client)',
+            'Removed the draft '
+                '${row.subjectText.isEmpty ? '(no subject)' : '"${row.subjectText}"'}'
+                ': its copy on the server is gone (deleted or sent from '
+                'another client)',
             accountId: row.accountId,
             data: {
               'draftId': row.id,

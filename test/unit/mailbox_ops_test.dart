@@ -600,6 +600,42 @@ void main() {
     });
 
     test(
+        'a path skipped while a rename was being sent is stored by the next '
+        'listing when the rename is refused (6b)', () async {
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+      // Another client renamed the folder to that name first; this rename
+      // is being sent by a flush that has not answered yet.
+      server.renameFolder('Archive', 'Old Mail');
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.changeType.equals('rename_mailbox')))
+          .write(
+        PendingChangesCompanion(
+          state: const Value('inflight'),
+          claimToken: const Value('other-flush'),
+          leaseUntil: Value(DateTime(2099)),
+        ),
+      );
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(
+        (await db.select(db.mailboxes).get()).map((m) => m.path),
+        isNot(contains('Old Mail')),
+      );
+      expect(events(), contains('mailbox.listing_skipped_arriving'));
+
+      // The server refuses it (the old path is gone).
+      final rename = (await db.select(db.pendingChanges).get())
+          .singleWhere((o) => o.changeType == 'rename_mailbox');
+      await MailboxStateWriter(db).fail(rename, 'NO [NONEXISTENT]');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      final shown = await shownFolders();
+      expect(shown.where((p) => p == 'Old Mail'), hasLength(1));
+      expect(shown, isNot(contains('Archive')));
+      await _expectConsistent(db);
+    });
+
+    test(
         'a listing that shows a rename done while it is being sent stores '
         'no second folder; the ack renames the folder (6b)', () async {
       final archive = (await db.select(db.mailboxes).get())
