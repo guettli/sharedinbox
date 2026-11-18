@@ -528,50 +528,70 @@ class MailboxStateWriter {
   /// not know that folder yet (SYNC-REDESIGN.md §6, §7; phase 5b): a local
   /// row whose `create_mailbox` is a shadow of [primarySeq], never sent
   /// (the other account creates or has the folder on the shared server).
-  /// The twin's shadow move names its path and so waits on it, shown
-  /// there. A listing that finds the folder adopts the row
+  /// It is made below [parent] (the `path` of a folder of [accountId] that
+  /// has a server copy, null for the top level; phase 6b), so a nested
+  /// folder gets the parent it has on the server: on IMAP the path the
+  /// server gives it (the parent's path, the separator, [name]), on JMAP a
+  /// [localJmapMailboxPrefix] path with the parent's server id as
+  /// `parent_id`. The twin's shadow move names its path and so waits on it,
+  /// shown there. A listing that finds the folder adopts the row
   /// ([writeServer]); one that started after the primary's ack and does
   /// not, drops it ([dropOrphanedCounterpartFolders]). Reuses such a row
-  /// already made for the name. Returns its path.
+  /// already made for the name below the same parent. Returns its path.
   Future<String> ensureCounterpartFolder({
     required String accountId,
     required String name,
     required String? role,
     required int primarySeq,
+    String? parent,
   }) =>
       _db.transaction(() async {
+        // Only below a folder the server has: a stand-in's parent is sent
+        // nowhere, but a `~new:` path must never become a server parent.
+        final parentRow =
+            parent == null ? null : await rowByPath(accountId, parent);
+        final under =
+            parentRow == null || parentRow.isLocal ? null : parentRow.path;
         for (final r in await _rowsOf(accountId)) {
           if (!r.isLocal || r.localHidden || r.name != name) continue;
-          if (await _counterpartCreateOf(r.id) == null) continue;
+          final create = await _counterpartCreateOf(r.id);
+          if (create == null) continue;
+          if (_payloadOf(create)?[mailboxOpParent] != under) continue;
           // One shadow create per move that needs the stand-in: the row
           // stays while any of them is live (an Undo of the first move
           // must not drop the folder a later twin shows in).
           final origin = EmailStateWriter.shadowOrigin(primarySeq);
           final mine = (await _opsOf(r.id)).any((o) => o.origin == origin);
           if (!mine) {
-            await _insertShadowCreate(accountId, r.id, name, role, primarySeq);
+            await _insertShadowCreate(
+              accountId,
+              r.id,
+              name,
+              role,
+              primarySeq,
+              under,
+            );
           }
           return r.path;
         }
         final jmap = await _isJmap(accountId);
-        final path = jmap ? '$localJmapMailboxPrefix${_hex(32)}' : name;
-        if (await rowByPath(accountId, path) != null) {
-          // A folder of this account has the path the stand-in would get
-          // (hidden or failed): the twin waits under a random one.
-          return _insertCounterpartFolder(
-            accountId,
-            '$localJmapMailboxPrefix${_hex(32)}',
-            name,
-            role,
-            primarySeq,
-          );
-        }
+        final path = jmap
+            ? '$localJmapMailboxPrefix${_hex(32)}'
+            : under == null
+                ? name
+                : '$under${await imapSeparator(accountId)}$name';
         return _insertCounterpartFolder(
           accountId,
-          path,
+          // A folder of this account has the path the stand-in would get
+          // (hidden or failed): the twin waits under a random one.
+          await rowByPath(accountId, path) == null
+              ? path
+              : '$localJmapMailboxPrefix${_hex(32)}',
           name,
           role,
           primarySeq,
+          parent: under,
+          jmap: jmap,
         );
       });
 
@@ -580,8 +600,10 @@ class MailboxStateWriter {
     String path,
     String name,
     String? role,
-    int primarySeq,
-  ) async {
+    int primarySeq, {
+    required String? parent,
+    required bool jmap,
+  }) async {
     final id = await _freeId(accountId, path);
     await _db.into(_db.mailboxes).insert(
           MailboxesCompanion.insert(
@@ -593,9 +615,10 @@ class MailboxStateWriter {
             isLocal: const Value(true),
             role: Value(role),
             displayPath: Value(name),
+            parentId: Value(jmap ? parent : null),
           ),
         );
-    await _insertShadowCreate(accountId, id, name, role, primarySeq);
+    await _insertShadowCreate(accountId, id, name, role, primarySeq, parent);
     await _refoldRow(id);
     await rebuildDisplayPaths(accountId);
     _log(
@@ -605,20 +628,22 @@ class MailboxStateWriter {
             'that name, which this account has not listed yet',
         accountId: accountId,
         mailboxPath: path,
-        data: {'primaryChangeId': primarySeq},
+        data: {'primaryChangeId': primarySeq, 'parent': parent},
       ),
     );
     return path;
   }
 
-  /// A `create_mailbox` of counterpart stand-in [mailboxId], a shadow of
-  /// move [primarySeq]: folded, never sent, ended with its primary.
+  /// A `create_mailbox` of counterpart stand-in [mailboxId] below [parent]
+  /// (null: top level), a shadow of move [primarySeq]: folded, never sent,
+  /// ended with its primary.
   Future<void> _insertShadowCreate(
     String accountId,
     String mailboxId,
     String name,
     String? role,
     int primarySeq,
+    String? parent,
   ) =>
       _db.into(_db.pendingChanges).insert(
             PendingChangesCompanion.insert(
@@ -626,7 +651,7 @@ class MailboxStateWriter {
               resourceType: mailboxResourceType,
               resourceId: mailboxId,
               changeType: createMailboxOp,
-              payload: _createPayload(name, null, role),
+              payload: _createPayload(name, parent, role),
               createdAt: _now(),
               state: const Value('shadow'),
               origin: Value(EmailStateWriter.shadowOrigin(primarySeq)),
@@ -661,10 +686,15 @@ class MailboxStateWriter {
   }
 
   /// A counterpart's stand-in folder ([ensureCounterpartFolder]) of
-  /// [accountId] called [name] (below [parentId] on JMAP) that a listing
-  /// lists at [path], which no row has: the row takes that path (its id
-  /// stays; the twin's shadow move follows, [serverPathChanged]). Returns
-  /// whether one was adopted.
+  /// [accountId] called [name] that a listing lists at [path], which no row
+  /// has: the row takes that path (its id stays; the twin's shadow move
+  /// follows, [serverPathChanged]). The stand-in must have been made below
+  /// the parent the listing gives the folder ([parentId] on JMAP, the
+  /// path's parent on IMAP), so a nested folder is adopted too (phase 6b).
+  /// On IMAP a stand-in made at the top level because its parent was not
+  /// known (or made before 6b) is still adopted by its name alone when no
+  /// stand-in has that parent. Only a unique candidate is adopted. Returns
+  /// whether one was.
   Future<bool> _adoptCounterpartFolder(
     String accountId,
     String path,
@@ -672,12 +702,23 @@ class MailboxStateWriter {
     String? parentId,
   ) async {
     final jmap = await _isJmap(accountId);
-    final candidates = <MailboxRow>[];
+    final listedParent =
+        jmap ? parentId : imapParentOf(path, await imapSeparator(accountId));
+    final below = <MailboxRow>[];
+    final topLevel = <MailboxRow>[];
     for (final r in await _rowsOf(accountId)) {
       if (!r.isLocal || r.name != name) continue;
-      if (jmap && r.parentId != parentId) continue;
-      if (await _counterpartCreateOf(r.id) != null) candidates.add(r);
+      final create = await _counterpartCreateOf(r.id);
+      if (create == null) continue;
+      final standInParent =
+          jmap ? r.parentId : _payloadOf(create)?[mailboxOpParent] as String?;
+      if (standInParent == listedParent) {
+        below.add(r);
+        continue;
+      }
+      if (!jmap && standInParent == null) topLevel.add(r);
     }
+    final candidates = below.isNotEmpty ? below : topLevel;
     if (candidates.length != 1) return false;
     final local = candidates.single;
     await serverPathChanged(accountId, local.path, path);
@@ -832,8 +873,45 @@ class MailboxStateWriter {
     required String separator,
   }) {
     if (jmap) return row.parentId;
-    final cut = row.path.lastIndexOf(separator);
-    return cut <= 0 ? null : row.path.substring(0, cut);
+    return imapParentOf(row.path, separator);
+  }
+
+  /// The parent of IMAP [path]: the path up to its last [separator] (null:
+  /// top level).
+  static String? imapParentOf(String path, String separator) {
+    final cut = path.lastIndexOf(separator);
+    return cut <= 0 ? null : path.substring(0, cut);
+  }
+
+  /// The parent `path` each of [accountId]'s mailboxes shows below (null:
+  /// the top level), keyed by `path` ([shownParentOf]).
+  Future<Map<String, String?>> shownParents(String accountId) async {
+    final jmap = await _isJmap(accountId);
+    final separator = await imapSeparator(accountId);
+    return {
+      for (final r in await _rowsOf(accountId))
+        r.path: switch (r.localParent) {
+          final String local => local.isEmpty ? null : local,
+          null => serverParentOf(r, jmap: jmap, separator: separator),
+        },
+    };
+  }
+
+  /// The folders [row] shows below, outermost first (empty at the top
+  /// level), or null when one of them is not cached.
+  Future<List<MailboxRow>?> ancestorsOf(MailboxRow row) async {
+    final parents = await shownParents(row.accountId);
+    final byPath = {for (final r in await _rowsOf(row.accountId)) r.path: r};
+    final chain = <MailboxRow>[];
+    final seen = <String>{row.path};
+    var parent = parents[row.path];
+    while (parent != null) {
+      final r = byPath[parent];
+      if (r == null || !seen.add(parent)) return null;
+      chain.insert(0, r);
+      parent = parents[parent];
+    }
+    return chain;
   }
 
   /// The parent `path` [row] shows below now (null: top level): its
@@ -1252,20 +1330,9 @@ class MailboxStateWriter {
           )
           .firstOrNull;
       if (lost == null) continue;
-      final cut = row.path.lastIndexOf(separator);
-      final String target;
-      final String name;
-      if (lost.changeType == moveMailboxOp) {
-        name = cut < 0 ? row.path : row.path.substring(cut + separator.length);
-        final parent = _payloadOf(lost)?[mailboxOpParent] as String?;
-        target = parent == null ? name : '$parent$separator$name';
-      } else {
-        final renamed = _payloadOf(lost)?[mailboxOpName];
-        if (renamed is! String) continue;
-        name = renamed;
-        target =
-            cut < 0 ? name : '${row.path.substring(0, cut)}$separator$name';
-      }
+      final renamed = _renameTarget(row, lost, separator);
+      if (renamed == null) continue;
+      final (:target, :name) = renamed;
       if (!listedPaths.contains(target)) continue;
       final done = await _db.transaction(() async {
         final count = await (_db.update(_db.pendingChanges)
@@ -1301,6 +1368,58 @@ class MailboxStateWriter {
       );
     }
     return moved;
+  }
+
+  /// The IMAP path (and leaf name) rename or move [op] gives folder [row],
+  /// or null when its payload names none.
+  static ({String target, String name})? _renameTarget(
+    MailboxRow row,
+    PendingChangeRow op,
+    String separator,
+  ) {
+    final cut = row.path.lastIndexOf(separator);
+    if (op.changeType == moveMailboxOp) {
+      final name =
+          cut < 0 ? row.path : row.path.substring(cut + separator.length);
+      final parent = _payloadOf(op)?[mailboxOpParent] as String?;
+      return (
+        target: parent == null ? name : '$parent$separator$name',
+        name: name,
+      );
+    }
+    if (op.changeType != renameMailboxOp) return null;
+    final name = _payloadOf(op)?[mailboxOpName];
+    if (name is! String) return null;
+    return (
+      target: cut < 0 ? name : '${row.path.substring(0, cut)}$separator$name',
+      name: name,
+    );
+  }
+
+  /// The IMAP paths a rename or move being sent right now (`inflight`)
+  /// gives a cached folder, for those the listing [listedPaths] already
+  /// shows done: the old path is gone, the new one listed (phase 6b). The
+  /// listing does not store a new row at such a path (nor at its
+  /// subfolders' paths, [isRenamedAway]): the op's ack moves the folder
+  /// there, keeping its id. Before 6b the listing stored the new path as a
+  /// second folder, shown next to the moved one until the ack merged them
+  /// (`mailbox.local_merged`). A rename or move sent before without an
+  /// answer is completed by [completeLostRenames] instead.
+  Future<Set<String>> pathsArrivingByRename(
+    String accountId,
+    Set<String> listedPaths,
+  ) async {
+    final separator = await imapSeparator(accountId);
+    final out = <String>{};
+    for (final row in await _rowsOf(accountId)) {
+      if (row.isLocal || listedPaths.contains(row.path)) continue;
+      for (final op in await _opsOf(row.id)) {
+        if (op.state != 'inflight') continue;
+        final target = _renameTarget(row, op, separator)?.target;
+        if (target != null && listedPaths.contains(target)) out.add(target);
+      }
+    }
+    return out;
   }
 
   /// Settles the acked ops of mailbox [mailboxId] against [srvName], read
@@ -2091,8 +2210,9 @@ class MailboxStateWriter {
     _log(
       (logger) => logger.warn(
         'mailbox.local_merged',
-        'The folder "${local.name}" created on this device is the server\'s '
-            'folder "${cached.name}"; they are shown as one',
+        'The folder "${local.name}" created, renamed or moved on this '
+            'device is the server\'s folder "${cached.name}", which a listing '
+            'stored before the server confirmed it; they are shown as one',
         accountId: local.accountId,
         mailboxPath: cached.path,
         data: {'localId': local.id, 'mailboxId': cached.id},

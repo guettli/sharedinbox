@@ -15,12 +15,69 @@ const _emailListOrderSql =
 /// shown in a folder whose delete is queued (`mailboxes.local_hidden`,
 /// phase 5b): the folder shows nowhere, so its mail does not either (in
 /// search, by address, by thread, by id). Queries that filter by a folder
-/// exclude it already; the others add this.
+/// exclude it already; the others add this. It does not make a watched
+/// query watch `mailboxes` (every folder listing writes it, once per
+/// folder): a watched query combines its rows with
+/// [_Queries._hiddenFoldersOf] instead (phase 6b).
 Expression<bool> _visible($EmailsTable t) =>
-    t.mailboxPath.equals('').not() & _notInHiddenFolder;
+    t.mailboxPath.equals('').not() &
+    CustomExpression<bool>('NOT (${_inHiddenFolderSql(t.aliasedName)})');
 
-final _notInHiddenFolder =
-    CustomExpression<bool>('NOT (${_inHiddenFolderSql('emails')})');
+/// The latest value of [a] and of [b], combined, each time either emits
+/// (once both have). Cancelling it cancels both.
+Stream<R> _combineLatest<A, B, R>(
+  Stream<A> a,
+  Stream<B> b,
+  R Function(A a, B b) combine,
+) {
+  // Single-subscription: it ends with its listener's cancel, which cancels
+  // both sources; nothing is added after that.
+  // ignore: close_sinks
+  late final StreamController<R> out;
+  StreamSubscription<A>? subA;
+  StreamSubscription<B>? subB;
+  late A lastA;
+  late B lastB;
+  var hasA = false;
+  var hasB = false;
+  void emit() {
+    if (hasA && hasB) out.add(combine(lastA, lastB));
+  }
+
+  out = StreamController<R>(
+    onListen: () {
+      subA = a.listen(
+        (v) {
+          lastA = v;
+          hasA = true;
+          emit();
+        },
+        onError: out.addError,
+      );
+      subB = b.listen(
+        (v) {
+          lastB = v;
+          hasB = true;
+          emit();
+        },
+        onError: out.addError,
+      );
+    },
+    onPause: () {
+      subA?.pause();
+      subB?.pause();
+    },
+    onResume: () {
+      subA?.resume();
+      subB?.resume();
+    },
+    onCancel: () async {
+      await subA?.cancel();
+      await subB?.cancel();
+    },
+  );
+  return out.stream;
+}
 
 /// SQL (correlated on the `emails` alias [e]): the mail shows in a folder
 /// whose delete is queued.
@@ -662,12 +719,12 @@ extension _Queries on EmailRepositoryImpl {
     // conversation's Inbox, Sent and Archive copies are gathered together
     // (#754). The UID tiebreak compares UIDs of different folders, so for
     // same-second copies it only makes the order deterministic.
-    return (_db.select(_db.emails)
+    final rows = (_db.select(_db.emails)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.threadId.equals(threadId) &
-                _visible(t),
+                t.mailboxPath.equals('').not(),
           )
           ..orderBy([
             (t) => OrderingTerm.asc(t.sentAt),
@@ -675,7 +732,30 @@ extension _Queries on EmailRepositoryImpl {
             (t) => OrderingTerm.asc(t.uid),
             (t) => OrderingTerm.asc(t.id),
           ]))
-        .watch()
-        .map((rows) => rows.map(_toModel).toList());
+        .watch();
+    // The mail of a folder whose delete is queued shows nowhere ([_visible]):
+    // filtered here, so the thread updates when that set changes and not on
+    // every folder listing.
+    return _combineLatest(
+      rows,
+      _hiddenFoldersOf(accountId),
+      (rows, hidden) => [
+        for (final r in rows)
+          if (!hidden.contains(r.mailboxPath)) _toModel(r),
+      ],
+    );
   }
+
+  /// The paths of [accountId]'s folders whose delete is queued
+  /// (`local_hidden`), again only when that set changes.
+  Stream<Set<String>> _hiddenFoldersOf(String accountId) =>
+      (_db.selectOnly(_db.mailboxes)
+            ..addColumns([_db.mailboxes.path])
+            ..where(
+              _db.mailboxes.accountId.equals(accountId) &
+                  _db.mailboxes.localHidden,
+            ))
+          .watch()
+          .map((rows) => {for (final r in rows) r.read(_db.mailboxes.path)!})
+          .distinct((a, b) => a.length == b.length && a.containsAll(b));
 }

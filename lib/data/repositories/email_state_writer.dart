@@ -1466,13 +1466,14 @@ class EmailStateWriter {
   /// pending, in-flight, stuck or acked op left are deleted
   /// ([cleanUpGone]). A row the user still has a change queued for stays,
   /// hidden or shown where that change puts it, until the change settles.
-  /// Returns the ids of the rows that stay.
+  /// Returns the ids of the rows that stay ([kept]) and how many rows were
+  /// deleted ([removed]); the caller logs both.
   ///
   /// With [exceptUidValidity], only the rows stamped with another
   /// UIDVALIDITY than that one: their UIDs name other mails now, whatever
   /// the checkpoint says (a force resync's full fetch, which may not know
   /// the folder's previous UIDVALIDITY).
-  Future<Set<String>> markFolderGone(
+  Future<({Set<String> kept, int removed})> markFolderGone(
     String accountId,
     String mailboxPath, {
     int? exceptUidValidity,
@@ -1495,7 +1496,7 @@ class EmailStateWriter {
           ).get())
             r.read<String>('id'),
         ];
-        if (ids.isEmpty) return <String>{};
+        if (ids.isEmpty) return (kept: <String>{}, removed: 0);
         // Only the rows this marked (no later read placed them elsewhere),
         // and only while they are still recorded in this folder.
         final marked = (await read.markGone(ids)).toList();
@@ -1514,10 +1515,11 @@ class EmailStateWriter {
           );
         }
         final deleted = (await cleanUpGone(accountId)).toSet();
-        return {
+        final kept = {
           for (final id in marked)
             if (!deleted.contains(id)) id,
         };
+        return (kept: kept, removed: marked.length - kept.length);
       });
 
   // ── Other columns ──────────────────────────────────────────────────────

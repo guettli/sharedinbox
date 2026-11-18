@@ -117,6 +117,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
   }
 
+  @override
+  Stream<Set<FolderRef>> observeHiddenFolders() =>
+      (_db.select(_db.mailboxes)..where((t) => t.localHidden))
+          .watch()
+          .map(
+            (rows) => {
+              for (final r in rows) (accountId: r.accountId, path: r.path),
+            },
+          )
+          .distinct((a, b) => a.length == b.length && a.containsAll(b));
+
   /// Folders whose shown unread count came out negative, logged once each.
   final _negativeLogged = <String>{};
 
@@ -202,9 +213,23 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // A rename whose answer was lost but that the listing shows done
       // moves the folder first, so it is not taken for deleted.
       await _writer.completeLostRenames(account.id, serverPaths);
+      // A rename or move being sent that the listing shows done already:
+      // its ack moves the folder to the new path (phase 6b).
+      final arriving =
+          await _writer.pathsArrivingByRename(account.id, serverPaths);
       // A folder another client renamed or moved: its mail and the changes
       // queued for it follow instead of failing as "folder removed".
-      await _followRenamesElsewhere(client, account.id, mailboxes, listSeq);
+      await _followRenamesElsewhere(
+        client,
+        account.id,
+        [
+          for (final mb in mailboxes)
+            if (!MailboxStateWriter.isRenamedAway(mb.path, arriving, separator))
+              mb,
+        ],
+        listSeq,
+        allListed: serverPaths,
+      );
       await _prune(account.id, serverPaths, listSeq);
       final renamedAway = await _writer.renamedAwaySince(account.id, listSeq);
 
@@ -213,6 +238,22 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // An old path (or a subfolder of one) a rename acked after this
         // listing started moved away from.
         if (MailboxStateWriter.isRenamedAway(path, renamedAway, separator)) {
+          continue;
+        }
+        // The new path of a rename or move being sent: not a second folder
+        // next to the one moving there (the ack moves that one).
+        if (MailboxStateWriter.isRenamedAway(path, arriving, separator) &&
+            await _writer.rowByPath(account.id, path) == null) {
+          unawaited(
+            _appLogger?.info(
+              'mailbox.listing_skipped_arriving',
+              'Not storing "$path" from this listing: a rename or move of a '
+                  'folder to it is being sent, and its answer moves the '
+                  'folder there',
+              accountId: account.id,
+              mailboxPath: path,
+            ),
+          );
           continue;
         }
 
@@ -647,9 +688,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   /// IMAP folders another client renamed or moved (SYNC-REDESIGN.md §8,
   /// phase 5b): IMAP has no folder ids, so a rename elsewhere lists as a
-  /// folder gone plus a new one. A cached folder the listing [listed]
-  /// (started at [readSeq]) no longer has, and that has no delete queued,
-  /// is taken for renamed to a new folder that shares its leaf (a move) or
+  /// folder gone plus a new one. A cached folder the listing (its paths
+  /// [allListed], started at [readSeq]) no longer has, and that has no
+  /// delete queued, is taken for renamed to a new folder of [listed] (the
+  /// listed folders less the paths an own rename or move being sent puts a
+  /// folder at) that shares its leaf (a move) or
   /// its parent (a rename) with it, when that match is unique both ways (one
   /// new folder for it, no other vanished folder matching that one) and the
   /// new folder
@@ -669,10 +712,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
     imap.ImapClient client,
     String accountId,
     List<imap.Mailbox> listed,
-    int readSeq,
-  ) async {
-    final listedPaths = {for (final mb in listed) mb.path};
-    final vanished = await _writer.prunable(accountId, listedPaths, readSeq);
+    int readSeq, {
+    required Set<String> allListed,
+  }) async {
+    final vanished = await _writer.prunable(accountId, allListed, readSeq);
     if (vanished.isEmpty) return;
     final cached = {
       for (final r in await (_db.select(_db.mailboxes)
@@ -1318,15 +1361,17 @@ Future<void> removeLocalMailbox(
   bool deletedByUser = false,
 }) async {
   final folders = MailboxStateWriter(db, appLogger: appLogger);
+  final cachedFolder = await folders.rowByPath(accountId, path);
   // A folder created offline has no server copy that could be gone: a
   // SELECT or listing that misses it says nothing about it.
-  if ((await folders.rowByPath(accountId, path))?.isLocal ?? false) {
+  if (cachedFolder?.isLocal ?? false) {
     log('Not removing "$path": created offline, not on the server yet');
     return;
   }
   final why = deletedByUser ? 'folder deleted' : 'folder removed on the server';
   final failed = <PendingChangeRow>[];
   var kept = <String>{};
+  var removed = 0;
   final writer = EmailStateWriter(db, appLogger: appLogger);
   await db.transaction(() async {
     await (db.delete(db.threads)
@@ -1380,7 +1425,8 @@ Future<void> removeLocalMailbox(
     ]);
     // Their shadows on a counterpart account go with them.
     shownElsewhere.addAll((await writer.dropOrphanedShadows()).keys);
-    kept = await writer.markFolderGone(accountId, path);
+    (kept: kept, removed: removed) =
+        await writer.markFolderGone(accountId, path);
     for (final row in await (db.select(db.emails)
           ..where((t) => t.id.isIn(shownElsewhere)))
         .get()) {
@@ -1394,6 +1440,22 @@ Future<void> removeLocalMailbox(
 
     await folders.deleteRow(accountId, path);
   });
+  if (!deletedByUser && (cachedFolder != null || removed > 0)) {
+    // The folder and the mail cached for it vanish from the app: say so
+    // (a SELECT error read as "no such folder", a listing without it, a
+    // JMAP `destroyed`).
+    unawaited(
+      appLogger?.warn(
+        'mailbox.removed_gone',
+        'The folder "$path" is gone on the server (deleted there, maybe '
+            'through another account of the same mailbox or another client): '
+            'removed it and the $removed mail(s) cached for it',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'removedEmails': removed, 'kept': kept.length},
+      ),
+    );
+  }
   if (kept.isNotEmpty) {
     unawaited(
       appLogger?.warn(

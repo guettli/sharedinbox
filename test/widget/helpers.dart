@@ -333,6 +333,14 @@ class FakeMailboxRepository implements MailboxRepository {
     return true;
   }
 
+  /// Feeds [observeHiddenFolders]: add a set to report folders whose
+  /// delete is queued. Lives as long as the fake.
+  // ignore: close_sinks
+  final hiddenFolders = StreamController<Set<FolderRef>>.broadcast();
+
+  @override
+  Stream<Set<FolderRef>> observeHiddenFolders() => hiddenFolders.stream;
+
   @override
   Future<Mailbox> moveMailbox(
     String accountId,

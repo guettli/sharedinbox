@@ -109,25 +109,31 @@ extension _SyncImap on EmailRepositoryImpl {
         // where the change shows it) until the change settles. Without a
         // known previous UIDVALIDITY, the rows stamped with another one
         // than the server's are gone the same way.
-        final kept = validityChanged
+        final (:kept, :removed) = validityChanged
             ? await _state.markFolderGone(account.id, mailboxPath)
             : uidValidity == 0
-                ? const <String>{}
+                ? (kept: const <String>{}, removed: 0)
                 : await _state.markFolderGone(
                     account.id,
                     mailboxPath,
                     exceptUidValidity: uidValidity,
                   );
-        if (kept.isNotEmpty) {
+        if (kept.isNotEmpty || removed > 0) {
+          // Also without a kept row: the cached copies (bodies, downloaded
+          // attachments) are gone and the mail comes back as new rows.
           unawaited(
             _appLogger?.warn(
               'sync.uidvalidity_changed',
-              'The server renumbered $mailboxPath: ${kept.length} '
+              'The server renumbered $mailboxPath: $removed cached mail(s) '
+                  'removed and fetched again as new; ${kept.length} '
                   'mail(s) with a queued change are kept until the change '
-                  'is applied or fails; the folder is fetched again',
+                  'is applied or fails',
               accountId: account.id,
               mailboxPath: mailboxPath,
-              data: {'keptEmailIds': kept.take(100).toList()},
+              data: {
+                'removed': removed,
+                'keptEmailIds': kept.take(100).toList(),
+              },
             ),
           );
         }

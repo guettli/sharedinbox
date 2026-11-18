@@ -372,6 +372,211 @@ void main() {
     expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
   });
 
+  group('a stand-in for a nested folder (6b)', () {
+    Future<void> folder(
+      String account,
+      String path,
+      String name, {
+      String? parentId,
+    }) =>
+        db.into(db.mailboxes).insert(
+              MailboxesCompanion.insert(
+                id: '$account:$path',
+                accountId: account,
+                path: path,
+                name: name,
+                parentId: Value(parentId),
+              ),
+            );
+    Future<MailboxRow> mailbox(String path) =>
+        (db.select(db.mailboxes)..where((t) => t.path.equals(path)))
+            .getSingle();
+    Future<PendingChangeRow> shadowCreate(String accountId) async =>
+        (await opsOf(accountId))
+            .singleWhere((o) => o.changeType == 'create_mailbox');
+    Future<void> ackPrimary(String accountId) async {
+      final primary = (await opsOf(accountId)).single;
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.id.equals(primary.id)))
+          .write(const PendingChangesCompanion(state: Value('inflight')));
+      await EmailStateWriter(db).ack(
+        await (db.select(db.pendingChanges)
+              ..where((t) => t.id.equals(primary.id)))
+            .getSingle(),
+      );
+    }
+
+    /// The primary is acked, then the counterpart's listing has the folder
+    /// at [path] (below [parentId] on JMAP): [standIn] becomes it, keeping
+    /// its id, its shadow create goes, and twin [twinId] shows there.
+    Future<void> listingAdopts(
+      MailboxRow standIn, {
+      required String primaryAccount,
+      required String path,
+      required String twinId,
+      String? parentId,
+    }) async {
+      await ackPrimary(primaryAccount);
+      await MailboxStateWriter(db).writeServer(
+        accountId: standIn.accountId,
+        path: path,
+        name: standIn.name,
+        role: null,
+        parentId: parentId,
+        unreadCount: 0,
+        totalCount: 1,
+        unreadSeq: 0,
+        readSeq: await EmailStateWriter(db).nextReadSeq(),
+      );
+
+      final adopted = await mailbox(path);
+      expect((adopted.id, adopted.isLocal), (standIn.id, false));
+      expect((await row(twinId)).mailboxPath, path);
+      expect(
+        (await opsOf(standIn.accountId)).map((o) => o.changeType),
+        isNot(contains('create_mailbox')),
+      );
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+    }
+
+    test(
+        'JMAP: made below the parent the counterpart has (not a same-named '
+        'folder elsewhere), never sent, no stand-in id as a parent; the '
+        "listing adopts it when the server's folder is nested", () async {
+      await folder('imap-p', 'Projects', 'Projects');
+      await folder('imap-p', 'Projects/2026', '2026');
+      await folder('jmap-p', 'mbox-proj', 'Projects');
+      // A "2026" below another folder is not the destination.
+      await folder('jmap-p', 'mbox-other', 'Other');
+      await folder('jmap-p', 'mbox-o2026', '2026', parentId: 'mbox-other');
+
+      await emails.moveEmail('imap-p:5', 'Projects/2026');
+
+      final twin = await row('jmap-p:e1');
+      expect(twin.mailboxPath, startsWith('~new:'));
+      final standIn = await mailbox(twin.mailboxPath);
+      expect(
+        (standIn.isLocal, standIn.name, standIn.parentId, standIn.displayPath),
+        (true, '2026', 'mbox-proj', 'Projects/2026'),
+      );
+      final create = await shadowCreate('jmap-p');
+      expect(create.state, 'shadow');
+      expect(
+        (jsonDecode(create.payload) as Map<String, dynamic>)['parent'],
+        'mbox-proj',
+      );
+      expect(await emails.flushPendingChanges('jmap-p', 'pw'), 0);
+      expect(jmapRequests, isEmpty, reason: 'its create is never sent');
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+
+      await listingAdopts(
+        standIn,
+        primaryAccount: 'imap-p',
+        path: 'mbox-2026',
+        parentId: 'mbox-proj',
+        twinId: 'jmap-p:e1',
+      );
+    });
+
+    test(
+        'JMAP: a parent the counterpart does not know puts the stand-in at '
+        'the top level, never into a same-named folder elsewhere', () async {
+      await folder('imap-p', 'Projects', 'Projects');
+      await folder('imap-p', 'Projects/2026', '2026');
+      // A decoy: "Other/2026" is not "Projects/2026".
+      await folder('jmap-p', 'mbox-other', 'Other');
+      await folder('jmap-p', 'mbox-o2026', '2026', parentId: 'mbox-other');
+
+      await emails.moveEmail('imap-p:5', 'Projects/2026');
+
+      final twinPath = (await row('jmap-p:e1')).mailboxPath;
+      expect(twinPath, isNot('mbox-o2026'));
+      final standIn = await mailbox(twinPath);
+      expect(standIn.isLocal, isTrue);
+      expect(standIn.parentId, isNull);
+      expect(
+        (jsonDecode((await shadowCreate('jmap-p')).payload)
+                as Map<String, dynamic>)
+            .containsKey('parent'),
+        isFalse,
+      );
+      await expectConsistent();
+    });
+
+    test(
+        'IMAP: a stand-in at the top level (parent unknown) is adopted by '
+        'its name when the listing has the folder nested', () async {
+      await folder('jmap-p', 'mbox-proj', 'Projects');
+      await folder('jmap-p', 'mbox-2026', '2026', parentId: 'mbox-proj');
+
+      await emails.moveEmail('jmap-p:e1', 'mbox-2026');
+
+      final standIn = await mailbox('2026');
+      expect((standIn.isLocal, standIn.accountId), (true, 'imap-p'));
+      await listingAdopts(
+        standIn,
+        primaryAccount: 'jmap-p',
+        path: 'Projects/2026',
+        twinId: 'imap-p:5',
+      );
+    });
+
+    test(
+        "a parent level is matched by name before by role: the user's own "
+        '"Trash" is not taken for the counterpart\'s "Deleted Items"',
+        () async {
+      await folder('imap-p', 'Trash', 'Trash');
+      await db.customUpdate(
+        "UPDATE mailboxes SET role = 'trash' WHERE id = 'imap-p:Trash'",
+      );
+      await folder('imap-p', 'Trash/Old', 'Old');
+      await folder('jmap-p', 'mbox-deleted', 'Deleted Items');
+      await db.customUpdate(
+        "UPDATE mailboxes SET role = 'trash' WHERE id = 'jmap-p:mbox-deleted'",
+      );
+      await folder('jmap-p', 'mbox-trash', 'Trash');
+
+      await emails.moveEmail('imap-p:5', 'Trash/Old');
+
+      final standIn = await mailbox((await row('jmap-p:e1')).mailboxPath);
+      expect(standIn.parentId, 'mbox-trash');
+    });
+
+    test(
+        'IMAP: made at the path the server gives the nested folder, and the '
+        'listing of that path takes it over', () async {
+      await folder('jmap-p', 'mbox-proj', 'Projects');
+      await folder('jmap-p', 'mbox-2026', '2026', parentId: 'mbox-proj');
+      await folder('imap-p', 'Projects', 'Projects');
+
+      await emails.moveEmail('jmap-p:e1', 'mbox-2026');
+
+      final twin = await row('imap-p:5');
+      expect(twin.mailboxPath, 'Projects/2026');
+      final standIn = await mailbox('Projects/2026');
+      expect(
+        (standIn.isLocal, standIn.accountId, standIn.displayPath),
+        (true, 'imap-p', 'Projects/2026'),
+      );
+      expect(
+        (jsonDecode((await shadowCreate('imap-p')).payload)
+            as Map<String, dynamic>)['parent'],
+        'Projects',
+      );
+      await expectConsistent();
+      expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+
+      await listingAdopts(
+        standIn,
+        primaryAccount: 'jmap-p',
+        path: 'Projects/2026',
+        twinId: 'imap-p:5',
+      );
+    });
+  });
+
   group('an IMAP twin shown in a folder through a shadow', () {
     setUp(() async {
       // The user archives on the JMAP account: the IMAP twin shows Archive,

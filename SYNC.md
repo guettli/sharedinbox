@@ -493,6 +493,22 @@ the same statement and never rewrites the whole row.
   All Mail sweeps it. App Log warn `sync.resync_swept` lists what a sweep removed. A
   refetch that fails part-way removes nothing. The v77 upgrade deletes the bodies and
   attachment rows that resyncs before 6a left without a mail.
+- **App Log of what sync removes** (audited in phase 6b): an *unexpected* removal or
+  rewrite of local data by sync logs a warn line: data the user may miss, or that the
+  server never reported deleted. A mail the server reports deleted in the ordinary
+  way (an expunge seen by the deletion reconcile, a JMAP `destroyed`) is not logged
+  one by one; a mail kept for a change of the user's still is
+  (`email.server_gone_with_changes`). Added in 6b: `mailbox.removed_gone` (a folder
+  gone on the server, with its cached mail; also when the paired account of the same
+  mailbox deleted it), `sync.uidvalidity_changed` also when no mail is kept (the
+  cached rows of a renumbered folder are removed and come back as new rows),
+  `sync.reconcile_pruned` (the periodic JMAP check removing mail no change reported
+  deleted), `draft.server_gone` and `draft.folder_changed`; info `body_cache.evicted`
+  and `mailbox.listing_skipped_arriving`. The body cache never evicts, nor counts
+  against its limit, a body that cannot be fetched again: a virtual row's
+  (`is_local`, the user's text, no server copy yet) or a mail's gone on the server
+  but kept for a change (`srv_gone`); and prefetching stops at 90 % of the limit, so
+  a run does not evict what the one before it fetched.
 - **Location reads.** IMAP: the new-mail FETCH (a new row with the read's folder, an
   existing one confirmed there), the deletion reconcile's `UID SEARCH ALL` (rows of the
   folder by `srv_mailbox_path` confirmed present or marked gone), the move's answer
@@ -739,7 +755,10 @@ changes the row's `path`, never its id; sync finds rows by `path`.
   folder (`dest`, `src`, `mailboxPath`, `prevSnoozedFrom`) and Undo actions follow,
   and the rows of those changes are re-folded, so a pending move into the folder
   shows it under its new path through the fold (no direct write of
-  `local_mailbox_path`); App Log warn `pending_change.folder_renamed`. A row sync
+  `local_mailbox_path`); App Log warn `pending_change.folder_renamed`. The payloads
+  are rewritten once, here, rather than resolved through an alias table when read
+  (decided in 5a; SYNC-REDESIGN.md §7 "Queued payloads follow a folder's new server
+  path" gives the reasons). A row sync
   stored for that path already is merged into (`mailbox.local_merged`, warn). The
   acked op keeps folding until a folder listing started after the ack names the
   folder: agreeing, it is dropped; contradicting, it is dropped by the second such
@@ -750,9 +769,16 @@ changes the row's `path`, never its id; sync finds rows by `path`.
   never remove a folder created offline or one written after the listing started (a
   folder just created or renamed), and do not store again a path an IMAP rename acked
   after the listing started moved away from (the payload's `fromPath`). A folder the
-  server no longer lists is removed (`removeLocalMailbox`): its queued folder ops and
-  the changes naming it become `failed` (`folder removed on the server`, App Log warn
-  `pending_change.folder_removed`), never dropped.
+  server no longer lists is removed (`removeLocalMailbox`, App Log warn
+  `mailbox.removed_gone` with how many cached mails went with it): its queued folder
+  ops and the changes naming it become `failed` (`folder removed on the server`, App
+  Log warn `pending_change.folder_removed`), never dropped. An IMAP listing that
+  already lists the new path of a rename or move being sent (and no longer the old
+  one) stores no row there or below it: the op's ack moves the folder there, so it
+  never shows twice (phase 6b; before, the listing stored a second folder that the
+  ack merged, `mailbox.local_merged`). The skip is logged (info
+  `mailbox.listing_skipped_arriving`); if the rename or move is refused after all,
+  the next listing stores the path.
 - **Mail changes that need a folder created offline.** A move, snooze or other mail
   change naming a folder without a server copy (`is_local`) waits in the flush,
   uncharged, with the mail's later changes; the create's ack names the server's path
@@ -840,7 +866,14 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     `Mailbox/get`), and the next listing drops it (`settleAckedDeletes`).
   - *Mail changes and a folder being deleted.* The mail of a folder whose
     delete is queued shows nowhere either (search, by address, by thread, by
-    id: `_visible` checks `local_hidden`). A mail change queued after the
+    id: `_visible` checks `local_hidden`). An open thread across folders combines its
+    rows with the account's hidden folders in Dart (the query does not watch
+    `mailboxes`, which every listing writes once per folder), so it updates when that
+    set changes. The search screen follows `MailboxRepository.observeHiddenFolders()`:
+    every result that arrives, also from a search that was running when the folder
+    was hidden, leaves out the hidden folders' mail; a folder newly hidden makes it
+    search again quietly (no snackbar on failure), and so does a folder shown again
+    (Undo, a failed delete), after a running search if there is one (phase 6b). A mail change queued after the
     delete that moves mail INTO the folder (`dest`: an Undo's move back, a
     Sieve `fileinto`) waits while the delete is queued, being sent or stuck:
     sent first, its mail would be deleted with the folder. Once the delete is
@@ -897,7 +930,8 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     Otherwise (an empty or never-synced folder under a new UIDVALIDITY, two
     candidates, a rename and a move at once) the queued changes fail visibly
     as "folder removed on the server". JMAP renames keep the id and need none
-    of this.
+    of this. RFC 8474 `MAILBOXID` would identify the folder directly, but
+    enough_mail neither asks for nor parses it, so it is not used (phase 6b).
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder
     queues its `create_mailbox` (role `snoozed`) and waits for it, as on JMAP;
     the snooze and unsnooze flush no longer `CREATE` folders on the side (an
@@ -919,6 +953,22 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     while any of them is live; a stand-in whose moves all ended, or that a
     listing started after the moves' ack does not find, is dropped
     (`mailbox.counterpart_folder_dropped`).
+    Nested folders (phase 6b): the destination's parents are matched on the
+    counterpart level by level (exact role and name; then the name below the level
+    before; then the role alone, so a user's own "Trash" is not taken for "Deleted
+    Items"), and the destination's own name only below that parent. When the
+    counterpart does not know a parent (not listed yet, or created offline on the
+    other account) the destination is matched by role only, never by name, so
+    "A/2026" never pairs with "B/2026". The stand-in is made below the parent found:
+    on IMAP at the path the server gives the folder, on JMAP with a `~new:` path and
+    the parent's server id as `parent_id`; a listing that lists a folder of that name
+    below that parent adopts it (JMAP too). Its create stays a shadow, never sent, and
+    its parent is always a folder with a server copy, so no `~new:` id reaches a
+    server. Without a known parent the stand-in is made at the top level: IMAP still
+    adopts it by its name alone when no stand-in below the listed parent matches (with
+    two listed folders of that name, the one listed first; SYNC-REDESIGN.md §10), JMAP
+    does not and drops it after the next listing, and the twin then shows where its
+    account reads it.
   - *Waiting for a folder.* The Pending Changes screen says "waiting for folder
     "X" to be created" for a change that names a folder created offline
     (`PendingChange.waitingForFolder`, derived when read). The change stays

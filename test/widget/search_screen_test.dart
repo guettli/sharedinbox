@@ -94,6 +94,13 @@ class _FolderAwareStructuredRepository extends FakeEmailRepository {
   final List<Email> mails;
   final List<({String? accountId, FilterGroup filter, int limit})> calls = [];
 
+  /// Folders whose delete is queued: their mail is out of the search, as in
+  /// the real repository.
+  final Set<String> hiddenPaths = {};
+
+  /// While set, a search waits for it (a slow re-query).
+  Completer<void>? gate;
+
   @override
   Future<List<Email>> searchEmailsStructured(
     String? accountId,
@@ -101,6 +108,7 @@ class _FolderAwareStructuredRepository extends FakeEmailRepository {
     int limit = searchPageSize,
   }) async {
     calls.add((accountId: accountId, filter: filter, limit: limit));
+    await gate?.future;
     final folder = filter.children
         .whereType<FilterLeaf>()
         .where((l) => l.field == FilterField.folder)
@@ -108,6 +116,7 @@ class _FolderAwareStructuredRepository extends FakeEmailRepository {
         .firstOrNull;
     return mails
         .where((e) => folder == null || e.mailboxPath == folder)
+        .where((e) => !hiddenPaths.contains(e.mailboxPath))
         .take(limit)
         .toList();
   }
@@ -1624,8 +1633,10 @@ void main() {
 
     Future<void> pump(
       WidgetTester tester,
-      _FolderAwareStructuredRepository repo,
-    ) async {
+      _FolderAwareStructuredRepository repo, {
+      FakeMailboxRepository? mailboxes,
+      bool settle = true,
+    }) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -1633,7 +1644,7 @@ void main() {
               FakeAccountRepository([kTestAccount]),
             ),
             mailboxRepositoryProvider.overrideWithValue(
-              FakeMailboxRepository([inboxBox, archiveBox]),
+              mailboxes ?? FakeMailboxRepository([inboxBox, archiveBox]),
             ),
             emailRepositoryProvider.overrideWithValue(repo),
             searchHistoryRepositoryProvider.overrideWithValue(
@@ -1643,7 +1654,7 @@ void main() {
           child: MaterialApp(home: SearchScreen(initialFilter: filter)),
         ),
       );
-      await tester.pumpAndSettle();
+      if (settle) await tester.pumpAndSettle();
     }
 
     Future<void> focusArchive(WidgetTester tester) async {
@@ -1657,6 +1668,72 @@ void main() {
         .whereType<FilterLeaf>()
         .where((l) => l.field == FilterField.folder)
         .firstOrNull;
+
+    testWidgets(
+        'a folder deleted while the results are open drops its mail at once '
+        'and re-runs the search; Undo of the delete brings it back (6b)',
+        (tester) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      final mailboxes = FakeMailboxRepository([inboxBox, archiveBox]);
+      await pump(tester, repo, mailboxes: mailboxes);
+      expect(find.text('a mail 1'), findsOneWidget);
+      // The first emission (nothing hidden) re-runs nothing.
+      mailboxes.hiddenFolders.add({});
+      await tester.pumpAndSettle();
+      final calls = repo.calls.length;
+
+      // Deleting "Archive" (queued) hides it at once, before the re-query
+      // (held back here) answers.
+      repo.hiddenPaths.add('a');
+      repo.gate = Completer<void>();
+      mailboxes.hiddenFolders.add({(accountId: 'acc-1', path: 'a')});
+      await tester.pumpAndSettle();
+      expect(find.text('a mail 1'), findsNothing, reason: 'dropped at once');
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      repo.gate!.complete();
+      repo.gate = null;
+      await tester.pumpAndSettle();
+
+      expect(find.text('a mail 1'), findsNothing);
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      expect(repo.calls.length, calls + 1, reason: 'the search re-ran');
+
+      // Undo: the folder shows again, and so does its mail.
+      repo.hiddenPaths.clear();
+      mailboxes.hiddenFolders.add({});
+      await tester.pumpAndSettle();
+      expect(find.text('a mail 1'), findsOneWidget);
+      expect(repo.calls.length, calls + 2);
+    });
+
+    testWidgets(
+        'a folder hidden while the search is running: its mail stays out of '
+        'the results that arrive (6b)', (tester) async {
+      final repo = _FolderAwareStructuredRepository([
+        mailIn('INBOX', 0),
+        mailIn('a', 1),
+      ]);
+      // The search is under way when the folder is hidden; its answer was
+      // read before (it still has the mail).
+      repo.gate = Completer<void>();
+      final mailboxes = FakeMailboxRepository([inboxBox, archiveBox]);
+      await pump(tester, repo, mailboxes: mailboxes, settle: false);
+      await tester.pump();
+      expect(repo.calls, hasLength(1), reason: 'the search is running');
+      mailboxes.hiddenFolders.add({});
+      await tester.pump();
+      mailboxes.hiddenFolders.add({(accountId: 'acc-1', path: 'a')});
+      await tester.pump();
+      repo.gate!.complete();
+      repo.gate = null;
+      await tester.pumpAndSettle();
+
+      expect(find.text('INBOX mail 0'), findsOneWidget);
+      expect(find.text('a mail 1'), findsNothing);
+    });
 
     testWidgets('"Only this folder" re-queries that folder', (tester) async {
       final repo = _FolderAwareStructuredRepository([
