@@ -10,6 +10,13 @@ extension _Sync on EmailRepositoryImpl {
     String accountId,
     String mailboxPath,
   ) async {
+    // A folder created offline is not on the server yet: nothing to sync,
+    // and a SELECT or Email/query of its stand-in path must not read as
+    // "folder deleted on the server" (SYNC-REDESIGN.md §7).
+    if ((await _mailboxState.rowByPath(accountId, mailboxPath))?.isLocal ??
+        false) {
+      return model.SyncEmailsResult.zero;
+    }
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final started = _now();

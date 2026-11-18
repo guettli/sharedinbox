@@ -742,6 +742,35 @@ class AppDatabase {
 }
 EOF
 
+expect fail "the table's own deleteWhere" \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => _db.mailboxes.deleteWhere((t) => t.id.equals(id));
+}
+EOF
+
+expect fail "the table's own insertOne" \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => _db.mailboxes.insertOne(row);
+}
+EOF
+
+expect fail 'an update behind this._db.' \
+  data/repositories/mailbox_repository_impl.dart 'mailboxes is written' <<'EOF'
+class MailboxRepositoryImpl {
+  Future<void> x() => (update(this._db.mailboxes)..where((t) => t.id.equals(i)))
+      .write(row);
+}
+EOF
+
+expect pass 'a read through the table getter' \
+  data/repositories/mailbox_repository_impl.dart <<'EOF'
+class MailboxRepositoryImpl {
+  MailboxRow x(QueryRow r) => _db.mailboxes.map(r.data);
+}
+EOF
+
 expect pass 'mailbox writes in the mailbox state writer' \
   data/repositories/mailbox_state_writer.dart <<'EOF'
 class MailboxStateWriter {

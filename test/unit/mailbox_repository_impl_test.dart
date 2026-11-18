@@ -915,7 +915,7 @@ void main() {
       test(
         'IMAP: reuses "." delimiter when the parent path already uses it',
         () async {
-          final spy = SnoozeSpyImapClient();
+          final spy = _SeparatorSpyImapClient('.');
           final r = _makeRepos(imapConnect: (_, __, ___) async => spy);
           await r.accounts.addAccount(_account, 'pw');
           await _seedMailbox(r.db, 'acc-1', 'INBOX.Work', 'Work');

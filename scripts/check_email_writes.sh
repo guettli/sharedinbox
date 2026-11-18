@@ -70,7 +70,9 @@
 #    writer (lib/data/repositories/mailbox_state_writer.dart) and the
 #    migrations (`_upgradeSteps`, `_overlayMailboxes` of database.dart). No
 #    allow-list, no opt-out. It fails on a `MailboxesCompanion`, Drift's
-#    into/update/delete on `mailboxes` (also in a batch), the table manager,
+#    into/update/delete on `mailboxes` (also in a batch, also behind
+#    `this._db.`), the table's own write methods (`mailboxes.deleteWhere(`,
+#    `.insertOne(`, ...), the table manager,
 #    `updates: {…}` naming it, and raw SQL in any letter case (`UPDATE [OR …]
 #    mailboxes`, `INSERT … INTO mailboxes`, `REPLACE INTO mailboxes`,
 #    `DELETE FROM mailboxes`, also split over adjacent string literals).
@@ -462,13 +464,15 @@ for f in $mailbox_files; do
       prev = code
       hit = 0
       if (code ~ /(^|[^A-Za-z0-9_])MailboxesCompanion/) hit = 1
-      if (code ~ /(into|update|delete)\(([A-Za-z_]+\.)?mailboxes[),]/) hit = 1
-      if (code ~ /\.(insert|insertAll|insertAllOnConflictUpdate|insertOnConflictUpdate|update|replace|replaceAll|delete|deleteWhere|deleteAll)\(([A-Za-z_]+\.)?mailboxes[),]/) hit = 1
+      if (code ~ /(into|update|delete)\(([A-Za-z_]+\.)*mailboxes[),]/) hit = 1
+      if (code ~ /\.(insert|insertAll|insertAllOnConflictUpdate|insertOnConflictUpdate|update|replace|replaceAll|delete|deleteWhere|deleteAll)\(([A-Za-z_]+\.)*mailboxes[),]/) hit = 1
+      # Write methods of the table itself (_db.mailboxes.deleteWhere and co).
+      if (code ~ /(^|[^A-Za-z0-9_])mailboxes\.(insert[A-Za-z]*|replace[A-Za-z]*|update[A-Za-z]*|delete[A-Za-z]*)\(/) hit = 1
       if (code ~ /managers\.mailboxes/) hit = 1
       if (code ~ /updates:[^}]*(^|[^A-Za-z0-9_])mailboxes([^A-Za-z0-9_]|$)/) hit = 1
       # A bare table reference on its own line: the argument of a Drift
       # write whose call starts on the line before.
-      if (code ~ /^[[:space:]]*([A-Za-z_]+\.)?mailboxes,?[[:space:]]*$/ && prevcode ~ /(into|update|delete)\($/) hit = 1
+      if (code ~ /^[[:space:]]*([A-Za-z_]+\.)*mailboxes,?[[:space:]]*$/ && prevcode ~ /(into|update|delete)\($/) hit = 1
       prevcode = code
       u = toupper(joined)
       if (u ~ /(UPDATE([[:space:]]+OR[[:space:]]+[A-Z]+)?|INTO|DELETE[[:space:]]+FROM)[[:space:]]+"?MAILBOXES"?([^A-Z0-9_]|$)/) hit = 1

@@ -1364,6 +1364,15 @@ As implemented, phase 5 is two PRs; 5a is done:
      `mailbox_repository_impl_test.dart`, the JMAP Snoozed tests, the v75
      migration test, and the Stalwart backend tests (IMAP and JMAP:
      create, move into it and rename offline, flushed; a JMAP clash).
+   - **Review fixes** (second commit, SYNC.md §6b "Review fixes"): local
+     folders are never synced or removed as gone; the IMAP separator only
+     from LIST; lost or in-flight renames protect their folder and are
+     completed by the listing; read-confirmed creates settle on the next
+     listing; stand-in paths resolved after the ack; removed folders fail
+     queued child creates and drop their acked ops; Retry of a create
+     brings its failed changes back; a listing never adopts a never-sent
+     create (a clash stays a visible failure); `check_email_writes.sh`
+     check 3 also catches the table's own write methods and `this._db.`.
 2. **5b (left):** folder move and delete as ops (`move_mailbox`,
    `delete_mailbox`, mailbox `local_hidden` and a parent overlay, with
    Undo where it applies); turning the flush-time hold into the `parked`

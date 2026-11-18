@@ -57,6 +57,7 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart'
     show
         imapMailboxFor,
         imapPathSeparator,
+        imapSeparatorOf,
         jmapMailboxSetErrorText,
         removeLocalMailbox;
 import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';

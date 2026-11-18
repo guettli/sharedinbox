@@ -1847,6 +1847,9 @@ Future<_FolderSyncOutcome> _syncFolders({
     // Skip folders that just duplicate other folders (Gmail's "All Mail"),
     // otherwise every message is downloaded twice (#691).
     if (isDuplicateOfOtherFolders(mailbox)) continue;
+    // A folder created offline has no server copy to sync yet: the flush
+    // creates it first (SYNC-REDESIGN.md §7).
+    if (mailbox.isLocal) continue;
     attempted++;
     final mailboxStart = DateTime.now();
     try {

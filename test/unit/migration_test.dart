@@ -1425,6 +1425,7 @@ void main() {
       await seedAccountRow(fresh, 'acc-i'); // creates the schema
       await seedAccountRow(fresh, 'acc-j', accountType: 'jmap');
       await seedAccountRow(fresh, 'acc-k', accountType: 'jmap');
+      await seedAccountRow(fresh, 'acc-u', accountType: 'jmap');
       await fresh.close();
 
       final rawDb = sqlite.sqlite3.open(dbFile.path);
@@ -1456,6 +1457,13 @@ void main() {
       snooze('acc-i', 'Snoozed');
       // The folder known: nothing to convert.
       snooze('acc-k', 'mbx-snoozed');
+      // Only an unsnooze out of the stand-in: no folder to create.
+      rawDb.execute(
+        'INSERT INTO pending_changes (account_id, resource_type, '
+        'resource_id, change_type, payload, created_at, state) '
+        "VALUES ('acc-u', 'Email', 'acc-u:~e1', 'unsnooze', "
+        '\'{"uid":0,"src":"Snoozed","dest":"inbox"}\', 0, \'pending\')',
+      );
       rawDb.execute('PRAGMA user_version = 74;');
       rawDb.close();
 

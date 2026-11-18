@@ -183,6 +183,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // again (SYNC-REDESIGN.md §4.3).
       final listSeq = await EmailStateWriter(_db).nextReadSeq();
       final mailboxes = await client.listMailboxes(recursive: true);
+      final separator = imapSeparatorOf(mailboxes);
+      await _writer.recordImapSeparator(account.id, separator);
 
       // Pre-load existing DB roles so we can preserve manually-set roles for
       // folders the server doesn't tag with a special-use attribute.
@@ -196,12 +198,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // server no longer lists has been deleted upstream, so drop it (and its
       // cached emails / sync state) before upserting the survivors.
       final serverPaths = mailboxes.map((mb) => mb.path).toSet();
+      // A rename whose answer was lost but that the listing shows done
+      // moves the folder first, so it is not taken for deleted.
+      await _writer.completeLostRenames(account.id, serverPaths);
       await _prune(account.id, serverPaths, listSeq);
       final renamedAway = await _writer.renamedAwaySince(account.id, listSeq);
 
       for (final mb in mailboxes) {
         final path = mb.path;
-        if (renamedAway.contains(path)) continue;
+        // An old path (or a subfolder of one) a rename acked after this
+        // listing started moved away from.
+        if (MailboxStateWriter.isRenamedAway(path, renamedAway, separator)) {
+          continue;
+        }
 
         var unread = 0;
         var total = 0;
@@ -251,6 +260,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
       }
       await _writer.rebuildDisplayPaths(account.id);
+      await _writer.settleReadConfirmed(account.id, listSeq);
       return mailboxes.length;
     } finally {
       await closeImapClient(client);
@@ -307,6 +317,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     await _prune(accountId, serverIds, readSeq);
 
     await _upsertJmapMailboxes(accountId, mailboxes, readSeq: readSeq);
+    await _writer.settleReadConfirmed(accountId, readSeq);
     await _saveSyncState(accountId, 'Mailbox', newState);
     log(
       'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState',
@@ -359,6 +370,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
     }
 
+    await _writer.settleReadConfirmed(accountId, readSeq);
     await _saveSyncState(accountId, 'Mailbox', newState);
     log(
       'JMAP incremental mailbox sync: +${created.length} '
@@ -552,6 +564,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         unreadCount: max(0, row.unreadCount + unreadDelta),
         totalCount: row.totalCount,
         role: row.role,
+        isLocal: row.isLocal,
       );
 
   /// Maps enough_mail special-use flags (RFC 6154) to JMAP role strings (RFC 8621).
@@ -797,6 +810,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       accountId,
       row.path,
       appLogger: _appLogger,
+      deletedByUser: true,
     );
   }
 
@@ -881,7 +895,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       password,
     );
     try {
-      final box = imapMailboxFor(row.path);
+      final box = imapMailboxFor(row.path, await imapPathSeparator(client));
       // IMAP DELETE always takes the mail with it, so check first when the
       // user was told the folder is empty.
       if (!removeEmails) {
@@ -910,12 +924,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
     );
     String newServerPath;
     try {
-      final separator = await imapPathSeparator(client, row.path);
+      final separator = await imapPathSeparator(client);
+      await _writer.recordImapSeparator(account.id, separator);
       final leaf = row.srvName ?? row.name;
       newServerPath =
           newParent == null ? leaf : '${newParent.path}$separator$leaf';
       // IMAP RENAME can both rename and relocate a mailbox.
-      await client.renameMailbox(imapMailboxFor(row.path), newServerPath);
+      await client.renameMailbox(
+        imapMailboxFor(row.path, separator),
+        newServerPath,
+      );
     } finally {
       await closeImapClient(client);
     }
@@ -1038,11 +1056,10 @@ String jmapMailboxSetErrorText(Map<String, dynamic> err) {
 }
 
 /// The enough_mail [imap.Mailbox] for the folder at [path], for RENAME and
-/// DELETE. The stored `path` is the decoded Unicode form, but enough_mail
-/// writes `encodedPath` verbatim, so it is re-encoded to modified UTF-7
-/// first (#633).
-imap.Mailbox imapMailboxFor(String path) {
-  final separator = path.contains('.') ? '.' : '/';
+/// DELETE, with the server's hierarchy [separator]. The stored `path` is the
+/// decoded Unicode form, but enough_mail writes `encodedPath` verbatim, so
+/// it is re-encoded to modified UTF-7 first (#633).
+imap.Mailbox imapMailboxFor(String path, String separator) {
   final encodedPath = encodeImapMailboxPath(path, separator);
   final leafIndex = encodedPath.lastIndexOf(separator);
   return imap.Mailbox(
@@ -1054,24 +1071,21 @@ imap.Mailbox imapMailboxFor(String path) {
   );
 }
 
-/// The IMAP hierarchy separator to use below the folder at [parentPath]
-/// (or at top level when null): the one in its path when it has one,
-/// otherwise the server's, asked via LIST; `/` if the server returns
-/// nothing usable.
-Future<String> imapPathSeparator(
-  imap.ImapClient client,
-  String? parentPath,
-) async {
-  if (parentPath != null) {
-    if (parentPath.contains('/')) return '/';
-    if (parentPath.contains('.')) return '.';
-  }
-  final listed = await client.listMailboxes();
-  if (listed.isNotEmpty && listed.first.pathSeparator.isNotEmpty) {
-    return listed.first.pathSeparator;
+/// The IMAP hierarchy separator of a LIST answer [listed]: the one the
+/// server gives its folders; `/` when it gives none. The one source of the
+/// separator: sync records it ([MailboxStateWriter.recordImapSeparator]),
+/// and subfolder paths, display paths, renames and the folder flush all go
+/// by it.
+String imapSeparatorOf(List<imap.Mailbox> listed) {
+  for (final m in listed) {
+    if (m.pathSeparator.isNotEmpty) return m.pathSeparator;
   }
   return '/';
 }
+
+/// [imapSeparatorOf] the server's LIST over [client].
+Future<String> imapPathSeparator(imap.ImapClient client) async =>
+    imapSeparatorOf(await client.listMailboxes());
 
 /// Deletes the local cache rows that belong to a single mailbox that no
 /// longer exists on the server.
@@ -1092,11 +1106,19 @@ Future<void> removeLocalMailbox(
   String accountId,
   String path, {
   AppLogger? appLogger,
+  bool deletedByUser = false,
 }) async {
+  final folders = MailboxStateWriter(db, appLogger: appLogger);
+  // A folder created offline has no server copy that could be gone: a
+  // SELECT or listing that misses it says nothing about it.
+  if ((await folders.rowByPath(accountId, path))?.isLocal ?? false) {
+    log('Not removing "$path": created offline, not on the server yet');
+    return;
+  }
+  final why = deletedByUser ? 'folder deleted' : 'folder removed on the server';
   final failed = <PendingChangeRow>[];
   var kept = <String>{};
   final writer = EmailStateWriter(db, appLogger: appLogger);
-  final mailboxes = MailboxStateWriter(db, appLogger: appLogger);
   await db.transaction(() async {
     await (db.delete(db.threads)
           ..where(
@@ -1131,16 +1153,16 @@ Future<void> removeLocalMailbox(
       if (!refs.contains(path)) continue;
       await (db.update(db.pendingChanges)..where((t) => t.id.equals(row.id)))
           .write(
-        const PendingChangesCompanion(
-          state: Value('failed'),
-          lastError: Value('folder removed on the server'),
+        PendingChangesCompanion(
+          state: const Value('failed'),
+          lastError: Value(why),
         ),
       );
       failed.add(row);
     }
     // The folder's own queued changes (a rename) can no longer apply
     // either, nor what waits for them.
-    failed.addAll(await mailboxes.failOpsOfRemoved(accountId, path));
+    failed.addAll(await folders.failOpsOfRemoved(accountId, path, why));
     // A failed change no longer folds: a mail it showed elsewhere shows the
     // server's folder and read/star/snooze state again.
     final shownElsewhere = await writer.refoldAll([
@@ -1161,7 +1183,7 @@ Future<void> removeLocalMailbox(
       );
     }
 
-    await mailboxes.deleteRow(accountId, path);
+    await folders.deleteRow(accountId, path);
   });
   if (kept.isNotEmpty) {
     unawaited(
@@ -1181,8 +1203,8 @@ Future<void> removeLocalMailbox(
       appLogger?.warn(
         'pending_change.folder_removed',
         'Could not apply a queued ${row.changeType} change — the folder '
-            '"$path" was removed on the server; kept on the Pending Changes '
-            'screen',
+            '"$path" ${deletedByUser ? 'was deleted' : 'was removed on the '
+                'server'}; kept on the Pending Changes screen',
         accountId: accountId,
         emailId:
             row.resourceType == mailboxResourceType ? null : row.resourceId,

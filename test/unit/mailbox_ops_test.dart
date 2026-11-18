@@ -81,21 +81,47 @@ void main() {
             localName: 'Job',
           ),
           DisplayPathRow(path: 'INBOX.Work.2026', name: '2026'),
+        ],
+        jmap: false,
+        separator: '.',
+      );
+      expect(paths, {
+        'INBOX': 'INBOX',
+        'INBOX.Work': 'INBOX.Job',
+        'INBOX.Work.2026': 'INBOX.Job.2026',
+      });
+    });
+
+    test(
+        "IMAP display paths on a '/' server: a '.' in a name is no "
+        'hierarchy', () {
+      final paths = displayPaths(
+        const [
+          DisplayPathRow(path: 'Mr', name: 'Mr', srvName: 'Mr'),
           DisplayPathRow(
             path: 'Mr. Smith',
             name: 'Smith',
             srvName: 'Mr. Smith',
             localName: 'Smith',
           ),
+          DisplayPathRow(
+            path: 'Work',
+            name: 'Job',
+            srvName: 'Work',
+            localName: 'Job',
+          ),
+          DisplayPathRow(path: 'Work.old', name: 'Work.old'),
+          DisplayPathRow(path: 'Work/2026', name: '2026'),
           DisplayPathRow(path: 'Archive/2025', name: '2025'),
         ],
         jmap: false,
       );
       expect(paths, {
-        'INBOX': 'INBOX',
-        'INBOX.Work': 'INBOX.Job',
-        'INBOX.Work.2026': 'INBOX.Job.2026',
+        'Mr': 'Mr',
         'Mr. Smith': 'Smith',
+        'Work': 'Job',
+        'Work.old': 'Work.old',
+        'Work/2026': 'Job/2026',
         // No pending name, no cached parent: the server path as it is.
         'Archive/2025': 'Archive/2025',
       });
@@ -206,13 +232,21 @@ void main() {
       );
       await _expectConsistent(db);
 
-      // Retry: the folder shows again and is created at the next flush.
+      // Retry: the folder shows again, the move that failed with it is
+      // queued again, and the next flush creates the folder and moves the
+      // mail there.
       server.refusesFolder = null;
       final create = (await db.select(db.pendingChanges).get()).first;
       await emails.retryMutation(create.id);
       expect(await shownFolders(), contains('Bad'));
+      expect(await _ops(db), [
+        ('create_mailbox', 'pending'),
+        ('move', 'pending'),
+      ]);
+      expect((await rowOfA()).mailboxPath, 'Bad');
       await flush();
       expect(server.folders.keys, contains('Bad'));
+      expect(server.find('a@test')!.folder.path, 'Bad');
       await _expectConsistent(db);
     });
 
@@ -350,20 +384,229 @@ void main() {
     });
 
     test(
-        'a folder created offline that another client created meanwhile is '
-        'taken as created: no CREATE is sent', () async {
+        'a folder another client created under the name of a never-sent '
+        'create is a clash, also when a listing sees it first', () async {
       await rig.mailboxes.createMailbox(_acc.id, 'Shared');
       server.addFolder('Shared');
 
       await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(
+        (await rig.mailboxes.observeMailboxes(_acc.id).first)
+            .singleWhere((m) => m.path == 'Shared')
+            .isLocal,
+        isTrue,
+        reason: 'the listing does not adopt it',
+      );
+      await flush();
+
+      expect(server.folderCommands, isEmpty);
+      expect(await _ops(db), [('create_mailbox', 'failed')]);
+      // The server's folder shows (the next listing takes it as the
+      // server's); the failed create stays listed.
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await shownFolders(), contains('Shared'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a create whose answer was lost is found done by the retry: no '
+        'second CREATE, settled by the next listing', () async {
+      await rig.mailboxes.createMailbox(_acc.id, 'Lost');
+      // The CREATE reached the server, its answer did not.
+      server.addFolder('Lost');
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 WHERE change_type = '
+        "'create_mailbox'",
+      );
+
       await flush();
 
       expect(server.folderCommands, isEmpty);
       expect(await _ops(db), [('create_mailbox', 'acked')]);
-      final row = await (db.select(db.mailboxes)
-            ..where((t) => t.path.equals('Shared')))
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(await _ops(db), isEmpty);
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a sync cycle while the create is not confirmed (transient failure) '
+        'neither syncs nor removes the folder', () async {
+      server.failCreates = true;
+      await rig.mailboxes.createMailbox(_acc.id, 'Pending');
+      final id = (await rowOfA()).id;
+      await emails.moveEmail(id, 'Pending');
+
+      // One cycle: flush (the CREATE fails, may pass), folder listing,
+      // then every folder shown is synced, as the sync loop does.
+      await flush();
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      final shown = await rig.mailboxes.observeMailboxes(_acc.id).first;
+      expect(shown.singleWhere((m) => m.path == 'Pending').isLocal, isTrue);
+      for (final m in shown) {
+        await emails.syncEmails(_acc.id, m.path);
+      }
+      // The SELECT path's folder-gone handling must not touch it either.
+      await removeLocalMailbox(db, _acc.id, 'Pending');
+
+      expect(await shownFolders(), contains('Pending'));
+      final ops = await db.select(db.pendingChanges).get();
+      expect(
+        ops.map((o) => (o.changeType, o.state, o.attempts)),
+        [('create_mailbox', 'pending', 1), ('move', 'pending', 0)],
+      );
+      expect((await rowOfA()).mailboxPath, 'Pending');
+
+      server.failCreates = false;
+      await flush();
+      expect(server.find('a@test')!.folder.path, 'Pending');
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a rename whose answer was lost: the listing showing it done moves '
+        'the folder, nothing is pruned', () async {
+      final archive = await (db.select(db.mailboxes)
+            ..where((t) => t.path.equals('Archive')))
           .getSingle();
-      expect(row.isLocal, isFalse);
+      final filler = await (db.select(db.emails)
+            ..where((t) => t.messageId.equals('filler@test')))
+          .getSingle();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+      // The RENAME reached the server, its answer did not.
+      server.renameFolder('Archive', 'Old Mail');
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 WHERE change_type = '
+        "'rename_mailbox'",
+      );
+      // A newer rename does not replace the one that may have been sent.
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Older Mail');
+      expect(await _ops(db), [
+        ('rename_mailbox', 'pending'),
+        ('rename_mailbox', 'pending'),
+      ]);
+      await db.customStatement(
+        'DELETE FROM pending_changes WHERE id = (SELECT MAX(id) FROM '
+        'pending_changes)',
+      );
+      await MailboxStateWriter(db).refold(archive.id);
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      final row = await (db.select(db.mailboxes)
+            ..where((t) => t.id.equals(archive.id)))
+          .getSingle();
+      expect((row.path, row.name), ('Old Mail', 'Old Mail'));
+      final e = await (db.select(db.emails)
+            ..where((t) => t.id.equals(filler.id)))
+          .getSingle();
+      expect(e.srvMailboxPath, 'Old Mail');
+      expect(events(), contains('mailbox.rename_found_done'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'renaming a parent moves its subfolders and their mail; a sibling '
+        "with '.' in its name on a '/' server stays", () async {
+      server
+        ..addFolder('Work')
+        ..addFolder('Work/2026')
+        ..addFolder('Work.old')
+        ..deliver('Work/2026', 'w@test')
+        ..deliver('Work.old', 'o@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Work/2026');
+      await emails.syncEmails(_acc.id, 'Work.old');
+      final child = await (db.select(db.mailboxes)
+            ..where((t) => t.path.equals('Work/2026')))
+          .getSingle();
+
+      await rig.mailboxes.renameMailbox(_acc.id, 'Work', 'Job');
+      expect(
+        await shownFolders(),
+        containsAll(['Job', 'Job/2026', 'Work.old']),
+      );
+      await flush();
+
+      expect(server.folders.keys, containsAll(['Job', 'Job/2026', 'Work.old']));
+      final paths = {
+        for (final m in await db.select(db.mailboxes).get()) m.id: m.path,
+      };
+      expect(paths[child.id], 'Job/2026');
+      expect(paths.values, contains('Work.old'));
+      Future<Email> mail(String messageId) =>
+          (db.select(db.emails)..where((t) => t.messageId.equals(messageId)))
+              .getSingle();
+      expect((await mail('w@test')).srvMailboxPath, 'Job/2026');
+      expect((await mail('o@test')).srvMailboxPath, 'Work.old');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      expect(
+        (await db.select(db.mailboxes).get()).map((m) => m.path),
+        unorderedEquals(['INBOX', 'Archive', 'Job', 'Job/2026', 'Work.old']),
+      );
+      expect(await _ops(db), isEmpty);
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a folder removed on the server fails the creates of subfolders '
+        'queued below it, and what waits for them', () async {
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await rig.mailboxes.createMailbox(
+        _acc.id,
+        'Sub',
+        parentDisplayPath: 'Archive',
+      );
+      final id = (await rowOfA()).id;
+      await emails.moveEmail(id, 'Archive/Sub');
+      server.folders.remove('Archive');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(await _ops(db), [
+        ('create_mailbox', 'failed'),
+        ('move', 'failed'),
+      ]);
+      expect((await rowOfA()).mailboxPath, 'INBOX');
+      await flush();
+      expect(server.folderCommands, isEmpty, reason: 'Archive stays gone');
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a rename waits while a mail change naming the folder is being sent '
+        'by another flush', () async {
+      await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: _acc.id,
+              resourceType: 'Email',
+              resourceId: (await rowOfA()).id,
+              changeType: 'move',
+              payload: '{"uid":1,"mailboxPath":"INBOX","dest":"Archive"}',
+              createdAt: DateTime(2026),
+              state: const Value('inflight'),
+              leaseUntil: Value(DateTime(2099)),
+              claimToken: const Value('other-flush'),
+            ),
+          );
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+
+      await flush();
+
+      expect(server.folderCommands, isEmpty);
+      final rename = (await db.select(db.pendingChanges).get()).last;
+      expect((rename.state, rename.attempts), ('pending', 0));
+    });
+
+    test('a removed folder leaves no acked op of it behind', () async {
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+      await flush();
+      expect(await _ops(db), [('rename_mailbox', 'acked')]);
+      server.folders.remove('Old Mail');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(await _ops(db), isEmpty);
       await _expectConsistent(db);
     });
 
@@ -507,6 +750,68 @@ void main() {
     });
 
     test(
+        'a create whose answer was lost finds the folder (no second '
+        'create) and the next listing settles it although Mailbox/changes '
+        'does not name it', () async {
+      await mailboxes.createMailbox(jmapAccount.id, 'Lost');
+      // The create reached the server, its answer did not.
+      server.addElsewhere('mbx-lost', 'Lost');
+      await r.db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 WHERE change_type = '
+        "'create_mailbox'",
+      );
+      // A listing in between: the folder is the server's, not a second one.
+      await mailboxes.syncMailboxes(jmapAccount.id);
+
+      await flush();
+
+      expect(server.created, isEmpty);
+      final shown = await mailboxes.observeMailboxes(jmapAccount.id).first;
+      expect(shown.where((m) => m.name == 'Lost'), hasLength(1));
+      expect(shown.singleWhere((m) => m.name == 'Lost').path, 'mbx-lost');
+      expect(await _ops(r.db), [('create_mailbox', 'acked')]);
+
+      await mailboxes.syncMailboxes(jmapAccount.id);
+      expect(await _ops(r.db), isEmpty);
+      await _expectConsistent(r.db);
+    });
+
+    test(
+        "a move queued from a screen that still names the folder's stand-in "
+        "goes to the server's id; an unknown stand-in fails", () async {
+      final folder = await mailboxes.createMailbox(jmapAccount.id, 'P');
+      await flush();
+      final id = server.created.single;
+
+      await r.emails.moveEmail('${jmapAccount.id}:e1', folder.path);
+      final move = (await r.db.select(r.db.pendingChanges).get()).last;
+      expect(move.payload, contains('"dest":"$id"'));
+
+      await insertJmapEmailRow(
+        r.db,
+        jmapAccount.id,
+        'e2',
+        mailboxPath: 'inbox',
+      );
+      await r.db.into(r.db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: jmapAccount.id,
+              resourceType: 'Email',
+              resourceId: '${jmapAccount.id}:e2',
+              changeType: 'move',
+              payload: '{"dest":"~new:gone","jmapId":"e2"}',
+              createdAt: DateTime(2026),
+            ),
+          );
+      await flush();
+      expect(server.moves, {'e1': id});
+      final gone = (await r.db.select(r.db.pendingChanges).get())
+          .singleWhere((o) => o.resourceId == '${jmapAccount.id}:e2');
+      expect(gone.state, 'failed');
+      expect(gone.lastError, contains('never created'));
+    });
+
+    test(
         'offline rename shows at once; the flush sends it; the next listing '
         'confirms it', () async {
       final renamed =
@@ -536,6 +841,14 @@ class _JmapFolders {
 
   late final http.Client client;
   bool offline = false;
+
+  /// Another client creates a mailbox [id] called [name].
+  void addElsewhere(String id, String name) {
+    _state++;
+    mailboxes[id] = {'id': id, 'name': name};
+    _changes.add((_state, id, true));
+  }
+
   bool refuseCreate = false;
   final Map<String, Map<String, dynamic>> mailboxes = {
     'inbox': {'id': 'inbox', 'name': 'Inbox', 'role': 'inbox'},
@@ -544,6 +857,9 @@ class _JmapFolders {
   final List<String> created = [];
   final Map<String, String> moves = {};
   var _state = 1;
+
+  /// What each state change did: (state after, mailbox id, created?).
+  final List<(int, String, bool)> _changes = [];
 
   http.Response? _raw(http.BaseRequest request) {
     if (offline) throw const SocketException('offline');
@@ -571,6 +887,13 @@ class _JmapFolders {
           call.callId,
         ];
       case 'Mailbox/changes':
+        // Only what changed since the state asked about, as a server does.
+        final since =
+            int.parse((call.args['sinceState'] as String).substring(1));
+        final changed = [
+          for (final c in _changes)
+            if (c.$1 > since) c,
+        ];
         return [
           'Mailbox/changes',
           {
@@ -578,8 +901,14 @@ class _JmapFolders {
             'oldState': call.args['sinceState'],
             'newState': 'm$_state',
             'hasMoreChanges': false,
-            'created': <String>[],
-            'updated': mailboxes.keys.toList(),
+            'created': [
+              for (final c in changed)
+                if (c.$3) c.$2,
+            ],
+            'updated': {
+              for (final c in changed)
+                if (!c.$3) c.$2,
+            }.toList(),
             'destroyed': <String>[],
           },
           call.callId,
@@ -598,6 +927,7 @@ class _JmapFolders {
             }
             final id = 'mbx-${created.length + 1}';
             created.add(id);
+            _changes.add((_state + 1, id, true));
             mailboxes[id] = {
               'id': id,
               ...(value as Map<String, dynamic>),
@@ -609,6 +939,7 @@ class _JmapFolders {
         if (update != null) {
           for (final MapEntry(:key, :value) in update.entries) {
             mailboxes[key]!.addAll(value as Map<String, dynamic>);
+            _changes.add((_state + 1, key, false));
             updated[key] = null;
           }
         }

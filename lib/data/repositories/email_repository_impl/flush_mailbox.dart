@@ -5,8 +5,9 @@ part of '../email_repository_impl.dart';
 // and holding back the email changes that need a folder not created yet.
 
 /// What the server confirmed for a mailbox op: the folder is at [path]
-/// under [name].
-typedef _MailboxDone = ({String path, String name});
+/// under [name]; [read]: found in a read of the server (a create of a
+/// folder that exists), not by our command's answer.
+typedef _MailboxDone = ({String path, String name, bool read});
 
 extension _FlushMailbox on EmailRepositoryImpl {
   /// Sends [accountId]'s queued mailbox ops (pending, and stuck ones that
@@ -70,6 +71,20 @@ extension _FlushMailbox on EmailRepositoryImpl {
     try {
       for (final snapshot in rows) {
         if (blocked.contains(snapshot.resourceId)) continue;
+        if (snapshot.changeType == renameMailboxOp) {
+          // A mail change naming the folder is being sent by another flush
+          // with the old path: the rename waits for it (nothing charged),
+          // or that change would name a folder the server just renamed.
+          final folder = await _mailboxState.rowById(snapshot.resourceId);
+          if (folder != null &&
+              await _mailboxState.mailChangeInFlightFor(
+                account.id,
+                folder.path,
+              )) {
+            blocked.add(snapshot.resourceId);
+            continue;
+          }
+        }
         final row = await _claimPendingChange(snapshot);
         if (row == null) {
           blocked.add(snapshot.resourceId);
@@ -81,9 +96,12 @@ extension _FlushMailbox on EmailRepositoryImpl {
           if (mailbox == null) {
             throw MailboxOpRefused('the folder no longer exists');
           }
-          final done = jmap != null
-              ? await _applyMailboxOpJmap(jmap, row, mailbox)
-              : await _applyMailboxOpImap(client!, row, mailbox);
+          final done = await _applyMailboxOp(
+            row,
+            mailbox,
+            client: client,
+            jmap: jmap,
+          );
           if (done == null) {
             // Its folder or parent folder is not on the server yet.
             await _unclaimPendingChange(row);
@@ -94,6 +112,7 @@ extension _FlushMailbox on EmailRepositoryImpl {
             row,
             serverPath: done.path,
             serverName: done.name,
+            readConfirmed: done.read,
           )) {
             applied++;
           }
@@ -150,14 +169,22 @@ extension _FlushMailbox on EmailRepositoryImpl {
         in await _mailboxState.failOrphanedWaiting(accountId)) {
       _mailboxState.logDependents(cause, dependents);
     }
-    final local = await _mailboxState.localPaths(accountId);
-    if (local.isEmpty) return rows;
+    // Folders not to name now: not created yet, or being renamed by
+    // another flush.
+    final waitFor = {
+      ...await _mailboxState.localPaths(accountId),
+      ...await _mailboxState.pathsBeingRenamed(accountId),
+    };
     final held = <String>{};
     final out = <PendingChangeRow>[];
     for (final row in rows) {
       if (held.contains(row.resourceId)) continue;
-      final payload = _decodePayload(row);
-      if (emailOpFolderKeys.any((k) => local.contains(payload?[k]))) {
+      final payload = await _resolveStandIns(row);
+      if (payload == null) {
+        held.add(row.resourceId);
+        continue;
+      }
+      if (emailOpFolderKeys.any((k) => waitFor.contains(payload[k]))) {
         held.add(row.resourceId);
         continue;
       }
@@ -168,105 +195,172 @@ extension _FlushMailbox on EmailRepositoryImpl {
     return out;
   }
 
-  // ── IMAP ──────────────────────────────────────────────────────────────
+  /// The payload of mail change [row] with every folder it names that no
+  /// mailbox has any more resolved to the folder's path now
+  /// ([MailboxStateWriter.resolveStandIn]: a JMAP `~new:` stand-in, or an
+  /// IMAP path guessed before the create's ack corrected it, still named by
+  /// a screen opened before the ack), written back. A `~new:` stand-in no
+  /// folder had fails the change (it would be sent as a mailbox id the
+  /// server never gave): null then.
+  Future<Map<String, dynamic>?> _resolveStandIns(PendingChangeRow row) async {
+    final payload = _decodePayload(row);
+    if (payload == null) return const {};
+    var changed = false;
+    for (final key in emailOpFolderKeys) {
+      final path = payload[key];
+      if (path is! String) continue;
+      final resolved = await _mailboxState.resolveStandIn(row.accountId, path);
+      if (resolved == path) continue;
+      if (resolved == null) {
+        if (!path.startsWith(localJmapMailboxPrefix)) continue;
+        await _mailboxState.failStandIn(row, path);
+        return null;
+      }
+      payload[key] = resolved;
+      changed = true;
+    }
+    if (changed) {
+      await (_db.update(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.id.equals(row.id) &
+                  t.state.isIn(const ['pending', 'stuck', 'parked']),
+            ))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+      await _refoldAndRethread(row.resourceId);
+    }
+    return payload;
+  }
 
-  /// Sends mailbox op [row] of [mailbox] over [client]. Null: it waits (the
-  /// folder or its parent is not on the server yet).
-  Future<_MailboxDone?> _applyMailboxOpImap(
-    imap.ImapClient client,
+  /// Sends mailbox op [row] of [mailbox] over [client] (IMAP) or [jmap].
+  /// Null: it waits (the folder or its parent is not on the server yet).
+  Future<_MailboxDone?> _applyMailboxOp(
     PendingChangeRow row,
-    MailboxRow mailbox,
-  ) async {
+    MailboxRow mailbox, {
+    required imap.ImapClient? client,
+    required JmapClient? jmap,
+  }) async {
     final payload = _decodePayload(row) ?? const <String, dynamic>{};
     final name = payload[mailboxOpName] as String? ?? mailbox.name;
     switch (row.changeType) {
       case createMailboxOp:
-        // Listed meanwhile (another client made it, or our earlier try
-        // did): the intent is satisfied.
-        if (!mailbox.isLocal) {
-          return (path: mailbox.path, name: mailbox.srvName ?? name);
-        }
         final parent = payload[mailboxOpParent] as String?;
-        if (parent != null && await _isLocalFolder(row.accountId, parent)) {
-          return null;
-        }
-        final folders = await client.listMailboxes(recursive: true);
-        final separator = _separatorFor(parent, folders);
-        final target = parent == null ? name : '$parent$separator$name';
-        bool exists(List<imap.Mailbox> list) =>
-            list.any((m) => m.path == target);
-        // Our own earlier try may have created it (an answer lost on the
-        // way); a role folder (Archive, Junk) that exists is the one meant.
-        final mine = row.attempts > 0 || payload[mailboxOpRole] != null;
-        if (exists(folders)) {
-          if (mine) return (path: target, name: name);
-          throw MailboxOpRefused('a folder named "$name" already exists');
-        }
-        try {
-          await client.createMailbox(target);
-        } catch (e) {
-          if (!client.isConnected || isImapConnectionLost(e)) rethrow;
-          if (exists(await client.listMailboxes(recursive: true))) {
-            if (mine) return (path: target, name: name);
-            throw MailboxOpRefused('a folder named "$name" already exists');
-          }
-          if (isImapPermanentRefusal(e)) {
-            throw MailboxOpRefused('the server refused the folder: $e');
-          }
-          rethrow;
-        }
-        return (path: target, name: name);
+        final early = await _createWithoutCall(row, mailbox, parent, name);
+        if (early != null) return early.path.isEmpty ? null : early;
+        final role = payload[mailboxOpRole] as String?;
+        return jmap != null
+            ? _createJmap(jmap, row, parent, name, role)
+            : _createImap(client!, row, parent, name, role);
       case renameMailboxOp:
         if (mailbox.isLocal) return null;
-        final from = mailbox.path;
-        final separator = await imapPathSeparator(client, from);
-        final parts = from.split(separator);
-        parts[parts.length - 1] = name;
-        final to = parts.join(separator);
-        if (to == from) return (path: from, name: name);
-        Future<bool> done() async {
-          final list = await client.listMailboxes(recursive: true);
-          return list.any((m) => m.path == to) &&
-              !list.any((m) => m.path == from);
-        }
-
-        if (row.attempts > 0 && await done()) return (path: to, name: name);
-        try {
-          // IMAP RENAME's second argument is the full destination path.
-          await client.renameMailbox(imapMailboxFor(from), to);
-        } catch (e) {
-          if (!client.isConnected || isImapConnectionLost(e)) rethrow;
-          final list = await client.listMailboxes(recursive: true);
-          final hasFrom = list.any((m) => m.path == from);
-          final hasTo = list.any((m) => m.path == to);
-          if (hasTo && !hasFrom) return (path: to, name: name);
-          if (hasTo) {
-            throw MailboxOpRefused('a folder named "$name" already exists');
-          }
-          if (!hasFrom) {
-            throw MailboxOpRefused(
-              'the folder no longer exists on the server',
-            );
-          }
-          if (isImapPermanentRefusal(e)) {
-            throw MailboxOpRefused('the server refused the new name: $e');
-          }
-          rethrow;
-        }
-        return (path: to, name: name);
+        return jmap != null
+            ? _renameJmap(jmap, mailbox, name)
+            : _renameImap(client!, row, mailbox, name);
     }
     throw MailboxOpRefused('unknown folder change "${row.changeType}"');
   }
 
-  /// The hierarchy separator below [parent]: from its path, else the
-  /// server's (LIST answer [folders]).
-  static String _separatorFor(String? parent, List<imap.Mailbox> folders) {
-    if (parent != null) {
-      if (parent.contains('/')) return '/';
-      if (parent.contains('.')) return '.';
+  // ── IMAP ──────────────────────────────────────────────────────────────
+
+  Future<_MailboxDone> _createImap(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    String? parent,
+    String name,
+    String? role,
+  ) async {
+    final folders = await client.listMailboxes(recursive: true);
+    final separator = imapSeparatorOf(folders);
+    await _mailboxState.recordImapSeparator(row.accountId, separator);
+    final target = parent == null ? name : '$parent$separator$name';
+    bool exists(List<imap.Mailbox> list) => list.any((m) => m.path == target);
+    // Our own earlier try may have created it (an answer lost on the
+    // way); a role folder (Archive, Junk) that exists is the one meant.
+    final mine = row.attempts > 0 || role != null;
+    if (exists(folders)) {
+      if (mine) return (path: target, name: name, read: true);
+      throw MailboxOpRefused('a folder named "$name" already exists');
     }
-    final listed = folders.firstOrNull?.pathSeparator;
-    return listed == null || listed.isEmpty ? '/' : listed;
+    try {
+      await client.createMailbox(target);
+    } catch (e) {
+      if (!client.isConnected || isImapConnectionLost(e)) rethrow;
+      if (exists(await client.listMailboxes(recursive: true))) {
+        if (mine) return (path: target, name: name, read: true);
+        throw MailboxOpRefused('a folder named "$name" already exists');
+      }
+      if (isImapPermanentRefusal(e)) {
+        throw MailboxOpRefused('the server refused the folder: $e');
+      }
+      rethrow;
+    }
+    return (path: target, name: name, read: false);
+  }
+
+  Future<_MailboxDone> _renameImap(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    MailboxRow mailbox,
+    String name,
+  ) async {
+    final from = mailbox.path;
+    final separator = await imapPathSeparator(client);
+    await _mailboxState.recordImapSeparator(row.accountId, separator);
+    final parts = from.split(separator);
+    parts[parts.length - 1] = name;
+    final to = parts.join(separator);
+    if (to == from) return (path: from, name: name, read: false);
+    Future<bool> done() async {
+      final list = await client.listMailboxes(recursive: true);
+      return list.any((m) => m.path == to) && !list.any((m) => m.path == from);
+    }
+
+    if (row.attempts > 0 && await done()) {
+      return (path: to, name: name, read: false);
+    }
+    try {
+      // IMAP RENAME's second argument is the full destination path.
+      await client.renameMailbox(imapMailboxFor(from, separator), to);
+    } catch (e) {
+      if (!client.isConnected || isImapConnectionLost(e)) rethrow;
+      final list = await client.listMailboxes(recursive: true);
+      final hasFrom = list.any((m) => m.path == from);
+      final hasTo = list.any((m) => m.path == to);
+      if (hasTo && !hasFrom) return (path: to, name: name, read: false);
+      if (hasTo) {
+        throw MailboxOpRefused('a folder named "$name" already exists');
+      }
+      if (!hasFrom) {
+        throw MailboxOpRefused(
+          'the folder no longer exists on the server',
+        );
+      }
+      if (isImapPermanentRefusal(e)) {
+        throw MailboxOpRefused('the server refused the new name: $e');
+      }
+      rethrow;
+    }
+    return (path: to, name: name, read: false);
+  }
+
+  /// The outcome of create [row] of [mailbox] that needs no server call:
+  /// done when a listing has the folder already (another client made it,
+  /// or our earlier try did, §5 satisfied), or one with an empty path when
+  /// its [parent] has no server copy yet (the create waits); null to send
+  /// it.
+  Future<_MailboxDone?> _createWithoutCall(
+    PendingChangeRow row,
+    MailboxRow mailbox,
+    String? parent,
+    String name,
+  ) async {
+    if (!mailbox.isLocal) {
+      return (path: mailbox.path, name: mailbox.srvName ?? name, read: true);
+    }
+    if (parent != null && await _isLocalFolder(row.accountId, parent)) {
+      return (path: '', name: name, read: false);
+    }
+    return null;
   }
 
   Future<bool> _isLocalFolder(String accountId, String path) async =>
@@ -274,91 +368,82 @@ extension _FlushMailbox on EmailRepositoryImpl {
 
   // ── JMAP ──────────────────────────────────────────────────────────────
 
-  /// Sends mailbox op [row] of [mailbox] over [jmap]. Null: it waits.
-  Future<_MailboxDone?> _applyMailboxOpJmap(
+  Future<_MailboxDone> _createJmap(
     JmapClient jmap,
     PendingChangeRow row,
-    MailboxRow mailbox,
+    String? parent,
+    String name,
+    String? role,
   ) async {
-    final payload = _decodePayload(row) ?? const <String, dynamic>{};
-    final name = payload[mailboxOpName] as String? ?? mailbox.name;
-    switch (row.changeType) {
-      case createMailboxOp:
-        if (!mailbox.isLocal) {
-          return (path: mailbox.path, name: mailbox.srvName ?? name);
-        }
-        final parent = payload[mailboxOpParent] as String?;
-        if (parent != null && await _isLocalFolder(row.accountId, parent)) {
-          return null;
-        }
-        if (parent != null && parent.startsWith(localJmapMailboxPrefix)) {
-          throw MailboxOpRefused('its parent folder was not created');
-        }
-        final role = payload[mailboxOpRole] as String?;
-        // A role folder the server has is the one meant (the Snoozed folder
-        // another device made); our own earlier try may have created it.
-        if (role != null || row.attempts > 0) {
-          final found = await _findJmapMailbox(
-            jmap,
-            name: name,
-            parentId: parent,
-            role: role,
-          );
-          if (found != null) return found;
-        }
-        // The `snoozed` role is not in the IANA registry and servers such
-        // as Stalwart reject it: a role the server refuses is left out.
-        for (final withRole
-            in role == null ? const [false] : const [true, false]) {
-          final responses = await jmap.call([
-            [
-              'Mailbox/set',
-              {
-                'accountId': jmap.accountId,
-                'create': {
-                  'c0': {
-                    'name': name,
-                    if (parent != null) 'parentId': parent,
-                    if (withRole) 'role': role,
-                  },
-                },
-              },
-              '0',
-            ],
-          ]);
-          final result = _responseArgs(responses, 0, 'Mailbox/set');
-          final created = (result['created'] as Map<String, dynamic>?)?['c0']
-              as Map<String, dynamic>?;
-          final id = created?['id'] as String?;
-          if (id != null) return (path: id, name: name);
-          final err = ((result['notCreated'] as Map<String, dynamic>?)?['c0']
-                  as Map<String, dynamic>?) ??
-              const {'type': 'serverFail'};
-          if (withRole && err['type'] == 'invalidProperties') continue;
-          throw MailboxOpRefused(jmapMailboxSetErrorText(err));
-        }
-        throw MailboxOpRefused('the server did not create the folder');
-      case renameMailboxOp:
-        if (mailbox.isLocal) return null;
-        final responses = await jmap.call([
-          [
-            'Mailbox/set',
-            {
-              'accountId': jmap.accountId,
-              'update': {
-                mailbox.path: {'name': name},
+    if (parent != null && parent.startsWith(localJmapMailboxPrefix)) {
+      throw MailboxOpRefused('its parent folder was not created');
+    }
+    // A role folder the server has is the one meant (the Snoozed folder
+    // another device made); our own earlier try may have created it.
+    if (role != null || row.attempts > 0) {
+      final found = await _findJmapMailbox(
+        jmap,
+        name: name,
+        parentId: parent,
+        role: role,
+      );
+      if (found != null) return found;
+    }
+    // The `snoozed` role is not in the IANA registry and servers such
+    // as Stalwart reject it: a role the server refuses is left out.
+    for (final withRole in role == null ? const [false] : const [true, false]) {
+      final responses = await jmap.call([
+        [
+          'Mailbox/set',
+          {
+            'accountId': jmap.accountId,
+            'create': {
+              'c0': {
+                'name': name,
+                if (parent != null) 'parentId': parent,
+                if (withRole) 'role': role,
               },
             },
-            '0',
-          ],
-        ]);
-        final result = _responseArgs(responses, 0, 'Mailbox/set');
-        final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
-        final err = notUpdated?[mailbox.path] as Map<String, dynamic>?;
-        if (err != null) throw MailboxOpRefused(jmapMailboxSetErrorText(err));
-        return (path: mailbox.path, name: name);
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Mailbox/set');
+      final created = (result['created'] as Map<String, dynamic>?)?['c0']
+          as Map<String, dynamic>?;
+      final id = created?['id'] as String?;
+      if (id != null) return (path: id, name: name, read: false);
+      final err = ((result['notCreated'] as Map<String, dynamic>?)?['c0']
+              as Map<String, dynamic>?) ??
+          const {'type': 'serverFail'};
+      if (withRole && err['type'] == 'invalidProperties') continue;
+      throw MailboxOpRefused(jmapMailboxSetErrorText(err));
     }
-    throw MailboxOpRefused('unknown folder change "${row.changeType}"');
+    throw MailboxOpRefused('the server did not create the folder');
+  }
+
+  Future<_MailboxDone> _renameJmap(
+    JmapClient jmap,
+    MailboxRow mailbox,
+    String name,
+  ) async {
+    final responses = await jmap.call([
+      [
+        'Mailbox/set',
+        {
+          'accountId': jmap.accountId,
+          'update': {
+            mailbox.path: {'name': name},
+          },
+        },
+        '0',
+      ],
+    ]);
+    final result = _responseArgs(responses, 0, 'Mailbox/set');
+    final notUpdated = result['notUpdated'] as Map<String, dynamic>?;
+    final err = notUpdated?[mailbox.path] as Map<String, dynamic>?;
+    if (err != null) throw MailboxOpRefused(jmapMailboxSetErrorText(err));
+    return (path: mailbox.path, name: name, read: false);
   }
 
   /// The server's mailbox with [role] (when given), else the one called
@@ -393,6 +478,7 @@ extension _FlushMailbox on EmailRepositoryImpl {
     return (
       path: match['id'] as String,
       name: match['name'] as String? ?? name,
+      read: true,
     );
   }
 }

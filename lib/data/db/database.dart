@@ -2085,21 +2085,23 @@ class AppDatabase extends _$AppDatabase {
       'SELECT DISTINCT p.account_id AS account_id FROM pending_changes p '
       "JOIN accounts a ON a.id = p.account_id AND a.account_type = 'jmap' "
       "WHERE p.state IN ('pending', 'inflight', 'stuck', 'parked') "
-      "AND p.change_type IN ('snooze', 'unsnooze') "
-      "AND (p.payload LIKE '%\"dest\":\"Snoozed\"%' "
-      "OR p.payload LIKE '%\"src\":\"Snoozed\"%')",
+      // A snooze into the stand-in needs the folder; an unsnooze out of it
+      // alone does not (the mail never got there: nothing to create).
+      "AND p.change_type = 'snooze' "
+      "AND p.payload LIKE '%\"dest\":\"Snoozed\"%'",
     ).get();
     for (final r in accounts) {
       final accountId = r.read<String>('account_id');
-      final known = await customSelect(
-        'SELECT 1 FROM mailboxes WHERE account_id = ?1 '
-        "AND path = 'Snoozed'",
-        variables: [Variable.withString(accountId)],
-      ).getSingleOrNull();
-      if (known != null) continue;
       final id = '$accountId:Snoozed'; // not an email id
+      // A row at that path (or with that id) already: no create to queue.
+      final known = await customSelect(
+        'SELECT 1 FROM mailboxes WHERE (account_id = ?1 '
+        "AND path = 'Snoozed') OR id = ?2 LIMIT 1",
+        variables: [Variable.withString(accountId), Variable.withString(id)],
+      ).get();
+      if (known.isNotEmpty) continue;
       await customStatement(
-        'INSERT OR IGNORE INTO mailboxes (id, account_id, path, name, '
+        'INSERT INTO mailboxes (id, account_id, path, name, '
         "role, display_path, local_name, is_local) VALUES (?1, ?2, 'Snoozed', "
         "'Snoozed', 'snoozed', 'Snoozed', 'Snoozed', 1)",
         [id, accountId],

@@ -127,10 +127,12 @@ class DisplayPathRow {
 /// folder that has a pending name (a rename, or a folder created offline)
 /// replaced by that name, also inside its subfolders' paths. A folder's
 /// parent is the cached folder with the longest path that is a prefix of
-/// its path followed by `/` or `.`.
+/// its path followed by the account's hierarchy [separator] (so on a `/`
+/// server "Mr. Smith" is no subfolder of "Mr").
 Map<String, String> displayPaths(
   List<DisplayPathRow> rows, {
   required bool jmap,
+  String separator = '/',
 }) {
   final byPath = {for (final r in rows) r.path: r};
   final out = <String, String>{};
@@ -155,8 +157,7 @@ Map<String, String> displayPaths(
     for (final p in sortedPaths) {
       if (p.length >= row.path.length) continue;
       if (!row.path.startsWith(p)) continue;
-      final sep = row.path[p.length];
-      if (sep == '/' || sep == '.') return byPath[p];
+      if (row.path.startsWith(separator, p.length)) return byPath[p];
     }
     return null;
   }
@@ -181,9 +182,8 @@ Map<String, String> displayPaths(
         result = local;
       }
     } else {
-      final sep = row.path[parent.path.length];
-      final leaf = row.path.substring(parent.path.length + 1);
-      result = '${display(parent, visiting)}$sep${local ?? leaf}';
+      final leaf = row.path.substring(parent.path.length + separator.length);
+      result = '${display(parent, visiting)}$separator${local ?? leaf}';
     }
     out[row.path] = result;
     return result;

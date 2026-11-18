@@ -96,16 +96,24 @@ class StatefulFakeImapServer with StaleAnswerHook {
   FakeServerFolder addFolder(String path) =>
       folders[path] = FakeServerFolder(path, nextUidValidity++);
 
-  /// Another client renames folder [from] to [to] (messages, UIDs and
-  /// UIDVALIDITY kept).
+  /// Another client renames folder [from] to [to], with its subfolders
+  /// (`/` is the hierarchy separator; messages, UIDs and UIDVALIDITY kept).
   void renameFolder(String from, String to) {
-    final old = folders.remove(from)!;
-    final renamed = FakeServerFolder(to, old.uidValidity)
-      ..uidNext = old.uidNext
-      ..highestModSeq = old.highestModSeq;
-    renamed.messages.addAll(old.messages);
-    folders[to] = renamed;
+    for (final path in folders.keys.toList()) {
+      if (path != from && !path.startsWith('$from/')) continue;
+      final old = folders.remove(path)!;
+      final newPath = '$to${path.substring(from.length)}';
+      final renamed = FakeServerFolder(newPath, old.uidValidity)
+        ..uidNext = old.uidNext
+        ..highestModSeq = old.highestModSeq;
+      renamed.messages.addAll(old.messages);
+      folders[newPath] = renamed;
+    }
   }
+
+  /// When set, a `CREATE` fails with a plain `NO` (no response code): a
+  /// failure that may pass, retried.
+  bool failCreates = false;
 
   /// When it returns true for a message, every `STORE` and `MOVE` touching
   /// it is refused with `NO`: a permanent server error.
@@ -268,6 +276,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     if (server.refusesFolder?.call(path) ?? false) {
       throw _no('NO [CANNOT] Invalid mailbox name');
     }
+    if (server.failCreates) throw _no('NO Server busy, try again later');
     server.addFolder(path);
     return _answer('CREATE', fakeMailbox(path));
   }

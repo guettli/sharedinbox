@@ -346,6 +346,9 @@ extension _ChangeQueue on EmailRepositoryImpl {
     // server id is not known, has no server copy to change yet: the change
     // is parked, folds like any other and is sent once the server copy is
     // matched in place (SYNC-REDESIGN.md §6).
+    // A screen opened before a folder's create was acked may still name
+    // its stand-in path: the change names the server's folder instead.
+    payload = await _withFoldersResolved(accountId, payload);
     final parked = email != null && await _hasNoServerCopy(email);
     if (!parked) {
       payload = _stampJmapId(payload, email?.srvJmapId);
@@ -469,6 +472,29 @@ extension _ChangeQueue on EmailRepositoryImpl {
     }
     _changeCtrl.add(accountId);
     return true;
+  }
+
+  /// [payload] with each folder it names (`dest`, `src`, `mailboxPath`)
+  /// that no mailbox has resolved to the path the folder has now
+  /// ([MailboxStateWriter.resolveStandIn]); unchanged when none needs it.
+  Future<String> _withFoldersResolved(String accountId, String payload) async {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(payload);
+    } catch (_) {
+      return payload;
+    }
+    if (decoded is! Map<String, dynamic>) return payload;
+    var changed = false;
+    for (final key in emailOpFolderKeys) {
+      final path = decoded[key];
+      if (path is! String) continue;
+      final resolved = await _mailboxState.resolveStandIn(accountId, path);
+      if (resolved == null || resolved == path) continue;
+      decoded[key] = resolved;
+      changed = true;
+    }
+    return changed ? jsonEncode(decoded) : payload;
   }
 
   /// Whether [row] has no server copy a change could be sent for: a local
@@ -1152,7 +1178,11 @@ extension _ChangeQueue on EmailRepositoryImpl {
       return;
     }
     if (row.resourceType == mailboxResourceType) {
-      await _mailboxState.retry(row);
+      // A retried folder create brings back the mail changes that failed
+      // with it.
+      for (final id in await _mailboxState.retry(row)) {
+        await _retryMutation(id);
+      }
       _changeCtrl.add(row.accountId);
       return;
     }

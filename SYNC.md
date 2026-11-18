@@ -736,6 +736,38 @@ changes the row's `path`, never its id; sync finds rows by `path`.
   the server has (by role, then by name) or makes one. The flush no longer resolves
   the stand-in itself. The v75 upgrade queues that create for each JMAP account with
   a queued snooze into the stand-in.
+- **Review fixes (5a).**
+  - A folder created offline is never synced (the sync loop and `syncEmails` skip
+    it: no SELECT or `Email/query` of its stand-in) and `removeLocalMailbox`
+    refuses it, so a create that is not confirmed yet (a transient error, stuck,
+    being sent by another isolate, waiting for its parent) cannot be taken for a
+    folder deleted on the server.
+  - The IMAP hierarchy separator comes from LIST only (`imapSeparatorOf`, recorded
+    per account in `sync_states` as `Mailbox:ImapSeparator`): subfolder paths,
+    display paths and the subfolders a rename moves go by it, so on a `/` server
+    "Work.old" is no subfolder of "Work".
+  - A rename that may have reached the server (attempts, or being sent) protects
+    its folder from the prune; a listing that shows the new path and not the old
+    one completes it (`completeLostRenames`, App Log warn
+    `mailbox.rename_found_done`). A newer rename replaces only a never-sent one.
+    A listing skips paths below a path an acked rename moved away from, and a
+    rename's ack carries the old paths of the acked renames it replaces.
+  - A listing does not take over a folder created offline whose create was never
+    sent: the create's flush reports the clash. A create found done by a read of
+    the server (a lost answer, a role folder) is dropped by the next listing
+    (`readConfirmed`), as JMAP `Mailbox/changes` does not name an unchanged folder.
+  - A create's ack keeps its stand-in path (`localPath`); a mail change that still
+    names it (queued from a screen opened before the ack, or the Snoozed race) is
+    pointed at the server's folder at enqueue and in the flush; a `~new:` path no
+    folder had fails the change. A mail change naming a folder whose rename is being
+    sent waits, and a rename waits while a mail change naming the folder is being
+    sent elsewhere.
+  - A removed folder fails the creates queued below it (and what waits for them),
+    and its acked ops go with its row. A user's server-first delete says "deleted".
+    Retry of a failed create queues the changes that failed with it again; a retry
+    without a folder, a discarded create that may have been sent, and a queued
+    create re-pointed to a new parent path are logged. The counterpart mirroring
+    never targets a folder without a server copy.
 - **Pending Changes screen** lists folder ops ("Create folder "X"", "Rename folder to
   "Y""); Retry and Discard act on them as above. `MailboxStateWriter.consistencyProblems`
   (`local_name` = the fold, `name` = `COALESCE(local_name, srv_name)`, a local row has
