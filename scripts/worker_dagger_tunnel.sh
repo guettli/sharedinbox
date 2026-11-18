@@ -6,7 +6,7 @@
 #
 # Reads DAGGER_ENGINE_HOST + DAGGER_SSH_KEY from the environment, injected by the
 # repo-scoped Secret `agentloop-repo-sharedinbox-secrets` (agentloop #1082/#1085).
-# `_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080` is baked into the image
+# `DAGGER_ENGINE=tcp://127.0.0.1:8080` is baked into the image
 # ENV, so once this tunnel is up every shell's `dagger`/`task` uses it.
 #
 # Idempotent: a no-op if the tunnel is already up. The tunnel is a detached

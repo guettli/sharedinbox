@@ -192,10 +192,10 @@ fi
 # --- SSH tunnel retry block --------------------------------------------------
 # Drive the tunnel block by extracting the section that starts at the
 # `# Create a background SSH tunnel` comment and stops just before the
-# `# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST` line. Everything above that is
+# `# Export DAGGER_ENGINE` line. Everything above that is
 # secret decryption and known_hosts priming — not under test here — and
 # everything below it is the verify block already covered above.
-_tunnel_snippet=$(awk '/^# Create a background SSH tunnel/{p=1} /^# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST/{exit} p' "$SCRIPT")
+_tunnel_snippet=$(awk '/^# Create a background SSH tunnel/{p=1} /^# Export DAGGER_ENGINE/{exit} p' "$SCRIPT")
 if [ -z "$_tunnel_snippet" ]; then
     echo "FAIL: could not locate SSH tunnel block in $SCRIPT"
     exit 1

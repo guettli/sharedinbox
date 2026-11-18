@@ -137,6 +137,23 @@ if [ -n "$old_refs" ]; then
 fi
 echo "Dagger secret references use env:// (Dagger v1.0 scheme)."
 
+# ---------------------------------------------------------------------------
+# Engine selection uses DAGGER_ENGINE (Dagger 1.0). The old runner-host
+# variable is a deprecated fallback in 1.0; every client moved off it on
+# 2026-11-18 (gitops#1084). Lines that say "deprecated" may name it.
+# ---------------------------------------------------------------------------
+old_var="_EXPERIMENTAL_DAGGER_""RUNNER_HOST"
+old_uses=$(git -C "$ROOT" grep -nF -- "$old_var" | grep -iv deprecated || true)
+if [ -n "$old_uses" ]; then
+  {
+    echo ""
+    echo "ERROR: use DAGGER_ENGINE (Dagger 1.0) instead of the deprecated $old_var:"
+    printf '%s\n' "$old_uses" | sed 's/^/         /'
+  } >&2
+  exit 1
+fi
+echo "Engine selected with DAGGER_ENGINE (Dagger v1.0 name)."
+
 [ "$WITH_ENGINE" = "1" ] || exit 0
 
 # ---------------------------------------------------------------------------
@@ -151,10 +168,10 @@ echo "Dagger secret references use env:// (Dagger v1.0 scheme)."
 # has already established:  echo '{version}' | dagger query  ->  {"version": "v0.21.7"}
 # ---------------------------------------------------------------------------
 
-if [ -z "${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-}" ]; then
+if [ -z "${DAGGER_ENGINE:-}" ]; then
   {
     echo ""
-    echo "ERROR: --engine was requested but _EXPERIMENTAL_DAGGER_RUNNER_HOST is unset,"
+    echo "ERROR: --engine was requested but DAGGER_ENGINE is unset,"
     echo "       so there is no engine to query. Run scripts/setup_dagger_remote.sh"
     echo "       first (CI does this in the 'Setup Dagger Remote Engine' step)."
   } >&2
@@ -189,7 +206,7 @@ if [ "$query_rc" -ne 0 ] || [ -z "$engine" ]; then
   {
     echo ""
     echo "ERROR: could not read the version of the running Dagger engine"
-    echo "       (_EXPERIMENTAL_DAGGER_RUNNER_HOST=${_EXPERIMENTAL_DAGGER_RUNNER_HOST})."
+    echo "       (DAGGER_ENGINE=${DAGGER_ENGINE})."
     echo "       Refusing to continue: without the engine version this check would"
     echo "       silently degrade to comparing in-repo files to each other, which is"
     echo "       precisely the blind spot it exists to close."

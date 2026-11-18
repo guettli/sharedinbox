@@ -90,7 +90,7 @@ re-run). The Dagger `task`s below fail to connect until it is up. If it errors
 
 > **On a `tc` `codeN` seat (not an agentloop worker):** skip the tunnel. The seat
 > reaches the engine directly over its local socket (`dagger` group +
-> `_EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock`, provisioned by
+> `DAGGER_ENGINE=unix:///run/dagger/engine.sock`, provisioned by
 > gitops#738), so the `task …` / `dagger call …` commands below work as-is — and
 > the pre-commit hooks run, so there is no need for `git commit --no-verify`. The
 > tunnel step is worker-only.
@@ -105,9 +105,9 @@ re-run). The Dagger `task`s below fail to connect until it is up. If it errors
 >
 > ```
 > getent group dagger | grep "$(id -un)"   # you should be listed
-> sg dagger -c 'export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock; dagger core --help'
+> sg dagger -c 'export DAGGER_ENGINE=unix:///run/dagger/engine.sock; dagger version'
 > # then prefix real checks the same way, e.g.
-> sg dagger -c 'export _EXPERIMENTAL_DAGGER_RUNNER_HOST=unix:///run/dagger/engine.sock; task check-fast'
+> sg dagger -c 'export DAGGER_ENGINE=unix:///run/dagger/engine.sock; task check-fast'
 > ```
 >
 > Use `sg dagger -c`, not a bare `newgrp dagger`: `newgrp` replaces the shell

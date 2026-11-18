@@ -160,6 +160,6 @@ ENV PATH=/home/ci/.pub-cache/bin:$PATH
 # it's up, without needing to re-export anything. Harmless until the tunnel
 # exists — `dagger` simply cannot connect, which is the intended "run the tunnel
 # first" signal.
-ENV _EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080
+ENV DAGGER_ENGINE=tcp://127.0.0.1:8080
 
 WORKDIR /src
