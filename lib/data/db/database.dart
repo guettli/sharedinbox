@@ -2087,6 +2087,17 @@ class AppDatabase extends _$AppDatabase {
       // snooze queued before into a folder not cached waits for its create.
       await _queueSnoozedCreates('imap');
     }
+    if (from < 77 && await _tableExists(this, 'emails')) {
+      // Phase 6a (force resync as mark-and-sweep): the resyncs before it
+      // deleted rows with foreign keys off, so their bodies and attachment
+      // rows stayed behind; with opaque ids (v71) no new row reused them.
+      for (final table in ['email_bodies', 'attachment_files']) {
+        if (!await _tableExists(this, table)) continue;
+        await customStatement(
+          'DELETE FROM $table WHERE email_id NOT IN (SELECT id FROM emails)',
+        );
+      }
+    }
   }
 
   /// Schema v75: every cached mailbox came from the server, so its name is

@@ -942,9 +942,6 @@ extension _UserActions on EmailRepositoryImpl {
       messageId: e.messageId,
       inReplyTo: e.inReplyTo,
       references: e.references,
-      snoozedFromMailboxPath: e.snoozedFromMailboxPath,
-      isLocal: e.isLocal,
-      isVirtualSentCopy: e.isVirtualSentCopy,
       srvUid: imapKnown ? srvUid : null,
       srvUidValidity: imapKnown ? e.srvUidValidity : null,
       srvJmapId: srvJmapId,
@@ -954,8 +951,13 @@ extension _UserActions on EmailRepositoryImpl {
     // snapshot shows what the app showed, which may be the user's pending
     // value, so the next sync reads the server's (the flag reconcile is
     // made due). Its queued changes fold over it.
-    await _state.insertServerRow(
+    await _state.restoreRow(
       restored,
+      RestoredLocalFields(
+        snoozedFromMailboxPath: e.snoozedFromMailboxPath,
+        isLocal: e.isLocal,
+        isVirtualSentCopy: e.isVirtualSentCopy,
+      ),
       id: e.id,
       accountId: e.accountId,
       // Where the snapshot says the server has it (a snapshot taken
@@ -968,7 +970,6 @@ extension _UserActions on EmailRepositoryImpl {
         flagged: e.isFlagged,
         snoozedUntil: e.snoozedUntil,
       ),
-      seq: 0,
     );
     await _state.makeFlagReconcileDue(e.id);
     await _state.refold(e.id);

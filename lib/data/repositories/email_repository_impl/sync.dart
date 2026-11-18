@@ -221,64 +221,160 @@ extension _Sync on EmailRepositoryImpl {
   /// Force resync of [accountId] (#1236), the mark of a mark-and-sweep
   /// (SYNC-REDESIGN.md §6 "Force resync"): nothing is deleted up front, so
   /// rows keep their ids, bodies, attachments and the references to them
-  /// (Undo, notifications, drafts). Forgetting the account's sync
-  /// checkpoints makes the next sync of each folder a complete refetch: it
-  /// writes every row it finds through the server-write gate (headers,
-  /// read/star/snooze state, location, stamped with its read) and then
-  /// sweeps the folder, marking gone what its enumeration did not list
-  /// (IMAP: the full fetch's [_SyncImap._reconcileDeletedImap]; JMAP: the
-  /// prune after a complete full sync, else the periodic reconcile), and
-  /// the clean-up rule deletes those without a change of the user's. The
-  /// mailbox listing sweeps the folders the same way. Rows recorded in a
-  /// folder the account no longer has, which no folder's refetch reaches,
-  /// are swept here.
+  /// (Undo, notifications, drafts). The account's sync checkpoints are
+  /// forgotten, except that each IMAP folder keeps its UIDVALIDITY with a
+  /// "full fetch" mark ([_forceFullImapCheckpoints]: a changed UIDVALIDITY
+  /// must still be seen), and on JMAP each folder gets a full sync due
+  /// ([_markJmapFullSyncDue]). So the next sync of each folder is a
+  /// complete refetch: it writes every row it finds through the
+  /// server-write gate and then sweeps the folder, marking gone what its
+  /// enumeration did not list (IMAP: the full fetch's
+  /// [_SyncImap._reconcileDeletedImap]; JMAP: the prune after a complete
+  /// full sync, else the periodic reconcile), and the clean-up rule deletes
+  /// those without a change of the user's. Rows recorded in a folder the
+  /// account no longer has are swept by [_sweepRowsOutsideFolders], once
+  /// the folder list was read again.
   Future<void> _clearForResync(String accountId) async {
     // A queued change is un-pushed user intent and is never deleted here
-    // (#558): it keeps folding over the refetched server state.
-    await _sweepRowsOutsideFolders(accountId);
-    await (_db.delete(_db.syncStates)
-          ..where((t) => t.accountId.equals(accountId)))
-        .go();
+    // (#558): it keeps folding over the refetched state.
+    final account = await _accounts.getAccount(accountId);
+    await _db.transaction(() async {
+      final kept = await _forceFullImapCheckpoints(accountId);
+      await (_db.delete(_db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.resourceType.isNotIn(kept),
+            ))
+          .go();
+      if (account?.type == account_model.AccountType.jmap) {
+        await _markJmapFullSyncDue(accountId);
+      }
+    });
   }
 
-  /// [_clearForResync] for one folder: forgets its checkpoint, so its next
-  /// sync is a complete refetch with the sweep. On JMAP a full sync is
-  /// marked due (an empty resume point): without a folder state, sync
-  /// would otherwise adopt the account's global `Email` state and only ask
-  /// for changes since then.
+  /// [_clearForResync] for one folder: its next sync is a complete refetch
+  /// with the sweep. On JMAP a full sync is marked due: without a folder
+  /// state, sync would otherwise adopt the account's global `Email` state
+  /// and only ask for changes since then.
   Future<void> _clearMailboxForResync(
     String accountId,
     String mailboxPath,
   ) async {
     final account = await _accounts.getAccount(accountId);
     await _db.transaction(() async {
+      await _forceFullImapCheckpoints(accountId, mailboxPath: mailboxPath);
       await (_db.delete(_db.syncStates)
             ..where(
               (t) =>
                   t.accountId.equals(accountId) &
-                  (t.resourceType.equals('IMAP:$mailboxPath') |
-                      t.resourceType.equals('JMAP:Email:$mailboxPath') |
+                  (t.resourceType.equals('JMAP:Email:$mailboxPath') |
                       t.resourceType.equals('JMAP:FullSync:$mailboxPath')),
             ))
           .go();
       if (account?.type == account_model.AccountType.jmap) {
-        await _saveSyncState(accountId, _jmapFullSyncKey(mailboxPath), '{}');
+        await _markJmapFullSyncDue(accountId, mailboxPath: mailboxPath);
       }
     });
   }
 
-  /// The rows of [accountId] recorded in a folder the account no longer has
-  /// (not a mailbox row of it, local or hidden ones included): no folder's
-  /// refetch reaches them, so a force resync marks them gone and the
-  /// clean-up rule deletes those without a change of the user's.
+  /// Rewrites the IMAP checkpoints of [accountId] (of [mailboxPath] only,
+  /// when given) to "full fetch due", keeping only their UIDVALIDITY: the
+  /// next sync fetches the folder in full, and a UIDVALIDITY the server
+  /// changed meanwhile still marks the folder's rows gone. A checkpoint
+  /// without a UIDVALIDITY is dropped (the full fetch then marks gone the
+  /// rows stamped with another one than the server's). Returns the
+  /// resource types of the checkpoints kept.
+  Future<Set<String>> _forceFullImapCheckpoints(
+    String accountId, {
+    String? mailboxPath,
+  }) async {
+    final rows = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                (mailboxPath == null
+                    ? t.resourceType.like('IMAP:%')
+                    : t.resourceType.equals('IMAP:$mailboxPath')),
+          ))
+        .get();
+    final kept = <String>{};
+    for (final row in rows) {
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(row.state);
+      } catch (_) {
+        continue;
+      }
+      // Only the folder checkpoints (`IMAP:<path>`), not the flag
+      // reconcile markers, which are no JSON objects.
+      if (decoded is! Map<String, dynamic> ||
+          !decoded.containsKey('uidValidity')) {
+        continue;
+      }
+      final validity = decoded['uidValidity'];
+      if (validity is! int || validity == 0) {
+        await _clearSyncState(accountId, row.resourceType);
+        continue;
+      }
+      await _saveSyncState(
+        accountId,
+        row.resourceType,
+        jsonEncode({'uidValidity': validity, _forceFullKey: true}),
+      );
+      kept.add(row.resourceType);
+    }
+    return kept;
+  }
+
+  /// Marks a full sync due for every cached folder of JMAP account
+  /// [accountId] ([mailboxPath] only, when given): an empty resume point,
+  /// which keeps the folder on the full-sync path even when another
+  /// folder's sync stores a state it could adopt.
+  Future<void> _markJmapFullSyncDue(
+    String accountId, {
+    String? mailboxPath,
+  }) async {
+    final paths = mailboxPath != null
+        ? [mailboxPath]
+        : [
+            for (final m in await (_db.select(_db.mailboxes)
+                  ..where(
+                    (t) =>
+                        t.accountId.equals(accountId) & t.isLocal.equals(false),
+                  ))
+                .get())
+              m.path,
+          ];
+    for (final path in paths) {
+      await _saveSyncState(accountId, _jmapFullSyncKey(path), '{}');
+    }
+  }
+
+  /// After a force resync of [accountId] read the folder list again: the
+  /// rows recorded in a folder the account no longer has (not a mailbox
+  /// row of it) are swept, as no folder's refetch reaches them. Skipped,
+  /// with an App Log info line, when the account has no folder from the
+  /// server at all: that is no listing, not an account without folders.
   Future<void> _sweepRowsOutsideFolders(String accountId) async {
-    // No folder at all is no listing, not an account without folders.
     final anyFolder = await (_db.selectOnly(_db.mailboxes)
           ..addColumns([_db.mailboxes.id])
-          ..where(_db.mailboxes.accountId.equals(accountId))
+          ..where(
+            _db.mailboxes.accountId.equals(accountId) &
+                _db.mailboxes.isLocal.equals(false),
+          )
           ..limit(1))
         .getSingleOrNull();
-    if (anyFolder == null) return;
+    if (anyFolder == null) {
+      unawaited(
+        _appLogger?.info(
+          'sync.resync_sweep_skipped',
+          'Force resync: no folder of this account is known from the '
+              'server, so mail outside the known folders was not swept',
+          accountId: accountId,
+        ),
+      );
+      return;
+    }
     final read = await _state.beginRead(accountId);
     final ids = [
       for (final r in await _db.customSelect(

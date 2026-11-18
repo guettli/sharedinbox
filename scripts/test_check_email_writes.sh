@@ -41,6 +41,7 @@ lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|fix
 lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|fixture
 '
 export EMAIL_WRITES_ALLOWED="$fixture_allowed"
+export CHECK_EMAIL_WRITES_FIXTURES=1
 
 # ── Check 1: overlay columns, no allow-list ─────────────────────────────────
 expect fail 'isSeen in an EmailsCompanion, even in an allowed member' \
@@ -849,7 +850,8 @@ class SyncLogRepositoryImpl {
 EOF
 
 # ── The real allow-list (empty since phase 6a) ─────────────────────────────
-unset EMAIL_WRITES_ALLOWED
+# EMAIL_WRITES_ALLOWED without the fixture flag is ignored.
+unset CHECK_EMAIL_WRITES_FIXTURES
 
 expect fail 'an emails insert in the IMAP fetch (no longer allowed)' \
   "$repo/sync_imap.dart" 'emails is written only' <<'EOF'
@@ -895,6 +897,59 @@ extension _SyncJmap on EmailRepositoryImpl {
       return;
     }
     await _state.writeServerHeaders(dbId, headers);
+  }
+}
+EOF
+
+unset EMAIL_WRITES_ALLOWED
+
+# ── Check 4: Undo's restore ────────────────────────────────────────────────
+expect fail 'restoreRow outside Undo' \
+  "$repo/sync_imap.dart" 'only by Undo' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    await _state.restoreRow(
+      headers,
+      const RestoredLocalFields(
+        snoozedFromMailboxPath: null,
+        isLocal: true,
+        isVirtualSentCopy: false,
+      ),
+      id: id,
+    );
+  }
+}
+EOF
+
+expect fail 'RestoredLocalFields in another member of user_actions.dart' \
+  "$repo/user_actions.dart" 'only by Undo' <<'EOF'
+extension _UserActions on EmailRepositoryImpl {
+  Future<void> _restoreEmail(model.Email e) async {}
+
+  Future<void> _other(model.Email e) async {
+    final f = RestoredLocalFields(
+      snoozedFromMailboxPath: null,
+      isLocal: e.isLocal,
+      isVirtualSentCopy: false,
+    );
+  }
+}
+EOF
+
+expect pass "restoreRow in Undo's _restoreEmail" \
+  "$repo/user_actions.dart" <<'EOF'
+extension _UserActions on EmailRepositoryImpl {
+  Future<void> _restoreEmail(model.Email e) async {
+    final restored = ServerRowHeaders(uid: e.uid, subject: e.subject);
+    await _state.restoreRow(
+      restored,
+      RestoredLocalFields(
+        snoozedFromMailboxPath: e.snoozedFromMailboxPath,
+        isLocal: e.isLocal,
+        isVirtualSentCopy: e.isVirtualSentCopy,
+      ),
+      id: e.id,
+    );
   }
 }
 EOF

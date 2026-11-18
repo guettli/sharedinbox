@@ -358,6 +358,10 @@ class EmailRepositoryImpl implements EmailRepository {
   Future<void> clearForResync(String accountId) => _clearForResync(accountId);
 
   @override
+  Future<void> sweepRowsOutsideFolders(String accountId) =>
+      _sweepRowsOutsideFolders(accountId);
+
+  @override
   Future<void> clearMailboxForResync(
     String accountId,
     String mailboxPath,

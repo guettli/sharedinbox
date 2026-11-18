@@ -1531,7 +1531,7 @@ when only a folder's `local_hidden` changes, so it drops the mail of a
 folder just deleted at its next refresh.
 
 As implemented, phase 6 is two PRs:
-1. **6a (done, no schema change):** the guards, mark-and-sweep for force
+1. **6a (done, schema v77):** the guards, mark-and-sweep for force
    resync, and the last allow-listed writes of `emails` (points 1–3 of the
    phase 6 brief).
    - **Guards (point 1): none removed, each kept for a reason.**
@@ -1558,9 +1558,15 @@ As implemented, phase 6 is two PRs:
      checkpoint: `clearForResync` deletes the account's sync states (and
      `MailboxRepository.clearForResync` the JMAP `Mailbox` state, so the next
      listing is a complete `Mailbox/get`), `clearMailboxForResync` the
-     folder's; on JMAP it also stores an empty full-sync resume point, since
-     without a folder state the sync used to adopt the account's global
-     `Email` state and only ask for changes. The refetch is the folder's full
+     folder's. An IMAP checkpoint is not deleted but rewritten to
+     `{uidValidity, forceFull: true}`, so the full fetch still sees a
+     UIDVALIDITY the server changed meanwhile and marks the folder's rows
+     gone (review blocker: with the checkpoint deleted, the old rows were
+     confirmed present by UID and every mail was stored twice). On JMAP every
+     cached folder (the one folder, for a folder resync) gets an empty
+     full-sync resume point: without a folder state the sync adopts the
+     account's global `Email` state, which another folder's sync may have
+     stored, and only asks for changes. The refetch is the folder's full
      sync: it finds each cached row by its server location and writes it
      through the gate (headers, read/star/snooze state, location), so the row
      keeps its id, body, attachments and references. The sweep is the
@@ -1568,36 +1574,66 @@ As implemented, phase 6 is two PRs:
      the enumeration: on IMAP the full path now ends with
      `_reconcileDeletedImap(complete: true)` against its `UID SEARCH ALL`
      (before, only the incremental path reconciled), which after a complete
-     fetch also counts a row without a UID (one the fetch could not find:
-     gone, or a stale duplicate); on JMAP the full sync's prune after a
+     fetch selects every row of the folder not gone yet (`srv_gone = 0`,
+     instead of `srv_uid IS NOT NULL`), so a row without a UID (one the fetch
+     could not find) is gone too; on JMAP the full sync's prune after a
      complete enumeration (a sync spread over runs leaves it to the periodic
-     reconcile). Rows marked gone are deleted by the clean-up rule only when
+     reconcile).
+     **UIDVALIDITY.** The deletion reconcile (complete or not) counts a row
+     present only under the folder's current UIDVALIDITY; an unstamped row
+     only while no row stamped with the current one holds its UID. The full
+     fetch first marks gone the rows stamped with another UIDVALIDITY than
+     the server's (`markFolderGone(exceptUidValidity:)`), for when the
+     previous one is unknown. And the fetch no longer adopts an unstamped
+     row at a UID whose mail has another Message-ID: the UID was reused, so
+     the mail gets its own row, and the old one (with its body, attachments
+     and headers) is swept as a stale duplicate. Rows marked gone are deleted by the clean-up rule only when
      no change of the user's is left; a row a read or ack wrote after the
      mark is not swept. Folders are swept by the listing (`prunable`, as
      before). What no refetch reaches, rows recorded in a folder the account
-     no longer has, is swept by `clearForResync` itself (skipped when the
-     account has no mailbox row at all). `EmailStateWriter.deleteRowsOf`,
+     no longer has, is swept by `EmailRepository.sweepRowsOutsideFolders`,
+     which `AccountSyncManager` calls only after the listing that follows
+     the clear succeeded (with the list read before the clear, a JMAP
+     `Mailbox/changes` that missed a folder would have its mail swept and
+     refetched under new ids). It is skipped, with the App Log info
+     `sync.resync_sweep_skipped`, when the account has no folder from the
+     server (`is_local = 0`). Gmail's All Mail is not refetched by the
+     account resync (#691), so its rows are not swept by it either: they
+     come only from an explicit resync of All Mail, which sweeps it. `EmailStateWriter.deleteRowsOf`,
      `MailboxStateWriter.clearForResync`, the `PRAGMA foreign_keys = OFF`
      around the old delete (whose orphaned bodies no new row reused since
      opaque ids, 2b) and the folder resync's delete of its threads are gone.
-     A refetch that fails part-way removes nothing.
+     The v77 migration deletes the `email_bodies` and `attachment_files`
+     rows those resyncs left without an `emails` row (the downloaded files
+     stay on disk). A refetch that fails part-way removes nothing.
    - **The last allow-listed writes (point 3).** The new-row inserts of the
-     IMAP fetch and the JMAP upsert and Undo's restore go through
+     IMAP fetch and the JMAP upsert go through
      `EmailStateWriter.insertServerRow` (a new row, `newRow` with the read's
-     stamp, or 0 for the restore) and `writeServerHeaders` (header columns
-     and server facts of an existing row). Their headers are a
+     stamp) and `writeServerHeaders` (header columns of an existing row),
+     Undo's restore through `restoreRow` (stamp 0). The headers are a
      `ServerRowHeaders` value, which names no column, as 4b's
-     `LocalRowHeaders`; a nullable field left null is not written. The
-     allow-list of `check_email_writes.sh` is empty; the mechanism stays (an
-     entry must name the phase that removes it), and
-     `test_check_email_writes.sh` supplies the old three members through
-     `EMAIL_WRITES_ALLOWED` so that the rules for allowed members stay
-     tested, plus fixtures that the real list allows none of them.
+     `LocalRowHeaders`; a nullable field left null is not written. It
+     carries no local-only attribute: those of a restored row
+     (`is_local`, `is_virtual_sent_copy`, `snoozed_from_mailbox_path`) are a
+     separate `RestoredLocalFields`, which `restoreRow` checks like
+     `_checkLocalRow` (a virtual row has no server location; only a virtual
+     row is a virtual Sent copy). `writeServerHeaders` writes only the row
+     at the location the headers name (same `srv_uid` and `srv_jmap_id`,
+     `srv_uid_validity` the same or not yet known, not `is_local`) and
+     throws otherwise, so a read cannot move a row or change its local
+     attributes through it. The allow-list of `check_email_writes.sh` is
+     empty; the mechanism stays (an entry must name the phase that removes
+     it), and `test_check_email_writes.sh` supplies the old three members
+     through `EMAIL_WRITES_ALLOWED`, honoured only with
+     `CHECK_EMAIL_WRITES_FIXTURES=1`, so that the rules for allowed members
+     stay tested, plus fixtures that the real list allows none of them. New
+     check 4: `restoreRow` and `RestoredLocalFields` only in `_restoreEmail`.
    - **App Log.** New warn `sync.resync_swept`: the rows a complete refetch
      of a folder (IMAP full fetch, JMAP full sync) or the account resync's
      sweep of rows outside any folder did not find, with their ids; a row
      kept because of a queued change is logged as before
-     (`email.server_gone_with_changes`).
+     (`email.server_gone_with_changes`). New info
+     `sync.resync_sweep_skipped` when that sweep is skipped.
    - **Behaviour changes.** Force resync keeps the id, body and
      attachments of every mail the server still has, and the lists do not
      empty while the refetch runs. A header the server did not send this time (an IMAP preview
@@ -1611,7 +1647,18 @@ As implemented, phase 6 is two PRs:
      outside any folder swept by the account resync), a Stalwart backend
      test (IMAP: a resync keeps the found row's id and body and sweeps the
      mail deleted on the server), the rewritten mailbox contract test, and
-     the check fixtures.
+     the check fixtures. Review round: a UIDVALIDITY changed before a
+     folder resync (one row per mail, no body on another mail), the same
+     without a known previous UIDVALIDITY and with an unstamped row whose
+     UID now holds another mail, a row without a UID swept, a row placed
+     after the enumeration started kept, a header the refetch did not get
+     kept, the sweep outside folders only after the listing (and not when it
+     fails, `force_resync_test.dart`) and skipped without folders, the JMAP
+     folder resync (`force_resync_jmap_test.dart`: full sync instead of the
+     global state, prune and `sync.resync_swept`, incremental again) and the
+     account resync's full-sync marks, the contract test's listing sweeping
+     a folder the server dropped, the v77 migration, and check 4 and the
+     fixture flag in the check fixtures.
    - **Left for 6b:** points 4–8 of the brief (watched email queries and
      `local_hidden`, the nested counterpart stand-in, a folder moved during
      a stale listing, documenting the payload rewrite decision, the
@@ -1706,7 +1753,7 @@ rule and the server location facts (`relocate`, `releaseLocation`,
 `renameFolder`), since 4b the local rows (`insertLocalRow`), the parked-op
 expiry, the shadow-op lifecycle and the appear side of carry-over, and
 since 6a the rows of server copies (`insertServerRow`,
-`writeServerHeaders`). `scripts/check_email_writes.sh` has an allow-list
+`writeServerHeaders`) and Undo's restore (`restoreRow`). `scripts/check_email_writes.sh` has an allow-list
 for members that write `emails` themselves; it is empty since 6a. Since 5a the mailbox state writer
 (`lib/data/repositories/mailbox_state_writer.dart`) is the only writer of
 `mailboxes` (check 3 of the same script). The thread aggregate is `refreshThreadAggregate`

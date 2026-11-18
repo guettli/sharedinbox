@@ -168,6 +168,8 @@ class FakeEmailRepositoryBase implements EmailRepository {
   @override
   Future<void> clearForResync(String accountId) async {}
   @override
+  Future<void> sweepRowsOutsideFolders(String accountId) async {}
+  @override
   Future<void> clearMailboxForResync(
     String accountId,
     String mailboxPath,

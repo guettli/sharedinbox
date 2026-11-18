@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -117,6 +118,7 @@ Future<JmapTestRepos> openJmapTestRepos({
   required Directory cacheDir,
   String password = 'pw',
   JmapTestRepos? reuse,
+  AppLogger? appLogger,
 }) async {
   // [reuse] continues against the same database and account repository with a
   // different HTTP client — modelling a second sync cycle (or a relaunched
@@ -130,6 +132,7 @@ Future<JmapTestRepos> openJmapTestRepos({
     accounts,
     getCacheDir: () async => cacheDir,
     httpClient: httpClient,
+    appLogger: appLogger,
   );
   if (reuse == null) await accounts.addAccount(account, password);
   return JmapTestRepos(db: db, accounts: accounts, emails: emails);

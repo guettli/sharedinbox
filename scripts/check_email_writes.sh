@@ -80,6 +80,14 @@
 #    `DELETE FROM mailboxes`, also split over adjacent string literals).
 #    `sync_log_mailboxes` is another table.
 #
+# 4. Undo's restore of a row (phase 6a): `restoreRow(` and
+#    `RestoredLocalFields(`, which write the local-only attributes
+#    (`is_local`, `is_virtual_sent_copy`, `snoozed_from_mailbox_path`) of a
+#    new row, appear outside the email state writer only in `_restoreEmail`
+#    of user_actions.dart. A sync read writes rows through
+#    `insertServerRow` / `writeServerHeaders`, whose `ServerRowHeaders`
+#    cannot carry them.
+#
 # Usage: scripts/check_email_writes.sh [dir]   (default: lib)
 set -euo pipefail
 
@@ -101,11 +109,14 @@ lib/data/db/database.dart|_createLocationOverlaySchema
 # EmailStateWriter.insertServerRow / writeServerHeaders with a
 # ServerRowHeaders value, which names no column. An entry added here must
 # name the phase that removes it again. scripts/test_check_email_writes.sh
-# sets EMAIL_WRITES_ALLOWED to its own list, so that the rules for allowed
-# members stay tested while no real member is allowed.
+# sets EMAIL_WRITES_ALLOWED to its own list (together with
+# CHECK_EMAIL_WRITES_FIXTURES=1, without which it is ignored), so that the
+# rules for allowed members stay tested while no real member is allowed.
 allowed='
 '
-allowed="${EMAIL_WRITES_ALLOWED-$allowed}"
+if [ "${CHECK_EMAIL_WRITES_FIXTURES:-}" = 1 ]; then
+  allowed="${EMAIL_WRITES_ALLOWED-$allowed}"
+fi
 
 files=$(grep -rlE --include='*.dart' \
   'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq|toCompanion\(' \
@@ -485,6 +496,31 @@ for f in $mailbox_files; do
 done
 mailbox_writes=$(printf '%s' "$mailbox_writes" | grep -v '^$' | sort -u || true)
 
+# ── Check 4: Undo's restore ────────────────────────────────────────────────
+restore_files=$(grep -rlE --include='*.dart' 'restoreRow\(|RestoredLocalFields\(' "$dir" \
+  | grep -v '\.g\.dart$' \
+  | grep -v 'lib/data/repositories/email_state_writer\.dart$' || true)
+restore_writes=""
+for f in $restore_files; do
+  rel="lib/${f#"${dir%/}/"}"
+  restore_writes+=$(awk -v rel="$rel" '
+    /^(  )?[A-Za-z_][A-Za-z0-9_<>?, .]*[[:space:]][A-Za-z_][A-Za-z0-9_]*\(/ {
+      if (match($0, /[A-Za-z_][A-Za-z0-9_]*\(/)) {
+        member = substr($0, RSTART, RLENGTH - 1)
+      }
+    }
+    {
+      code = $0
+      sub(/^[[:space:]]*\/\/.*$/, "", code)
+      if (code !~ /(restoreRow|RestoredLocalFields)\(/) next
+      if (rel ~ /email_repository_impl\/user_actions\.dart$/ && member == "_restoreEmail") next
+      print rel ":" FNR ": " $0
+    }
+  ' "$f")
+  restore_writes+=$'\n'
+done
+restore_writes=$(printf '%s' "$restore_writes" | grep -v '^$' | sort -u || true)
+
 overlay=$(printf '%s' "$overlay" | grep -v '^$' | sort -u || true)
 other=$(printf '%s' "$other" | grep -v '^$' | sort -u || true)
 status=0
@@ -514,6 +550,13 @@ if [ -n "$mailbox_writes" ]; then
   echo "ERROR: mailboxes is written only by the mailbox state writer and"
   echo "migrations (see SYNC.md \"Mailbox ops\"):"
   printf '%s\n' "$mailbox_writes"
+  status=1
+fi
+if [ -n "$restore_writes" ]; then
+  echo "ERROR: restoreRow / RestoredLocalFields (the local-only attributes of a"
+  echo "restored row) are used only by Undo's _restoreEmail (see SYNC.md"
+  echo "\"Email state writer\"):"
+  printf '%s\n' "$restore_writes"
   status=1
 fi
 [ "$status" -eq 0 ] && echo "Email write check passed."

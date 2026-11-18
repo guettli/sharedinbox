@@ -519,6 +519,10 @@ class AccountSyncManager {
         const ForceResyncProgress(phase: ForceResyncPhase.syncingMailboxes),
       );
       await _mailboxes.syncMailboxes(accountId);
+      // Only after a complete listing: a folder missing from the list read
+      // before the clear (a JMAP Mailbox/changes that missed it) must not
+      // have its mail swept.
+      await _emails.sweepRowsOutsideFolders(accountId);
 
       final mailboxes = await _mailboxes.observeMailboxes(accountId).first;
       final total = mailboxes.length;

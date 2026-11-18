@@ -312,9 +312,14 @@ abstract class EmailRepository {
   /// sync checkpoints so the next sync of each folder refetches it
   /// completely and then removes the cached mail it did not find (a mail
   /// with a queued change stays until the change settles). Deletes no row
-  /// up front, so ids, bodies, attachments and queued changes are kept;
-  /// rows recorded in a folder the account no longer has are removed here.
+  /// up front, so ids, bodies, attachments and queued changes are kept.
   Future<void> clearForResync(String accountId);
+
+  /// The last step of an account's force resync, after the folder list was
+  /// read again: removes the cached mail recorded in a folder the account
+  /// no longer has, which no folder's refetch reaches (a mail with a queued
+  /// change stays until the change settles).
+  Future<void> sweepRowsOutsideFolders(String accountId);
 
   /// Like [clearForResync] but scoped to a single mailbox: resets that
   /// mailbox's checkpoint so its next sync refetches and sweeps it.

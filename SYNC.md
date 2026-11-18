@@ -474,18 +474,25 @@ the same statement and never rewrites the whole row.
   user's own delete for good). A `failed` change stays listed without its row
   (`pending_change.row_removed` when the flush cleans the row up).
 - **Force resync: mark and sweep** (#1236, phase 6a). A force resync of the account or
-  of one folder deletes no row up front. It forgets the sync checkpoints (on JMAP a
-  folder resync also marks a full sync due, and the account resync forgets the
-  `Mailbox` state), so the next sync of each folder is a complete refetch: every cached
-  row it finds is written again through the gate and keeps its id, body and
-  attachments. Then the folder is swept: a row the refetch's enumeration did not list
+  of one folder deletes no row up front. It forgets the sync checkpoints (an IMAP one
+  keeps its UIDVALIDITY with a "full fetch" mark, so a UIDVALIDITY the server changed
+  meanwhile still marks the folder's rows gone; on JMAP each folder gets a full sync
+  due, and the account resync forgets the `Mailbox` state), so the next sync of each
+  folder is a complete refetch: every cached row it finds is written again through the
+  gate and keeps its id, body and attachments. A row counts as found only under the
+  folder's current UIDVALIDITY, and the fetch does not take over an unstamped row
+  whose UID now holds a mail with another Message-ID. Then the folder is swept: a row the refetch's enumeration did not list
   (IMAP: the full fetch's `UID SEARCH ALL`, which now ends with the deletion reconcile;
   JMAP: the full sync's prune when its enumeration was complete) is marked gone, and
   deleted by the clean-up rule unless the user has a change of it. A row a read or ack
   wrote after the enumeration started is not swept. The folder listing sweeps folders
-  the same way. Rows recorded in a folder the account no longer has are swept by the
-  resync itself. App Log warn `sync.resync_swept` lists what a sweep removed. A
-  refetch that fails part-way removes nothing.
+  the same way. Rows recorded in a folder the account no longer has are swept once the
+  listing after the clear succeeded (skipped, App Log info `sync.resync_sweep_skipped`,
+  when no folder of the account is known from the server). Gmail's All Mail, which the
+  account resync does not refetch (#691), is not swept by it; an explicit resync of
+  All Mail sweeps it. App Log warn `sync.resync_swept` lists what a sweep removed. A
+  refetch that fails part-way removes nothing. The v77 upgrade deletes the bodies and
+  attachment rows that resyncs before 6a left without a mail.
 - **Location reads.** IMAP: the new-mail FETCH (a new row with the read's folder, an
   existing one confirmed there), the deletion reconcile's `UID SEARCH ALL` (rows of the
   folder by `srv_mailbox_path` confirmed present or marked gone), the move's answer
@@ -558,9 +565,11 @@ the same statement and never rewrites the whole row.
 
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
   overlays it deletes rows (`deleteRow`, `cleanUpGone`), inserts and updates the rows of
-  server copies (`insertServerRow`, `writeServerHeaders`, phase 6a: the IMAP fetch, the
-  JMAP upsert and Undo's restore, with a `ServerRowHeaders` value that names no
-  column), fills header backfills (`writeHeaders`, `writeSizes`), records server location facts
+  server copies (`insertServerRow`, `writeServerHeaders`, phase 6a: the IMAP fetch and
+  the JMAP upsert, with a `ServerRowHeaders` value that names no column;
+  `writeServerHeaders` writes only the row at the location the headers name),
+  restores a row for Undo (`restoreRow`, its local-only attributes in a separate
+  `RestoredLocalFields`), fills header backfills (`writeHeaders`, `writeSizes`), records server location facts
   (`relocate`, `releaseLocation`, and `renameFolder`, which only the mailbox
   state writer calls, §6b), the local-only
   `snoozed_from_mailbox_path` (`writeSnoozedFrom`) and does the foreign-move
@@ -587,7 +596,9 @@ the same statement and never rewrites the whole row.
   reads, which catches aliases) must be in the writer, the migrations, or a member on
   the script's allow-list, which names file, method and reason. The allow-list is
   empty since phase 6a (the fixture tests supply their own through
-  `EMAIL_WRITES_ALLOWED`); an entry that no longer matches a write fails too. Members are found by indentation; fields, getters,
+  `EMAIL_WRITES_ALLOWED`, honoured only with `CHECK_EMAIL_WRITES_FIXTURES=1`); an
+  entry that no longer matches a write fails too. Check 4 keeps `restoreRow` and
+  `RestoredLocalFields` in Undo's `_restoreEmail`. Members are found by indentation; fields, getters,
   annotations and signatures over two lines end the member above them.
   The same script's check 3 (schema v75) keeps every write of `mailboxes` in the
   mailbox state writer and the migrations (§6b), with no allow-list.
