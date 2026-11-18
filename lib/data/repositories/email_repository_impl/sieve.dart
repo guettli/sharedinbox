@@ -236,7 +236,10 @@ extension _Sieve on EmailRepositoryImpl {
     if (account.type == account_model.AccountType.jmap) {
       final destMailbox = await (_db.select(_db.mailboxes)
             ..where(
-              (t) => t.accountId.equals(account.id) & t.name.equals(folder),
+              (t) =>
+                  t.accountId.equals(account.id) &
+                  t.name.equals(folder) &
+                  t.localHidden.not(),
             )
             ..limit(1))
           .getSingleOrNull();

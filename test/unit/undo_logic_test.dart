@@ -552,8 +552,11 @@ void main() {
         final email = (await repo.getEmail(emailId))!;
         expect(email.mailboxPath, 'Snoozed');
         expect(email.snoozedUntil, until);
-        final changes =
-            (await db.select(db.pendingChanges).get()).map((c) => c.changeType);
+        // The mail's changes; the Snoozed folder's create (phase 5b) is its
+        // own op.
+        final changes = (await db.select(db.pendingChanges).get())
+            .where((c) => c.resourceType == 'Email')
+            .map((c) => c.changeType);
         if (flushed) {
           // The server lost the snooze with the move: snooze it again there.
           expect(changes, ['snooze']);

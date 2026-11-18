@@ -324,6 +324,15 @@ class FakeMailboxRepository implements MailboxRepository {
     );
   }
 
+  /// The mailbox id of each [undoFolderChange] call.
+  final List<String> undoCalls = [];
+
+  @override
+  Future<bool> undoFolderChange(String accountId, String mailboxId) async {
+    undoCalls.add(mailboxId);
+    return true;
+  }
+
   @override
   Future<Mailbox> moveMailbox(
     String accountId,

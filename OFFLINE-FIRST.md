@@ -49,14 +49,13 @@ Found by an audit in November 2026. Each issue says how to confirm it.
 | #1239 | Sync drops queued changes when a folder or mail disappears |
 | #1240 | `mailto:` unsubscribe bypasses the outbox |
 | #1241 | A cached body older than 7 days does not open offline |
-| #1242 | Folder move / delete are server-first (create and rename are queued since schema v75, SYNC.md §6b) |
 | #1243 | Sieve scripts are server-first |
 | #1244 | Raw source and attachments need the network |
 | #1245 | No consistent "needs a connection" UI |
 
 Already offline-first: flags, move, delete, snooze, mark-all-read, drafts,
 outbox / compose, undo, local search, notes (#1235), notification rules,
-preferences.
+preferences, folder create, rename, move and delete (#1242, SYNC.md §6b).
 
 ## Enforcement
 

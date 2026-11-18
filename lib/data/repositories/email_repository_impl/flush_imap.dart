@@ -54,6 +54,8 @@ extension _FlushImap on EmailRepositoryImpl {
     // Shadows whose primary ended in another isolate or by a path that did
     // not take them along (SYNC-REDESIGN.md §6).
     await _rethreadRefolds(await _state.dropOrphanedShadows());
+    // A counterpart's stand-in folder whose shadow create went with them.
+    await _mailboxState.dropOrphanedCounterpartFolders(accountId);
     // Rows gone on the server whose last change settled since (failed or
     // was discarded): nothing can bring them back (clean-up rule).
     final cleaned = await _state.cleanUpGone(accountId);
@@ -99,14 +101,19 @@ extension _FlushImap on EmailRepositoryImpl {
             await due(mailboxes: false),
           );
           if (rows.isEmpty) return folders;
-          switch (account.type) {
-            case account_model.AccountType.imap:
-              return folders +
-                  await _flushPendingChangesImap(account, password, rows);
-            case account_model.AccountType.jmap:
-              return folders +
-                  await _flushPendingChangesJmap(account, password, rows);
-          }
+          final mails = switch (account.type) {
+            account_model.AccountType.imap =>
+              await _flushPendingChangesImap(account, password, rows),
+            account_model.AccountType.jmap =>
+              await _flushPendingChangesJmap(account, password, rows),
+          };
+          // A folder delete waits for the mail changes queued before it
+          // (phase 5b): with those sent, it goes in this flush too.
+          final again = (await due(mailboxes: true))
+                  .any((r) => r.changeType == deleteMailboxOp)
+              ? await _flushMailboxOps(account, password, onlyDeletes: true)
+              : 0;
+          return folders + mails + again;
         },
         zoneValues: {_flushTokenKey: token},
       );
@@ -328,6 +335,13 @@ extension _FlushImap on EmailRepositoryImpl {
         // Cancelled, failed or claimed by another flush since the snapshot:
         // the mail's later changes wait for the next flush.
         blocked.add(snapshot.resourceId);
+        continue;
+      }
+      if (await _namesFolderBeingChanged(row)) {
+        // A folder it names is being renamed, moved or deleted by another
+        // flush (checked after the claim, as the folder side does).
+        await _unclaimPendingChange(row);
+        blocked.add(row.resourceId);
         continue;
       }
       claimed.add(row);
@@ -721,11 +735,14 @@ extension _FlushImap on EmailRepositoryImpl {
         });
         if (!owned) return (applied: 0, connectionLost: null);
         log('IMAP change ${row.id} skipped: message already gone ($e)');
+        // A warn: the user's change is dropped as applied without the
+        // server having done it (its folder is gone, e.g. renamed or
+        // deleted elsewhere).
         unawaited(
-          _appLogger?.info(
+          _appLogger?.warn(
             'pending_change.skipped_gone',
-            'Skipped ${_describeChange(row)} — message already gone on '
-                'the server',
+            'Skipped ${_describeChange(row)} — its folder or message is '
+                'gone on the server; the change is dropped as done',
             accountId: account.id,
             emailId: dropped != null ? null : row.resourceId,
             data: {'changeType': row.changeType},
@@ -843,10 +860,9 @@ extension _FlushImap on EmailRepositoryImpl {
         // format just in case.
         final timestamp = until.replaceAll(':', '').replaceAll('-', '');
         final keyword = 'snz:$timestamp';
+        // The Snoozed folder exists: the snooze waited for its queued
+        // create (phase 5b), never created on the side here.
         final dest = payload['dest'] as String;
-        try {
-          await client.createMailbox(dest);
-        } catch (_) {}
         // A re-snooze replaces the earlier snooze keyword: with both, sync
         // would read back whichever comes first.
         final resnooze = payload['prevSnoozedUntil'] != null;
@@ -883,10 +899,9 @@ extension _FlushImap on EmailRepositoryImpl {
           movedNothing: movedNothing,
         );
       case 'unsnooze':
+        // Back to the inbox, which exists; a folder that is gone is not
+        // created again on the side (a failed move, listed, instead).
         final dest = payload['dest'] as String;
-        try {
-          await client.createMailbox(dest);
-        } catch (_) {}
         await _removeImapSnoozeFlags(client, seq);
         final moveSeq = await _state.nextReadSeq();
         final unsnoozeResult =
@@ -1334,20 +1349,8 @@ extension _FlushImap on EmailRepositoryImpl {
     if (messageId == null || messageId.isEmpty) return const [];
     try {
       if (select) await client.selectUnicodeMailboxByPath(mailboxPath);
-      // Some servers (e.g. Exchange) only match the exact header token, so a
-      // bare id is retried in its angle-bracketed form (and vice versa).
-      final bare = messageId.startsWith('<') && messageId.endsWith('>')
-          ? messageId.substring(1, messageId.length - 1)
-          : messageId;
-      for (final candidate in {messageId, bare, '<$bare>'}) {
-        // RFC 3501 SEARCH HEADER uses an astring for the value; quoting is
-        // safe for typical Message-ID syntax (no embedded quotes or
-        // backslashes).
-        final escaped =
-            candidate.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
-        final result = await client.uidSearchMessages(
-          searchCriteria: 'HEADER Message-ID "$escaped"',
-        );
+      for (final criteria in messageIdSearchCriteria(messageId)) {
+        final result = await client.uidSearchMessages(searchCriteria: criteria);
         final uids = result.matchingSequence?.toList() ?? const <int>[];
         if (uids.isEmpty) continue;
         return uids;

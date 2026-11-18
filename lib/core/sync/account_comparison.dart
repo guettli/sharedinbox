@@ -197,8 +197,9 @@ class AccountComparison {
   }
 
   Future<List<MailboxRow>> _mailboxesFor(String accountId) {
+    // Not a folder being deleted (phase 5b): it shows nowhere.
     return (_db.select(_db.mailboxes)
-          ..where((t) => t.accountId.equals(accountId)))
+          ..where((t) => t.accountId.equals(accountId) & t.localHidden.not()))
         .get();
   }
 

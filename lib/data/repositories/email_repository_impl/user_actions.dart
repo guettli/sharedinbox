@@ -524,10 +524,14 @@ extension _UserActions on EmailRepositoryImpl {
     if (row.mailboxPath.isEmpty) return null;
     final account = (await _bulkAccount(row.accountId))!;
 
-    // Move to Trash when possible so the user can recover the message.
+    // Move to Trash when possible so the user can recover the message (not
+    // a Trash being deleted, phase 5b).
     final trashRow = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('trash'),
+            (t) =>
+                t.accountId.equals(account.id) &
+                t.role.equals('trash') &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -611,14 +615,12 @@ extension _UserActions on EmailRepositoryImpl {
     if (row.mailboxPath.isEmpty) return;
     final accountId = row.accountId;
     final destPath = await _snoozedMailboxPath(accountId);
-    // On JMAP a snooze needs the server's Snoozed folder. When none is
-    // known (or creating it failed), it is created first, as a queued folder
-    // create the snooze waits for (SYNC-REDESIGN.md §7); its ack names the
-    // server's id in the snooze. IMAP creates the folder in the snooze's
-    // own flush (the path is the name).
-    if (!_inShadow &&
-        (await _bulkAccount(accountId))?.type ==
-            account_model.AccountType.jmap) {
+    // A snooze needs the server's Snoozed folder. When none is known (or
+    // creating it failed), it is created first, as a queued folder create
+    // the snooze waits for (SYNC-REDESIGN.md §7); its ack names the
+    // server's folder in the snooze (on JMAP its id). Since phase 5b also
+    // on IMAP: the snooze's flush no longer creates it on the side.
+    if (!_inShadow) {
       final folder = await _mailboxState.rowByPath(accountId, destPath);
       if (folder == null || folder.isLocal) {
         await _mailboxState.ensureLocal(
@@ -692,12 +694,16 @@ extension _UserActions on EmailRepositoryImpl {
   }
 
   /// The path of [accountId]'s Snoozed mailbox (by role, then by name), or
-  /// the literal `Snoozed` when it is not known locally yet — the snooze flush
-  /// creates it on the server.
+  /// the literal `Snoozed` when it is not known locally yet — the snooze
+  /// queues its creation ([_snoozeRow]).
   Future<String> _snoozedMailboxPath(String accountId) async {
+    // Not a folder being deleted (phase 5b).
     var snoozedMailbox = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.role.equals('snoozed') &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -706,7 +712,8 @@ extension _UserActions on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.name.equals(_snoozedPlaceholder),
+                t.name.equals(_snoozedPlaceholder) &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();

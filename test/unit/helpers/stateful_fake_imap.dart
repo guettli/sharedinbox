@@ -88,9 +88,16 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// UIDVALIDITY of the next folder a `CREATE` makes.
   int nextUidValidity = 900;
 
-  /// Every `CREATE` and `RENAME` an app connection sent, as
-  /// `CREATE <path>` / `RENAME <from>-><to>`.
+  /// Every `CREATE`, `RENAME` and `DELETE` an app connection sent, as
+  /// `CREATE <path>` / `RENAME <from>-><to>` / `DELETE <path>`.
   final List<String> folderCommands = [];
+
+  /// When set, a `DELETE` fails with a plain `NO` (no response code): a
+  /// failure that may pass, retried.
+  bool failDeletes = false;
+
+  /// Another client deletes folder [path] (with its messages).
+  void deleteFolder(String path) => folders.remove(path);
 
   /// Another client creates (or this test sets up) folder [path].
   FakeServerFolder addFolder(String path) =>
@@ -307,7 +314,20 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     if (folder == null) throw _no('NO [NONEXISTENT] Mailbox does not exist');
     return box
       ..messagesExists = folder.messages.length
-      ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length;
+      ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length
+      ..uidValidity = folder.uidValidity;
+  }
+
+  @override
+  Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
+    final path = box.encodedPath;
+    server.folderCommands.add('DELETE $path');
+    if (!server.folders.containsKey(path)) {
+      throw _no('NO [NONEXISTENT] Mailbox does not exist');
+    }
+    if (server.failDeletes) throw _no('NO Server busy, try again later');
+    server.folders.remove(path);
+    return _answer('DELETE', box);
   }
 
   @override

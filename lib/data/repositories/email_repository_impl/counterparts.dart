@@ -453,14 +453,21 @@ extension _Counterparts on EmailRepositoryImpl {
       );
       if (counterpartDest == null) {
         // The counterpart has no equivalent destination mailbox yet — e.g. an
-        // Archive folder the primary account just created but that the
-        // counterpart discovers only on a later mailbox sync. Both accounts
-        // point at the same server, so the primary's move relocates the shared
-        // message there and the counterpart will observe it leave the inbox on
-        // its next sync. Until then, hide the now-stale local copy so the
-        // combined inbox doesn't re-surface it as a duplicate of the message
-        // the user just acted on (see #478).
-        await _dropStaleCounterpartRow(row, primary);
+        // Archive folder the primary account just created (offline, too)
+        // but that the counterpart discovers only on a later mailbox sync.
+        // Both accounts point at the same server, so the primary's move
+        // relocates the shared message there. The twin's shadow move waits
+        // on a stand-in folder of the counterpart, parked on the folder's
+        // creation (SYNC-REDESIGN.md §7, phase 5b): it shows there at once
+        // instead of re-surfacing in the inbox (#478), and a listing that
+        // finds the folder adopts the stand-in.
+        final standIn = await _mailboxState.ensureCounterpartFolder(
+          accountId: row.accountId,
+          name: destName,
+          role: destRole,
+          primarySeq: primary,
+        );
+        await _asShadowOf(primary, () => _moveRow(row, standIn));
         continue;
       }
       // Already in the destination → nothing to mirror.
@@ -468,29 +475,6 @@ extension _Counterparts on EmailRepositoryImpl {
 
       await _asShadowOf(primary, () => _moveRow(row, counterpartDest));
     }
-  }
-
-  /// Hides a stale counterpart email [row] whose new folder the counterpart
-  /// does not know yet, until its account's sync sees the mail leave
-  /// (SYNC-REDESIGN.md §6): a shadow `delete` of [primarySeq], the move
-  /// the primary account performs on the shared server message. It hides
-  /// the row (the row and its body stay), is never sent, and settles like
-  /// any shadow: dropped with its primary (the row shows again), or acked
-  /// with it and dropped once a read of the counterpart finds the mail
-  /// gone from (or elsewhere than) [Email.srvMailboxPath] ([awayFromKey]);
-  /// the clean-up rule then deletes a gone row. Before, the row was deleted
-  /// at once: a failed or undone move left the counterpart without it.
-  Future<void> _dropStaleCounterpartRow(Email row, int primarySeq) async {
-    await _asShadowOf(
-      primarySeq,
-      () => _enqueueChange(
-        row.accountId,
-        row.id,
-        'delete',
-        jsonEncode({awayFromKey: row.srvMailboxPath ?? row.mailboxPath}),
-      ),
-    );
-    await _updateThread(row.accountId, row.mailboxPath, row.threadId ?? row.id);
   }
 
   /// Mirrors a delete onto the matching message in every counterpart account.
@@ -537,8 +521,14 @@ extension _Counterparts on EmailRepositoryImpl {
     // Only folders the server has: a folder created offline (or whose
     // create failed, hidden) is no place a server-side move can have put
     // the mail (SYNC-REDESIGN.md §7).
+    // Nor one being deleted (phase 5b).
     final mailboxes = await (_db.select(_db.mailboxes)
-          ..where((t) => t.accountId.equals(accountId) & t.isLocal.not()))
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.isLocal.not() &
+                t.localHidden.not(),
+          ))
         .get();
     final lowerName = name.toLowerCase();
     for (final m in mailboxes) {

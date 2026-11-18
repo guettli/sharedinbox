@@ -21,7 +21,7 @@ import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
-import 'fake_imap.dart' show SnoozeSpyImapClient;
+import 'fake_imap.dart' show SnoozeSpyImapClient, fakeMailbox;
 import 'recording_app_log_repository.dart';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1292,7 +1292,7 @@ void main() {
       test(
         'IMAP: DELETE sends the folder in modified UTF-7 (#633)',
         () async {
-          final spy = SnoozeSpyImapClient();
+          final spy = _ListingSpy(['INBOX', 'Gesch&AOQ-ftsf&APw-hrer']);
           final db = openTestDatabase();
           final accounts = AccountRepositoryImpl(db, MapSecureStorage());
           final mailboxes = MailboxRepositoryImpl(
@@ -1312,6 +1312,13 @@ void main() {
               );
 
           await mailboxes.deleteMailbox('acc-1', 'Geschäftsführer');
+          // Queued (phase 5b): the flush sends it.
+          expect(spy.deletedEncodedPath, isNull);
+          await EmailRepositoryImpl(
+            db,
+            accounts,
+            imapConnect: (_, __, ___) async => spy,
+          ).flushPendingChanges('acc-1', 'pw');
 
           expect(spy.deletedEncodedPath, 'Gesch&AOQ-ftsf&APw-hrer');
         },
@@ -1321,7 +1328,7 @@ void main() {
         'delete without removeEmails refuses a folder that has mail on the '
         'server (stale "empty" count)',
         () async {
-          final spy = SnoozeSpyImapClient()..statusMessages = 1;
+          final spy = _ListingSpy(['INBOX', 'Work'])..statusMessages = 1;
           final db = openTestDatabase();
           final accounts = AccountRepositoryImpl(db, MapSecureStorage());
           final mailboxes = MailboxRepositoryImpl(
@@ -1336,17 +1343,33 @@ void main() {
                   accountId: 'acc-1',
                   path: 'Work',
                   name: 'Work',
+                  // The count the user saw when agreeing to delete its mail.
+                  totalCount: const Value(1),
                 ),
               );
 
-          await expectLater(
-            mailboxes.deleteMailbox('acc-1', 'Work'),
-            throwsA(isA<Exception>()),
-          );
-          expect(spy.deletedEncodedPath, isNull);
-          expect(await db.select(db.mailboxes).get(), hasLength(1));
+          Future<void> flush() => EmailRepositoryImpl(
+                db,
+                accounts,
+                imapConnect: (_, __, ___) async => spy,
+              ).flushPendingChanges('acc-1', 'pw');
 
+          await mailboxes.deleteMailbox('acc-1', 'Work');
+          await flush();
+          // Refused: a failed change, and the folder shows again.
+          expect(spy.deletedEncodedPath, isNull);
+          final change = await db.select(db.pendingChanges).getSingle();
+          expect(change.state, 'failed');
+          expect(
+            (await mailboxes.observeMailboxes('acc-1').first)
+                .map((m) => m.path),
+            ['Work'],
+          );
+
+          // The user confirms deleting the mail: the failed delete is
+          // replaced.
           await mailboxes.deleteMailbox('acc-1', 'Work', removeEmails: true);
+          await flush();
           expect(spy.deletedEncodedPath, 'Work');
           expect(await db.select(db.mailboxes).get(), isEmpty);
         },
@@ -1723,18 +1746,33 @@ void main() {
       test(
           'delete: sends Mailbox/set destroy with onDestroyRemoveEmails and '
           'drops the local rows', () async {
+        // First the count check (as many mails as the user agreed to
+        // delete), then the destroy.
+        var calls = 0;
         final r = await setupJmap(
           responseFor: () => {
             'sessionState': 'sess1',
             'methodResponses': [
-              [
-                'Mailbox/set',
-                {
-                  'accountId': 'acct1',
-                  'destroyed': ['mbx-1'],
-                },
-                '0',
-              ],
+              if (calls++ == 0)
+                [
+                  'Mailbox/get',
+                  {
+                    'accountId': 'acct1',
+                    'list': [
+                      {'id': 'mbx-1', 'totalEmails': 0},
+                    ],
+                  },
+                  '0',
+                ]
+              else
+                [
+                  'Mailbox/set',
+                  {
+                    'accountId': 'acct1',
+                    'destroyed': ['mbx-1'],
+                  },
+                  '0',
+                ],
             ],
           },
         );
@@ -1782,9 +1820,13 @@ void main() {
 
         await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1', removeEmails: true);
 
+        // Hidden at once, offline too (phase 5b); the flush sends it.
         final surviving = await r.mailboxes.observeMailboxes('jmap-1').first;
         expect(surviving.map((m) => m.path), ['mbx-inbox']);
-        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        expect(r.requests, isEmpty);
+        await flushJmap(r);
+        expect(r.requests.map(_method), ['Mailbox/get', 'Mailbox/set']);
+        final body = jsonDecode(r.requests.last) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
         final setArgs = args[1] as Map<String, dynamic>;
         expect(setArgs['destroy'], ['mbx-1']);
@@ -1828,17 +1870,16 @@ void main() {
               ),
             );
 
-        await expectLater(
-          r.mailboxes.deleteMailbox('jmap-1', 'mbx-1'),
-          throwsA(
-            predicate(
-              (e) =>
-                  e.toString() ==
-                  'Exception: the folder is not empty on the server any more '
-                      '— reload the folder list and confirm deleting its mail '
-                      '(mailboxHasEmail)',
-            ),
-          ),
+        await r.mailboxes.deleteMailbox('jmap-1', 'mbx-1');
+        await flushJmap(r);
+
+        // A failed change (Retry/Discard), with the readable reason.
+        final change = await r.db.select(r.db.pendingChanges).getSingle();
+        expect(change.state, 'failed');
+        expect(
+          change.lastError,
+          'the folder is not empty on the server any more — reload the '
+          'folder list and confirm deleting its mail (mailboxHasEmail)',
         );
         final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
@@ -1896,6 +1937,9 @@ void main() {
 
         expect(result.parentId, 'mbx-parent');
         expect(result.displayPath, 'Parent/Child');
+        // Shown there at once, offline too (phase 5b); the flush sends it.
+        expect(r.requests, isEmpty);
+        await flushJmap(r);
         final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
         final update =
@@ -2047,5 +2091,17 @@ class _SeparatorSpyImapClient extends SnoozeSpyImapClient {
           pathSeparator: separator,
           flags: [],
         ),
+      ];
+}
+
+/// [SnoozeSpyImapClient] whose LIST answers [paths] (encoded).
+class _ListingSpy extends SnoozeSpyImapClient {
+  _ListingSpy(this.paths);
+
+  final List<String> paths;
+
+  @override
+  List<imap.Mailbox> get listedMailboxes => [
+        for (final p in paths) fakeMailbox(p),
       ];
 }

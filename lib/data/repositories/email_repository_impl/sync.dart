@@ -13,8 +13,10 @@ extension _Sync on EmailRepositoryImpl {
     // A folder created offline is not on the server yet: nothing to sync,
     // and a SELECT or Email/query of its stand-in path must not read as
     // "folder deleted on the server" (SYNC-REDESIGN.md §7).
-    if ((await _mailboxState.rowByPath(accountId, mailboxPath))?.isLocal ??
-        false) {
+    // A folder being deleted (phase 5b) is not synced either: it shows
+    // nowhere, and its delete settles it.
+    final folder = await _mailboxState.rowByPath(accountId, mailboxPath);
+    if (folder != null && (folder.isLocal || folder.localHidden)) {
       return model.SyncEmailsResult.zero;
     }
     final account = (await _accounts.getAccount(accountId))!;

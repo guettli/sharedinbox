@@ -11,9 +11,22 @@ const _emailListOrderSql =
     'e.is_flagged DESC, e.received_at DESC, e.uid DESC, e.id DESC';
 
 /// Not a hidden row: one deleted for good, or gone on the server, has the
-/// empty string as its `mailbox_path` (SYNC-REDESIGN.md §2). Queries that
-/// filter by a folder exclude it already; the others add this.
-Expression<bool> _visible($EmailsTable t) => t.mailboxPath.equals('').not();
+/// empty string as its `mailbox_path` (SYNC-REDESIGN.md §2); nor a mail
+/// shown in a folder whose delete is queued (`mailboxes.local_hidden`,
+/// phase 5b): the folder shows nowhere, so its mail does not either (in
+/// search, by address, by thread, by id). Queries that filter by a folder
+/// exclude it already; the others add this.
+Expression<bool> _visible($EmailsTable t) =>
+    t.mailboxPath.equals('').not() & _notInHiddenFolder;
+
+final _notInHiddenFolder =
+    CustomExpression<bool>('NOT (${_inHiddenFolderSql('emails')})');
+
+/// SQL (correlated on the `emails` alias [e]): the mail shows in a folder
+/// whose delete is queued.
+String _inHiddenFolderSql(String e) =>
+    'EXISTS (SELECT 1 FROM mailboxes hm WHERE hm.account_id = $e.account_id '
+    'AND hm.path = $e.mailbox_path AND hm.local_hidden = 1)';
 
 /// Escapes characters that would break out of a JSON string literal.
 String _jsonEsc(String s) => s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
@@ -338,7 +351,9 @@ extension _Queries on EmailRepositoryImpl {
     if (ftsQuery.isEmpty) return [];
 
     // Not a hidden row (SYNC-REDESIGN.md §2).
-    final extraConditions = StringBuffer(" AND e.mailbox_path <> ''");
+    final extraConditions = StringBuffer(
+      " AND e.mailbox_path <> '' AND NOT (${_inHiddenFolderSql('e')})",
+    );
     final extraVars = <Variable<String>>[];
     if (accountId != null) {
       extraConditions.write(' AND e.account_id = ?');

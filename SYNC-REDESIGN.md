@@ -1,6 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **chosen direction, partly implemented** (phases 0–4 and 5a, see §8). Goal: make offline-first (the rules in
+Status: **chosen direction, partly implemented** (phases 0–5, see §8; phase 6 left). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -233,8 +233,8 @@ Types and the `local_*` columns each one writes:
 | `unsnooze` | `mailbox_path`, `snoozed_until = NULL` |
 | `clear_snooze` | `snoozed_until = NULL` |
 
-Later: `create_mailbox`, `rename_mailbox`, `move_mailbox` and
-`delete_mailbox` on the mailbox rows.
+On the mailbox rows (phase 5): `create_mailbox`, `rename_mailbox`,
+`move_mailbox` and `delete_mailbox` (§7, §8).
 
 Producers, all of which append ops and never write effective or `srv_`
 columns: `setFlag`, `markAllAsRead` (one transaction, batched fold; it also
@@ -1268,7 +1268,7 @@ a counterpart that does not know a folder hides its twin (shadow
 `delete` with `awayFrom`) rather than parking a move on the folder's
 creation.
 
-As implemented, phase 5 is two PRs; 5a is done:
+As implemented, phase 5 is two PRs, both done:
 1. **5a (done, schema v75):** the mailbox op infrastructure, create and
    rename, the Snoozed folder, and moves into a folder not created yet.
    SYNC.md §6b describes the behaviour.
@@ -1373,21 +1373,161 @@ As implemented, phase 5 is two PRs; 5a is done:
      brings its failed changes back; a listing never adopts a never-sent
      create (a clash stays a visible failure); `check_email_writes.sh`
      check 3 also catches the table's own write methods and `this._db.`.
-2. **5b (left):** folder move and delete as ops (`move_mailbox`,
-   `delete_mailbox`, mailbox `local_hidden` and a parent overlay, with
-   Undo where it applies); turning the flush-time hold into the `parked`
-   state with promotion on the create's ack if the Pending Changes screen
-   should say "waiting for folder"; the counterpart (a twin hidden by a
-   shadow `delete` with `awayFrom` becomes a move parked on the folder's
-   creation); IMAP Snoozed folder creation as an op (the snooze flush
-   still creates it); a server-side rename seen as delete + create on
-   IMAP (the queued changes of the old path fail rather than follow).
+2. **5b (done, schema v76):** folder move and delete as ops, the
+   counterpart's stand-in folder, the IMAP Snoozed folder as an op, and
+   renames made on another IMAP client. SYNC.md §6b "Move and delete (5b)"
+   describes the behaviour.
+   - **Schema.** `mailboxes.local_parent` (the fold of the latest foldable
+     `move_mailbox`: the new parent's `path`, `''` for the top level) and
+     `local_hidden` (a foldable `delete_mailbox`). Decision: no
+     `srv_parent_id`; `parent_id` stays the server's JMAP parent (now gated by
+     `srv_seq` like the name, and written by a move's ack), and the parent a
+     folder shows below is computed (`effectiveMailboxParent`, used by the
+     model, the display paths and the create's sibling check). A stored
+     effective parent would have needed every writer of `parent_id`, the
+     migration and the many tests that seed rows to keep two columns in step,
+     for one `COALESCE` at read time. IMAP keeps the hierarchy in the path:
+     `displayPaths` puts a folder with a `local_parent` (and its subfolders)
+     below the new parent's display path.
+   - **Ops.** `move_mailbox` (`parent`, `fromParent` for Undo) and
+     `delete_mailbox` (`removeEmails`). `enqueueMove` supersedes a never-sent
+     or failed move and queues nothing for a move back below the server's
+     parent; `enqueueDelete` keeps a live delete and replaces a failed one.
+     The repository refuses a delete of a folder with a subfolder that shows
+     (as the UI did) and a move into the folder itself or a descendant.
+   - **Hidden everywhere.** `mailboxShownSql` (observeMailboxes, so lists,
+     counts, pickers and the sync loop; `findMailboxByRole`, `_findParent`),
+     `syncEmails` (a hidden folder is not synced), the counterpart lookup,
+     the account comparison, sync statistics and Sieve's JMAP folder lookup
+     skip `local_hidden`.
+   - **Flush** (`flush_mailbox.dart`). Move: waits for a local folder or a
+     local new parent, refuses a `~new:` parent no folder has and a parent
+     being deleted; IMAP `RENAME` (shared with the rename:
+     `_renameImapTo`), JMAP `update {parentId}`. Delete: waits while a mail
+     change queued before it names the folder or a subfolder, or a
+     subfolder's op queued before it is not done (`subfolderOpQueued`); the
+     flush runs the deletes again after the mail changes (`onlyDeletes`), so
+     one flush empties and deletes. IMAP checks LIST (gone = done; server
+     subfolders = refused) and, without `removeEmails`, STATUS; JMAP
+     `destroy` (`notFound` = done). Outcomes as for 5a's ops.
+   - **Ack.** A move's ack is a rename's (path change with `fromPath` on
+     IMAP; `parent_id` written on JMAP), settled by the next listing on the
+     parent (`mailboxReadAgrees` with `srvParent`). A delete is acked by
+     `ackDelete`: the op stays `acked` with `fromPath` (kept by `deleteRow`)
+     while `removeLocalMailbox(deletedByUser: true)` removes the cache with
+     the online delete's semantics (changes naming it fail, mail marked
+     gone, kept while a change of it is unsettled); `renamedAwaySince` keeps
+     a stale listing (IMAP, and since 5b the JMAP `Mailbox/get` paths) from
+     bringing it back, and the next listing drops it
+     (`settleAckedDeletes`).
+   - **Mail changes naming a folder being deleted.** Earlier ones go first
+     (the delete waits); later ones that move mail into it are held while
+     the delete is queued, being sent or stuck (`pathsBeingDeleted`), then
+     fail with "folder deleted" (or are sent when the delete failed); later
+     ones that take mail out of it are sent first and the delete waits
+     (`mailLeavingQueuedFor`), also for a counterpart's shadow whose primary
+     is not done. The mail of a hidden folder is out of the email queries
+     (`_visible`). A delete with `removeEmails` stores the count the user
+     agreed to (`messages`); more on the server refuses it. Retry of a
+     failed delete drops the old `removeEmails`. `pathsBeingRenamed`
+     covers moves and deletes being sent and, on IMAP, the subfolders; both
+     the mail and the folder flush check again after their claim.
+   - **Server-side changes.** A queued delete of a folder the server
+     removed is done (`mailbox.delete_found_done`) instead of failed.
+     `failOpsOfRemoved` and `_failDependentsOf` also fail moves into a
+     removed or never-created folder. `prunable` keeps a folder and its
+     IMAP subfolders while a rename or move of it may have reached the
+     server (a 5a gap: the subfolders were pruned), and a folder whose
+     delete is being sent; `completeLostRenames` also completes lost IMAP
+     moves.
+   - **IMAP rename on another client** (`_followRenamesElsewhere`): a
+     vanished folder without a queued delete is taken for renamed to a new
+     folder sharing its leaf or parent, when the match is unique both ways
+     and the new folder has its checkpoint UIDVALIDITY (STATUS; servers
+     that keep it across RENAME) confirmed by its cached Message-IDs, or,
+     else, holds every Message-ID cached for it (up to 50, `UID SEARCH
+     HEADER Message-ID`) with exactly the cached number of messages:
+     Stalwart gives a renamed folder a new UIDVALIDITY (seen in the backend
+     test), so it takes the second rule. Review fix: a folder with a queued
+     delete is never followed (a wrong match would delete another folder);
+     a subset of the mail or an ambiguous match is no rename. `serverPathChanged` follows it
+     (`mailbox.renamed_elsewhere`). An empty or never-synced folder renamed
+     on a server like Stalwart is not recognised: its queued changes fail
+     visibly as before. `messageIdSearchCriteria` (`lib/data/imap/`) is
+     shared with the flush's Message-ID search.
+   - **Undo.** `undoFolderChange` (repository) / `undoLatest` (writer):
+     a never-sent move or delete is cancelled; a sent move gets a move back
+     to `fromParent`; a delete being sent or sent cannot be undone (worded
+     apart). The folder snackbars offer it. An IMAP move into a parent the
+     server does not list is refused (RENAME would create it), and a move
+     waits while its parent's own rename or move may have been sent.
+   - **The `parked` state for folder waits** (point 3 of the brief) was
+     not built: the 5a hold is computed at every flush from the folders'
+     `is_local`, needs no promotion step in any isolate, and a `parked`
+     state would also be taken by the virtual-row expiry (7 days) and
+     Undo's `cancelOps` rules. The Pending Changes screen still says
+     "waiting for folder "X" to be created": `PendingChange.waitingForFolder`
+     is derived when the queue is read.
+   - **Counterpart** (`ensureCounterpartFolder`, `_adoptCounterpartFolder`,
+     `dropOrphanedCounterpartFolders`): a twin whose account does not know
+     the destination folder gets a shadow move into a stand-in folder of its
+     own account, whose `create_mailbox` is a shadow of the primary move
+     (never flushed; acked with it; `_ackShadows` acks a mailbox shadow
+     instead of dropping it). A listing adopts the stand-in by path or by
+     name (and JMAP parent); a stand-in whose shadow went, or that a listing
+     started after the ack does not find, is dropped and the changes the
+     user queued for it fail. Each move that needs a stand-in adds its own
+     shadow create, so an Undo of one keeps the folder for the others.
+     `_dropStaleCounterpartRow` is gone.
+   - **IMAP Snoozed folder.** `_snoozeRow` queues the create on IMAP too; the
+     snooze and unsnooze flush no longer create folders. The v76 migration
+     queues the create for queued IMAP snoozes into a `Snoozed` path no
+     mailbox has (`_queueSnoozedCreates`, shared with v75's JMAP step).
+   - **Enforcement.** `check_email_writes.sh` check 3 allows
+     `_queueSnoozedCreates`; new fixtures for it, a `local_hidden` write and
+     a parent write outside the writer. `consistencyProblems` compares
+     `local_parent` and `local_hidden` with the fold and allows the kept
+     acked delete; `checkAndRepair` repairs by the same re-fold.
+   - **App Log.** New warns: `mailbox.delete_found_done`,
+     `mailbox.renamed_elsewhere`, `mailbox.counterpart_folder_adopted`,
+     `mailbox.counterpart_folder_dropped`; `op.contradicted` for a move;
+     `pending_change.folder_renamed` also for a move whose parent's path
+     changed; `pending_change.folder_removed` ("folder deleted") for the
+     changes a confirmed delete fails. Info: `mailbox.move`,
+     `mailbox.delete`, `mailbox.undo`, `mailbox.counterpart_folder`.
+   - **Tests.** `mailbox_ops_test.dart` (fold and display paths; IMAP:
+     offline move with subfolders and mail, a listing during an in-flight
+     move, offline delete with a stale listing, delete after the mail moved
+     out in one flush, refused delete and Discard, `removeEmails` and a
+     change queued after the delete, Undo of a delete and of a sent move, a
+     delete found done, subfolder then parent, subfolders that show, a move
+     into a folder created offline and into a refused one, a rename
+     elsewhere followed and one not matched, the IMAP Snoozed create, the
+     "waiting for folder" label; JMAP: move, move into a folder created
+     offline, delete with a stale full listing, a refused delete and Retry),
+     the rewritten counterpart tests, the v76 migration, and Stalwart
+     backend tests (IMAP: move, mail moved out and delete in one flush, a
+     rename on another client followed; JMAP: move, delete, a refused
+     delete).
+   - **Left for phase 6** (below).
 
 **Phase 6 — clean-up.** Remove the remaining guard helpers, such as
 `_pendingDeleteOrMoveUids` and the per-path queue checks, and update SYNC.md.
 Also left for it after 5a: mark-and-sweep for force resync (§6), which
 still deletes the mailbox rows without ops; the three allow-listed
-new-row inserts of `emails`.
+new-row inserts of `emails`. Left after 5b: the queued mail payloads are
+still rewritten when a folder's server path changes (an alias table was
+decided against in 5a); an IMAP folder renamed and moved at once on
+another client, or an empty or never-synced one renamed on a server that
+gives it a new UIDVALIDITY, is not followed (its queued changes fail
+visibly; a server MAILBOXID, RFC 8474, would close this); a counterpart stand-in for a
+nested folder is made at the top level and adopted on JMAP only when the
+server's folder is top level too (otherwise it is dropped after the
+listing and the twin shows where its account reads it); a folder moved
+while a stale listing runs can show twice until the move's ack merges
+the rows (`mailbox.local_merged`), as in 5a for renames; a watched email query (search results open on screen) is not re-run
+when only a folder's `local_hidden` changes, so it drops the mail of a
+folder just deleted at its next refresh.
 
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
@@ -1456,7 +1596,7 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | `change_failures.dart` | Flush: `_recordChangeError`, stuck and failed changes, reverting failed flag and location changes |
 | `flush_imap.dart` | Flush: `_applyPendingChangeImap`, `_settleImapChange`, `_remapEmailAfterImapMove`, `_retryImapMoveByMessageId` |
 | `flush_jmap.dart` | Flush: `_applyPendingChangeJmap` (`_repointSnoozedPlaceholder` gone in 5a) |
-| `flush_mailbox.dart` | Flush: mailbox ops (`_flushMailboxOps`, 5a) and the hold of mail changes that need a folder not created yet |
+| `flush_mailbox.dart` | Flush: mailbox ops (`_flushMailboxOps`: create, rename since 5a; move, delete since 5b) and the hold of mail changes that need a folder not created yet or being deleted |
 | `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, `restoreEmails` |
 | `counterparts.dart` | User actions: `_mirror*ToCounterparts` and `_dropStaleCounterpartRow` (shadow ops since 4b); sync: `_matchArrival` (the in-place match, 4b) |
 | `sieve.dart` | User actions: Sieve `_enqueueSieveMove/Delete/Flags` |

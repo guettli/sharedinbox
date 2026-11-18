@@ -1,6 +1,7 @@
-// The mailbox overlay of SYNC-REDESIGN.md §7 (phase 5a), as pure
-// functions: the mailbox ops, their fold into `mailboxes.local_name`, and
-// the display path the folder tree shows. No database access here, so the
+// The mailbox overlay of SYNC-REDESIGN.md §7 (phases 5a and 5b), as pure
+// functions: the mailbox ops, their fold into `mailboxes.local_name`,
+// `local_parent` and `local_hidden`, and the display path the folder tree
+// shows. No database access here, so the
 // mailbox state writer and its tests share it.
 
 import 'package:sharedinbox/data/db/keyword_fold.dart' show foldableOpStates;
@@ -19,16 +20,46 @@ const createMailboxOp = 'create_mailbox';
 /// [mailboxOpName], the new name.
 const renameMailboxOp = 'rename_mailbox';
 
-/// The mailbox ops of phase 5a.
-const mailboxOpTypes = [createMailboxOp, renameMailboxOp];
+/// Moves the mailbox below another one (its leaf name stays). Payload:
+/// [mailboxOpParent], the new parent's `path` (null: top level), and
+/// [mailboxOpFromParent], the parent it showed below when the move was
+/// queued (null: top level), for Undo. Phase 5b.
+const moveMailboxOp = 'move_mailbox';
+
+/// Deletes the mailbox. Payload: [mailboxOpRemoveEmails], whether the user
+/// confirmed deleting the mail it has (without it the server refuses a
+/// folder with mail, so mail that arrived later is never deleted
+/// silently). Phase 5b.
+const deleteMailboxOp = 'delete_mailbox';
+
+/// The mailbox ops that name the folder: their latest foldable one gives
+/// `local_name`.
+const mailboxNameOpTypes = [createMailboxOp, renameMailboxOp];
+
+/// Every mailbox op.
+const mailboxOpTypes = [
+  createMailboxOp,
+  renameMailboxOp,
+  moveMailboxOp,
+  deleteMailboxOp,
+];
 
 const mailboxOpName = 'name';
 const mailboxOpParent = 'parent';
 const mailboxOpRole = 'role';
+const mailboxOpFromParent = 'fromParent';
+const mailboxOpRemoveEmails = 'removeEmails';
 
-/// Payload key an acked IMAP rename records: the server path the folder had
-/// before, so a mailbox listing that started before the ack (and still
-/// lists that path) does not bring the old folder back.
+/// Payload key of a `delete_mailbox` with [mailboxOpRemoveEmails]: how many
+/// mails the folder had when the user agreed to delete them with it; a
+/// server with more refuses the delete (mail that arrived since is never
+/// deleted silently).
+const mailboxOpConfirmedMessages = 'messages';
+
+/// Payload key an acked IMAP rename or move, and an acked delete, records:
+/// the server path the folder had before, so a mailbox listing that started
+/// before the ack (and still lists that path) does not bring the old folder
+/// back.
 const mailboxOpFromPath = 'fromPath';
 
 /// The `path` prefix of a JMAP mailbox created offline, until the create's
@@ -46,6 +77,7 @@ class MailboxFoldOp {
     required this.type,
     required this.name,
     required this.state,
+    this.parent,
   });
 
   /// `pending_changes.id`: the fold applies ops in this order.
@@ -59,6 +91,10 @@ class MailboxFoldOp {
 
   /// `pending_changes.state`.
   final String state;
+
+  /// A move's new parent `path`; `''` for the top level. Null for the
+  /// other ops.
+  final String? parent;
 }
 
 /// Folds a mailbox's ops into its `local_name`: the name of the latest
@@ -69,7 +105,7 @@ String? foldMailboxName(Iterable<MailboxFoldOp> ops) {
   final sorted = [
     for (final op in ops)
       if (foldableOpStates.contains(op.state) &&
-          mailboxOpTypes.contains(op.type) &&
+          mailboxNameOpTypes.contains(op.type) &&
           op.name != null)
         op,
   ]..sort((a, b) => a.seq.compareTo(b.seq));
@@ -79,6 +115,27 @@ String? foldMailboxName(Iterable<MailboxFoldOp> ops) {
   return name;
 }
 
+/// Folds a mailbox's ops into its `local_parent`: the new parent of the
+/// latest foldable move (`''` for the top level), or null when there is
+/// none (the folder shows below the server's parent).
+String? foldMailboxParent(Iterable<MailboxFoldOp> ops) {
+  MailboxFoldOp? latest;
+  for (final op in ops) {
+    if (op.type != moveMailboxOp || !foldableOpStates.contains(op.state)) {
+      continue;
+    }
+    if (latest == null || op.seq > latest.seq) latest = op;
+  }
+  return latest == null ? null : latest.parent ?? '';
+}
+
+/// Folds a mailbox's ops into its `local_hidden`: a foldable delete hides
+/// the folder (everywhere: lists, counts, pickers, sync); a failed or
+/// discarded one shows it again.
+bool foldMailboxHidden(Iterable<MailboxFoldOp> ops) => ops.any(
+      (op) => op.type == deleteMailboxOp && foldableOpStates.contains(op.state),
+    );
+
 /// Whether a mailbox created offline ([isLocal]) shows: only while its
 /// `create_mailbox` op folds. A failed (or discarded) create hides it; its
 /// mail goes back where the server has it.
@@ -86,10 +143,17 @@ bool localMailboxShown(Iterable<MailboxFoldOp> ops) => ops.any(
       (op) => op.type == createMailboxOp && foldableOpStates.contains(op.state),
     );
 
-/// Whether the server's read of a mailbox ([srvName]) agrees with an acked
-/// op: the folder exists under the op's name.
-bool mailboxReadAgrees(MailboxFoldOp op, String? srvName) =>
-    srvName != null && srvName == op.name;
+/// Whether the server's read of a mailbox ([srvName], and [srvParent], the
+/// parent's `path`, null at the top level) agrees with an acked op: the
+/// folder exists under the op's name, or below a move's parent.
+bool mailboxReadAgrees(
+  MailboxFoldOp op,
+  String? srvName, {
+  String? srvParent,
+}) {
+  if (op.type == moveMailboxOp) return (srvParent ?? '') == (op.parent ?? '');
+  return srvName != null && srvName == op.name;
+}
 
 /// One mailbox row, as far as the display path needs it.
 class DisplayPathRow {
@@ -99,6 +163,7 @@ class DisplayPathRow {
     this.localName,
     this.srvName,
     this.parentId,
+    this.localParent,
   });
 
   final String path;
@@ -114,6 +179,10 @@ class DisplayPathRow {
 
   /// JMAP: the parent's `path` (server id or local stand-in).
   final String? parentId;
+
+  /// IMAP: the parent a pending move puts the folder below (`''`: the top
+  /// level); its subfolders follow. JMAP folds it into [parentId].
+  final String? localParent;
 }
 
 /// The `display_path` of every row in [rows] (one account), keyed by
@@ -125,7 +194,9 @@ class DisplayPathRow {
 ///
 /// IMAP: the server path, as sync always stored it, with the leaf of every
 /// folder that has a pending name (a rename, or a folder created offline)
-/// replaced by that name, also inside its subfolders' paths. A folder's
+/// replaced by that name, and the parent of every folder with a pending
+/// move replaced by the display path of its new parent, also inside its
+/// subfolders' paths. A folder's
 /// parent is the cached folder with the longest path that is a prefix of
 /// its path followed by the account's hierarchy [separator] (so on a `/`
 /// server "Mr. Smith" is no subfolder of "Mr").
@@ -170,7 +241,21 @@ Map<String, String> displayPaths(
     final String result;
     final local = row.localName;
     final srv = row.srvName;
-    if (parent == null) {
+    final moved = row.localParent;
+    if (moved != null) {
+      // A pending move: below its new parent (or at the top level), with
+      // its own (pending or server) leaf name.
+      final cut = row.path.lastIndexOf(separator);
+      final leaf = local ??
+          (cut < 0 ? row.path : row.path.substring(cut + separator.length));
+      final target = moved.isEmpty ? null : byPath[moved];
+      final base = moved.isEmpty
+          ? ''
+          : target == null
+              ? moved
+              : display(target, visiting);
+      result = base.isEmpty ? leaf : '$base$separator$leaf';
+    } else if (parent == null) {
       // A top-level folder, or one whose parent is not cached: only a
       // known leaf is replaced.
       if (local == null) {
@@ -193,4 +278,15 @@ Map<String, String> displayPaths(
     display(r, <String>{});
   }
   return out;
+}
+
+/// The parent a mailbox shows below on JMAP: its pending move's parent
+/// ([localParent], `''` for the top level) when it has one, else the
+/// server's ([parentId]). IMAP keeps the hierarchy in the path: null there.
+String? effectiveMailboxParent({
+  required String? parentId,
+  required String? localParent,
+}) {
+  if (localParent == null) return parentId;
+  return localParent.isEmpty ? null : localParent;
 }

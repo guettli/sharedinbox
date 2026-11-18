@@ -330,7 +330,7 @@ reaches the server:
 |--------|-------------|
 | `id` | Auto-increment primary key |
 | `email_id` | The email being mutated |
-| `type` | `flag_seen`, `flag_flagged`, `move`, `delete`, `snooze`, …; since schema v75 also the mailbox ops `create_mailbox` and `rename_mailbox` (`resource_type` `Mailbox`, `resource_id` a `mailboxes.id`, §6b) |
+| `type` | `flag_seen`, `flag_flagged`, `move`, `delete`, `snooze`, …; since schema v75 also the mailbox ops `create_mailbox` and `rename_mailbox`, since v76 `move_mailbox` and `delete_mailbox` (`resource_type` `Mailbox`, `resource_id` a `mailboxes.id`, §6b) |
 | `payload` | JSON-encoded protocol-specific arguments |
 | `attempts` | Incremented on each failed try that may have reached the server; 0 means never sent |
 | `created_at` | For debug; the flush runs in `id` order |
@@ -645,15 +645,16 @@ the same statement and never rewrites the whole row.
   into `local_*`, and made the flag reconcile due for the folders of rows with queued
   read/star/snooze changes, whose stored value was the user's, not the server's.
 
-## 6b. Mailbox ops: folders created and renamed offline
+## 6b. Mailbox ops: folders created, renamed, moved and deleted offline
 
-Schema v75, SYNC-REDESIGN.md §7 (phase 5a, #1242). Creating and renaming a folder
-work offline like any mail change: the folder shows at once, and the change is a
-queued op in `pending_changes` (`resource_type = 'Mailbox'`, `resource_id` the
+Schema v75 and v76, SYNC-REDESIGN.md §7 (phases 5a and 5b, #1242). Creating,
+renaming, moving and deleting a folder work offline like any mail change: the
+folder shows (or hides) at once, and the change is a queued op in
+`pending_changes` (`resource_type = 'Mailbox'`, `resource_id` the
 `mailboxes.id`), flushed with the same claim, lease, outcomes and states
-(`pending`, `inflight`, `acked`, `stuck`, `failed`) as a mail change. Moving and
-deleting a folder are still sent at once (phase 5b); deleting a folder created
-offline only gives up its creation.
+(`pending`, `inflight`, `acked`, `stuck`, `failed`) as a mail change. Deleting a
+folder created offline only gives up its creation. Moves and deletes are
+described under "Move and delete (5b)" below.
 
 | Column of `mailboxes` | Written by | Meaning |
 |--------|------------|---------|
@@ -661,7 +662,10 @@ offline only gives up its creation.
 | `local_name` | the fold | the name of the folder's latest foldable `create_mailbox` / `rename_mailbox` |
 | `name` | together with either | `COALESCE(local_name, srv_name)` |
 | `is_local` | create, listings, acks | created offline, no server copy yet |
-| `srv_seq` | listings, acks | the read sequence that last wrote `srv_name`; an older listing does not write it |
+| `srv_seq` | listings, acks | the read sequence that last wrote `srv_name` (and the JMAP `parent_id`); an older listing does not write it |
+| `local_parent` | the fold (v76) | the new parent's `path` of the folder's latest foldable `move_mailbox` (`''`: top level); NULL: none |
+| `local_hidden` | the fold (v76) | a foldable `delete_mailbox`: the folder shows nowhere |
+| `parent_id` | listings, acks, creates | JMAP: the server's parent; the parent shown is `local_parent` when set, else this (`effectiveMailboxParent`) |
 | `display_path` | derived | the tree path from the effective names (JMAP: the `parentId` chain; IMAP: the server path with the leaf of a renamed folder replaced, also inside its subfolders' paths) |
 
 All of `mailboxes` is written by the mailbox state writer
@@ -763,11 +767,137 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     sent waits, and a rename waits while a mail change naming the folder is being
     sent elsewhere.
   - A removed folder fails the creates queued below it (and what waits for them),
-    and its acked ops go with its row. A user's server-first delete says "deleted".
+    and its acked ops go with its row. A user's delete says "deleted".
     Retry of a failed create queues the changes that failed with it again; a retry
     without a folder, a discarded create that may have been sent, and a queued
     create re-pointed to a new parent path are logged. The counterpart mirroring
     never targets a folder without a server copy.
+- **Move and delete (5b, schema v76).**
+  - *Move.* `moveMailbox` queues a `move_mailbox` op (payload: the new
+    parent's `path`, `parent`, NULL for the top level, and the parent it showed
+    below, `fromParent`, for Undo); the folder and its subfolders show below the
+    new parent at once (`local_parent`; on IMAP the display paths of the folder
+    and its subfolders, on JMAP the effective `parentId`). A newer move replaces
+    a never-sent one; moving back below the server's parent with nothing sent
+    queues nothing. Flush: IMAP `RENAME` to the new parent's path plus the leaf
+    (the separator from LIST), JMAP `Mailbox/set` `update {parentId}`. A folder,
+    or a new parent, created offline makes the move wait for its create (whose
+    ack names the server's path in the move); a parent that is being deleted,
+    or a `~new:` stand-in no folder has, refuses it. The ack works like a
+    rename's: on IMAP `serverPathChanged` moves the row, its subfolders, their
+    mail and the queued changes naming them, and records `fromPath`; on JMAP it
+    writes the server's `parent_id`. The next listing settles it (the parent
+    agrees, or is contradicted twice).
+  - *Delete.* `deleteMailbox` queues a `delete_mailbox` op (payload:
+    `removeEmails`, the user's yes to deleting the mail it has); the folder is
+    hidden at once everywhere (`local_hidden`: folder list, counts, Move-to
+    and move pickers, `findMailboxByRole`, the counterpart lookup, sync
+    statistics, Sieve's JMAP folder lookup, the sync loop and `syncEmails`). A
+    folder with a subfolder that shows is refused at once (delete those first).
+    Flush: it waits while a mail change queued before it names the folder or a
+    subfolder (pending, being sent or stuck), or while an op of a subfolder
+    queued before it is not done; the flush runs the waiting deletes again
+    after the mail changes, so one flush moves the mail out and then deletes
+    the folder. IMAP: a folder the LIST no longer has is done; one with
+    subfolders on the server is refused; without `removeEmails` a STATUS with
+    messages refuses it (the mail stays, the folder shows again); else `DELETE`.
+    JMAP: `Mailbox/set destroy` (with `onDestroyRemoveEmails` only with the
+    user's yes); `notFound` is done, any other SetError refuses it
+    (`mailboxHasEmail`, `mailboxHasChild`). The ack (`ackDelete`) keeps the op,
+    `acked`, with `fromPath`, then `removeLocalMailbox(deletedByUser: true)`
+    removes the cache as an online delete did: queued changes still naming the
+    folder fail ("folder deleted", listed), its mail is marked gone (kept while
+    a change of it is unsettled). The kept op stops a listing that started
+    before the ack from bringing the folder back (IMAP and JMAP full
+    `Mailbox/get`), and the next listing drops it (`settleAckedDeletes`).
+  - *Mail changes and a folder being deleted.* The mail of a folder whose
+    delete is queued shows nowhere either (search, by address, by thread, by
+    id: `_visible` checks `local_hidden`). A mail change queued after the
+    delete that moves mail INTO the folder (`dest`: an Undo's move back, a
+    Sieve `fileinto`) waits while the delete is queued, being sent or stuck:
+    sent first, its mail would be deleted with the folder. Once the delete is
+    done it fails, listed; when the delete fails it is sent. A change that
+    takes mail OUT of the folder (`src` / `mailboxPath`, whenever queued) is
+    sent first, and the delete waits for it, as it does for a counterpart's
+    shadow move out of the folder whose primary is not done yet.
+  - *Mail the user did not see.* A delete with `removeEmails` records how many
+    mails the user agreed to delete (`messages`: the server's count plus the
+    mails moved in locally); a server with more (STATUS on IMAP, `totalEmails`
+    on JMAP) refuses it (`mailbox.delete_new_mail`, warn; the folder shows
+    again). Retry of a failed delete asks the server without deleting mail
+    (`removeEmails` false); deleting it again asks the user again.
+  - *A folder gone on the server* while its delete is queued: the delete is
+    done (`mailbox.delete_found_done`, warn), not failed. Moves into a removed
+    folder fail with it (on IMAP a RENAME into it would bring it back).
+  - *Undo.* The snackbar of a folder move or delete offers Undo
+    (`undoFolderChange`): an op not sent yet is cancelled; a move that may have
+    reached the server is followed by a move back (`fromParent`); a delete that
+    is being sent or may have reached the server cannot be undone ("Too late",
+    worded for each case in the App Log). Discard and
+    Retry act on failed moves and deletes like on any folder op (Retry of a
+    delete hides the folder again).
+  - *In-flight races.* A rename, move or delete waits while a mail change
+    naming the folder or (IMAP) a subfolder is being sent by another flush;
+    mail changes naming a folder (or IMAP subfolder) whose rename, move or
+    delete is being sent wait. A listing does not prune a folder, nor (IMAP)
+    its subfolders, while a rename or move of it may have reached the server
+    (being sent, or sent without an answer), nor a folder whose delete is being
+    sent; a lost IMAP move whose result the listing shows is completed like a
+    lost rename. Both sides check again after their claim (a mail flush that
+    claimed a change naming a folder being renamed, moved or deleted releases
+    it; a folder flush that claimed its op while a mail change naming the
+    folder is being sent releases it), so the two are never sent at once.
+    The IMAP "source folder gone" outcome that drops a change as done is a
+    warn now (`pending_change.skipped_gone`).
+  - *No folder comes back by a move.* An IMAP RENAME creates missing parents,
+    so a move into a parent the server does not list (deleted elsewhere, an
+    Undo's old parent) is refused, and a move waits while its parent's own
+    rename or move may have reached the server.
+  - *A folder another client renamed or moved (IMAP).* IMAP has no folder ids,
+    so a rename elsewhere lists as a folder gone plus a new one. Before the
+    prune, a vanished folder without a queued delete (that one is never
+    followed: its delete counts as done) is taken for renamed to a new folder
+    that shares its leaf (a move) or its parent (a rename) with it, when the
+    match is unique both ways and the new folder either has the UIDVALIDITY
+    of its sync checkpoint (STATUS; RFC 3501 servers that keep it across
+    RENAME) and holds its cached Message-IDs, or, as Stalwart gives a renamed
+    folder a new UIDVALIDITY, holds every Message-ID cached for it (up to 50,
+    `UID SEARCH HEADER Message-ID`) with exactly as many messages as are
+    cached. `serverPathChanged` then moves the row
+    (its id stays), its subfolders, its mail and the queued changes naming it
+    (App Log warn `mailbox.renamed_elsewhere`, saying which rule matched).
+    Otherwise (an empty or never-synced folder under a new UIDVALIDITY, two
+    candidates, a rename and a move at once) the queued changes fail visibly
+    as "folder removed on the server". JMAP renames keep the id and need none
+    of this.
+  - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder
+    queues its `create_mailbox` (role `snoozed`) and waits for it, as on JMAP;
+    the snooze and unsnooze flush no longer `CREATE` folders on the side (an
+    unsnooze into a folder that is gone fails, listed, instead of bringing it
+    back). The v76 upgrade queues that create for each IMAP account with a
+    snooze queued into a `Snoozed` path no mailbox has (App Log warn
+    `migration.snoozed_folder_queued`). The Snoozed and Trash lookups skip a
+    folder being deleted.
+  - *Counterparts.* When an account's move puts a shared mail into a folder its
+    counterpart account (the same server over the other protocol) does not
+    know, the twin no longer is hidden by a shadow `delete`: the counterpart
+    gets a stand-in folder (a local row whose `create_mailbox` is a shadow of
+    the move: never sent, folded, dropped with the move) and the twin a shadow
+    move into it, so it shows there, parked on the folder's creation. The
+    counterpart's listing adopts the stand-in when it lists the folder (by
+    path, or by name and JMAP parent: `serverPathChanged` moves the twin's
+    shadow along; App Log warn `mailbox.counterpart_folder_adopted`). Each
+    move that needs the stand-in adds its own shadow create, so it stays
+    while any of them is live; a stand-in whose moves all ended, or that a
+    listing started after the moves' ack does not find, is dropped
+    (`mailbox.counterpart_folder_dropped`).
+  - *Waiting for a folder.* The Pending Changes screen says "waiting for folder
+    "X" to be created" for a change that names a folder created offline
+    (`PendingChange.waitingForFolder`, derived when read). The change stays
+    `pending`: the flush holds it (as in 5a), no `parked` state with promotion.
+  - The consistency check (`MailboxStateWriter.consistencyProblems`) also
+    compares `local_parent` and `local_hidden` with the fold, and allows the
+    acked delete kept without its folder.
 - **Pending Changes screen** lists folder ops ("Create folder "X"", "Rename folder to
   "Y""); Retry and Discard act on them as above. `MailboxStateWriter.consistencyProblems`
   (`local_name` = the fold, `name` = `COALESCE(local_name, srv_name)`, a local row has

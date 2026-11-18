@@ -16,6 +16,7 @@ import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
@@ -211,8 +212,9 @@ void main() {
   });
 
   test(
-      'a move into a folder the counterpart does not know hides the twin '
-      'with a shadow instead of deleting it', () async {
+      'a move into a folder the counterpart does not know parks the twin '
+      "on a stand-in folder there, parked on the folder's creation (5b)",
+      () async {
     await db.into(db.mailboxes).insert(
           MailboxesCompanion.insert(
             id: 'imap-p:Projects',
@@ -226,22 +228,98 @@ void main() {
     );
 
     final twin = await row('jmap-p:e1');
-    expect(twin.mailboxPath, '', reason: 'hidden, not deleted');
-    final shadow = (await opsOf('jmap-p')).single;
-    expect(shadow.changeType, 'delete');
-    expect(shadow.state, 'shadow');
+    expect(twin.mailboxPath, startsWith('~new:'), reason: 'shown, not hidden');
+    final standIn = await (db.select(db.mailboxes)
+          ..where((t) => t.path.equals(twin.mailboxPath)))
+        .getSingle();
+    expect(
+      (standIn.accountId, standIn.name, standIn.isLocal),
+      (
+        'jmap-p',
+        'Projects',
+        true,
+      ),
+    );
+    final shadows = await opsOf('jmap-p');
+    expect(
+      shadows.map((o) => (o.changeType, o.state)),
+      unorderedEquals([('create_mailbox', 'shadow'), ('move', 'shadow')]),
+    );
+    // Never sent: the counterpart's flush has nothing to do.
+    expect(await emails.flushPendingChanges('jmap-p', 'pw'), 0);
+    expect(jmapRequests, isEmpty);
     await expectConsistent();
+    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
 
-    // Undo: the twin shows again, with its body and id.
+    // Undo: the twin shows again, with its body and id; the stand-in goes.
     await emails.cancelOps(captured['imap-p:5']!);
     expect((await row('jmap-p:e1')).mailboxPath, 'mbox-in');
     expect(await opsOf('jmap-p'), isEmpty);
+    await MailboxStateWriter(db).dropOrphanedCounterpartFolders('jmap-p');
+    expect(
+      (await db.select(db.mailboxes).get()).map((m) => m.id),
+      isNot(contains(standIn.id)),
+    );
     await expectConsistent();
+    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
   });
 
   test(
-      'an acked hiding shadow settles when the counterpart reads the mail '
-      'in its new folder', () async {
+      'a stand-in two moves need stays while either is live: Undo of the '
+      'first keeps the folder the second twin shows in', () async {
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'imap-p:Projects',
+            accountId: 'imap-p',
+            path: 'Projects',
+            name: 'Projects',
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'imap-p:6',
+            accountId: 'imap-p',
+            mailboxPath: 'INBOX',
+            uid: 6,
+            receivedAt: DateTime(2024),
+            messageId: const Value('<def@example.com>'),
+            srvUid: const Value(6),
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'jmap-p:e2',
+            accountId: 'jmap-p',
+            mailboxPath: 'mbox-in',
+            uid: 0,
+            receivedAt: DateTime(2024),
+            messageId: const Value('def@example.com'),
+            srvJmapId: const Value('e2'),
+          ),
+        );
+    final (_, first) = await emails.captureOps(
+      () => emails.moveEmail('imap-p:5', 'Projects'),
+    );
+    await emails.moveEmail('imap-p:6', 'Projects');
+    final standIn = (await row('jmap-p:e1')).mailboxPath;
+    expect((await row('jmap-p:e2')).mailboxPath, standIn);
+
+    await emails.cancelOps(first['imap-p:5']!);
+    await MailboxStateWriter(db).dropOrphanedCounterpartFolders('jmap-p');
+
+    expect((await row('jmap-p:e1')).mailboxPath, 'mbox-in');
+    expect((await row('jmap-p:e2')).mailboxPath, standIn);
+    expect(
+      (await db.select(db.mailboxes).get()).map((m) => m.path),
+      contains(standIn),
+    );
+    await expectConsistent();
+    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+  });
+
+  test(
+      "the counterpart's listing adopts the stand-in folder; a read of the "
+      'mail there settles the shadow', () async {
     await db.into(db.mailboxes).insert(
           MailboxesCompanion.insert(
             id: 'imap-p:Projects',
@@ -251,6 +329,7 @@ void main() {
           ),
         );
     await emails.moveEmail('imap-p:5', 'Projects');
+    final standInPath = (await row('jmap-p:e1')).mailboxPath;
     final primary = (await opsOf('imap-p')).single;
     await (db.update(db.pendingChanges)..where((t) => t.id.equals(primary.id)))
         .write(const PendingChangesCompanion(state: Value('inflight')));
@@ -261,13 +340,36 @@ void main() {
           .getSingle(),
     );
 
-    // The counterpart learnt the new folder and finds the mail there.
+    // The counterpart lists the folder the primary moved the mail into.
+    await MailboxStateWriter(db).writeServer(
+      accountId: 'jmap-p',
+      path: 'mbox-projects',
+      name: 'Projects',
+      role: null,
+      parentId: null,
+      unreadCount: 0,
+      totalCount: 1,
+      unreadSeq: 0,
+      readSeq: await writer.nextReadSeq(),
+    );
+    final adopted = await (db.select(db.mailboxes)
+          ..where((t) => t.path.equals('mbox-projects')))
+        .getSingle();
+    expect(adopted.isLocal, isFalse);
+    expect(
+      (await db.select(db.mailboxes).get()).map((m) => m.path),
+      isNot(contains(standInPath)),
+    );
+    expect((await row('jmap-p:e1')).mailboxPath, 'mbox-projects');
+
+    // A read of the counterpart finds the mail there.
     final read = await writer.beginRead('jmap-p');
     await read.writeLocation('jmap-p:e1', 'mbox-projects');
 
     expect(await opsOf('jmap-p'), isEmpty);
     expect((await row('jmap-p:e1')).mailboxPath, 'mbox-projects');
     await expectConsistent();
+    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
   });
 
   group('an IMAP twin shown in a folder through a shadow', () {

@@ -352,6 +352,19 @@ class EmailStateWriter {
           ))
         .get();
     for (final shadow in shadows) {
+      // A counterpart's stand-in folder (phase 5b) waits for a listing of
+      // its own account, whatever the twin does.
+      if (shadow.resourceType == 'Mailbox') {
+        await (_db.update(_db.pendingChanges)
+              ..where((t) => t.id.equals(shadow.id)))
+            .write(
+          PendingChangesCompanion(
+            state: const Value('acked'),
+            ackSeq: Value(ackSeq),
+          ),
+        );
+        continue;
+      }
       final twin = await (_db.selectOnly(_db.emails)
             ..addColumns([_db.emails.srvGone])
             ..where(_db.emails.id.equals(shadow.resourceId)))
