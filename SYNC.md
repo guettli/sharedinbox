@@ -810,18 +810,30 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     a change of it is unsettled). The kept op stops a listing that started
     before the ack from bringing the folder back (IMAP and JMAP full
     `Mailbox/get`), and the next listing drops it (`settleAckedDeletes`).
-  - *Mail changes and a folder being deleted.* A mail change queued after the
-    delete that names the folder (an Undo's move back, a stale screen, a Sieve
-    `fileinto`) waits while the delete is queued, being sent or stuck: sent
-    first, its mail would be deleted with the folder. Once the delete is done
-    it fails, listed; when the delete fails it is sent.
+  - *Mail changes and a folder being deleted.* The mail of a folder whose
+    delete is queued shows nowhere either (search, by address, by thread, by
+    id: `_visible` checks `local_hidden`). A mail change queued after the
+    delete that moves mail INTO the folder (`dest`: an Undo's move back, a
+    Sieve `fileinto`) waits while the delete is queued, being sent or stuck:
+    sent first, its mail would be deleted with the folder. Once the delete is
+    done it fails, listed; when the delete fails it is sent. A change that
+    takes mail OUT of the folder (`src` / `mailboxPath`, whenever queued) is
+    sent first, and the delete waits for it, as it does for a counterpart's
+    shadow move out of the folder whose primary is not done yet.
+  - *Mail the user did not see.* A delete with `removeEmails` records how many
+    mails the user agreed to delete (`messages`: the server's count plus the
+    mails moved in locally); a server with more (STATUS on IMAP, `totalEmails`
+    on JMAP) refuses it (`mailbox.delete_new_mail`, warn; the folder shows
+    again). Retry of a failed delete asks the server without deleting mail
+    (`removeEmails` false); deleting it again asks the user again.
   - *A folder gone on the server* while its delete is queued: the delete is
     done (`mailbox.delete_found_done`, warn), not failed. Moves into a removed
     folder fail with it (on IMAP a RENAME into it would bring it back).
   - *Undo.* The snackbar of a folder move or delete offers Undo
     (`undoFolderChange`): an op not sent yet is cancelled; a move that may have
     reached the server is followed by a move back (`fromParent`); a delete that
-    may have reached the server cannot be undone ("Too late"). Discard and
+    is being sent or may have reached the server cannot be undone ("Too late",
+    worded for each case in the App Log). Discard and
     Retry act on failed moves and deletes like on any folder op (Retry of a
     delete hides the folder again).
   - *In-flight races.* A rename, move or delete waits while a mail change
@@ -831,15 +843,27 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     its subfolders, while a rename or move of it may have reached the server
     (being sent, or sent without an answer), nor a folder whose delete is being
     sent; a lost IMAP move whose result the listing shows is completed like a
-    lost rename.
+    lost rename. Both sides check again after their claim (a mail flush that
+    claimed a change naming a folder being renamed, moved or deleted releases
+    it; a folder flush that claimed its op while a mail change naming the
+    folder is being sent releases it), so the two are never sent at once.
+    The IMAP "source folder gone" outcome that drops a change as done is a
+    warn now (`pending_change.skipped_gone`).
+  - *No folder comes back by a move.* An IMAP RENAME creates missing parents,
+    so a move into a parent the server does not list (deleted elsewhere, an
+    Undo's old parent) is refused, and a move waits while its parent's own
+    rename or move may have reached the server.
   - *A folder another client renamed or moved (IMAP).* IMAP has no folder ids,
     so a rename elsewhere lists as a folder gone plus a new one. Before the
-    prune, a vanished folder is taken for renamed to the one new folder that
-    shares its leaf (a move) or its parent (a rename) with it and either has
-    the UIDVALIDITY of its sync checkpoint (STATUS; RFC 3501 servers that keep
-    it across RENAME) or, as Stalwart gives a renamed folder a new one, holds
-    every Message-ID cached for it (up to 50, `UID SEARCH HEADER Message-ID`,
-    with at least as many messages). `serverPathChanged` then moves the row
+    prune, a vanished folder without a queued delete (that one is never
+    followed: its delete counts as done) is taken for renamed to a new folder
+    that shares its leaf (a move) or its parent (a rename) with it, when the
+    match is unique both ways and the new folder either has the UIDVALIDITY
+    of its sync checkpoint (STATUS; RFC 3501 servers that keep it across
+    RENAME) and holds its cached Message-IDs, or, as Stalwart gives a renamed
+    folder a new UIDVALIDITY, holds every Message-ID cached for it (up to 50,
+    `UID SEARCH HEADER Message-ID`) with exactly as many messages as are
+    cached. `serverPathChanged` then moves the row
     (its id stays), its subfolders, its mail and the queued changes naming it
     (App Log warn `mailbox.renamed_elsewhere`, saying which rule matched).
     Otherwise (an empty or never-synced folder under a new UIDVALIDITY, two
@@ -851,7 +875,9 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     the snooze and unsnooze flush no longer `CREATE` folders on the side (an
     unsnooze into a folder that is gone fails, listed, instead of bringing it
     back). The v76 upgrade queues that create for each IMAP account with a
-    snooze queued into a `Snoozed` path no mailbox has.
+    snooze queued into a `Snoozed` path no mailbox has (App Log warn
+    `migration.snoozed_folder_queued`). The Snoozed and Trash lookups skip a
+    folder being deleted.
   - *Counterparts.* When an account's move puts a shared mail into a folder its
     counterpart account (the same server over the other protocol) does not
     know, the twin no longer is hidden by a shadow `delete`: the counterpart
@@ -860,9 +886,11 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     move into it, so it shows there, parked on the folder's creation. The
     counterpart's listing adopts the stand-in when it lists the folder (by
     path, or by name and JMAP parent: `serverPathChanged` moves the twin's
-    shadow along; App Log warn `mailbox.counterpart_folder_adopted`); a
-    stand-in whose move ended, or that a listing started after the move's ack
-    does not find, is dropped (`mailbox.counterpart_folder_dropped`).
+    shadow along; App Log warn `mailbox.counterpart_folder_adopted`). Each
+    move that needs the stand-in adds its own shadow create, so it stays
+    while any of them is live; a stand-in whose moves all ended, or that a
+    listing started after the moves' ack does not find, is dropped
+    (`mailbox.counterpart_folder_dropped`).
   - *Waiting for a folder.* The Pending Changes screen says "waiting for folder
     "X" to be created" for a change that names a folder created offline
     (`PendingChange.waitingForFolder`, derived when read). The change stays

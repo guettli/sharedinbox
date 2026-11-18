@@ -50,6 +50,12 @@ const mailboxOpRole = 'role';
 const mailboxOpFromParent = 'fromParent';
 const mailboxOpRemoveEmails = 'removeEmails';
 
+/// Payload key of a `delete_mailbox` with [mailboxOpRemoveEmails]: how many
+/// mails the folder had when the user agreed to delete them with it; a
+/// server with more refuses the delete (mail that arrived since is never
+/// deleted silently).
+const mailboxOpConfirmedMessages = 'messages';
+
 /// Payload key an acked IMAP rename or move, and an acked delete, records:
 /// the server path the folder had before, so a mailbox listing that started
 /// before the ack (and still lists that path) does not bring the old folder

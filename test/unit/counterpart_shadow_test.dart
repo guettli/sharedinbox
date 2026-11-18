@@ -265,6 +265,59 @@ void main() {
   });
 
   test(
+      'a stand-in two moves need stays while either is live: Undo of the '
+      'first keeps the folder the second twin shows in', () async {
+    await db.into(db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'imap-p:Projects',
+            accountId: 'imap-p',
+            path: 'Projects',
+            name: 'Projects',
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'imap-p:6',
+            accountId: 'imap-p',
+            mailboxPath: 'INBOX',
+            uid: 6,
+            receivedAt: DateTime(2024),
+            messageId: const Value('<def@example.com>'),
+            srvUid: const Value(6),
+          ),
+        );
+    await db.into(db.emails).insert(
+          EmailsCompanion.insert(
+            id: 'jmap-p:e2',
+            accountId: 'jmap-p',
+            mailboxPath: 'mbox-in',
+            uid: 0,
+            receivedAt: DateTime(2024),
+            messageId: const Value('def@example.com'),
+            srvJmapId: const Value('e2'),
+          ),
+        );
+    final (_, first) = await emails.captureOps(
+      () => emails.moveEmail('imap-p:5', 'Projects'),
+    );
+    await emails.moveEmail('imap-p:6', 'Projects');
+    final standIn = (await row('jmap-p:e1')).mailboxPath;
+    expect((await row('jmap-p:e2')).mailboxPath, standIn);
+
+    await emails.cancelOps(first['imap-p:5']!);
+    await MailboxStateWriter(db).dropOrphanedCounterpartFolders('jmap-p');
+
+    expect((await row('jmap-p:e1')).mailboxPath, 'mbox-in');
+    expect((await row('jmap-p:e2')).mailboxPath, standIn);
+    expect(
+      (await db.select(db.mailboxes).get()).map((m) => m.path),
+      contains(standIn),
+    );
+    await expectConsistent();
+    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
+  });
+
+  test(
       "the counterpart's listing adopts the stand-in folder; a read of the "
       'mail there settles the shadow', () async {
     await db.into(db.mailboxes).insert(

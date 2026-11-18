@@ -480,7 +480,8 @@ Future<void> _undoFolderChange(
     final undone = await repo.undoFolderChange(accountId, mailbox.id);
     if (undone) return;
     messenger.show(
-      'Too late to undo: the folder was deleted on the server',
+      'Too late to undo: the delete is being sent to the server, or may '
+      'have reached it already',
       level: AppLogLevel.warn,
       event: 'mailbox.undo_too_late',
       accountId: accountId,

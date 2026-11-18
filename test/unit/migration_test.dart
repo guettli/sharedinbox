@@ -1505,6 +1505,77 @@ void main() {
       await db.close();
     });
 
+    test(
+        'v75→v76 adds the folder move/delete overlay and queues the IMAP '
+        'Snoozed folder a queued snooze waits for, noted in the App Log',
+        () async {
+      final dbFile = File('test_migration_v75_mailboxes.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-i'); // creates the schema
+      await seedAccountRow(fresh, 'acc-k');
+      await fresh.close();
+
+      final rawDb = sqlite.sqlite3.open(dbFile.path);
+      for (final column in ['local_hidden', 'local_parent']) {
+        rawDb.execute('ALTER TABLE mailboxes DROP COLUMN $column;');
+      }
+      void snooze(String account) => rawDb.execute(
+            'INSERT INTO pending_changes (account_id, resource_type, '
+            'resource_id, change_type, payload, created_at, state) '
+            "VALUES (?, 'Email', ?, 'snooze', ?, 0, 'pending')",
+            [
+              account,
+              '$account:~e1',
+              '{"uid":1,"mailboxPath":"INBOX","src":"INBOX",'
+                  '"dest":"Snoozed","until":"2030-01-01T00:00:00.000"}',
+            ],
+          );
+      snooze('acc-i');
+      // The folder is cached already: nothing to queue.
+      rawDb.execute(
+        'INSERT INTO mailboxes (id, account_id, path, name) '
+        "VALUES ('acc-k:Snoozed', 'acc-k', 'Snoozed', 'Snoozed')",
+      );
+      snooze('acc-k');
+      rawDb.execute('PRAGMA user_version = 75;');
+      rawDb.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      expect(
+        await _tableColumns(db, 'mailboxes'),
+        containsAll(['local_hidden', 'local_parent']),
+      );
+      final local = (await db.select(db.mailboxes).get())
+          .where((m) => m.isLocal)
+          .toList();
+      expect(
+        local.map((m) => (m.accountId, m.path, m.role)),
+        [('acc-i', 'Snoozed', 'snoozed')],
+      );
+      final creates = await (db.select(db.pendingChanges)
+            ..where((t) => t.resourceType.equals('Mailbox')))
+          .get();
+      expect(
+        creates.map((c) => (c.accountId, c.changeType, c.state)),
+        [('acc-i', 'create_mailbox', 'pending')],
+      );
+      final logged = await db
+          .customSelect(
+            'SELECT account_id FROM app_logs '
+            "WHERE event = 'migration.snoozed_folder_queued'",
+          )
+          .get();
+      expect(logged.map((r) => r.read<String>('account_id')), ['acc-i']);
+      final version = await db.customSelect('PRAGMA user_version').getSingle();
+      expect(version.read<int>('user_version'), 76);
+      await db.close();
+    });
+
     test('a fresh database has the server-location indexes', () async {
       final db = AppDatabase(NativeDatabase.memory());
       final indexes = await db

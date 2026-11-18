@@ -337,6 +337,13 @@ extension _FlushImap on EmailRepositoryImpl {
         blocked.add(snapshot.resourceId);
         continue;
       }
+      if (await _namesFolderBeingChanged(row)) {
+        // A folder it names is being renamed, moved or deleted by another
+        // flush (checked after the claim, as the folder side does).
+        await _unclaimPendingChange(row);
+        blocked.add(row.resourceId);
+        continue;
+      }
       claimed.add(row);
     }
     if (claimed.isEmpty) return (applied: 0, connectionLost: false);
@@ -728,11 +735,14 @@ extension _FlushImap on EmailRepositoryImpl {
         });
         if (!owned) return (applied: 0, connectionLost: null);
         log('IMAP change ${row.id} skipped: message already gone ($e)');
+        // A warn: the user's change is dropped as applied without the
+        // server having done it (its folder is gone, e.g. renamed or
+        // deleted elsewhere).
         unawaited(
-          _appLogger?.info(
+          _appLogger?.warn(
             'pending_change.skipped_gone',
-            'Skipped ${_describeChange(row)} — message already gone on '
-                'the server',
+            'Skipped ${_describeChange(row)} — its folder or message is '
+                'gone on the server; the change is dropped as done',
             accountId: account.id,
             emailId: dropped != null ? null : row.resourceId,
             data: {'changeType': row.changeType},

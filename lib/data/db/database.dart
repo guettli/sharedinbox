@@ -2148,6 +2148,24 @@ class AppDatabase extends _$AppDatabase {
           DateTime.now().millisecondsSinceEpoch ~/ 1000,
         ],
       );
+      // The upgrade queued a folder op the user did not: noted (warn
+      // `migration.snoozed_folder_queued`).
+      if (await _tableExists(this, 'app_logs')) {
+        await customStatement(
+          'INSERT INTO app_logs (created_at, level, event, message, '
+          'data_json, account_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+          [
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            'warn',
+            'migration.snoozed_folder_queued',
+            'Upgrade: queued the creation of the Snoozed folder, which a '
+                'queued snooze waits for (it used to be created on the side '
+                'by the snooze)',
+            jsonEncode({'accountType': accountType, 'mailboxId': id}),
+            accountId,
+          ],
+        );
+      }
     }
   }
 

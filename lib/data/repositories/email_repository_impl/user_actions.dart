@@ -524,10 +524,14 @@ extension _UserActions on EmailRepositoryImpl {
     if (row.mailboxPath.isEmpty) return null;
     final account = (await _bulkAccount(row.accountId))!;
 
-    // Move to Trash when possible so the user can recover the message.
+    // Move to Trash when possible so the user can recover the message (not
+    // a Trash being deleted, phase 5b).
     final trashRow = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(account.id) & t.role.equals('trash'),
+            (t) =>
+                t.accountId.equals(account.id) &
+                t.role.equals('trash') &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -693,9 +697,13 @@ extension _UserActions on EmailRepositoryImpl {
   /// the literal `Snoozed` when it is not known locally yet — the snooze
   /// queues its creation ([_snoozeRow]).
   Future<String> _snoozedMailboxPath(String accountId) async {
+    // Not a folder being deleted (phase 5b).
     var snoozedMailbox = await (_db.select(_db.mailboxes)
           ..where(
-            (t) => t.accountId.equals(accountId) & t.role.equals('snoozed'),
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.role.equals('snoozed') &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();
@@ -704,7 +712,8 @@ extension _UserActions on EmailRepositoryImpl {
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.name.equals(_snoozedPlaceholder),
+                t.name.equals(_snoozedPlaceholder) &
+                t.localHidden.not(),
           )
           ..limit(1))
         .getSingleOrNull();

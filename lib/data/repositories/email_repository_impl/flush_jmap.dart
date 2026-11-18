@@ -36,6 +36,13 @@ extension _FlushJmap on EmailRepositoryImpl {
         blocked.add(snapshot.resourceId);
         continue;
       }
+      if (await _namesFolderBeingChanged(row)) {
+        // A folder it names is being moved or deleted by another flush
+        // (checked after the claim, as the folder side does).
+        await _unclaimPendingChange(row);
+        blocked.add(row.resourceId);
+        continue;
+      }
       final placement = _placementChangeTypes.contains(row.changeType);
       if (placement) {
         // Unblocked again below once it applied.

@@ -1343,6 +1343,8 @@ void main() {
                   accountId: 'acc-1',
                   path: 'Work',
                   name: 'Work',
+                  // The count the user saw when agreeing to delete its mail.
+                  totalCount: const Value(1),
                 ),
               );
 
@@ -1744,18 +1746,33 @@ void main() {
       test(
           'delete: sends Mailbox/set destroy with onDestroyRemoveEmails and '
           'drops the local rows', () async {
+        // First the count check (as many mails as the user agreed to
+        // delete), then the destroy.
+        var calls = 0;
         final r = await setupJmap(
           responseFor: () => {
             'sessionState': 'sess1',
             'methodResponses': [
-              [
-                'Mailbox/set',
-                {
-                  'accountId': 'acct1',
-                  'destroyed': ['mbx-1'],
-                },
-                '0',
-              ],
+              if (calls++ == 0)
+                [
+                  'Mailbox/get',
+                  {
+                    'accountId': 'acct1',
+                    'list': [
+                      {'id': 'mbx-1', 'totalEmails': 0},
+                    ],
+                  },
+                  '0',
+                ]
+              else
+                [
+                  'Mailbox/set',
+                  {
+                    'accountId': 'acct1',
+                    'destroyed': ['mbx-1'],
+                  },
+                  '0',
+                ],
             ],
           },
         );
@@ -1808,7 +1825,8 @@ void main() {
         expect(surviving.map((m) => m.path), ['mbx-inbox']);
         expect(r.requests, isEmpty);
         await flushJmap(r);
-        final body = jsonDecode(r.requests.first) as Map<String, dynamic>;
+        expect(r.requests.map(_method), ['Mailbox/get', 'Mailbox/set']);
+        final body = jsonDecode(r.requests.last) as Map<String, dynamic>;
         final args = (body['methodCalls'] as List<dynamic>).first as List;
         final setArgs = args[1] as Map<String, dynamic>;
         expect(setArgs['destroy'], ['mbx-1']);

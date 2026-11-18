@@ -648,16 +648,19 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// IMAP folders another client renamed or moved (SYNC-REDESIGN.md §8,
   /// phase 5b): IMAP has no folder ids, so a rename elsewhere lists as a
   /// folder gone plus a new one. A cached folder the listing [listed]
-  /// (started at [readSeq]) no longer has is taken for renamed to a new
-  /// folder that shares its leaf (a move) or its parent (a rename) with it
-  /// and is the only new one that
+  /// (started at [readSeq]) no longer has, and that has no delete queued,
+  /// is taken for renamed to a new folder that shares its leaf (a move) or
+  /// its parent (a rename) with it, when that match is unique both ways (one
+  /// new folder for it, no other vanished folder matching that one) and the
+  /// new folder
   /// - has its UIDVALIDITY (from its sync checkpoint; STATUS of the new
-  ///   one): RFC 3501 servers that keep UIDVALIDITY across RENAME, while a
-  ///   new folder gets a fresh one; or, as that fails on servers that give a
-  ///   renamed folder a new one (Stalwart),
+  ///   one; RFC 3501 servers keep it across RENAME), and holds the
+  ///   Message-IDs cached for it when there are any; or, as that fails on
+  ///   servers that give a renamed folder a new one (Stalwart),
   /// - holds every Message-ID cached for it (at most [_renameProbeIds] of
-  ///   them, searched with `UID SEARCH HEADER Message-ID`), with at least as
-  ///   many messages: an empty folder cannot be recognised this way.
+  ///   them, searched with `UID SEARCH HEADER Message-ID`) and exactly as
+  ///   many messages as are cached: an empty folder cannot be recognised
+  ///   this way.
   /// The cached folder, its subfolders, its mail and the queued changes
   /// naming it follow ([MailboxStateWriter.serverPathChanged]; App Log warn
   /// `mailbox.renamed_elsewhere`). Anything else is left to the prune: the
@@ -718,58 +721,106 @@ class MailboxRepositoryImpl implements MailboxRepository {
       return cut < 0 ? path : path.substring(cut + separator.length);
     }
 
-    // Parents first: their subfolders move with them.
-    final ordered = [for (final v in vanished) v.path]
-      ..sort((a, b) => a.length.compareTo(b.length));
-    final taken = <String>{};
-    for (final from in ordered) {
-      if (await _writer.rowByPath(accountId, from) == null) continue;
+    // Every vanished folder's matches first, so a match is taken only
+    // when it is unique both ways: one new folder for the vanished one,
+    // and no other vanished folder matching that new one.
+    final matchesOf = <String, ({List<String> to, String how})>{};
+    for (final v in vanished) {
+      // A folder the user deleted (queued) is never followed: a wrong match
+      // would delete another folder. Its delete counts as done by the
+      // prune ([MailboxStateWriter.failOpsOfRemoved]).
+      if (await _hasQueuedDelete(v.id)) continue;
+      final from = v.path;
       final candidates = [
         for (final path in freshStatus.keys)
-          if (!taken.contains(path) &&
-              (leafOf(from) == leafOf(path) ||
-                  parentOf(from) == parentOf(path)) &&
-              await _writer.rowByPath(accountId, path) == null)
+          if (leafOf(from) == leafOf(path) || parentOf(from) == parentOf(path))
             path,
       ];
       if (candidates.isEmpty) continue;
-      var how = 'UIDVALIDITY';
+      final ids = await _cachedMessageIds(accountId, from);
       final validity = validityOf[from];
-      var matches = validity == null ||
-              validityOf.values.where((v) => v == validity).length != 1
-          ? const <String>[]
-          : [
-              for (final path in candidates)
-                if (freshStatus[path]!.validity == validity) path,
-            ];
-      if (matches.isEmpty) {
-        how = 'Message-ID';
-        final ids = await _cachedMessageIds(accountId, from);
-        if (ids.isEmpty) continue;
-        matches = [
+      if (validity != null &&
+          validityOf.values.where((x) => x == validity).length == 1) {
+        final byValidity = [
           for (final path in candidates)
-            if (freshStatus[path]!.messages >= ids.length &&
+            if (freshStatus[path]!.validity == validity) path,
+        ];
+        if (byValidity.isNotEmpty) {
+          // UIDVALIDITY is not unique across folders: the mail cached for
+          // it confirms the match when there is any.
+          matchesOf[from] = (
+            to: [
+              for (final path in byValidity)
+                if (ids.isEmpty || await _holdsAll(client, path, ids)) path,
+            ],
+            how: 'UIDVALIDITY',
+          );
+          continue;
+        }
+      }
+      if (ids.isEmpty) continue;
+      // Exactly the folder's mail: as many messages as it has cached (not a
+      // folder another client filled with copies and more).
+      final count = await _cachedMessageCount(accountId, from);
+      matchesOf[from] = (
+        to: [
+          for (final path in candidates)
+            if (freshStatus[path]!.messages == count &&
                 await _holdsAll(client, path, ids))
               path,
-        ];
-      }
-      if (matches.length != 1) continue;
-      final to = matches.single;
-      taken.add(to);
-      await _writer.serverPathChanged(accountId, from, to);
+        ],
+        how: 'Message-ID',
+      );
+    }
+    // Parents first: their subfolders move with them.
+    final ordered = matchesOf.keys.toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+    for (final from in ordered) {
+      final (:to, :how) = matchesOf[from]!;
+      if (to.length != 1) continue;
+      final target = to.single;
+      final rivals = matchesOf.entries
+          .where((e) => e.key != from && e.value.to.contains(target));
+      if (rivals.isNotEmpty) continue;
+      if (await _writer.rowByPath(accountId, from) == null) continue;
+      if (await _writer.rowByPath(accountId, target) != null) continue;
+      await _writer.serverPathChanged(accountId, from, target);
       unawaited(
         _appLogger?.warn(
           'mailbox.renamed_elsewhere',
-          'The folder "$from" is "$to" on the server now (renamed or moved '
-              'by another client, recognised by its $how); its mail and the '
-              'changes queued for it follow',
+          'The folder "$from" is "$target" on the server now (renamed or '
+              'moved by another client, recognised by its $how); its mail and '
+              'the changes queued for it follow',
           accountId: accountId,
-          mailboxPath: to,
-          data: {'from': from, 'to': to, 'by': how},
+          mailboxPath: target,
+          data: {'from': from, 'to': target, 'by': how},
         ),
       );
     }
   }
+
+  /// Whether mailbox [mailboxId] has a delete queued, being sent or stuck.
+  Future<bool> _hasQueuedDelete(String mailboxId) async =>
+      (await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceType.equals(mailboxResourceType) &
+                  t.resourceId.equals(mailboxId) &
+                  t.changeType.equals(deleteMailboxOp) &
+                  t.state.isIn(const ['pending', 'inflight', 'stuck']),
+            )
+            ..limit(1))
+          .getSingleOrNull()) !=
+      null;
+
+  /// How many mails are cached for the server folder [path] of [accountId].
+  Future<int> _cachedMessageCount(String accountId, String path) async =>
+      (await _db.customSelect(
+        'SELECT COUNT(*) AS n FROM emails WHERE account_id = ?1 '
+        'AND srv_mailbox_path = ?2 AND srv_gone = 0 AND is_local = 0',
+        variables: [Variable.withString(accountId), Variable.withString(path)],
+      ).getSingle())
+          .read<int>('n');
 
   /// How many cached Message-IDs a rename check looks for at most.
   static const _renameProbeIds = 50;
@@ -1005,7 +1056,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
         'The folder "${row.name}" has subfolders; delete them first',
       );
     }
-    final op = await _writer.enqueueDelete(row, removeEmails: removeEmails);
+    final op = await _writer.enqueueDelete(
+      row,
+      removeEmails: removeEmails,
+      confirmedMessages:
+          removeEmails ? await _confirmedMessages(accountId, row) : null,
+    );
     unawaited(
       _appLogger?.info(
         'mailbox.delete',
@@ -1017,6 +1073,23 @@ class MailboxRepositoryImpl implements MailboxRepository {
       ),
     );
     _queuedCtrl.add(accountId);
+  }
+
+  /// How many mails the user saw in [row] when agreeing to delete them with
+  /// it: the server's count, plus the mails shown there by a move into it
+  /// not on the server yet. More on the server at the flush refuses the
+  /// delete.
+  Future<int> _confirmedMessages(String accountId, MailboxRow row) async {
+    final movedIn = await _db.customSelect(
+      'SELECT COUNT(*) AS n FROM emails WHERE account_id = ?1 '
+      'AND mailbox_path = ?2 '
+      'AND (srv_mailbox_path IS NULL OR srv_mailbox_path <> ?2)',
+      variables: [
+        Variable.withString(accountId),
+        Variable.withString(row.path),
+      ],
+    ).getSingle();
+    return row.totalCount + movedIn.read<int>('n');
   }
 
   /// Whether a folder that shows has [row] as its parent: on JMAP by the
@@ -1130,13 +1203,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
             'Moving folder "${row.name}" back; queued for the server',
           MailboxUndo.tooLate => 'Could not undo deleting folder '
               '"${row.name}": the delete may have reached the server',
+          MailboxUndo.sending => 'Could not undo deleting folder '
+              '"${row.name}": the delete is being sent right now; if the '
+              'server refuses it, the folder shows again',
         },
         accountId: accountId,
         mailboxPath: row.path,
       ),
     );
     if (undo == MailboxUndo.reversed) _queuedCtrl.add(accountId);
-    return undo != MailboxUndo.tooLate;
+    return undo != MailboxUndo.tooLate && undo != MailboxUndo.sending;
   }
 
   Future<MailboxRow> _requireRow(String accountId, String mailboxPath) async {

@@ -85,6 +85,6 @@ abstract class MailboxRepository {
   /// Undoes the latest move or delete of the folder [mailboxId] of
   /// [accountId]: one not sent yet is cancelled; a move already sent is
   /// moved back. Returns false when it can no longer be undone (a delete
-  /// that may have reached the server).
+  /// being sent, or one that may have reached the server).
   Future<bool> undoFolderChange(String accountId, String mailboxId);
 }

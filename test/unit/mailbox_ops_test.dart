@@ -21,6 +21,7 @@ import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 
 import 'db_test_helper.dart';
 import 'helpers/jmap_test_server.dart';
+import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
 
@@ -1109,6 +1110,234 @@ void main() {
         contains('Message-ID'),
       );
       await _expectConsistent(db);
+    });
+
+    // Review B1: a wrong match must never carry a queued op (least of all a
+    // delete) to another folder.
+    Future<void> workWithMail() async {
+      server
+        ..addFolder('Projects')
+        ..deliver('Projects', 'p1@test')
+        ..deliver('Projects', 'p2@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Projects');
+    }
+
+    FakeServerFolder copyOf(String from, String to, {int extra = 0}) {
+      final copy = server.addFolder(to);
+      for (final m in server.folders[from]!.messages.values) {
+        server.deliver(to, m.messageId);
+      }
+      for (var i = 0; i < extra; i++) {
+        server.deliver(to, 'extra$i@test');
+      }
+      return copy;
+    }
+
+    test(
+        'a queued delete never follows a folder that looks renamed: the '
+        'delete counts as done, the other folder stays', () async {
+      await workWithMail();
+      await rig.mailboxes
+          .deleteMailbox(_acc.id, 'Projects', removeEmails: true);
+      // Webmail: copies the mail into a new sibling, adds none, deletes the
+      // original. The match would be exact.
+      copyOf('Projects', 'Projects-2026');
+      server.deleteFolder('Projects');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await flush();
+
+      expect(server.folders.keys, contains('Projects-2026'));
+      expect(server.folders['Projects-2026']!.messages, hasLength(2));
+      expect(server.folderCommands, isEmpty);
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+      expect(events(), contains('mailbox.delete_found_done'));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'a new folder holding the cached mail and more is no rename (a '
+        'subset is not enough)', () async {
+      await workWithMail();
+      copyOf('Projects', 'Projects-2026', extra: 3);
+      server.deleteFolder('Projects');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+      expect(
+        (await db.select(db.mailboxes).get()).map((m) => m.path),
+        isNot(contains('Projects')),
+      );
+    });
+
+    test('two new folders matching one gone folder: no rename (ambiguous)',
+        () async {
+      await workWithMail();
+      copyOf('Projects', 'Projects-a');
+      copyOf('Projects', 'Projects-b');
+      server.deleteFolder('Projects');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+    });
+
+    test(
+        'a new folder with the same count but other mail is no rename '
+        '(Message-ID mismatch); nor one with the UIDVALIDITY but other mail',
+        () async {
+      await workWithMail();
+      server
+        ..addFolder('Projects-x')
+        ..deliver('Projects-x', 'o1@test')
+        ..deliver('Projects-x', 'o2@test');
+      // The same UIDVALIDITY, other mail.
+      final validity = server.folders['Projects']!.uidValidity;
+      server.folders['Projects-y'] = FakeServerFolder('Projects-y', validity);
+      server
+        ..deliver('Projects-y', 'o3@test')
+        ..deliver('Projects-y', 'o4@test')
+        ..deleteFolder('Projects');
+
+      await rig.mailboxes.syncMailboxes(_acc.id);
+
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+    });
+
+    test(
+        "a folder's mail is out of reach while its delete is queued; a "
+        'move out of it queued after the delete is sent first', () async {
+      server
+        ..addFolder('Old')
+        ..deliver('Old', 'keep@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Old');
+      final keep = await mail('keep@test');
+
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Old', removeEmails: true);
+      expect(await emails.getEmail(keep.id), isNull, reason: 'hidden');
+      // Saved anyway (a screen opened before): it leaves the folder first.
+      await emails.moveEmail(keep.id, 'INBOX');
+      await flush();
+
+      expect(server.find('keep@test')!.folder.path, 'INBOX');
+      expect(server.folders.keys, isNot(contains('Old')));
+      expect((await emails.getEmail(keep.id))!.mailboxPath, 'INBOX');
+      await _expectConsistent(db);
+    });
+
+    test(
+        "a delete waits while a counterpart's move out of the folder is not "
+        'done (a shadow of a change not sent yet)', () async {
+      server
+        ..addFolder('Old')
+        ..deliver('Old', 'tw@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await emails.syncEmails(_acc.id, 'Old');
+      final twin = await mail('tw@test');
+      // The primary, on another account, is not sent yet.
+      final primary = await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: _acc.id,
+              resourceType: 'Email',
+              resourceId: '${_acc.id}:elsewhere',
+              changeType: 'flag_seen',
+              payload: '{}',
+              createdAt: DateTime(2026),
+              state: const Value('parked'),
+            ),
+          );
+      await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: _acc.id,
+              resourceType: 'Email',
+              resourceId: twin.id,
+              changeType: 'move',
+              payload: '{"uid":1,"mailboxPath":"Old","dest":"INBOX"}',
+              createdAt: DateTime(2026),
+              state: const Value('shadow'),
+              origin: Value('counterpart:$primary'),
+            ),
+          );
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Old', removeEmails: true);
+
+      await flush();
+
+      expect(server.folderCommands, isEmpty);
+      expect(server.folders.keys, contains('Old'));
+    });
+
+    test(
+        'with removeEmails, mail that arrived since the delete refuses it; '
+        'Retry asks the server without deleting mail', () async {
+      server
+        ..addFolder('Busy')
+        ..deliver('Busy', 'b1@test');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Busy', removeEmails: true);
+      server.deliver('Busy', 'b2@test');
+
+      await flush();
+
+      final change = await db.select(db.pendingChanges).getSingle();
+      expect((change.changeType, change.state), ('delete_mailbox', 'failed'));
+      expect(change.lastError, contains('more mail'));
+      expect(server.folders['Busy']!.messages, hasLength(2));
+      expect(await shownFolders(), contains('Busy'));
+      expect(events(), contains('mailbox.delete_new_mail'));
+
+      await emails.retryMutation(change.id);
+      final retried = await db.select(db.pendingChanges).getSingle();
+      expect(retried.payload, '{"removeEmails":false}');
+      await flush();
+      expect(server.folders['Busy']!.messages, hasLength(2));
+      await _expectConsistent(db);
+    });
+
+    test(
+        'Undo of a sent move whose old parent is gone on the server: the '
+        'move back is refused, the parent is not created again', () async {
+      server
+        ..addFolder('Box')
+        ..addFolder('Box/Work');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      final work = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Box/Work');
+      await rig.mailboxes
+          .moveMailbox(_acc.id, 'Box/Work', newParentDisplayPath: null);
+      await flush();
+      expect(server.folders.keys, contains('Work'));
+      server.deleteFolder('Box');
+
+      expect(await rig.mailboxes.undoFolderChange(_acc.id, work.id), isTrue);
+      await flush();
+
+      expect(server.folders.keys, isNot(contains('Box')));
+      expect(server.folders.keys, contains('Work'));
+      final failed = (await db.select(db.pendingChanges).get())
+          .singleWhere((o) => o.state == 'failed');
+      expect(failed.lastError, contains('does not exist on the server'));
+    });
+
+    test('Undo of a delete being sent says so and changes nothing', () async {
+      server.addFolder('Sent2');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      final row = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.path == 'Sent2');
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Sent2');
+      await db.customStatement(
+        "UPDATE pending_changes SET state = 'inflight', claim_token = 'x'",
+      );
+
+      expect(await rig.mailboxes.undoFolderChange(_acc.id, row.id), isFalse);
+      await pumpEventQueue();
+      expect(
+        logs.rows.singleWhere((r) => r.event == 'mailbox.undo').message,
+        contains('being sent right now'),
+      );
+      expect((await folder(row.id)).localHidden, isTrue);
     });
 
     test(

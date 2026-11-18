@@ -41,8 +41,13 @@ enum MailboxUndo {
   /// The move may have reached the server: a move back is queued.
   reversed,
 
-  /// The delete may have reached the server: it cannot be undone.
+  /// The delete was sent before (no answer): it may have reached the
+  /// server and cannot be undone.
   tooLate,
+
+  /// The delete is being sent right now (claimed by a flush): it cannot be
+  /// cancelled any more; if it fails, the folder shows again.
+  sending,
 }
 
 /// SQL (correlated on the `mailboxes` alias [m]): whether the mailbox shows.
@@ -276,6 +281,51 @@ class MailboxStateWriter {
     return false;
   }
 
+  /// Whether a mail change of [accountId] in one of [states], queued at any
+  /// time, takes mail out of folder [path] (or, on IMAP, a subfolder): it
+  /// names the folder as its source (`src`, `mailboxPath`) and puts the mail
+  /// elsewhere (or changes it in place). A delete of the folder waits for
+  /// it, so the mail is saved before the folder goes.
+  Future<bool> mailLeavingQueuedFor(
+    String accountId,
+    String path, {
+    required List<String> states,
+  }) async {
+    final separator =
+        await _isJmap(accountId) ? null : await imapSeparator(accountId);
+    for (final op in await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(mailboxResourceType).not() &
+                t.state.isIn(states),
+          ))
+        .get()) {
+      final payload = _payloadOf(op);
+      final dest = payload?['dest'];
+      if (dest is String && _isAtOrBelow(dest, path, separator)) continue;
+      for (final key in const ['src', 'mailboxPath']) {
+        final named = payload?[key];
+        if (named is String && _isAtOrBelow(named, path, separator)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Whether a rename or move of mailbox [mailboxId] is being sent or may
+  /// have reached the server (sent before without an answer).
+  Future<bool> mayBeMoving(String mailboxId) async =>
+      (await _opsOf(mailboxId)).any(
+        (o) =>
+            (o.changeType == renameMailboxOp ||
+                o.changeType == moveMailboxOp) &&
+            (o.state == 'inflight' ||
+                (o.attempts > 0 &&
+                    const ['pending', 'stuck'].contains(o.state))),
+      );
+
   /// Whether a subfolder (on the server) of [mailbox] has a folder op
   /// queued before op [before] that is not done yet (queued, being sent,
   /// stuck): a delete of [mailbox] waits for it (a subfolder being moved
@@ -492,7 +542,16 @@ class MailboxStateWriter {
       _db.transaction(() async {
         for (final r in await _rowsOf(accountId)) {
           if (!r.isLocal || r.localHidden || r.name != name) continue;
-          if (await _counterpartCreateOf(r.id) != null) return r.path;
+          if (await _counterpartCreateOf(r.id) == null) continue;
+          // One shadow create per move that needs the stand-in: the row
+          // stays while any of them is live (an Undo of the first move
+          // must not drop the folder a later twin shows in).
+          final origin = EmailStateWriter.shadowOrigin(primarySeq);
+          final mine = (await _opsOf(r.id)).any((o) => o.origin == origin);
+          if (!mine) {
+            await _insertShadowCreate(accountId, r.id, name, role, primarySeq);
+          }
+          return r.path;
         }
         final jmap = await _isJmap(accountId);
         final path = jmap ? '$localJmapMailboxPrefix${_hex(32)}' : name;
@@ -536,18 +595,7 @@ class MailboxStateWriter {
             displayPath: Value(name),
           ),
         );
-    await _db.into(_db.pendingChanges).insert(
-          PendingChangesCompanion.insert(
-            accountId: accountId,
-            resourceType: mailboxResourceType,
-            resourceId: id,
-            changeType: createMailboxOp,
-            payload: _createPayload(name, null, role),
-            createdAt: _now(),
-            state: const Value('shadow'),
-            origin: Value(EmailStateWriter.shadowOrigin(primarySeq)),
-          ),
-        );
+    await _insertShadowCreate(accountId, id, name, role, primarySeq);
     await _refoldRow(id);
     await rebuildDisplayPaths(accountId);
     _log(
@@ -562,6 +610,28 @@ class MailboxStateWriter {
     );
     return path;
   }
+
+  /// A `create_mailbox` of counterpart stand-in [mailboxId], a shadow of
+  /// move [primarySeq]: folded, never sent, ended with its primary.
+  Future<void> _insertShadowCreate(
+    String accountId,
+    String mailboxId,
+    String name,
+    String? role,
+    int primarySeq,
+  ) =>
+      _db.into(_db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: accountId,
+              resourceType: mailboxResourceType,
+              resourceId: mailboxId,
+              changeType: createMailboxOp,
+              payload: _createPayload(name, null, role),
+              createdAt: _now(),
+              state: const Value('shadow'),
+              origin: Value(EmailStateWriter.shadowOrigin(primarySeq)),
+            ),
+          );
 
   /// The counterpart shadow create of mailbox [mailboxId] (shadow, or
   /// acked with its primary), or null.
@@ -835,7 +905,11 @@ class MailboxStateWriter {
   /// confirmed); without, a folder that has mail on the server is refused
   /// and shows again. A queued delete of it stays (returned); a failed one
   /// is replaced. Returns the op's id.
-  Future<int> enqueueDelete(MailboxRow row, {required bool removeEmails}) =>
+  Future<int> enqueueDelete(
+    MailboxRow row, {
+    required bool removeEmails,
+    int? confirmedMessages,
+  }) =>
       _db.transaction(() async {
         final ops = await _opsOf(row.id);
         final live = ops
@@ -859,7 +933,11 @@ class MailboxStateWriter {
           row.accountId,
           row.id,
           deleteMailboxOp,
-          jsonEncode({mailboxOpRemoveEmails: removeEmails}),
+          jsonEncode({
+            mailboxOpRemoveEmails: removeEmails,
+            if (removeEmails && confirmedMessages != null)
+              mailboxOpConfirmedMessages: confirmedMessages,
+          }),
         );
         await _refoldRow(row.id);
         await rebuildDisplayPaths(row.accountId);
@@ -897,7 +975,14 @@ class MailboxStateWriter {
       return true;
     });
     if (cancelled) return MailboxUndo.cancelled;
-    if (latest.changeType == deleteMailboxOp) return MailboxUndo.tooLate;
+    if (latest.changeType == deleteMailboxOp) {
+      final now = await (_db.select(_db.pendingChanges)
+            ..where((t) => t.id.equals(latest.id)))
+          .getSingleOrNull();
+      return now?.state == 'inflight' && now!.attempts == 0
+          ? MailboxUndo.sending
+          : MailboxUndo.tooLate;
+    }
     await enqueueMove(
       (await rowById(row.id))!,
       _payloadOf(latest)?[mailboxOpFromParent] as String?,
@@ -1797,7 +1882,12 @@ class MailboxStateWriter {
         current.accountId,
         current.resourceId,
         current.changeType,
-        _withoutRetryMarks(current.payload),
+        current.changeType == deleteMailboxOp
+            // A retried delete does not carry the old yes to deleting the
+            // folder's mail (it may have more now): the server refuses a
+            // folder with mail, and deleting it again asks again.
+            ? jsonEncode({mailboxOpRemoveEmails: false})
+            : _withoutRetryMarks(current.payload),
       );
       await _deleteOp(current.id);
       await _refoldRow(row.id);

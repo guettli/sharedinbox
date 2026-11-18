@@ -1421,10 +1421,17 @@ As implemented, phase 5 is two PRs, both done:
      bringing it back, and the next listing drops it
      (`settleAckedDeletes`).
    - **Mail changes naming a folder being deleted.** Earlier ones go first
-     (the delete waits); later ones are held while the delete is queued,
-     being sent or stuck (`pathsBeingDeleted`), then fail with "folder
-     deleted" (or are sent when the delete failed). `pathsBeingRenamed`
-     covers moves and deletes being sent and, on IMAP, the subfolders.
+     (the delete waits); later ones that move mail into it are held while
+     the delete is queued, being sent or stuck (`pathsBeingDeleted`), then
+     fail with "folder deleted" (or are sent when the delete failed); later
+     ones that take mail out of it are sent first and the delete waits
+     (`mailLeavingQueuedFor`), also for a counterpart's shadow whose primary
+     is not done. The mail of a hidden folder is out of the email queries
+     (`_visible`). A delete with `removeEmails` stores the count the user
+     agreed to (`messages`); more on the server refuses it. Retry of a
+     failed delete drops the old `removeEmails`. `pathsBeingRenamed`
+     covers moves and deletes being sent and, on IMAP, the subfolders; both
+     the mail and the folder flush check again after their claim.
    - **Server-side changes.** A queued delete of a folder the server
      removed is done (`mailbox.delete_found_done`) instead of failed.
      `failOpsOfRemoved` and `_failDependentsOf` also fail moves into a
@@ -1434,20 +1441,26 @@ As implemented, phase 5 is two PRs, both done:
      delete is being sent; `completeLostRenames` also completes lost IMAP
      moves.
    - **IMAP rename on another client** (`_followRenamesElsewhere`): a
-     vanished folder is taken for renamed to the one new folder sharing its
-     leaf or parent that has its checkpoint UIDVALIDITY (STATUS; servers
-     that keep it across RENAME) or, else, holds every Message-ID cached
-     for it (up to 50, `UID SEARCH HEADER Message-ID`): Stalwart gives a
-     renamed folder a new UIDVALIDITY (seen in the backend test), so it
-     takes the second rule. `serverPathChanged` follows it
+     vanished folder without a queued delete is taken for renamed to a new
+     folder sharing its leaf or parent, when the match is unique both ways
+     and the new folder has its checkpoint UIDVALIDITY (STATUS; servers
+     that keep it across RENAME) confirmed by its cached Message-IDs, or,
+     else, holds every Message-ID cached for it (up to 50, `UID SEARCH
+     HEADER Message-ID`) with exactly the cached number of messages:
+     Stalwart gives a renamed folder a new UIDVALIDITY (seen in the backend
+     test), so it takes the second rule. Review fix: a folder with a queued
+     delete is never followed (a wrong match would delete another folder);
+     a subset of the mail or an ambiguous match is no rename. `serverPathChanged` follows it
      (`mailbox.renamed_elsewhere`). An empty or never-synced folder renamed
      on a server like Stalwart is not recognised: its queued changes fail
      visibly as before. `messageIdSearchCriteria` (`lib/data/imap/`) is
      shared with the flush's Message-ID search.
    - **Undo.** `undoFolderChange` (repository) / `undoLatest` (writer):
      a never-sent move or delete is cancelled; a sent move gets a move back
-     to `fromParent`; a sent delete cannot be undone. The folder snackbars
-     offer it.
+     to `fromParent`; a delete being sent or sent cannot be undone (worded
+     apart). The folder snackbars offer it. An IMAP move into a parent the
+     server does not list is refused (RENAME would create it), and a move
+     waits while its parent's own rename or move may have been sent.
    - **The `parked` state for folder waits** (point 3 of the brief) was
      not built: the 5a hold is computed at every flush from the folders'
      `is_local`, needs no promotion step in any isolate, and a `parked`
@@ -1463,7 +1476,9 @@ As implemented, phase 5 is two PRs, both done:
      instead of dropping it). A listing adopts the stand-in by path or by
      name (and JMAP parent); a stand-in whose shadow went, or that a listing
      started after the ack does not find, is dropped and the changes the
-     user queued for it fail. `_dropStaleCounterpartRow` is gone.
+     user queued for it fail. Each move that needs a stand-in adds its own
+     shadow create, so an Undo of one keeps the folder for the others.
+     `_dropStaleCounterpartRow` is gone.
    - **IMAP Snoozed folder.** `_snoozeRow` queues the create on IMAP too; the
      snooze and unsnooze flush no longer create folders. The v76 migration
      queues the create for queued IMAP snoozes into a `Snoozed` path no
@@ -1502,9 +1517,7 @@ Also left for it after 5a: mark-and-sweep for force resync (§6), which
 still deletes the mailbox rows without ops; the three allow-listed
 new-row inserts of `emails`. Left after 5b: the queued mail payloads are
 still rewritten when a folder's server path changes (an alias table was
-decided against in 5a); the mail of a folder whose delete is queued still
-shows in search and cross-folder views until the delete is confirmed (the
-folder itself is hidden); an IMAP folder renamed and moved at once on
+decided against in 5a); an IMAP folder renamed and moved at once on
 another client, or an empty or never-synced one renamed on a server that
 gives it a new UIDVALIDITY, is not followed (its queued changes fail
 visibly; a server MAILBOXID, RFC 8474, would close this); a counterpart stand-in for a
@@ -1512,7 +1525,9 @@ nested folder is made at the top level and adopted on JMAP only when the
 server's folder is top level too (otherwise it is dropped after the
 listing and the twin shows where its account reads it); a folder moved
 while a stale listing runs can show twice until the move's ack merges
-the rows (`mailbox.local_merged`), as in 5a for renames.
+the rows (`mailbox.local_merged`), as in 5a for renames; a watched email query (search results open on screen) is not re-run
+when only a folder's `local_hidden` changes, so it drops the mail of a
+folder just deleted at its next refresh.
 
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
