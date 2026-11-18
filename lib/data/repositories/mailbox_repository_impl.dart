@@ -874,9 +874,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
   }
 
+  /// Force resync, the mark of a mark-and-sweep (SYNC-REDESIGN.md §6): no
+  /// mailbox row is deleted (they keep their ids, and the ops naming them
+  /// stay valid). The JMAP listing state is forgotten, so the next listing
+  /// is a complete `Mailbox/get`; that listing, like every IMAP `LIST`,
+  /// writes each folder it lists and prunes the cached ones it does not
+  /// ([_prune]: [MailboxStateWriter.prunable] keeps a folder created
+  /// offline or one a later read or ack wrote).
   @override
-  Future<void> clearForResync(String accountId) =>
-      _writer.clearForResync(accountId);
+  Future<void> clearForResync(String accountId) => (_db.delete(_db.syncStates)
+        ..where(
+          (t) =>
+              t.accountId.equals(accountId) & t.resourceType.equals('Mailbox'),
+        ))
+      .go();
 
   /// Removes any locally cached mailbox for [accountId] whose `path` is not
   /// in [keepPaths] (paths the server still advertises), with the related

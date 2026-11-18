@@ -1,6 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **chosen direction, partly implemented** (phases 0–5, see §8; phase 6 left). Goal: make offline-first (the rules in
+Status: **chosen direction, partly implemented** (phases 0–5 and 6a, see §8; phase 6b left). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -367,7 +367,8 @@ matches only). Rows not matched after a complete enumeration become
 (anything else), never dropped silently.
 
 **Force resync** (#1236) uses the same mechanism for the whole account:
-mark, refetch, then remove only rows proven gone. It never clears first.
+mark, refetch, then remove only rows proven gone. It never clears first
+(done in phase 6a, §8).
 
 **Virtual self-sent rows** (SYNC.md §8a) are rows with `is_local = true` and
 no `srv_` location. User changes on them become `parked` ops, folded like
@@ -1529,6 +1530,97 @@ the rows (`mailbox.local_merged`), as in 5a for renames; a watched email query (
 when only a folder's `local_hidden` changes, so it drops the mail of a
 folder just deleted at its next refresh.
 
+As implemented, phase 6 is two PRs:
+1. **6a (done, no schema change):** the guards, mark-and-sweep for force
+   resync, and the last allow-listed writes of `emails` (points 1–3 of the
+   phase 6 brief).
+   - **Guards (point 1): none removed, each kept for a reason.**
+     `_pendingDeleteOrMoveUids` (the IMAP new-mail FETCH does not insert a
+     row for a UID whose mail left that location while a move, snooze,
+     unsnooze or delete of it is queued, being sent or acked, #1269) is not
+     redundant. The overlay records where a row *is*; once a move's answer
+     relocated the row, no `emails` column says that the old folder and UID
+     were the mail's, so a FETCH answer that predates the move cannot be
+     told from a new mail at that UID. The op's payload (source folder, UID,
+     UIDVALIDITY) is the only record of the vacated location, and the guard
+     is that record read at the one place it matters. The alternative, a
+     Message-ID match against a row whose `srv_location_seq` is newer than
+     the FETCH, would also skip a genuine second copy (the Inbox and Sent
+     copies of a self-sent mail, a Gmail label), and a skipped UID at or
+     below `lastUid` is never fetched again. The per-path checks of the
+     flush (`pathsBeingRenamed`, `pathsBeingDeleted`, `mailLeavingQueuedFor`,
+     `_holdForLocalFolders`) are not sync guards: they order server commands
+     (a mail change must not be sent to a path a queued rename, move or
+     delete is changing), which the fold does not do, so they stay too.
+     SYNC.md §3 "No resurrection by a late FETCH answer" says so.
+   - **Mark-and-sweep (point 2, §6).** Force resync no longer deletes any
+     `emails` or `mailboxes` row up front. The mark is the forgotten
+     checkpoint: `clearForResync` deletes the account's sync states (and
+     `MailboxRepository.clearForResync` the JMAP `Mailbox` state, so the next
+     listing is a complete `Mailbox/get`), `clearMailboxForResync` the
+     folder's; on JMAP it also stores an empty full-sync resume point, since
+     without a folder state the sync used to adopt the account's global
+     `Email` state and only ask for changes. The refetch is the folder's full
+     sync: it finds each cached row by its server location and writes it
+     through the gate (headers, read/star/snooze state, location), so the row
+     keeps its id, body, attachments and references. The sweep is the
+     enumeration's absence rule (§4.3) with the read sequence taken before
+     the enumeration: on IMAP the full path now ends with
+     `_reconcileDeletedImap(complete: true)` against its `UID SEARCH ALL`
+     (before, only the incremental path reconciled), which after a complete
+     fetch also counts a row without a UID (one the fetch could not find:
+     gone, or a stale duplicate); on JMAP the full sync's prune after a
+     complete enumeration (a sync spread over runs leaves it to the periodic
+     reconcile). Rows marked gone are deleted by the clean-up rule only when
+     no change of the user's is left; a row a read or ack wrote after the
+     mark is not swept. Folders are swept by the listing (`prunable`, as
+     before). What no refetch reaches, rows recorded in a folder the account
+     no longer has, is swept by `clearForResync` itself (skipped when the
+     account has no mailbox row at all). `EmailStateWriter.deleteRowsOf`,
+     `MailboxStateWriter.clearForResync`, the `PRAGMA foreign_keys = OFF`
+     around the old delete (whose orphaned bodies no new row reused since
+     opaque ids, 2b) and the folder resync's delete of its threads are gone.
+     A refetch that fails part-way removes nothing.
+   - **The last allow-listed writes (point 3).** The new-row inserts of the
+     IMAP fetch and the JMAP upsert and Undo's restore go through
+     `EmailStateWriter.insertServerRow` (a new row, `newRow` with the read's
+     stamp, or 0 for the restore) and `writeServerHeaders` (header columns
+     and server facts of an existing row). Their headers are a
+     `ServerRowHeaders` value, which names no column, as 4b's
+     `LocalRowHeaders`; a nullable field left null is not written. The
+     allow-list of `check_email_writes.sh` is empty; the mechanism stays (an
+     entry must name the phase that removes it), and
+     `test_check_email_writes.sh` supplies the old three members through
+     `EMAIL_WRITES_ALLOWED` so that the rules for allowed members stay
+     tested, plus fixtures that the real list allows none of them.
+   - **App Log.** New warn `sync.resync_swept`: the rows a complete refetch
+     of a folder (IMAP full fetch, JMAP full sync) or the account resync's
+     sweep of rows outside any folder did not find, with their ids; a row
+     kept because of a queued change is logged as before
+     (`email.server_gone_with_changes`).
+   - **Behaviour changes.** Force resync keeps the id, body and
+     attachments of every mail the server still has, and the lists do not
+     empty while the refetch runs. A header the server did not send this time (an IMAP preview
+     snippet whose fetch failed, a JMAP `preview` not returned, an unknown
+     UIDVALIDITY, a List-Unsubscribe header) no longer overwrites the stored
+     one with NULL. A single-folder resync on JMAP is a full sync.
+   - **Tests.** `force_resync_sweep_test.dart` (stateful IMAP fake: nothing
+     deleted before the refetch, a found row keeps id and body, a lost one is
+     swept and logged, a stale flag corrected, a lost mail with a queued
+     change kept hidden, a folder resync sweeping only its folder, a row
+     outside any folder swept by the account resync), a Stalwart backend
+     test (IMAP: a resync keeps the found row's id and body and sweeps the
+     mail deleted on the server), the rewritten mailbox contract test, and
+     the check fixtures.
+   - **Left for 6b:** points 4–8 of the brief (watched email queries and
+     `local_hidden`, the nested counterpart stand-in, a folder moved during
+     a stale listing, documenting the payload rewrite decision, the
+     remaining App Log audit, and the final docs, status and §9 review). Not
+     planned: a foreign move whose source folder is synced before the
+     destination still ends as a new row (2c, 4b): carrying it over needs
+     the vanished row to wait without a change of the user's, which is not
+     what the resync's sweep does.
+
 **Enforcement, from phase 3 on** (done in 3b, see there):
 - **An allow-list check.** `EmailsCompanion`, `_db.emails` writes
   (`update`, `into`, `delete`) and raw `UPDATE`/`INSERT`/`DELETE` on
@@ -1586,7 +1678,7 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 
 | Part | Role (groups below) |
 |---|---|
-| `sync.dart` | Sync: dispatch, `clearForResync` / `clearMailboxForResync`, `_backfillAddressHeaders` |
+| `sync.dart` | Sync: dispatch, `clearForResync` / `clearMailboxForResync` (the mark of mark-and-sweep since 6a, and the sweep of rows outside any folder), `_backfillAddressHeaders` |
 | `sync_imap.dart` | Sync: IMAP fetch and upsert, flag refresh and reconcile, size backfill, `_reconcileDeletedImap`, UIDVALIDITY (the late-FETCH location guard until 4a) |
 | `sync_jmap.dart` | Sync: JMAP upsert, `notFound` / `destroyed`, prune, reconcile, sync state |
 | `jmap_push.dart` | Sync: the JMAP EventSource watch (no row writes) |
@@ -1613,9 +1705,9 @@ carry-over's whole-row copy, since 4a the location overlay, the clean-up
 rule and the server location facts (`relocate`, `releaseLocation`,
 `renameFolder`), since 4b the local rows (`insertLocalRow`), the parked-op
 expiry, the shadow-op lifecycle and the appear side of carry-over, and
-`scripts/check_email_writes.sh` lists the members that
-still write `emails` themselves (allow-list, with the phase that moves
-each). Since 5a the mailbox state writer
+since 6a the rows of server copies (`insertServerRow`,
+`writeServerHeaders`). `scripts/check_email_writes.sh` has an allow-list
+for members that write `emails` themselves; it is empty since 6a. Since 5a the mailbox state writer
 (`lib/data/repositories/mailbox_state_writer.dart`) is the only writer of
 `mailboxes` (check 3 of the same script). The thread aggregate is `refreshThreadAggregate`
 (`lib/data/repositories/thread_aggregate.dart`, 4a), shared with
@@ -1636,8 +1728,8 @@ The line numbers below are from before the split (`33c67b4`).
   (3586), `_reconcileJmapFlagsForMailbox` (3683).
 - `removeLocalMailbox` / `pruneLocalMailboxes`
   (`mailbox_repository_impl.dart:1399`, 585), which become `srv_gone`.
-- `clearForResync` / `clearMailboxForResync` (9631, 9663), which become
-  mark and sweep.
+- `clearForResync` / `clearMailboxForResync` (9631, 9663), mark and sweep
+  since 6a (the sweep is the full sync's absence rule).
 - `_backfillAddressHeaders` (9413), headers only.
 - `_healMismatchedImapBody` (891), which updates `srv_uid` and no longer
   re-keys.

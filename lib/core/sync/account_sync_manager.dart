@@ -409,10 +409,11 @@ class AccountSyncManager {
     }
   }
 
-  /// Clears all locally-cached emails and mailboxes for [accountId], then
-  /// re-syncs mailboxes and every mailbox's emails from the server. Cached
-  /// email bodies and attachments are preserved (see `clearForResync` on the
-  /// email repository) so already-downloaded content is not fetched again.
+  /// Refetches every mailbox and every mailbox's emails of [accountId]
+  /// from the server and then removes what the server no longer has
+  /// (mark-and-sweep, see `clearForResync` on the email repository): the
+  /// cached rows are not deleted first, so their bodies, attachments and
+  /// queued changes stay, and nothing vanishes if the refetch fails.
   ///
   /// Returns a single-subscription [Stream] that emits [ForceResyncProgress]
   /// snapshots as the work advances (one per phase change, plus one per
@@ -426,10 +427,11 @@ class AccountSyncManager {
     return ctrl.stream;
   }
 
-  /// Flushes queued local mutations to the server before a force re-sync wipes
-  /// the local cache. Best-effort: a failure (typically offline) leaves the
-  /// changes queued — `clearForResync` preserves them — so they retry on the
-  /// next successful sync instead of being lost (#558).
+  /// Flushes queued local mutations to the server before a force re-sync
+  /// refetches everything. Best-effort: a failure (typically offline)
+  /// leaves the changes queued — `clearForResync` preserves them, and they
+  /// fold over the refetched state — so they retry on the next successful
+  /// sync instead of being lost (#558).
   Future<void> _flushBeforeResync(String accountId) async {
     try {
       final password = await _accounts.getPassword(accountId);
@@ -439,7 +441,7 @@ class AccountSyncManager {
     }
   }
 
-  /// Checks that the server answers before a force re-sync wipes anything.
+  /// Checks that the server answers before a force re-sync starts.
   /// Without this, a resync started offline cleared the local mail and then
   /// failed to fetch it again, leaving an empty account until the network
   /// came back (#1236). The probe is a mailbox sync: it needs a working login
@@ -507,9 +509,8 @@ class AccountSyncManager {
       emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
 
       // Push any un-pushed local mutations (e.g. a just-starred mail) to the
-      // server before wiping the cache — otherwise the re-fetch below would
-      // overwrite the optimistic local state with stale server truth and the
-      // change would be lost (#558).
+      // server first, so the refetch reads them back (#558); what stays
+      // queued folds over the refetched state.
       await _flushBeforeResync(accountId);
       await _emails.clearForResync(accountId);
       await _mailboxes.clearForResync(accountId);
@@ -607,10 +608,10 @@ class AccountSyncManager {
     }
   }
 
-  /// Clears one mailbox's local cache and re-syncs only that mailbox from the
-  /// server, leaving every other folder untouched. Cached email bodies and
-  /// attachments are preserved (see `clearMailboxForResync` on the email
-  /// repository) so already-downloaded content is not fetched again.
+  /// Refetches only one mailbox from the server and then removes the
+  /// cached mail of it the server no longer has (see
+  /// `clearMailboxForResync` on the email repository), leaving every other
+  /// folder untouched.
   ///
   /// Returns a single-subscription [Stream] emitting [ForceResyncProgress]
   /// snapshots, closing right after the final terminal snapshot. As with
@@ -683,7 +684,7 @@ class AccountSyncManager {
         return;
       }
       emit(const ForceResyncProgress(phase: ForceResyncPhase.clearing));
-      // Push un-pushed local mutations before wiping the cache (see #558).
+      // Push un-pushed local mutations before the refetch (see #558).
       await _flushBeforeResync(accountId);
       await _emails.clearMailboxForResync(accountId, mailboxPath);
 

@@ -58,7 +58,7 @@
 #
 # The allow-list names a file and the member (method, getter, top-level
 # function) holding the write, with the reason it is not in the state writer
-# yet and the phase that moves it there. Members are found by indentation:
+# yet and the phase that moves it there. It is empty since phase 6a. Members are found by indentation:
 # a declaration at indent 0 outside a type, at indent 2 inside one. Fields,
 # getters, annotations and signatures spread over lines start a member of
 # their own, so a write cannot borrow the name of an allowed member above
@@ -96,18 +96,16 @@ lib/data/db/database.dart|_createLocationOverlaySchema
 '
 
 # file | member | reason
+# Empty since phase 6a: the last three members (the new-row inserts of the
+# IMAP fetch and the JMAP upsert, and Undo's restore) write through
+# EmailStateWriter.insertServerRow / writeServerHeaders with a
+# ServerRowHeaders value, which names no column. An entry added here must
+# name the phase that removes it again. scripts/test_check_email_writes.sh
+# sets EMAIL_WRITES_ALLOWED to its own list, so that the rules for allowed
+# members stay tested while no real member is allowed.
 allowed='
-# Row inserts of new rows and the header columns of existing ones. The
-# overlay columns come only from EmailStateWriter.newRow /
-# withServerLocation (check 1); an existing row is written with an
-# EmailsCompanion naming no overlay column. The local rows (virtual rows,
-# the Sent copy) moved into the writer in phase 4b (insertLocalRow,
-# writeLocalRowHeaders). These three build a header companion
-# from a server answer or an Undo snapshot, which phase 6 may move too.
-lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|IMAP new-mail fetch: new rows and headers (phase 6)
-lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|JMAP Email/get: new rows and headers (phase 6)
-lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo brings a row back that sync cleaned up (phase 6)
 '
+allowed="${EMAIL_WRITES_ALLOWED-$allowed}"
 
 files=$(grep -rlE --include='*.dart' \
   'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq|toCompanion\(' \

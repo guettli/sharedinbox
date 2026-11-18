@@ -72,11 +72,15 @@ abstract class MailboxRepositoryContract {
       expect(box!.role, 'archive');
     });
 
-    test('clearForResync removes all mailboxes for the account', () async {
+    test('clearForResync keeps the mailboxes: the next listing sweeps them',
+        () async {
+      // Mark-and-sweep (#1236): a force resync deletes nothing up front, so
+      // a refetch that fails leaves the folder list as it was.
       final repo = await makeRepo();
       await insertMailbox(repo, id: 'mb', path: 'INBOX');
       await repo.clearForResync(_account.id);
-      expect(await repo.observeMailboxes(_account.id).first, isEmpty);
+      final boxes = await repo.observeMailboxes(_account.id).first;
+      expect(boxes.map((m) => m.path), ['INBOX']);
     });
   }
 }

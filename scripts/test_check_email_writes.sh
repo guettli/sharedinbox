@@ -33,6 +33,15 @@ expect() {
 
 repo=data/repositories/email_repository_impl
 
+# The real allow-list is empty since phase 6a. The fixtures below test the
+# rules for allowed members with the three members that were on it last.
+fixture_allowed='
+lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|fixture
+lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|fixture
+lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|fixture
+'
+export EMAIL_WRITES_ALLOWED="$fixture_allowed"
+
 # ── Check 1: overlay columns, no allow-list ─────────────────────────────────
 expect fail 'isSeen in an EmailsCompanion, even in an allowed member' \
   "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
@@ -836,6 +845,57 @@ class SyncLogRepositoryImpl {
         'DELETE FROM sync_log_mailboxes WHERE sync_log_id = 1',
       );
   // UPDATE mailboxes in a comment is prose.
+}
+EOF
+
+# ── The real allow-list (empty since phase 6a) ─────────────────────────────
+unset EMAIL_WRITES_ALLOWED
+
+expect fail 'an emails insert in the IMAP fetch (no longer allowed)' \
+  "$repo/sync_imap.dart" 'emails is written only' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    await _db.into(_db.emails).insert(
+          EmailStateWriter.newRow(headers, id: id, seq: read.seq),
+        );
+  }
+}
+EOF
+
+expect fail 'a header update in the JMAP upsert (no longer allowed)' \
+  "$repo/sync_jmap.dart" 'emails is written only' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
+    await (_db.update(_db.emails)..where((t) => t.id.equals(dbId)))
+        .write(EmailsCompanion(subject: Value(subject)));
+  }
+}
+EOF
+
+expect fail "an EmailsCompanion in Undo's restore (no longer allowed)" \
+  "$repo/user_actions.dart" 'emails is written only' <<'EOF'
+extension _UserActions on EmailRepositoryImpl {
+  Future<void> _restoreEmail(model.Email e) async {
+    final restored = EmailsCompanion(subject: Value(e.subject));
+    await _state.insertServerRow(restored, id: e.id, seq: 0);
+  }
+}
+EOF
+
+expect pass 'the three members writing through the writer' \
+  "$repo/sync_jmap.dart" <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
+    final existing = await (_db.select(_db.emails)
+          ..where((t) => t.srvJmapId.equals(jmapId)))
+        .getSingleOrNull();
+    final headers = ServerRowHeaders(uid: 0, subject: subject);
+    if (existing == null) {
+      await _state.insertServerRow(headers, id: dbId, seq: read.seq);
+      return;
+    }
+    await _state.writeServerHeaders(dbId, headers);
+  }
 }
 EOF
 

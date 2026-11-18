@@ -218,78 +218,117 @@ extension _Sync on EmailRepositoryImpl {
     );
   }
 
+  /// Force resync of [accountId] (#1236), the mark of a mark-and-sweep
+  /// (SYNC-REDESIGN.md §6 "Force resync"): nothing is deleted up front, so
+  /// rows keep their ids, bodies, attachments and the references to them
+  /// (Undo, notifications, drafts). Forgetting the account's sync
+  /// checkpoints makes the next sync of each folder a complete refetch: it
+  /// writes every row it finds through the server-write gate (headers,
+  /// read/star/snooze state, location, stamped with its read) and then
+  /// sweeps the folder, marking gone what its enumeration did not list
+  /// (IMAP: the full fetch's [_SyncImap._reconcileDeletedImap]; JMAP: the
+  /// prune after a complete full sync, else the periodic reconcile), and
+  /// the clean-up rule deletes those without a change of the user's. The
+  /// mailbox listing sweeps the folders the same way. Rows recorded in a
+  /// folder the account no longer has, which no folder's refetch reaches,
+  /// are swept here.
   Future<void> _clearForResync(String accountId) async {
-    // Disable FK constraints so EmailBodies rows survive the emails deletion.
-    // When emails are re-inserted after the next sync with the same IDs, the
-    // cached body content will be reused without a network round-trip.
-    // The pragma is per connection: other statements that run until the
-    // finally block are unchecked too.
-    await _db.customStatement('PRAGMA foreign_keys = OFF');
-    try {
-      await _db.transaction(() async {
-        // A row the user still has a change for stays (clean-up rule).
-        await _state.deleteRowsOf(accountId);
-        // NB: pending_changes are deliberately NOT deleted here. A queued
-        // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
-        // the server yet) is un-pushed user intent — dropping it would let the
-        // subsequent full re-fetch overwrite the local state with stale server
-        // truth, losing the star (#558). The caller flushes pending changes
-        // before clearing; anything still queued (offline) survives and is
-        // retried on the next sync, its payload carrying the uid/id needed to
-        // apply it even though the email row was deleted.
-        await (_db.delete(
-          _db.syncStates,
-        )..where((t) => t.accountId.equals(accountId)))
-            .go();
-      });
-    } finally {
-      await _db.customStatement('PRAGMA foreign_keys = ON');
-    }
+    // A queued change is un-pushed user intent and is never deleted here
+    // (#558): it keeps folding over the refetched server state.
+    await _sweepRowsOutsideFolders(accountId);
+    await (_db.delete(_db.syncStates)
+          ..where((t) => t.accountId.equals(accountId)))
+        .go();
   }
 
+  /// [_clearForResync] for one folder: forgets its checkpoint, so its next
+  /// sync is a complete refetch with the sweep. On JMAP a full sync is
+  /// marked due (an empty resume point): without a folder state, sync
+  /// would otherwise adopt the account's global `Email` state and only ask
+  /// for changes since then.
   Future<void> _clearMailboxForResync(
     String accountId,
     String mailboxPath,
   ) async {
-    // Disable FK constraints so EmailBodies rows survive the emails deletion —
-    // re-inserting emails with the same IDs after the next sync reuses the
-    // cached body without a network round-trip. The pragma is per connection:
-    // other statements that run until the finally block are unchecked too.
-    await _db.customStatement('PRAGMA foreign_keys = OFF');
-    try {
-      await _db.transaction(() async {
-        // NB: pending_changes are deliberately NOT deleted here. A queued
-        // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
-        // the server yet) is un-pushed user intent — dropping it would let the
-        // subsequent full re-fetch overwrite the local state with stale server
-        // truth, losing the star (#558). The caller flushes pending changes
-        // before clearing; anything still queued (offline) survives and is
-        // retried on the next sync, its payload carrying the uid/id needed to
-        // apply it even though the email row was deleted.
-        // A row the user still has a change for stays (clean-up rule).
-        await _state.deleteRowsOf(accountId, mailboxPath: mailboxPath);
-        await (_db.delete(_db.threads)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.mailboxPath.equals(mailboxPath),
-              ))
-            .go();
-        // Reset this mailbox's sync checkpoint. Only the row matching the
-        // account's protocol exists; deleting both variants is a no-op for the
-        // other. The global 'Email' state is left intact.
-        await (_db.delete(_db.syncStates)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    (t.resourceType.equals('IMAP:$mailboxPath') |
-                        t.resourceType.equals('JMAP:Email:$mailboxPath') |
-                        t.resourceType.equals('JMAP:FullSync:$mailboxPath')),
-              ))
-            .go();
-      });
-    } finally {
-      await _db.customStatement('PRAGMA foreign_keys = ON');
-    }
+    final account = await _accounts.getAccount(accountId);
+    await _db.transaction(() async {
+      await (_db.delete(_db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  (t.resourceType.equals('IMAP:$mailboxPath') |
+                      t.resourceType.equals('JMAP:Email:$mailboxPath') |
+                      t.resourceType.equals('JMAP:FullSync:$mailboxPath')),
+            ))
+          .go();
+      if (account?.type == account_model.AccountType.jmap) {
+        await _saveSyncState(accountId, _jmapFullSyncKey(mailboxPath), '{}');
+      }
+    });
+  }
+
+  /// The rows of [accountId] recorded in a folder the account no longer has
+  /// (not a mailbox row of it, local or hidden ones included): no folder's
+  /// refetch reaches them, so a force resync marks them gone and the
+  /// clean-up rule deletes those without a change of the user's.
+  Future<void> _sweepRowsOutsideFolders(String accountId) async {
+    // No folder at all is no listing, not an account without folders.
+    final anyFolder = await (_db.selectOnly(_db.mailboxes)
+          ..addColumns([_db.mailboxes.id])
+          ..where(_db.mailboxes.accountId.equals(accountId))
+          ..limit(1))
+        .getSingleOrNull();
+    if (anyFolder == null) return;
+    final read = await _state.beginRead(accountId);
+    final ids = [
+      for (final r in await _db.customSelect(
+        'SELECT id FROM emails WHERE account_id = ?1 AND is_local = 0 '
+        'AND srv_gone = 0 AND srv_mailbox_path NOT IN '
+        '(SELECT path FROM mailboxes WHERE account_id = ?1)',
+        variables: [Variable.withString(accountId)],
+        readsFrom: {_db.emails, _db.mailboxes},
+      ).get())
+        r.read<String>('id'),
+    ];
+    if (ids.isEmpty) return;
+    final rows =
+        await (_db.select(_db.emails)..where((t) => t.id.isIn(ids))).get();
+    final marked = await read.markGone(ids);
+    await _settleGoneRows(accountId, rows, marked);
+    _logSwept(
+      accountId,
+      null,
+      [
+        for (final row in rows)
+          if (marked.contains(row.id)) row,
+      ],
+    );
+  }
+
+  /// App Log warn `sync.resync_swept` for the rows [swept] a complete
+  /// refetch of [mailboxPath] (a force resync, a UIDVALIDITY change, a JMAP
+  /// full sync; null: of the account, for rows outside any folder) did not
+  /// find: they vanish from the list, deleted at once or, with a change of
+  /// the user's left, once it settles (`email.server_gone_with_changes`).
+  void _logSwept(String accountId, String? mailboxPath, List<Email> swept) {
+    if (swept.isEmpty) return;
+    unawaited(
+      _appLogger?.warn(
+        'sync.resync_swept',
+        '${swept.length} cached mail(s) '
+            '${mailboxPath == null ? 'in folders this account no longer has' : 'of $mailboxPath'} '
+            'were not found by a complete refetch and are removed (a mail '
+            'with a queued change stays until the change is applied or '
+            'fails)',
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        data: {
+          'emailIds': [for (final row in swept.take(100)) row.id],
+          'subjects': [
+            for (final row in swept.take(20)) row.subject ?? '(no subject)',
+          ],
+        },
+      ),
+    );
   }
 }

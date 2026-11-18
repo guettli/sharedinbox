@@ -486,6 +486,41 @@ class EmailStateWriter {
     return count > 0;
   }
 
+  /// Inserts row [id] of [accountId] for a server copy: a mail a sync read
+  /// found no row for (the IMAP new-mail FETCH, JMAP `Email/get`), stamped
+  /// with that read's [seq], or Undo's restore of a row the clean-up rule
+  /// deleted, stamped 0 so that any read corrects it. [headers] carry no
+  /// overlay column: the folder and the read/star/snooze state come from
+  /// [mailboxPath] and [keywords] as the server's ([newRow]); a new row has
+  /// no pending change, and the ops of a restored one fold over it (the
+  /// caller re-folds).
+  Future<void> insertServerRow(
+    ServerRowHeaders headers, {
+    required String id,
+    required String accountId,
+    required String mailboxPath,
+    required ServerKeywords keywords,
+    required int seq,
+  }) =>
+      _db.into(_db.emails).insert(
+            newRow(
+              headers._companion,
+              id: id,
+              accountId: accountId,
+              mailboxPath: mailboxPath,
+              keywords: keywords,
+              seq: seq,
+            ),
+          );
+
+  /// Writes the header columns and server facts in [headers] over row
+  /// [emailId], the row a sync read found for the server's mail: no
+  /// overlay column (the read writes those through [KeywordRead.write] and
+  /// [KeywordRead.writeLocation]), and a field [headers] leave null is kept.
+  Future<void> writeServerHeaders(String emailId, ServerRowHeaders headers) =>
+      (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+          .write(headers._companion);
+
   /// A local row is virtual exactly when it has no server location, and
   /// only a virtual row is a virtual Sent copy.
   static void _checkLocalRow(LocalRowHeaders headers) {
@@ -1420,25 +1455,6 @@ class EmailStateWriter {
   Future<void> deleteRow(String emailId) =>
       (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
 
-  /// Force resync: deletes every row of [accountId] the server has in
-  /// [mailboxPath], or every row of the account when [mailboxPath] is null,
-  /// except a row with a pending, in-flight, stuck or acked change (the
-  /// clean-up rule): it keeps its id, body and changes, and the refetch
-  /// finds it again by its server location (or marks it gone).
-  Future<void> deleteRowsOf(String accountId, {String? mailboxPath}) =>
-      _db.customUpdate(
-        'DELETE FROM emails WHERE account_id = ?1 '
-        '${mailboxPath == null ? '' : 'AND srv_mailbox_path = ?2 '}'
-        'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
-        'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql))',
-        variables: [
-          Variable.withString(accountId),
-          if (mailboxPath != null) Variable.withString(mailboxPath),
-        ],
-        updates: {_db.emails},
-        updateKind: UpdateKind.delete,
-      );
-
   /// Fills header columns of row [emailId] that a later schema added or an
   /// earlier sync missed (null leaves a column alone). No user intent, so
   /// any read may write them (SYNC-REDESIGN.md §2).
@@ -2143,6 +2159,97 @@ class LocalRowHeaders {
         srvUid: Value(uid),
         srvUidValidity: Value(srvUidValidity),
         srvJmapId: Value(srvJmapId),
+      );
+}
+
+/// The header columns and server facts of a row of a server copy
+/// ([EmailStateWriter.insertServerRow], [EmailStateWriter.writeServerHeaders]):
+/// no overlay column. A nullable field left null is not written (an insert
+/// gets the column's default), so a read that could not get a value keeps
+/// the one an earlier read stored.
+class ServerRowHeaders {
+  const ServerRowHeaders({
+    required this.uid,
+    required this.subject,
+    required this.sentAt,
+    required this.receivedAt,
+    required this.fromJson,
+    required this.toJson,
+    required this.ccJson,
+    required this.replyToJson,
+    required this.bccJson,
+    required this.hasAttachment,
+    required this.threadId,
+    required this.messageId,
+    required this.inReplyTo,
+    required this.references,
+    this.sizeBytes,
+    this.preview,
+    this.listUnsubscribeHeader,
+    this.serverEmailId,
+    this.srvUid,
+    this.srvUidValidity,
+    this.srvJmapId,
+    this.snoozedFromMailboxPath,
+    this.isLocal,
+    this.isVirtualSentCopy,
+  });
+
+  /// The legacy `uid` column (0 on JMAP).
+  final int uid;
+  final String? subject;
+  final DateTime? sentAt;
+  final DateTime receivedAt;
+  final String fromJson;
+  final String toJson;
+  final String ccJson;
+  final String replyToJson;
+  final String bccJson;
+  final bool hasAttachment;
+  final String? threadId;
+  final String? messageId;
+  final String? inReplyTo;
+  final String? references;
+  final int? sizeBytes;
+  final String? preview;
+  final String? listUnsubscribeHeader;
+
+  /// The move-stable server id (RFC 8474 EMAILID, Gmail X-GM-MSGID).
+  final String? serverEmailId;
+  final int? srvUid;
+  final int? srvUidValidity;
+  final String? srvJmapId;
+
+  /// Local-only attributes an Undo snapshot carries; a sync read has none.
+  final String? snoozedFromMailboxPath;
+  final bool? isLocal;
+  final bool? isVirtualSentCopy;
+
+  EmailsCompanion get _companion => EmailsCompanion(
+        uid: Value(uid),
+        subject: Value(subject),
+        sentAt: Value(sentAt),
+        receivedAt: Value(receivedAt),
+        fromJson: Value(fromJson),
+        toAddresses: Value(toJson),
+        ccJson: Value(ccJson),
+        replyToJson: Value(replyToJson),
+        bccJson: Value(bccJson),
+        hasAttachment: Value(hasAttachment),
+        threadId: Value(threadId),
+        messageId: Value(messageId),
+        inReplyTo: Value(inReplyTo),
+        references: Value(references),
+        sizeBytes: Value.absentIfNull(sizeBytes),
+        preview: Value.absentIfNull(preview),
+        listUnsubscribeHeader: Value.absentIfNull(listUnsubscribeHeader),
+        serverEmailId: Value.absentIfNull(serverEmailId),
+        srvUid: Value.absentIfNull(srvUid),
+        srvUidValidity: Value.absentIfNull(srvUidValidity),
+        srvJmapId: Value.absentIfNull(srvJmapId),
+        snoozedFromMailboxPath: Value.absentIfNull(snoozedFromMailboxPath),
+        isLocal: Value.absentIfNull(isLocal),
+        isVirtualSentCopy: Value.absentIfNull(isVirtualSentCopy),
       );
 }
 

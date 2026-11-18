@@ -308,16 +308,17 @@ abstract class EmailRepository {
   /// phantom conversations (#523). Returns the number of rows removed.
   Future<int> sweepOrphanThreads(String accountId, String mailboxPath);
 
-  /// Deletes all locally-cached email rows and pending changes for [accountId],
-  /// while preserving EmailBodies so already-downloaded content is not lost.
-  /// Also resets sync-state checkpoints so the next sync fetches everything fresh.
+  /// Force resync of [accountId], mark-and-sweep (#1236): resets the
+  /// sync checkpoints so the next sync of each folder refetches it
+  /// completely and then removes the cached mail it did not find (a mail
+  /// with a queued change stays until the change settles). Deletes no row
+  /// up front, so ids, bodies, attachments and queued changes are kept;
+  /// rows recorded in a folder the account no longer has are removed here.
   Future<void> clearForResync(String accountId);
 
-  /// Like [clearForResync] but scoped to a single mailbox: deletes the cached
-  /// emails, threads and pending changes for [mailboxPath] under [accountId],
-  /// and resets that mailbox's sync checkpoint so the next sync re-fetches it
-  /// in full. EmailBodies are preserved so already-downloaded content is not
-  /// re-downloaded. Other mailboxes are untouched.
+  /// Like [clearForResync] but scoped to a single mailbox: resets that
+  /// mailbox's checkpoint so its next sync refetches and sweeps it.
+  /// Other mailboxes are untouched.
   Future<void> clearMailboxForResync(String accountId, String mailboxPath);
 }
 
