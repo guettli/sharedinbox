@@ -177,7 +177,7 @@ if [ "$_elapsed" -gt 10 ]; then
     echo "::warning::SSH tunnel setup took ${_elapsed}s"
 fi
 
-# Export _EXPERIMENTAL_DAGGER_RUNNER_HOST to use the tunnel.
+# Export DAGGER_ENGINE to use the tunnel.
 # 127.0.0.1, NOT localhost: the tunnel binds the IPv4 loopback only, but
 # `localhost` resolves to both 127.0.0.1 and ::1, and dagger's engine client
 # would try [::1]:8080 first (nothing listens there) -- when the tunnel is
@@ -186,9 +186,9 @@ fi
 # herring made gitops#686 hard to read (1190 `dial tcp [::1]:8080` spans).
 # Pinning v4 means a failure says 127.0.0.1 -- i.e. "the tunnel is down",
 # which is the truth.
-export _EXPERIMENTAL_DAGGER_RUNNER_HOST="tcp://127.0.0.1:8080"
+export DAGGER_ENGINE="tcp://127.0.0.1:8080"
 if [ -n "${GITHUB_ENV:-}" ]; then
-    echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080" >> "$GITHUB_ENV"
+    echo "DAGGER_ENGINE=tcp://127.0.0.1:8080" >> "$GITHUB_ENV"
 fi
 
 # Make the CLI match the engine (the "bump deadlock" fix). Ask the engine for

@@ -24,7 +24,7 @@ builds fast; nothing runs a throwaway engine per job.
   source of truth; do not duplicate their content here.
 - **Access:** clients reach the engine over an SSH tunnel to its Unix socket
   (`/run/dagger/engine.sock`) and point Dagger at it via
-  `_EXPERIMENTAL_DAGGER_RUNNER_HOST`. See
+  `DAGGER_ENGINE`. See
   [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh).
 
 ### Version pinning
@@ -84,7 +84,7 @@ when the module genuinely needs a newer engine, after the engine has moved.
 Every workflow pins `runs-on: sharedinbox-arc`. Each job's first Dagger step is
 [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh), which opens
 the SSH tunnel to the remote engine and exports
-`_EXPERIMENTAL_DAGGER_RUNNER_HOST=tcp://127.0.0.1:8080` for the steps that
+`DAGGER_ENGINE=tcp://127.0.0.1:8080` for the steps that
 follow (see `.github/workflows/ci.yml`).
 
 ```
@@ -102,7 +102,7 @@ must error out instead of silently degrading.
 Local development uses the same remote engine, not a local one. With
 `SOPS_AGE_KEY` set, sourcing
 [`scripts/setup_dagger_remote.sh`](scripts/setup_dagger_remote.sh) establishes
-the SSH tunnel and exports `_EXPERIMENTAL_DAGGER_RUNNER_HOST` exactly as CI does.
+the SSH tunnel and exports `DAGGER_ENGINE` exactly as CI does.
 
 Once connected, run the pipeline. For non-interactive environments (CI, LLMs)
 use `--progress=plain` for readable logs:
