@@ -108,6 +108,45 @@ const _unsentStates = [_pendingState, _parkedState];
 /// the change with this id instead of real changes ([_Counterparts]).
 final _shadowOfKey = Object();
 
+/// Payload key of a parked change: the folder its row showed when it was
+/// queued. It marks the payload as built for a row without a server copy
+/// (rewritten by [_ChangeQueue._unparkOps], which removes it), and tells
+/// where a delete for good was meant.
+const _parkedShownInKey = 'parkedShownIn';
+
+/// [payload] of a change parked on a row shown in [shownIn].
+String _markParked(String payload, String shownIn) {
+  final Map<String, dynamic> map;
+  try {
+    map = jsonDecode(payload) as Map<String, dynamic>;
+  } catch (_) {
+    return payload;
+  }
+  map[_parkedShownInKey] = shownIn;
+  return jsonEncode(map);
+}
+
+/// What [_ChangeQueue._unparkOps] did.
+class _Unparked {
+  const _Unparked({
+    required this.sent,
+    required this.deletedForGood,
+    this.refusedDelete,
+  });
+
+  static const none = _Unparked(sent: 0, deletedForGood: false);
+
+  /// Changes that became pending.
+  final int sent;
+
+  /// One of them deletes the mail for good.
+  final bool deletedForGood;
+
+  /// A delete for good that failed instead: the mail arrived elsewhere
+  /// than where the user deleted it.
+  final PendingChangeRow? refusedDelete;
+}
+
 /// [row]'s JSON payload, or null when it is not a JSON object.
 Map<String, dynamic>? _decodePayload(PendingChangeRow row) {
   try {
@@ -308,6 +347,8 @@ extension _ChangeQueue on EmailRepositoryImpl {
       payload = _stampJmapId(payload, email?.srvJmapId);
       payload = await _stampUidValidity(accountId, resourceId, payload);
       payload = await _markUidAfterQueuedMove(resourceId, payload);
+    } else if (shadowOf == null) {
+      payload = _markParked(payload, email.mailboxPath);
     }
     final supersede = shadowOf == null &&
         (supersedeFailures ?? Zone.current[_automaticChangeKey] != true);
@@ -448,12 +489,20 @@ extension _ChangeQueue on EmailRepositoryImpl {
   /// the destination of the change before it for the later ones, which
   /// then find the mail by Message-ID, [_markUidAfterQueuedMove]), and
   /// carries the server id, as one queued now would. They keep their ids
-  /// (their order, and Undo's references). Returns how many.
-  Future<int> _unparkOps(String emailId) => _db.transaction(() async {
+  /// (their order, and Undo's references).
+  ///
+  /// A move into the folder the mail is in already is dropped (nothing to
+  /// send). A delete for good is sent only when the mail arrived in the
+  /// inbox or is in the folder the user deleted it from ([_parkedShownInKey]):
+  /// a server-side filter may have filed it elsewhere (Junk, Gmail's All
+  /// Mail, where an expunge removes every label), and deleting that for
+  /// good was not what the user saw. Such a delete fails instead, so the
+  /// mail shows again and stays listed with the change.
+  Future<_Unparked> _unparkOps(String emailId) => _db.transaction(() async {
         final row = await (_db.select(_db.emails)
               ..where((t) => t.id.equals(emailId)))
             .getSingleOrNull();
-        if (row == null || await _hasNoServerCopy(row)) return 0;
+        if (row == null || await _hasNoServerCopy(row)) return _Unparked.none;
         final parked = await (_db.select(_db.pendingChanges)
               ..where(
                 (t) =>
@@ -461,9 +510,39 @@ extension _ChangeQueue on EmailRepositoryImpl {
               )
               ..orderBy([(t) => OrderingTerm.asc(t.id)]))
             .get();
-        var at = row.srvMailboxPath ?? row.mailboxPath;
+        final arrival = row.srvMailboxPath ?? row.mailboxPath;
+        final arrivalIsInbox =
+            await _mailboxRole(row.accountId, arrival) == 'inbox';
+        var at = arrival;
+        var sent = 0;
+        var deletedForGood = false;
+        PendingChangeRow? refusedDelete;
         for (final op in parked) {
           final payload = _decodePayload(op) ?? <String, dynamic>{};
+          final shownIn = payload.remove(_parkedShownInKey);
+          if (op.changeType == 'move' &&
+              payload['dest'] == at &&
+              payload['clearSnooze'] != true) {
+            await (_db.delete(_db.pendingChanges)
+                  ..where((t) => t.id.equals(op.id)))
+                .go();
+            continue;
+          }
+          if (op.changeType == 'delete' && !arrivalIsInbox && shownIn != at) {
+            await (_db.update(_db.pendingChanges)
+                  ..where((t) => t.id.equals(op.id)))
+                .write(
+              PendingChangesCompanion(
+                state: const Value(_failedState),
+                lastError: Value(
+                  'the delivered mail arrived in $arrival, not where it was '
+                  'deleted: not deleted for good',
+                ),
+              ),
+            );
+            refusedDelete = op;
+            continue;
+          }
           if (payload.containsKey('uid')) payload['uid'] = row.srvUid ?? 0;
           for (final key in const ['mailboxPath', 'src']) {
             if (payload.containsKey(key)) payload[key] = at;
@@ -484,12 +563,18 @@ extension _ChangeQueue on EmailRepositoryImpl {
               payload: Value(stamped),
             ),
           );
+          sent++;
+          if (op.changeType == 'delete') deletedForGood = true;
           if (payload['dest'] case final String dest
               when _locationChangeTypes.contains(op.changeType)) {
             at = dest;
           }
         }
-        return parked.length;
+        return _Unparked(
+          sent: sent,
+          deletedForGood: deletedForGood,
+          refusedDelete: refusedDelete,
+        );
       });
 
   /// Deletes failed changes of [resourceId] that a new [changeType] change
@@ -580,6 +665,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
   /// There the UID may name another mail. The move's answer replaces it
   /// ([_FlushImap._repointQueuedChanges]); a change still marked when it is applied
   /// finds its mail by Message-ID instead, or fails ([_FlushImap._currentImapUid]).
+  ///
+  /// Since phase 4b the rule is the location overlay's: the payload's
+  /// folder is not where the server has the row's mail as last read
+  /// (`srv_mailbox_path`). That covers a queued move, a counterpart twin
+  /// shown in a folder through a shadow and an acked move whose new UID
+  /// was never learnt (all keep the source's UID; acting on it in the
+  /// shown folder would hit another mail), and leaves alone an acked move
+  /// whose new location is recorded. Only a row without a recorded server
+  /// folder falls back to the queued moves into the payload's folder.
   Future<String> _markUidAfterQueuedMove(
     String resourceId,
     String payload,
@@ -593,19 +687,26 @@ extension _ChangeQueue on EmailRepositoryImpl {
     if (map['uid'] is! int) return payload;
     final path = map['mailboxPath'] ?? map['src'];
     if (path is! String) return payload;
-    // Also an acked move still waiting for its destination copy (its new
-    // UID was never learnt, `lease_until` set, SYNC-REDESIGN.md §4.5): the
-    // row's UID is still the source's.
-    final moves = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.resourceId.equals(resourceId) &
-                (t.state.isIn(_liveStates) |
-                    (t.state.equals(_ackedState) & t.leaseUntil.isNotNull())) &
-                t.changeType.isIn(_locationChangeTypes),
-          ))
-        .get();
-    if (!moves.any((m) => _decodePayload(m)?['dest'] == path)) return payload;
+    final srv = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.srvMailboxPath])
+          ..where(_db.emails.id.equals(resourceId)))
+        .getSingleOrNull();
+    final srvPath = srv?.read(_db.emails.srvMailboxPath);
+    if (srvPath != null) {
+      if (srvPath == path) return payload;
+    } else {
+      final moves = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(resourceId) &
+                  t.state.isIn(_liveStates) &
+                  t.changeType.isIn(_locationChangeTypes),
+            ))
+          .get();
+      if (!moves.any((m) => _decodePayload(m)?['dest'] == path)) {
+        return payload;
+      }
+    }
     map[_uidAfterMoveKey] = true;
     if (map['messageId'] == null) {
       final messageId = await _messageIdOf(resourceId);
@@ -1045,7 +1146,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
       final email = await (_db.select(_db.emails)
             ..where((t) => t.id.equals(current.resourceId)))
           .getSingleOrNull();
-      final parked = email != null && await _hasNoServerCopy(email);
+      final wasParked =
+          _decodePayload(current)?.containsKey(_parkedShownInKey) ?? false;
+      // A change that was parked (built for a row without a server copy:
+      // UID 0, the row's own folder) is never sent as it is: its row is
+      // gone, so it stays failed; or it waits again for the server copy;
+      // or, the copy being there by now, it is rewritten for it below.
+      if (wasParked && email == null) return;
+      final parked =
+          email != null && (wasParked || await _hasNoServerCopy(email));
       // A fresh row at the end of the queue (new autoincrement id): the
       // retried change must not jump ahead of changes queued after it, or it
       // could undo the user's newer intent for the same mail.
@@ -1061,6 +1170,9 @@ extension _ChangeQueue on EmailRepositoryImpl {
             ),
           );
       await _deletePendingChange(current);
+      if (parked && !await _hasNoServerCopy(email)) {
+        await _unparkOps(email.id);
+      }
       // The retried change folds again: the folder, read/star and snooze.
       await _refoldAndRethread(current.resourceId);
     });

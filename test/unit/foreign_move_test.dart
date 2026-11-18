@@ -435,7 +435,8 @@ void main() {
             accountId: _account.id,
             mailboxPath: 'Sent',
             uid: 0,
-            receivedAt: DateTime(2024),
+            // Recent: an old one would expire after the inbox sync.
+            receivedAt: now,
             messageId: const Value('local@test'),
             serverEmailId: const Value('E-a@test'),
             isLocal: const Value(true),

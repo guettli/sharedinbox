@@ -459,6 +459,63 @@ void main() {
     });
   });
 
+  group('a note deleted for good before its delivery', () {
+    Future<Email> deleteNoteForGood(_Repos r) async {
+      // No Trash folder: the delete is for good, parked, the note hidden.
+      final virtual = await _enqueueSelfNote(r);
+      await r.emails.deleteEmail(virtual.id);
+      expect(await _inbox(r), isEmpty);
+      expect(await _pendingChanges(r), [('delete', 'parked')]);
+      return virtual;
+    }
+
+    test('is sent when the mail arrives in the inbox', () async {
+      final r = await _reposWithInbox();
+      final virtual = await deleteNoteForGood(r);
+
+      await _arriveAndMatch(r, virtual.messageId!);
+
+      expect(await _pendingChanges(r), [('delete', 'pending')]);
+      expect(await _inbox(r), isEmpty);
+    });
+
+    test('fails when a server filter filed the mail elsewhere', () async {
+      final r = await _reposWithInbox();
+      await _seedMailbox(r.db, 'Junk', 'junk');
+      final virtual = await deleteNoteForGood(r);
+
+      await _arriveAndMatch(r, virtual.messageId!, mailboxPath: 'Junk');
+
+      // Not deleted for good: the mail shows where it is, and the delete
+      // is listed as failed.
+      final change = (await r.db.select(r.db.pendingChanges).get()).single;
+      expect(change.state, 'failed');
+      expect(change.lastError, contains('not deleted for good'));
+      final junk = await r.emails.observeEmails('acc-1', 'Junk').first;
+      expect(junk.single.id, virtual.id);
+      expect(await EmailStateWriter(r.db).consistencyProblems(), isEmpty);
+    });
+  });
+
+  test('a second copy with the same Message-ID does not match the row again',
+      () async {
+    final r = await _reposWithInbox();
+    final virtual = await _enqueueSelfNote(r);
+    await r.emails.setFlag(virtual.id, flagged: true);
+    await _arriveAndMatch(r, virtual.messageId!);
+
+    final second = await _arriveAndMatch(r, virtual.messageId!, uid: 43);
+
+    expect(
+      await (r.db.select(r.db.emails)..where((t) => t.id.equals(second)))
+          .getSingleOrNull(),
+      isNotNull,
+      reason: 'the row no longer waits: the second copy stays a row',
+    );
+    final change = (await r.db.select(r.db.pendingChanges).get()).single;
+    expect((jsonDecode(change.payload) as Map)['uid'], 42);
+  });
+
   group('expiry', () {
     test(
         'a virtual row unmatched after 7 days is dropped; its parked change '
@@ -467,14 +524,18 @@ void main() {
       final r = await _reposWithInbox(now: () => now);
       final virtual = await _enqueueSelfNote(r);
       await r.emails.setFlag(virtual.id, flagged: true);
+      // Runs after each successful inbox sync (never before it).
+      Future<void> expireAfterInboxSync() =>
+          EmailStateWriter(r.db, now: () => now)
+              .expireParked('acc-1', folder: 'INBOX', role: 'inbox');
 
       // Not yet.
       now = now.add(const Duration(days: 6));
-      await r.emails.flushPendingChanges('acc-1', 'pw');
+      await expireAfterInboxSync();
       expect((await _inbox(r)).single.id, virtual.id);
 
       now = now.add(const Duration(days: 2));
-      await r.emails.flushPendingChanges('acc-1', 'pw');
+      await expireAfterInboxSync();
       expect(await _inbox(r), isEmpty);
       final change = (await r.db.select(r.db.pendingChanges).get()).single;
       expect(change.state, 'failed');

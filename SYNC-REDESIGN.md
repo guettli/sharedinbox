@@ -1072,20 +1072,43 @@ As implemented, phase 4 is two PRs:
      (kind `virtual`, `moved` or `no_server_id`, with the merged row's id).
      The sync guard `_hasLocalMessages` became `_hasWaitingRows` (a local,
      gone, or location-less row exists).
-   - **Expiry** (`EmailStateWriter.expireParked`, at the start of every
-     flush). A virtual row stored more than 7 days ago is dropped (its
+   - **Expiry** (`EmailStateWriter.expireParked`, right after a
+     successful sync of a folder, never before it: a week offline must not
+     drop a note whose copy the very next sync stores; a note only after
+     an inbox sync, a virtual Sent copy after a Sent sync, a parked change
+     of a JMAP row after a sync of its folder). A virtual row stored more
+     than 7 days ago is dropped (its
      body cascades; App Log warn `email.virtual_expired`) and its parked
      ops become `failed` ("the server copy of this mail never arrived"),
      listed without their row; a parked op of another row older than 7
      days becomes `failed` ("the server id of this mail never became
      known") and stops folding, the row stays (App Log warn
-     `pending_change.parked_expired` for each).
+     `pending_change.parked_expired` for each). Retry of such a change
+     (its payload carries `parkedShownIn`, the mark of a parked change)
+     stays failed when the row is gone, parks it again while the row has
+     no server copy, and otherwise rewrites it for the copy (`_unparkOps`),
+     never sending UID 0. On upgrade, virtual rows older than 7 days are
+     dropped after the first inbox sync (each logged).
+   - **In-place match, review fixes.** `_matchInPlace` re-checks in its
+     transaction that the kept row still waits (`_isWaiting`) and that the
+     stored row is a server row with the same Message-ID, so two isolates
+     or two copies cannot match it twice. `_unparkOps` drops a parked move
+     into the folder the mail arrived in, and sends a parked delete for
+     good only when the mail arrived in the inbox or is in the folder the
+     user deleted it from (`parkedShownIn`): a mail a server filter filed
+     into Junk or Gmail's All Mail (where an expunge removes every label)
+     is not deleted; that delete fails, the mail shows, and
+     `email.local_row_matched` says so (and says "deleted for good" when it
+     is).
    - **Virtual row creation** moved into the writer (`insertLocalRow`,
      `writeLocalRowHeaders` with a `LocalRowHeaders` value, the
      `create_local` step): `local_rows.dart` builds no `EmailsCompanion`
      any more. The own folder and keywords are still stored as `srv_*`
      with stamp 0 at insert (the columns are NOT NULL; no read ever writes
-     a virtual row, and the match replaces them).
+     a virtual row, and the match replaces them). The writer refuses a
+     `LocalRowHeaders` that is virtual with a server location (or not
+     virtual without one), and `writeLocalRowHeaders` writes only a
+     virtual row or the row at the server location the headers name.
    - **Counterpart shadow ops.** The mirroring (`_mirrorMove/Delete/
      SnoozeToCounterparts`, the bulk delete) runs the twin's action inside
      `_asShadowOf(primary)`, where the primary is the latest change queued
@@ -1108,7 +1131,27 @@ As implemented, phase 4 is two PRs:
      folder; `locationAgreesWith` accepts gone or any other folder)
      instead of deleting the row: an Undo or failure of the primary shows
      the twin again, with its body. Shadows are hidden from the Pending
-     Changes screen, the failed list and the unsynced-work count.
+     Changes screen, the failed list and the unsynced-work count. A
+     shadowed action writes no App Log line for the twin (the primary's
+     says what the user did) and does not clear the twin's local-only
+     snooze source (nothing would restore it when the primary is
+     cancelled). An acked shadow move waits for the destination copy like
+     an own one (below), so an IMAP twin whose INBOX no longer lists the
+     mail keeps its id instead of hiding and coming back as a new row.
+   - **UIDs of a twin or a waiting row (review blocker).** A twin shown
+     in a folder through a shadow, or a row whose acked move never learnt
+     its new UID, keeps the source's UID; an IMAP change queued on it
+     (star, move, delete for good, the wake-up's snooze cleanup) built
+     from the shown folder and that UID would act on another mail there.
+     `_markUidAfterQueuedMove` therefore marks `uidAfterMove` whenever the
+     payload's folder is not the row's `srv_mailbox_path` (or a foldable
+     move of any state puts it there), and the flush finds the mail by
+     Message-ID, or fails the change.
+   - **Primary and shadow** are queued in two transactions (the mirroring
+     needs the account list, a watch query that would wait on a
+     transaction it runs in): a crash between them leaves the twin
+     without the shadow, which only delays its showing the change until
+     its account reads it.
    - **Appear side of carry-over.** In `_settleAcked`, an acked move,
      snooze or unsnooze (not a shadow) whose row becomes gone after the
      ack while `srv_mailbox_path` is not its destination, whose row has a
@@ -1121,8 +1164,15 @@ As implemented, phase 4 is two PRs:
      rule keeps the row. The destination's next sync matches the new row
      in place (`awaitingRowFor`: gone, an acked op waiting with that
      destination, same Message-ID, unique), and the op settles as
-     confirmed. `expireAwaitedMoves` (flush start) resolves an expired
-     wait as satisfied (`op.gone`), the row is hidden and cleaned up. A
+     confirmed. When the destination's copy is stored already (that
+     folder synced first), the absence carries the row over at once
+     (`_settleGoneRows`: `waitingDestinationOf`, `storedCopyIn`), so the
+     mail never shows twice. A successful sync of the destination that
+     started after the wait began and did not match the mail ends it
+     (`endAwaitedMoves`: another client moved it on or deleted it), and
+     `expireAwaitedMoves` ends any wait older than the window; both run
+     after a folder sync, not in the flush. An ended wait resolves as
+     satisfied (`op.gone`), the row is hidden and cleaned up. A
      change queued on a waiting row is marked `uidAfterMove`
      (`_markUidAfterQueuedMove` counts the waiting acked move), so the
      flush finds the mail by Message-ID instead of acting on the source's
@@ -1132,12 +1182,21 @@ As implemented, phase 4 is two PRs:
      `unread_seq`; `observeMailboxes` adds `unreadDeltaSql`: over the rows
      with a pending/inflight/stuck/parked/shadow op or one acked after
      `unread_seq`, unread rows shown in the folder minus unread rows the
-     server has there (`srv_*`, not gone), virtual rows excluded; never
-     below 0. It covers read/unread changes and moves, deletes and snoozes
-     of unread mail. Approximation: the delta compares a row's whole
-     effective state with its whole `srv_*` state, so a row with one
-     change the count reflects and another it does not can be off by one
-     until the reflected one drops.
+     server has there (`srv_*`, not gone), virtual rows excluded. It
+     covers read/unread changes and moves, deletes and snoozes of unread
+     mail. The v74 migration stamps the stored counts with the current
+     read sequence, so changes acked before the upgrade are not counted
+     on top of counts that reflect them. Limits: `srv_*` is the server's
+     state as last read, not as of the count; a row read again after the
+     count (its change confirmed and dropped) no longer adjusts it, so the
+     folder shows the older count until the next count read (once per sync
+     cycle); a row with one change the count reflects and another it does
+     not can be off by one. A negative sum (a count read before mail it
+     now has) shows 0 and logs `mailbox.unread_negative` once per folder.
+     `EXPLAIN QUERY PLAN`: the delta is driven from the foldable ops
+     (covering index `pending_changes_resource_state`, then the `emails`
+     primary key), one probe per queued change and mailbox when it reruns
+     on a write; no new index.
    - **Enforcement.** The allow-list of `check_email_writes.sh` loses the
      two `local_rows.dart` members (3 left: the new-row inserts of the
      IMAP fetch and the JMAP upsert, and Undo's restore); fixtures for an
@@ -1163,6 +1222,15 @@ As implemented, phase 4 is two PRs:
      of #565 now also checks the row keeps its id and the parked star
      reaches the server. The stale-answer fuzz moves the app's clock past
      the wait when it settles (time passes while the queue drains).
+     Review round: IMAP-twin tests (a star or move queued on a twin shown
+     through a shadow is marked `uidAfterMove`; an acked shadow waits),
+     `waiting_rows_sync_test.dart` (through the real IMAP sync: a note
+     older than the expiry matched by the inbox sync that stores its
+     delivery, the immediate carry-over when the destination synced first,
+     the end of a wait when the destination's sync finds no copy), the
+     parked delete for good (sent for an inbox arrival, refused for Junk),
+     a second copy not matching a row again, Retry of an expired parked
+     change, and a negative unread sum.
    - **Not done, documented.**
      - A foreign move whose source folder is synced before the
        destination still deletes the row and stores a new one (2c's
@@ -1178,6 +1246,15 @@ As implemented, phase 4 is two PRs:
      - A failed primary takes its shadows along, and its Retry does not
        re-create them: the twin shows the change again only after the
        retried change is acked and the counterpart reads it.
+     - A move mirrored onto a twin before v74 is a real change of the
+       twin's account, and Undo actions stored before v74 captured it.
+       Undo after the upgrade still cancels it with the original when
+       nothing was sent. When the twin's change was sent but the
+       original was cancelled, `moveEmail` back queues nothing on the
+       source row (it is in place already) and so mirrors nothing: the
+       twin stays where its sent change put it, and the user moves it
+       back by hand. Only Undo actions from before the upgrade can hit
+       this.
      - Undo's `restoreEmails` stays for rows sync cleaned up (§2 "Former
        writers"); with hidden rows it is rarely needed.
 

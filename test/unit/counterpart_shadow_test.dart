@@ -5,6 +5,8 @@
 // is acked, dropped or failed with its primary. Also the unread-count delta
 // (§7), which counts the changes a stored server count does not reflect.
 
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -268,6 +270,71 @@ void main() {
     await expectConsistent();
   });
 
+  group('an IMAP twin shown in a folder through a shadow', () {
+    setUp(() async {
+      // The user archives on the JMAP account: the IMAP twin shows Archive,
+      // while its server location is still INBOX, UID 5.
+      await emails.moveEmail('jmap-p:e1', 'mbox-arch');
+      expect((await row('imap-p:5')).mailboxPath, 'Archive');
+      expect((await row('imap-p:5')).srvMailboxPath, 'INBOX');
+    });
+
+    Future<Map<String, dynamic>> lastPayloadOf(String accountId) async =>
+        jsonDecode((await opsOf(accountId)).last.payload)
+            as Map<String, dynamic>;
+
+    test(
+        'a star queued on it finds the mail by Message-ID, not by the UID '
+        'of INBOX', () async {
+      await emails.setFlag('imap-p:5', flagged: true);
+
+      final payload = await lastPayloadOf('imap-p');
+      expect(payload['mailboxPath'], 'Archive');
+      expect(payload['uidAfterMove'], isTrue);
+      expect(payload['messageId'], '<abc@example.com>');
+    });
+
+    test('so does a move out of it', () async {
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'imap-p:Projects',
+              accountId: 'imap-p',
+              path: 'Projects',
+              name: 'Projects',
+            ),
+          );
+      await emails.moveEmail('imap-p:5', 'Projects');
+
+      final payload = await lastPayloadOf('imap-p');
+      expect(payload['mailboxPath'], 'Archive');
+      expect(payload['uidAfterMove'], isTrue);
+    });
+
+    test(
+        'once acked, it waits for the IMAP Archive copy instead of hiding '
+        'the twin when INBOX no longer lists it', () async {
+      final primary = (await opsOf('jmap-p')).single;
+      await (db.update(db.pendingChanges)
+            ..where((t) => t.id.equals(primary.id)))
+          .write(const PendingChangesCompanion(state: Value('inflight')));
+      final writer = EmailStateWriter(db);
+      await writer.ack(
+        await (db.select(db.pendingChanges)
+              ..where((t) => t.id.equals(primary.id)))
+            .getSingle(),
+      );
+
+      final read = await writer.beginRead('imap-p');
+      await read.markGone(['imap-p:5']);
+
+      final shadow = (await opsOf('imap-p')).single;
+      expect(shadow.state, 'acked');
+      expect(shadow.leaseUntil, isNotNull);
+      expect((await row('imap-p:5')).mailboxPath, 'Archive');
+      await expectConsistent();
+    });
+  });
+
   group('unread-count delta', () {
     late MailboxRepositoryImpl mailboxes;
 
@@ -300,6 +367,16 @@ void main() {
     test('a queued move of an unread mail moves its count', () async {
       await emails.moveEmail('imap-p:5', 'Archive');
       expect(await unread(), {'Archive': 1, 'INBOX': 2});
+    });
+
+    test('a count read before a mail arrived does not go below 0', () async {
+      // The stored count (3) is older than the mails: none is unread on the
+      // server as last read, so a queued move of an unread row would make
+      // INBOX -1 below a count that never had it.
+      await (db.update(db.mailboxes)..where((t) => t.id.equals('imap-p:INBOX')))
+          .write(const MailboxesCompanion(unreadCount: Value(0)));
+      await emails.moveEmail('imap-p:5', 'Archive');
+      expect(await unread(), {'Archive': 1, 'INBOX': 0});
     });
 
     test('an acked change counts until a count read after the ack', () async {

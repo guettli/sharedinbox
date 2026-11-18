@@ -432,24 +432,59 @@ class EmailStateWriter {
     required String accountId,
     required String mailboxPath,
     required ServerKeywords keywords,
-  }) =>
-      _db.into(_db.emails).insert(
-            newRow(
-              headers._companion,
-              id: id,
-              accountId: accountId,
-              mailboxPath: mailboxPath,
-              keywords: keywords,
-              seq: 0,
-            ),
-          );
+  }) {
+    _checkLocalRow(headers);
+    return _db.into(_db.emails).insert(
+          newRow(
+            headers._companion,
+            id: id,
+            accountId: accountId,
+            mailboxPath: mailboxPath,
+            keywords: keywords,
+            seq: 0,
+          ),
+        );
+  }
 
   /// Writes [headers] over row [emailId] (the Sent copy of a later send of
   /// the same message, or the row a sync already stored for it): header
-  /// columns and server location facts, no overlay column.
-  Future<void> writeLocalRowHeaders(String emailId, LocalRowHeaders headers) =>
-      (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-          .write(headers._companion);
+  /// columns and server location facts, no overlay column. Only a virtual
+  /// row, or the row of the very server location [headers] name: it never
+  /// turns another server row into a virtual one or moves it elsewhere.
+  /// Returns whether a row was written.
+  Future<bool> writeLocalRowHeaders(
+    String emailId,
+    LocalRowHeaders headers,
+  ) async {
+    _checkLocalRow(headers);
+    final uid = headers.uid;
+    final jmapId = headers.srvJmapId;
+    final count = await (_db.update(_db.emails)
+          ..where(
+            (t) =>
+                t.id.equals(emailId) &
+                (headers.isLocal
+                    ? t.isLocal.equals(true)
+                    : (uid != null
+                        ? t.srvUid.equals(uid)
+                        : t.srvJmapId.equals(jmapId!))),
+          ))
+        .write(headers._companion);
+    return count > 0;
+  }
+
+  /// A local row is virtual exactly when it has no server location, and
+  /// only a virtual row is a virtual Sent copy.
+  static void _checkLocalRow(LocalRowHeaders headers) {
+    final located = headers.uid != null || headers.srvJmapId != null;
+    if (headers.isLocal == located ||
+        (headers.isVirtualSentCopy && !headers.isLocal)) {
+      throw ArgumentError(
+        'A local row is virtual (isLocal) exactly when no server location '
+        'is given',
+      );
+    }
+  }
 
   /// Gives up on what waited [parkedExpiry] for a server copy: a virtual
   /// row of [accountId] stored before then is dropped (its body cascades)
@@ -458,17 +493,30 @@ class EmailStateWriter {
   /// mail whose server id never became known) queued before then becomes
   /// `failed` and stops folding. Returns what it did, for the App Log and
   /// the thread aggregates.
-  Future<ParkedExpiry> expireParked(String accountId) =>
+  ///
+  /// Run right after a successful sync of [folder] (role [role]), never
+  /// before it: the copy the sync may just have matched is not given up
+  /// on. A note to self expires only after an inbox sync, a virtual Sent
+  /// copy only after a Sent sync, a parked change of a JMAP row only after
+  /// a sync of that row's folder.
+  Future<ParkedExpiry> expireParked(
+    String accountId, {
+    required String folder,
+    required String? role,
+  }) =>
       _db.transaction(() async {
         final cutoff = _now().subtract(parkedExpiry);
-        final virtual = await (_db.select(_db.emails)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.isLocal.equals(true) &
-                    t.receivedAt.isSmallerThanValue(cutoff),
-              ))
-            .get();
+        final virtual = role != 'inbox' && role != 'sent'
+            ? <Email>[]
+            : await (_db.select(_db.emails)
+                  ..where(
+                    (t) =>
+                        t.accountId.equals(accountId) &
+                        t.isLocal.equals(true) &
+                        t.isVirtualSentCopy.equals(role == 'sent') &
+                        t.receivedAt.isSmallerThanValue(cutoff),
+                  ))
+                .get();
         final failedOps = <PendingChangeRow>[];
         Future<void> fail(PendingChangeRow op, String why) async {
           final count = await (_db.update(_db.pendingChanges)
@@ -498,14 +546,17 @@ class EmailStateWriter {
               .go();
           await deleteRow(row.id);
         }
-        final stale = await (_db.select(_db.pendingChanges)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.state.equals('parked') &
-                    t.createdAt.isSmallerThanValue(cutoff),
-              ))
-            .get();
+        final stale = [
+          for (final op in await (_db.select(_db.pendingChanges)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(accountId) &
+                      t.state.equals('parked') &
+                      t.createdAt.isSmallerThanValue(cutoff),
+                ))
+              .get())
+            if (await _isOfNonLocalRowIn(op.resourceId, folder)) op,
+        ];
         final refoldIds = <String>{};
         for (final op in stale) {
           await fail(op, 'the server id of this mail never became known');
@@ -520,7 +571,109 @@ class EmailStateWriter {
         );
       });
 
+  /// Whether row [emailId] is not a virtual row and the server has (or
+  /// had) it in [folder].
+  Future<bool> _isOfNonLocalRowIn(String emailId, String folder) async {
+    final row = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.id])
+          ..where(
+            _db.emails.id.equals(emailId) &
+                _db.emails.isLocal.equals(false) &
+                _db.emails.srvMailboxPath.equals(folder),
+          ))
+        .getSingleOrNull();
+    return row != null;
+  }
+
   // ── The appear side of carry-over (SYNC-REDESIGN.md §4.5) ───────────────
+
+  /// Ends the waits of acked moves of [accountId] into [folder] that began
+  /// no later than [syncStarted], when a successful sync of [folder] that
+  /// started then did not match their mail (an absence read began the
+  /// wait; the sync's fetch would have carried the row over): the mail is
+  /// not there (another client moved it on, or deleted it). Each is dropped
+  /// (App Log `op.gone`) and its row hidden, for [cleanUpGone]. Returns the
+  /// rows re-folded.
+  Future<Set<String>> endAwaitedMoves(
+    String accountId,
+    String folder,
+    DateTime syncStarted,
+  ) =>
+      _db.transaction(() async {
+        final ops = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.state.equals('acked') &
+                    t.leaseUntil.isSmallerOrEqualValue(
+                      syncStarted.add(awaitAppearWindow),
+                    ),
+              ))
+            .get();
+        final rows = <String>{};
+        for (final op in ops) {
+          if (_payloadOf(op)?['dest'] != folder) continue;
+          if (await _dropWaiting(op)) rows.add(op.resourceId);
+        }
+        await refoldAll(rows);
+        return rows;
+      });
+
+  /// Drops [op], an acked move waiting for its destination copy, when its
+  /// row is still gone (else a read placed the mail meanwhile and settles
+  /// it); logs `op.gone`. Returns whether it dropped it.
+  Future<bool> _dropWaiting(PendingChangeRow op) async {
+    final row = await (_db.selectOnly(_db.emails)
+          ..addColumns([_db.emails.srvMailboxPath, _db.emails.srvGone])
+          ..where(_db.emails.id.equals(op.resourceId)))
+        .getSingleOrNull();
+    if (row != null && !(row.read(_db.emails.srvGone) ?? false)) return false;
+    await _dropOp(op);
+    if (op.origin == null) _logGone(op, row?.read(_db.emails.srvMailboxPath));
+    return true;
+  }
+
+  /// The destination of the acked move row [emailId] waits with for its
+  /// destination copy, or null when it waits for none.
+  Future<String?> waitingDestinationOf(String emailId) async {
+    final ops = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(emailId) &
+                t.state.equals('acked') &
+                t.leaseUntil.isNotNull(),
+          ))
+        .get();
+    for (final op in ops) {
+      if (_payloadOf(op)?['dest'] case final String dest) return dest;
+    }
+    return null;
+  }
+
+  /// The one stored, not gone, server row of [accountId] in [folder] with
+  /// Message-ID [messageId] (either stored form) other than [exceptId];
+  /// null when there is none or more than one.
+  Future<Email?> storedCopyIn(
+    String accountId,
+    String folder,
+    String messageId, {
+    required String exceptId,
+  }) async {
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.isLocal.equals(false) &
+                t.srvGone.equals(false) &
+                t.srvMailboxPath.equals(folder) &
+                t.id.equals(exceptId).not() &
+                (t.messageId.equals(messageId) |
+                    t.messageId.equals('<$messageId>')),
+          )
+          ..limit(2))
+        .get();
+    return rows.length == 1 ? rows.single : null;
+  }
 
   /// Gives up waiting for the destination copy of the acked moves of
   /// [accountId] whose mail left its source with no new location known,
@@ -540,16 +693,7 @@ class EmailStateWriter {
             .get();
         final rows = <String>{};
         for (final op in ops) {
-          final row = await (_db.selectOnly(_db.emails)
-                ..addColumns([_db.emails.srvMailboxPath, _db.emails.srvGone])
-                ..where(_db.emails.id.equals(op.resourceId)))
-              .getSingleOrNull();
-          if (row != null && !(row.read(_db.emails.srvGone) ?? false)) {
-            continue;
-          }
-          await _dropOp(op);
-          _logGone(op, row?.read(_db.emails.srvMailboxPath));
-          rows.add(op.resourceId);
+          if (await _dropWaiting(op)) rows.add(op.resourceId);
         }
         await refoldAll(rows);
         return rows;
@@ -1556,7 +1700,6 @@ class EmailStateWriter {
             newest &&
             hasLocation &&
             op.changeType != 'delete' &&
-            op.origin == null &&
             dest is String &&
             dest != srvPath) {
           if (op.leaseUntil == null) {
@@ -1574,7 +1717,7 @@ class EmailStateWriter {
         // move's mail is gone.
         await _dropOp(op);
         dropped = true;
-        if (hasLocation && op.changeType != 'delete') {
+        if (hasLocation && op.changeType != 'delete' && op.origin == null) {
           _logGone(op, srvPath);
         }
         continue;

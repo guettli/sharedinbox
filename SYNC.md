@@ -492,10 +492,19 @@ the same statement and never rewrites the whole row.
   and exactly one row of the account waits for it in that folder, the waiting row
   takes the new row's place in place (it keeps its id; the new row is merged into it;
   App Log warn `email.local_row_matched`, kind `moved`) and the move is confirmed.
-  When nothing appears in time, the flush resolves it as satisfied (`op.gone`), the
-  row is hidden and cleaned up, and a copy stored later is a row of its own. A mail
-  without a Message-ID cannot be matched and is not kept waiting. A change queued
-  on a waiting row finds the mail by Message-ID (its UID is still the source's).
+  When the destination's copy is stored already (that folder synced first), the
+  row carries over at once, so the mail never shows twice. A sync of the destination
+  that started after the wait began and did not store the mail ends the wait
+  (another client moved it on or deleted it), as does the end of the hour; both
+  run after a folder sync. An ended wait resolves as satisfied (`op.gone`), the row
+  is hidden and cleaned up, and a copy stored later is a row of its own. A mail
+  without a Message-ID cannot be matched and is not kept waiting.
+- **UIDs of rows shown elsewhere than the server has them.** A row shown in a folder
+  that is not its `srv_mailbox_path` (a queued move, a counterpart's shadow, an
+  acked move waiting for its destination copy) still carries the source's UID. An
+  IMAP change queued on it (star, move, delete, the wake-up's snooze cleanup) is
+  marked `uidAfterMove` and finds the mail by Message-ID in the shown folder, or
+  fails; it never acts on that UID there, where it may name another mail.
 - **Counterpart shadows** (phase 4b, schema v74). When one server is added twice
   (IMAP and JMAP), a move, delete, snooze or unsnooze of a mail on one account gives
   the twin row of the other account a *shadow* of the queued change (`state =
@@ -511,8 +520,11 @@ the same statement and never rewrites the whole row.
   `awayFrom` (it agrees with a read that finds the mail gone or elsewhere) instead
   of deleting the row. The mirroring takes the latest change queued on the source
   row as the primary; when the action queued nothing (the mail is in the destination
-  already), nothing is mirrored. Changes mirrored before v74 are real changes and
-  flush as before.
+  already), nothing is mirrored. A shadowed action writes no App Log line for the
+  twin and does not clear its local-only snooze source. An acked shadow move waits
+  for the destination copy like an own one, so an IMAP twin keeps its id. Changes
+  mirrored before v74 are real changes and flush as before; an Undo stored before
+  the upgrade whose twin change was sent no longer reverses the twin.
 - **Unread counts** (phase 4b, §7 of SYNC-REDESIGN.md). The stored count is the
   server's (IMAP `STATUS`, JMAP `unreadEmails`), with the read sequence taken before
   that read (`mailboxes.unread_seq`, v74). The count shown (`observeMailboxes`) adds
@@ -521,8 +533,11 @@ the same statement and never rewrites the whole row.
   shown in the folder minus the unread rows the server has there as last read
   (`srv_*`; virtual rows left out). A read/unread change, and a move, delete or
   snooze of unread mail, count at once and once; a count read after the ack does
-  not count them again. Approximate when one row has changes on both sides of the
-  count's read.
+  not count them again. The v74 upgrade stamps the stored counts with the current
+  read sequence. Limits: `srv_*` is the server's state as last read, not as of the
+  count, so a row read again after the count no longer adjusts it until the next
+  count read; a row with changes on both sides of the count's read can be off by
+  one. A negative sum shows 0 and logs `mailbox.unread_negative` once per folder.
 
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
   overlays it deletes rows (`deleteRow`, `deleteRowsOf`, `cleanUpGone`), fills header
@@ -734,7 +749,12 @@ a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
 - **Parked changes**: a user change of a virtual row (star, read, move, snooze, delete) is
   queued as a `parked` change (§6, §6a): it folds, so the row shows it, but it is not
   flushed; Undo cancels it like a pending one. A delete for good hides the row (it is
-  not deleted), so the delivered mail is deleted too once it arrives.
+  not deleted), so the delivered mail is deleted too once it arrives — but only when
+  it arrives in the inbox or in the folder the note was deleted from; one a server
+  filter filed elsewhere (Junk, Gmail's All Mail) is not deleted for good: the
+  delete fails and the mail shows. Retry of a parked change that expired is
+  rewritten for the server copy, waits again without one, and stays failed when the
+  row is gone.
 - **Matched in place on arrival** (`_matchArrival`): when sync stores the real message,
   it is paired with the virtual row by Message-ID and role (a Sent-folder arrival only
   with the virtual Sent copy, any other arrival, also one a server-side filter filed
@@ -744,10 +764,14 @@ a row to `emails` with `is_local = 1`, `uid = 0` and that Message-ID.
   (`_mergeDuplicateRow`), its body replacing the draft text. The parked changes become
   `pending`, rewritten for the server copy (UID, folder, UIDVALIDITY, JMAP id; a later
   change addresses the mail where the change before it puts it), and are flushed. App
-  Log warn `email.local_row_matched` names both rows. Notes need no migration — they
+  Log warn `email.local_row_matched` names both rows. The match re-checks in its
+  transaction that the row still waits, so it never happens twice. A parked move
+  into the folder the mail arrived in is dropped. Notes need no migration — they
   are keyed by Message-ID.
-- **Expiry**: a virtual row whose server copy did not arrive within 7 days is dropped at
-  the start of a flush (App Log warn `email.virtual_expired`, with its id and
+- **Expiry**: a virtual row whose server copy did not arrive within 7 days is dropped
+  right after a successful sync of the folder it would arrive in (a note: the inbox;
+  a Sent copy: Sent), never before it, so a week offline does not drop a note whose
+  copy the next sync stores (App Log warn `email.virtual_expired`, with its id and
   Message-ID), and its parked changes become `failed`, listed on the Pending Changes
   screen.
 

@@ -12,6 +12,7 @@ extension _Sync on EmailRepositoryImpl {
   ) async {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
+    final started = _now();
     // One sync run: a change one of its reads contradicts is given up only
     // on a read of a later run (SYNC.md §6a).
     final result = await _state.inSyncRun(() async {
@@ -22,6 +23,7 @@ extension _Sync on EmailRepositoryImpl {
           return _syncEmailsJmap(account, password, mailboxPath);
       }
     });
+    await _afterFolderSync(accountId, mailboxPath, started);
     // Sampled, at most every half hour per account (SYNC.md §6a). Awaited:
     // it is bounded (a few ms when due, one row read otherwise), and a
     // background isolate may end as soon as the sync returns.
@@ -31,6 +33,34 @@ extension _Sync on EmailRepositoryImpl {
       onRepaired: _refreshThreadsOf,
     );
     return result;
+  }
+
+  /// What waits for [mailboxPath]'s sync, which started at [started] and
+  /// succeeded (SYNC-REDESIGN.md §6, §4.5): an acked move into it whose
+  /// mail that sync did not store gives up waiting (the mail is not there);
+  /// one that waited [EmailStateWriter.awaitAppearWindow] gives up too; and
+  /// the virtual rows and parked changes this folder's sync could have
+  /// matched expire after [EmailStateWriter.parkedExpiry]. Never before the
+  /// sync: a week offline must not drop a note whose copy the next sync
+  /// stores.
+  Future<void> _afterFolderSync(
+    String accountId,
+    String mailboxPath,
+    DateTime started,
+  ) async {
+    final ended = {
+      ...await _state.endAwaitedMoves(accountId, mailboxPath, started),
+      ...await _state.expireAwaitedMoves(accountId),
+    };
+    for (final id in ended) {
+      await _rethreadRow(id);
+    }
+    if (ended.isNotEmpty) await _state.cleanUpGone(accountId);
+    await _expireParked(
+      accountId,
+      folder: mailboxPath,
+      role: await _mailboxRole(accountId, mailboxPath),
+    );
   }
 
   /// Refreshes the thread aggregates of the rows [emailIds] (the sampled
@@ -70,6 +100,18 @@ extension _Sync on EmailRepositoryImpl {
     List<Email> rows,
     Set<String> marked,
   ) async {
+    // A row whose acked move now waits for its destination copy, while
+    // sync already stored that copy (the destination synced first): it
+    // carries over at once instead of showing the mail twice.
+    for (final row in rows) {
+      if (!marked.contains(row.id)) continue;
+      final dest = await _state.waitingDestinationOf(row.id);
+      final mid = normaliseMessageId(row.messageId);
+      if (dest == null || mid == null) continue;
+      final copy =
+          await _state.storedCopyIn(accountId, dest, mid, exceptId: row.id);
+      if (copy != null) await _matchInPlace(row, copy.id, kind: 'moved');
+    }
     final deleted = (await _state.cleanUpGone(accountId)).toSet();
     final kept = <(Email, List<PendingChangeRow>)>[];
     for (final row in rows) {

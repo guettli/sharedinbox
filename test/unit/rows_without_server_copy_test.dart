@@ -46,6 +46,27 @@ void main() {
       expect(await writer.consistencyProblems(), isEmpty);
 
   group('a JMAP mail whose server id is unknown', () {
+    /// Sync stores the server copy (id `e7`) and matches it.
+    Future<void> storeServerCopyAndMatch() async {
+      await db.into(db.emails).insert(
+            EmailsCompanion.insert(
+              id: 'jmap-1:new',
+              accountId: 'jmap-1',
+              mailboxPath: 'mbox-in',
+              uid: 0,
+              receivedAt: DateTime(2024),
+              messageId: const Value('m1@example.com'),
+              srvJmapId: const Value('e7'),
+            ),
+          );
+      await emails.matchArrivalForTest(
+        'jmap-1',
+        'mbox-in',
+        'jmap-1:new',
+        'm1@example.com',
+      );
+    }
+
     setUp(() async {
       await db.into(db.emails).insert(
             EmailsCompanion.insert(
@@ -77,24 +98,7 @@ void main() {
     test('is filled in place by the stored copy; its change is sent then',
         () async {
       await emails.setFlag('jmap-1:old', flagged: true);
-      await db.into(db.emails).insert(
-            EmailsCompanion.insert(
-              id: 'jmap-1:new',
-              accountId: 'jmap-1',
-              mailboxPath: 'mbox-in',
-              uid: 0,
-              receivedAt: DateTime(2024),
-              messageId: const Value('m1@example.com'),
-              srvJmapId: const Value('e7'),
-            ),
-          );
-
-      await emails.matchArrivalForTest(
-        'jmap-1',
-        'mbox-in',
-        'jmap-1:new',
-        'm1@example.com',
-      );
+      await storeServerCopyAndMatch();
 
       expect(await row('jmap-1:new'), isNull);
       final kept = (await row('jmap-1:old'))!;
@@ -110,7 +114,7 @@ void main() {
       await emails.setFlag('jmap-1:old', flagged: true);
 
       now = now.add(const Duration(days: 8));
-      await emails.flushPendingChanges('jmap-1', 'pw');
+      await writer.expireParked('jmap-1', folder: 'mbox-in', role: 'inbox');
 
       final op = (await ops()).single;
       expect(op.state, 'failed');
@@ -118,6 +122,46 @@ void main() {
       final kept = (await row('jmap-1:old'))!;
       expect(kept.isFlagged, isFalse, reason: 'a failed change stops folding');
       await expectConsistent();
+    });
+
+    Future<PendingChangeRow> expiredFlag() async {
+      await emails.setFlag('jmap-1:old', flagged: true);
+      now = now.add(const Duration(days: 8));
+      await writer.expireParked('jmap-1', folder: 'mbox-in', role: 'inbox');
+      return (await ops()).single;
+    }
+
+    test(
+        'Retry of its expired change, once the copy is matched, sends it '
+        'rewritten for the copy', () async {
+      final failed = await expiredFlag();
+      await storeServerCopyAndMatch();
+
+      await emails.retryMutation(failed.id);
+
+      final op = (await ops()).single;
+      expect(op.state, 'pending');
+      final payload = jsonDecode(op.payload) as Map;
+      expect(payload['jmapId'], 'e7');
+      expect(payload.containsKey('parkedShownIn'), isFalse);
+      expect((await row('jmap-1:old'))!.isFlagged, isTrue);
+      await expectConsistent();
+    });
+
+    test(
+        'Retry of its expired change waits again without a copy, and stays '
+        'failed once the row is gone', () async {
+      final failed = await expiredFlag();
+
+      await emails.retryMutation(failed.id);
+      final again = (await ops()).single;
+      expect(again.state, 'parked');
+
+      await (db.update(db.pendingChanges)..where((t) => t.id.equals(again.id)))
+          .write(const PendingChangesCompanion(state: Value('failed')));
+      await writer.deleteRow('jmap-1:old');
+      await emails.retryMutation(again.id);
+      expect((await ops()).single.state, 'failed');
     });
   });
 
@@ -207,7 +251,8 @@ void main() {
 
     test('resolves as satisfied when nothing appears in time', () async {
       now = now.add(EmailStateWriter.awaitAppearWindow);
-      await emails.flushPendingChanges('acc-1', 'pw');
+      await writer.expireAwaitedMoves('acc-1');
+      await writer.cleanUpGone('acc-1');
 
       expect(await ops(), isEmpty);
       expect(await row('acc-1:a'), isNull, reason: 'hidden, then cleaned up');

@@ -375,7 +375,9 @@ extension _UserActions on EmailRepositoryImpl {
   /// (`clearSnooze`). Here only the local-only snooze source is cleared and
   /// the threads of both folders refreshed.
   Future<void> _applyLocalMove(Email row, String destMailboxPath) async {
-    await _state.writeSnoozedFrom(row.id, null);
+    // A shadow leaves the twin's local-only snooze source alone: when its
+    // primary is cancelled nothing would restore it.
+    if (!_inShadow) await _state.writeSnoozedFrom(row.id, null);
     await _reconcileSourceThreads(
       row.accountId,
       row.mailboxPath,
@@ -461,8 +463,10 @@ extension _UserActions on EmailRepositoryImpl {
               counterpart.id,
               mid,
             );
-            if (twin == null || !handled.add(twin.id)) continue;
-            if (primary == null) continue;
+            // A twin the user selected too is deleted on its own when
+            // nothing was queued here to shadow.
+            if (twin == null || primary == null) continue;
+            if (!handled.add(twin.id)) continue;
             await _asShadowOf(primary, () => _deleteRow(twin));
           }
         }
@@ -475,6 +479,10 @@ extension _UserActions on EmailRepositoryImpl {
     scope.kickedAccounts.forEach(_changeCtrl.add);
     return dest;
   }
+
+  /// Whether this runs as a counterpart's shadow of another account's change
+  /// ([_ChangeQueue._asShadowOf]).
+  bool get _inShadow => Zone.current[_shadowOfKey] != null;
 
   /// The [_BulkScope] of the [deleteEmails] call currently running in this
   /// zone, or null outside a bulk operation.
@@ -492,7 +500,12 @@ extension _UserActions on EmailRepositoryImpl {
   /// Writes an App Log row now, or — inside a bulk operation — once its
   /// transaction has committed. The logger writes to the same database, so an
   /// unawaited insert issued inside the transaction could outlive it.
+  ///
+  /// Not for a counterpart's shadow ([_inShadow]): the primary's own line
+  /// says what the user did; "moved" or "permanently deleted" for the twin
+  /// would claim a change its account never sends.
   void _logAfterBulk(Future<Object?>? Function() write) {
+    if (_inShadow) return;
     final bulk = _bulkScope;
     if (bulk != null) {
       bulk.logs.add(write);
@@ -626,6 +639,7 @@ extension _UserActions on EmailRepositoryImpl {
       }),
     );
     await _applyLocalSnooze(row, destPath);
+    if (_inShadow) return;
 
     unawaited(
       _appLogger?.info(
@@ -786,6 +800,7 @@ extension _UserActions on EmailRepositoryImpl {
 
     // Optimistic local update.
     await _applyLocalUnsnooze(row, dest);
+    if (_inShadow) return;
 
     unawaited(
       _appLogger?.info(
@@ -808,7 +823,7 @@ extension _UserActions on EmailRepositoryImpl {
   /// here the local-only snooze source is cleared and the threads of both
   /// folders refreshed.
   Future<void> _applyLocalUnsnooze(Email row, String dest) async {
-    await _state.writeSnoozedFrom(row.id, null);
+    if (!_inShadow) await _state.writeSnoozedFrom(row.id, null);
     await _updateThread(
       row.accountId,
       row.mailboxPath,

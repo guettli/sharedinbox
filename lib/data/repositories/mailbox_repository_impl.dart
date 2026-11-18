@@ -29,20 +29,33 @@ import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 /// snoozes of unread mail, each once; a change the count already reflects
 /// is not counted again, so the number does not flicker back. Virtual rows
 /// (no server copy) are left out: the server's count never had them.
-/// Approximate when one row has changes on both sides of the count's read.
+///
+/// Limits: `srv_*` is the server's state as last read, not as of the
+/// count's read. A row read again after the count (its change confirmed
+/// and dropped) adds nothing any more, so until the next count read the
+/// folder shows the older server count; a count read before a mail
+/// arrived can make the sum negative ([MailboxRepositoryImpl] shows 0 and
+/// logs it). The query is driven from the foldable ops
+/// (`pending_changes_resource_state`, then the `emails` primary key), so
+/// re-running it on every write costs one probe per queued change and
+/// mailbox.
 const unreadDeltaSql = 'COALESCE((SELECT SUM(c.n) FROM ('
     'SELECT e.id, e.account_id, e.mailbox_path AS path, 1 AS n '
     'FROM emails e WHERE e.is_seen = 0 AND e.is_local = 0 '
-    'AND e.id IN (SELECT resource_id FROM pending_changes) '
+    'AND e.id IN ($_queuedRowsSql) '
     'UNION ALL '
     'SELECT e.id, e.account_id, e.srv_mailbox_path AS path, -1 AS n '
     'FROM emails e WHERE e.srv_is_seen = 0 AND e.srv_gone = 0 '
     'AND e.is_local = 0 '
-    'AND e.id IN (SELECT resource_id FROM pending_changes)'
+    'AND e.id IN ($_queuedRowsSql)'
     ') c WHERE c.account_id = m.account_id AND c.path = m.path '
     'AND EXISTS (SELECT 1 FROM pending_changes p WHERE p.resource_id = c.id '
     "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
     "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq)))), 0)";
+
+const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
+    "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow', "
+    "'acked')";
 
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
@@ -81,12 +94,36 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .map(
           (rows) => [
             for (final r in rows)
-              _toModel(
+              _shownUnread(
                 _db.mailboxes.map(r.data),
-                unreadDelta: r.read<int>('unread_delta'),
+                r.read<int>('unread_delta'),
               ),
           ],
         );
+  }
+
+  /// Folders whose shown unread count came out negative, logged once each.
+  final _negativeLogged = <String>{};
+
+  /// [row] with the unread count the UI shows (server count plus
+  /// [delta]); a negative sum (a count read before mail it now has, see
+  /// [unreadDeltaSql]) shows as 0 and is logged once per folder.
+  model.Mailbox _shownUnread(MailboxRow row, int delta) {
+    final shown = row.unreadCount + delta;
+    if (shown < 0 && _negativeLogged.add(row.id)) {
+      unawaited(
+        _appLogger?.warn(
+          'mailbox.unread_negative',
+          'The unread count of "${row.name}" came out at $shown (server '
+              '${row.unreadCount}, local changes $delta); showing 0 until '
+              'the next count read',
+          accountId: row.accountId,
+          mailboxPath: row.path,
+          data: {'server': row.unreadCount, 'delta': delta},
+        ),
+      );
+    }
+    return _toModel(row, unreadDelta: delta);
   }
 
   @override

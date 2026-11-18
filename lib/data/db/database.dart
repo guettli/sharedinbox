@@ -2025,6 +2025,15 @@ class AppDatabase extends _$AppDatabase {
       }
       if (await _tableExists(this, 'mailboxes')) {
         await _addColumnIfMissing(m, mailboxes, mailboxes.unreadSeq);
+        // The stored counts were read by syncs before the upgrade, which
+        // ran after the changes acked so far: they reflect them. Stamped 0,
+        // every acked change would be counted on top of them once more.
+        if (await _tableExists(this, 'sync_read_seq')) {
+          await customStatement(
+            'UPDATE mailboxes SET unread_seq = '
+            'COALESCE((SELECT seq FROM sync_read_seq WHERE id = 1), 0)',
+          );
+        }
       }
     }
   }

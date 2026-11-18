@@ -248,6 +248,18 @@ extension _Counterparts on EmailRepositoryImpl {
             ..where((t) => t.id.equals(arrivedId)))
           .getSingleOrNull();
       if (current == null || arrived == null) return null;
+      // Re-checked in the transaction: another isolate, or a second copy
+      // with the same Message-ID, may have matched [current] meanwhile
+      // (its parked changes are rewritten for that copy then), or
+      // [arrived] may be a row that is waiting itself.
+      if (!await _isWaiting(current) ||
+          arrived.isLocal ||
+          arrived.srvGone ||
+          (arrived.srvUid == null && arrived.srvJmapId == null) ||
+          normaliseMessageId(arrived.messageId) !=
+              normaliseMessageId(current.messageId)) {
+        return null;
+      }
       // A virtual row's body is the draft text: the server's copy (stored,
       // or fetched when opened) replaces it.
       if (current.isLocal) {
@@ -270,7 +282,8 @@ extension _Counterparts on EmailRepositoryImpl {
       return (current: current, arrived: arrived, unparked: unparked);
     });
     if (matched == null) return;
-    final (:current, :arrived, :unparked) = matched;
+    final (:current, :arrived, unparked: result) = matched;
+    final unparked = result.sent;
     final now = await (_db.select(_db.emails)
           ..where((t) => t.id.equals(current.id)))
         .getSingleOrNull();
@@ -297,12 +310,18 @@ extension _Counterparts on EmailRepositoryImpl {
       'moved' => 'the row of the moved mail',
       _ => 'the row stored without a server id',
     };
+    final refused = result.refusedDelete;
     unawaited(
       _appLogger?.warn(
         'email.local_row_matched',
         'The server copy of "${arrived.subject ?? '(no subject)'}" arrived '
             'in ${arrived.mailboxPath}: $what takes its place'
-            '${unparked > 0 ? ', and its $unparked change(s) are sent now' : ''}',
+            '${unparked > 0 ? ', and its $unparked change(s) are sent now' : ''}'
+            '${result.deletedForGood ? ' (the mail is deleted for good, as '
+                'the user deleted the local copy)' : ''}'
+            '${refused != null ? '; not deleted for good: it arrived '
+                'elsewhere than where the user deleted it, so it shows '
+                'again and the delete is listed as failed' : ''}',
         accountId: current.accountId,
         mailboxPath: arrived.mailboxPath,
         emailId: current.id,
@@ -310,10 +329,36 @@ extension _Counterparts on EmailRepositoryImpl {
           'kind': kind,
           'droppedEmailId': arrived.id,
           'unparked': unparked,
+          'deletedForGood': result.deletedForGood,
+          if (refused != null) 'refusedDeleteId': refused.id,
           'shownBefore': current.mailboxPath,
         },
       ),
     );
+  }
+
+  /// Whether [row] still waits for its server copy ([_matchArrival]): a
+  /// local virtual row, a row gone from its source with an acked move
+  /// waiting for its destination copy, or a JMAP row whose server id was
+  /// never recorded.
+  Future<bool> _isWaiting(Email row) async {
+    if (row.isLocal) return true;
+    if (row.srvGone) {
+      final waiting = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(row.id) &
+                  t.state.equals(_ackedState) &
+                  t.leaseUntil.isNotNull(),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+      return waiting != null;
+    }
+    return row.srvJmapId == null &&
+        row.srvUid == null &&
+        (await _bulkAccount(row.accountId))?.type ==
+            account_model.AccountType.jmap;
   }
 
   /// The virtual row for Message-ID [mid] on [accountId] that is — or is not,

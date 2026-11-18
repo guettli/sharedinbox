@@ -102,6 +102,20 @@ Future<RecordingAppLogRepository> openRigWithMailA({
   return logs;
 }
 
+/// [openRigWithMailA] with INBOX (UIDVALIDITY 11) and Archive (22) and no
+/// Trash folder, so a delete is a delete for good.
+Future<RecordingAppLogRepository> openRigInboxArchive() => openRigWithMailA(
+      uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
+      folders: [('INBOX', 'inbox'), ('Archive', 'archive')],
+    );
+
+/// The queued changes of the rig's database.
+Future<List<PendingChangeRow>> rigOps() => db.select(db.pendingChanges).get();
+
+/// The overlay invariants the rig's database breaks (none, normally).
+Future<List<ConsistencyProblem>> rigProblems() =>
+    EmailStateWriter(db).consistencyProblems();
+
 /// The rows of `a@test` ([openRigWithMailA]).
 Future<List<Email>> rowsOfA() =>
     (db.select(db.emails)..where((t) => t.messageId.equals('a@test'))).get();

@@ -54,11 +54,6 @@ extension _FlushImap on EmailRepositoryImpl {
     // Shadows whose primary ended in another isolate or by a path that did
     // not take them along (SYNC-REDESIGN.md §6).
     await _rethreadRefolds(await _state.dropOrphanedShadows());
-    await _expireParked(accountId);
-    // Acked moves that waited long enough for their destination copy.
-    for (final id in await _state.expireAwaitedMoves(accountId)) {
-      await _rethreadRow(id);
-    }
     // Rows gone on the server whose last change settled since (failed or
     // was discarded): nothing can bring them back (clean-up rule).
     final cleaned = await _state.cleanUpGone(accountId);
@@ -100,12 +95,18 @@ extension _FlushImap on EmailRepositoryImpl {
     }
   }
 
-  /// [EmailStateWriter.expireParked] for [accountId], with an App Log warning
-  /// for each virtual row dropped (`email.virtual_expired`: its server copy
-  /// never arrived) and each parked change given up on
+  /// [EmailStateWriter.expireParked] for [accountId] after a successful
+  /// sync of [folder] (role [role]), with an App Log warning for each
+  /// virtual row dropped (`email.virtual_expired`: its server copy never
+  /// arrived) and each parked change given up on
   /// (`pending_change.parked_expired`, listed on the Pending Changes screen).
-  Future<void> _expireParked(String accountId) async {
-    final expiry = await _state.expireParked(accountId);
+  Future<void> _expireParked(
+    String accountId, {
+    required String folder,
+    required String? role,
+  }) async {
+    final expiry =
+        await _state.expireParked(accountId, folder: folder, role: role);
     if (expiry.isEmpty) return;
     for (final row in expiry.droppedRows) {
       await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
