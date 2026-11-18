@@ -486,6 +486,106 @@ class EmailStateWriter {
     return count > 0;
   }
 
+  /// Inserts row [id] of [accountId] for a mail a sync read found no row
+  /// for (the IMAP new-mail FETCH, JMAP `Email/get`), stamped with that
+  /// read's [seq]. [headers] carry no overlay column: the folder and the
+  /// read/star/snooze state come from [mailboxPath] and [keywords] as the
+  /// server's ([newRow]); a new row has no pending change.
+  Future<void> insertServerRow(
+    ServerRowHeaders headers, {
+    required String id,
+    required String accountId,
+    required String mailboxPath,
+    required ServerKeywords keywords,
+    required int seq,
+  }) =>
+      _db.into(_db.emails).insert(
+            newRow(
+              headers._companion,
+              id: id,
+              accountId: accountId,
+              mailboxPath: mailboxPath,
+              keywords: keywords,
+              seq: seq,
+            ),
+          );
+
+  /// Undo's restore of row [id], which the clean-up rule deleted: [headers]
+  /// and [local] as the Undo snapshot recorded them, the snapshot's folder
+  /// [mailboxPath] and [keywords] as the server's, stamped 0 so that any
+  /// read corrects them. The row's queued changes fold over it (the caller
+  /// re-folds). A virtual row ([RestoredLocalFields.isLocal]) has no server
+  /// location, and only a virtual row is a virtual Sent copy.
+  Future<void> restoreRow(
+    ServerRowHeaders headers,
+    RestoredLocalFields local, {
+    required String id,
+    required String accountId,
+    required String mailboxPath,
+    required ServerKeywords keywords,
+  }) {
+    final located = headers.srvUid != null || headers.srvJmapId != null;
+    if ((local.isLocal && located) ||
+        (local.isVirtualSentCopy && !local.isLocal)) {
+      throw ArgumentError(
+        'A restored virtual row has no server location, and only a virtual '
+        'row is a virtual Sent copy',
+      );
+    }
+    return _db.into(_db.emails).insert(
+          newRow(
+            headers._companion.copyWith(
+              snoozedFromMailboxPath: Value(local.snoozedFromMailboxPath),
+              isLocal: Value(local.isLocal),
+              isVirtualSentCopy: Value(local.isVirtualSentCopy),
+            ),
+            id: id,
+            accountId: accountId,
+            mailboxPath: mailboxPath,
+            keywords: keywords,
+            seq: 0,
+          ),
+        );
+  }
+
+  /// Writes the header columns in [headers] over row [emailId], the server
+  /// row a sync read found for the server's mail at the location [headers]
+  /// name: no overlay column (the read writes those through
+  /// [KeywordRead.write] and [KeywordRead.writeLocation]), and a field
+  /// [headers] leave null is kept. The location facts must be the row's
+  /// own: its `srv_uid`, `srv_jmap_id` and (unless the row has none yet)
+  /// `srv_uid_validity`; a read never moves a row or turns a virtual one
+  /// into a server row here. Throws [StateError] when they are not.
+  Future<void> writeServerHeaders(
+    String emailId,
+    ServerRowHeaders headers,
+  ) async {
+    final uid = headers.srvUid;
+    final jmapId = headers.srvJmapId;
+    final validity = headers.srvUidValidity;
+    final count = await (_db.update(_db.emails)
+          ..where(
+            (t) =>
+                t.id.equals(emailId) &
+                t.isLocal.equals(false) &
+                (uid == null ? const Constant(true) : t.srvUid.equals(uid)) &
+                (jmapId == null
+                    ? const Constant(true)
+                    : t.srvJmapId.equals(jmapId)) &
+                (validity == null
+                    ? const Constant(true)
+                    : (t.srvUidValidity.isNull() |
+                        t.srvUidValidity.equals(validity))),
+          ))
+        .write(headers._companion);
+    if (count == 0) {
+      throw StateError(
+        'writeServerHeaders: row $emailId is not the server row at the '
+        'location its headers name',
+      );
+    }
+  }
+
   /// A local row is virtual exactly when it has no server location, and
   /// only a virtual row is a virtual Sent copy.
   static void _checkLocalRow(LocalRowHeaders headers) {
@@ -1367,10 +1467,16 @@ class EmailStateWriter {
   /// ([cleanUpGone]). A row the user still has a change queued for stays,
   /// hidden or shown where that change puts it, until the change settles.
   /// Returns the ids of the rows that stay.
+  ///
+  /// With [exceptUidValidity], only the rows stamped with another
+  /// UIDVALIDITY than that one: their UIDs name other mails now, whatever
+  /// the checkpoint says (a force resync's full fetch, which may not know
+  /// the folder's previous UIDVALIDITY).
   Future<Set<String>> markFolderGone(
     String accountId,
-    String mailboxPath,
-  ) =>
+    String mailboxPath, {
+    int? exceptUidValidity,
+  }) =>
       // One transaction: a flush relocating one of these rows meanwhile
       // (another isolate) must not have its new UID cleared.
       _db.transaction(() async {
@@ -1378,14 +1484,18 @@ class EmailStateWriter {
         final ids = [
           for (final r in await _db.customSelect(
             'SELECT id FROM emails WHERE account_id = ?1 '
-            'AND srv_mailbox_path = ?2 AND is_local = 0',
+            'AND srv_mailbox_path = ?2 AND is_local = 0'
+            '${exceptUidValidity == null ? '' : ' AND srv_uid_validity IS NOT NULL AND srv_uid_validity <> ?3'}',
             variables: [
               Variable.withString(accountId),
               Variable.withString(mailboxPath),
+              if (exceptUidValidity != null)
+                Variable.withInt(exceptUidValidity),
             ],
           ).get())
             r.read<String>('id'),
         ];
+        if (ids.isEmpty) return <String>{};
         // Only the rows this marked (no later read placed them elsewhere),
         // and only while they are still recorded in this folder.
         final marked = (await read.markGone(ids)).toList();
@@ -1419,25 +1529,6 @@ class EmailStateWriter {
   /// [KeywordRead.markGone] and [cleanUpGone].
   Future<void> deleteRow(String emailId) =>
       (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
-
-  /// Force resync: deletes every row of [accountId] the server has in
-  /// [mailboxPath], or every row of the account when [mailboxPath] is null,
-  /// except a row with a pending, in-flight, stuck or acked change (the
-  /// clean-up rule): it keeps its id, body and changes, and the refetch
-  /// finds it again by its server location (or marks it gone).
-  Future<void> deleteRowsOf(String accountId, {String? mailboxPath}) =>
-      _db.customUpdate(
-        'DELETE FROM emails WHERE account_id = ?1 '
-        '${mailboxPath == null ? '' : 'AND srv_mailbox_path = ?2 '}'
-        'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
-        'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql))',
-        variables: [
-          Variable.withString(accountId),
-          if (mailboxPath != null) Variable.withString(mailboxPath),
-        ],
-        updates: {_db.emails},
-        updateKind: UpdateKind.delete,
-      );
 
   /// Fills header columns of row [emailId] that a later schema added or an
   /// earlier sync missed (null leaves a column alone). No user intent, so
@@ -2144,6 +2235,101 @@ class LocalRowHeaders {
         srvUidValidity: Value(srvUidValidity),
         srvJmapId: Value(srvJmapId),
       );
+}
+
+/// The header columns and server facts of a row of a server copy
+/// ([EmailStateWriter.insertServerRow], [EmailStateWriter.writeServerHeaders]):
+/// no overlay column. A nullable field left null is not written (an insert
+/// gets the column's default), so a read that could not get a value keeps
+/// the one an earlier read stored.
+class ServerRowHeaders {
+  const ServerRowHeaders({
+    required this.uid,
+    required this.subject,
+    required this.sentAt,
+    required this.receivedAt,
+    required this.fromJson,
+    required this.toJson,
+    required this.ccJson,
+    required this.replyToJson,
+    required this.bccJson,
+    required this.hasAttachment,
+    required this.threadId,
+    required this.messageId,
+    required this.inReplyTo,
+    required this.references,
+    this.sizeBytes,
+    this.preview,
+    this.listUnsubscribeHeader,
+    this.serverEmailId,
+    this.srvUid,
+    this.srvUidValidity,
+    this.srvJmapId,
+  });
+
+  /// The legacy `uid` column (0 on JMAP).
+  final int uid;
+  final String? subject;
+  final DateTime? sentAt;
+  final DateTime receivedAt;
+  final String fromJson;
+  final String toJson;
+  final String ccJson;
+  final String replyToJson;
+  final String bccJson;
+  final bool hasAttachment;
+  final String? threadId;
+  final String? messageId;
+  final String? inReplyTo;
+  final String? references;
+  final int? sizeBytes;
+  final String? preview;
+  final String? listUnsubscribeHeader;
+
+  /// The move-stable server id (RFC 8474 EMAILID, Gmail X-GM-MSGID).
+  final String? serverEmailId;
+  final int? srvUid;
+  final int? srvUidValidity;
+  final String? srvJmapId;
+
+  EmailsCompanion get _companion => EmailsCompanion(
+        uid: Value(uid),
+        subject: Value(subject),
+        sentAt: Value(sentAt),
+        receivedAt: Value(receivedAt),
+        fromJson: Value(fromJson),
+        toAddresses: Value(toJson),
+        ccJson: Value(ccJson),
+        replyToJson: Value(replyToJson),
+        bccJson: Value(bccJson),
+        hasAttachment: Value(hasAttachment),
+        threadId: Value(threadId),
+        messageId: Value(messageId),
+        inReplyTo: Value(inReplyTo),
+        references: Value(references),
+        sizeBytes: Value.absentIfNull(sizeBytes),
+        preview: Value.absentIfNull(preview),
+        listUnsubscribeHeader: Value.absentIfNull(listUnsubscribeHeader),
+        serverEmailId: Value.absentIfNull(serverEmailId),
+        srvUid: Value.absentIfNull(srvUid),
+        srvUidValidity: Value.absentIfNull(srvUidValidity),
+        srvJmapId: Value.absentIfNull(srvJmapId),
+      );
+}
+
+/// The local-only attributes an Undo snapshot carries for
+/// [EmailStateWriter.restoreRow]; a sync read has none, so
+/// [ServerRowHeaders] cannot carry them.
+class RestoredLocalFields {
+  const RestoredLocalFields({
+    required this.snoozedFromMailboxPath,
+    required this.isLocal,
+    required this.isVirtualSentCopy,
+  });
+
+  final String? snoozedFromMailboxPath;
+  final bool isLocal;
+  final bool isVirtualSentCopy;
 }
 
 /// What [EmailStateWriter.expireParked] did.

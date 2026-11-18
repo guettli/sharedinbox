@@ -722,8 +722,9 @@ void main() {
       final r = _makeRepos();
       await r.accounts.addAccount(_account, 'pw');
 
-      // Seed two folders, each with an email, thread, pending change and a
-      // per-folder sync checkpoint. INBOX also has a cached body.
+      // Seed two folders, each with an email, thread and a per-folder sync
+      // checkpoint. INBOX has a cached body and no queued change; Archive
+      // has a queued change.
       for (final (mb, uid) in [('INBOX', 1), ('Archive', 2)]) {
         final id = 'acc-1:$uid';
         await r.db.into(r.db.emails).insert(
@@ -744,21 +745,23 @@ void main() {
                 latestEmailId: id,
               ),
             );
-        await r.db.into(r.db.pendingChanges).insert(
-              PendingChangesCompanion.insert(
-                accountId: 'acc-1',
-                resourceType: 'Email',
-                resourceId: id,
-                changeType: 'flag_seen',
-                payload: '{"seen":true}',
-                createdAt: DateTime(2024),
-              ),
-            );
+        if (mb == 'Archive') {
+          await r.db.into(r.db.pendingChanges).insert(
+                PendingChangesCompanion.insert(
+                  accountId: 'acc-1',
+                  resourceType: 'Email',
+                  resourceId: id,
+                  changeType: 'flag_seen',
+                  payload: '{"seen":true}',
+                  createdAt: DateTime(2024),
+                ),
+              );
+        }
         await r.db.into(r.db.syncStates).insert(
               SyncStatesCompanion.insert(
                 accountId: 'acc-1',
                 resourceType: 'IMAP:$mb',
-                state: '{}',
+                state: '{"uidValidity":5,"lastUid":$uid}',
                 syncedAt: DateTime(2024),
               ),
             );
@@ -772,24 +775,25 @@ void main() {
 
       await r.emails.clearMailboxForResync('acc-1', 'INBOX');
 
-      // The INBOX checkpoint is gone; its row stays, because the user has a
-      // change queued for it (clean-up rule): the refetch finds it again by
-      // its server location.
+      // Mark-and-sweep (phase 6a): the INBOX row stays although the user
+      // has no change of it. Only the refetch's sweep may remove it, if the
+      // server no longer lists it (clean-up rule). The checkpoint keeps its
+      // UIDVALIDITY and asks for a full fetch.
       expect(
         await r.emails.observeEmails('acc-1', 'INBOX').first,
         hasLength(1),
       );
       final inboxState = await (r.db.select(r.db.syncStates)
             ..where((t) => t.resourceType.equals('IMAP:INBOX')))
-          .get();
-      expect(inboxState, isEmpty);
-      // …but an un-pushed pending change survives the wipe (#558): dropping it
-      // would let the re-fetch overwrite the local flag with stale server truth
-      // (e.g. losing a just-set star). It is flushed/retried on the next sync.
-      final inboxPending = await (r.db.select(r.db.pendingChanges)
-            ..where((t) => t.resourceId.equals('acc-1:1')))
-          .get();
-      expect(inboxPending, hasLength(1));
+          .getSingle();
+      expect(
+        jsonDecode(inboxState.state),
+        {'uidValidity': 5, 'forceFull': true},
+      );
+      final inboxThread = await (r.db.select(r.db.threads)
+            ..where((t) => t.id.equals('t-1')))
+          .getSingleOrNull();
+      expect(inboxThread, isNotNull);
 
       // …while Archive is untouched.
       expect(
@@ -798,8 +802,14 @@ void main() {
       );
       final archiveState = await (r.db.select(r.db.syncStates)
             ..where((t) => t.resourceType.equals('IMAP:Archive')))
-          .get();
-      expect(archiveState, hasLength(1));
+          .getSingle();
+      expect(archiveState.state, '{"uidValidity":5,"lastUid":2}');
+      expect(
+        await (r.db.select(r.db.pendingChanges)
+              ..where((t) => t.resourceId.equals('acc-1:2')))
+            .get(),
+        hasLength(1),
+      );
 
       // The cached body survives so a re-sync never re-downloads it.
       final body = await (r.db.select(r.db.emailBodies)

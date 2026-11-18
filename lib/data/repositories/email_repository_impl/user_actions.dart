@@ -925,54 +925,52 @@ extension _UserActions on EmailRepositoryImpl {
       return;
     }
     final imapKnown = srvPath != null && srvUid != null;
-    final restored = EmailsCompanion(
-      uid: Value(e.uid),
-      subject: Value(e.subject),
-      sentAt: Value(e.sentAt),
-      receivedAt: Value(e.receivedAt),
-      fromJson: Value(jsonEncode(e.from)),
-      toAddresses: Value(jsonEncode(e.to)),
-      ccJson: Value(jsonEncode(e.cc)),
-      replyToJson: Value(jsonEncode(e.replyTo)),
-      bccJson: Value(jsonEncode(e.bcc)),
-      sizeBytes: Value(e.size),
-      preview: Value(e.preview),
-      hasAttachment: Value(e.hasAttachment),
-      threadId: Value(e.threadId),
-      messageId: Value(e.messageId),
-      inReplyTo: Value(e.inReplyTo),
-      references: Value(e.references),
-      snoozedFromMailboxPath: Value(e.snoozedFromMailboxPath),
-      isLocal: Value(e.isLocal),
-      isVirtualSentCopy: Value(e.isVirtualSentCopy),
-      srvUid: imapKnown ? Value(srvUid) : const Value.absent(),
-      srvUidValidity:
-          imapKnown ? Value(e.srvUidValidity) : const Value.absent(),
-      srvJmapId: srvJmapId != null ? Value(srvJmapId) : const Value.absent(),
+    final restored = ServerRowHeaders(
+      uid: e.uid,
+      subject: e.subject,
+      sentAt: e.sentAt,
+      receivedAt: e.receivedAt,
+      fromJson: jsonEncode(e.from),
+      toJson: jsonEncode(e.to),
+      ccJson: jsonEncode(e.cc),
+      replyToJson: jsonEncode(e.replyTo),
+      bccJson: jsonEncode(e.bcc),
+      sizeBytes: e.size,
+      preview: e.preview,
+      hasAttachment: e.hasAttachment,
+      threadId: e.threadId,
+      messageId: e.messageId,
+      inReplyTo: e.inReplyTo,
+      references: e.references,
+      srvUid: imapKnown ? srvUid : null,
+      srvUidValidity: imapKnown ? e.srvUidValidity : null,
+      srvJmapId: srvJmapId,
     );
     // A row brought back takes the snapshot's read/star/snooze state and
     // folder as the server's, stamped 0 so any read corrects them: the
     // snapshot shows what the app showed, which may be the user's pending
     // value, so the next sync reads the server's (the flag reconcile is
     // made due). Its queued changes fold over it.
-    await _db.into(_db.emails).insert(
-          EmailStateWriter.newRow(
-            restored,
-            id: e.id,
-            accountId: e.accountId,
-            // Where the snapshot says the server has it (a snapshot taken
-            // behind a queued move shows the destination, but the server
-            // still had it in the source); the shown folder would record
-            // a location without a UID that no sync could ever confirm.
-            mailboxPath: e.srvMailboxPath ?? e.mailboxPath,
-            keywords: ServerKeywords(
-              seen: e.isSeen,
-              flagged: e.isFlagged,
-              snoozedUntil: e.snoozedUntil,
-            ),
-            seq: 0,
-          ),
-        );
+    await _state.restoreRow(
+      restored,
+      RestoredLocalFields(
+        snoozedFromMailboxPath: e.snoozedFromMailboxPath,
+        isLocal: e.isLocal,
+        isVirtualSentCopy: e.isVirtualSentCopy,
+      ),
+      id: e.id,
+      accountId: e.accountId,
+      // Where the snapshot says the server has it (a snapshot taken
+      // behind a queued move shows the destination, but the server
+      // still had it in the source); the shown folder would record
+      // a location without a UID that no sync could ever confirm.
+      mailboxPath: e.srvMailboxPath ?? e.mailboxPath,
+      keywords: ServerKeywords(
+        seen: e.isSeen,
+        flagged: e.isFlagged,
+        snoozedUntil: e.snoozedUntil,
+      ),
+    );
     await _state.makeFlagReconcileDue(e.id);
     await _state.refold(e.id);
     await _rethreadRow(e.id);

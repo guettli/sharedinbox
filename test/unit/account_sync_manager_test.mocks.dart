@@ -1169,6 +1169,17 @@ class MockEmailRepository extends _i1.Mock implements _i4.EmailRepository {
       ) as _i6.Future<void>);
 
   @override
+  _i6.Future<void> sweepRowsOutsideFolders(String? accountId) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #sweepRowsOutsideFolders,
+          [accountId],
+        ),
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
+
+  @override
   _i6.Future<void> clearMailboxForResync(
     String? accountId,
     String? mailboxPath,

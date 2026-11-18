@@ -9,6 +9,10 @@ const _imapFlagReconcileInterval = Duration(minutes: 15);
 
 const _imapSizeBackfillBatch = 500;
 
+/// Marks an IMAP checkpoint whose next sync must be a full fetch (a force
+/// resync): it keeps the folder's UIDVALIDITY, so a change is still seen.
+const _forceFullKey = 'forceFull';
+
 extension _SyncImap on EmailRepositoryImpl {
   Future<model.ImapMailboxState?> _lastImapMailboxState(
     String accountId,
@@ -92,29 +96,46 @@ extension _SyncImap on EmailRepositoryImpl {
             exists: selectedMailbox.messagesExists,
           );
 
-      if (checkpoint == null || checkpoint['uidValidity'] != uidValidity) {
-        // First run or UID validity changed — full sync.
-        if (checkpoint != null) {
-          // UID validity changed: the folder's UIDs name other mails now.
-          // Its rows are gone; one with a queued change stays (hidden, or
-          // where the change shows it) until the change settles.
-          final kept = await _state.markFolderGone(account.id, mailboxPath);
-          if (kept.isNotEmpty) {
-            unawaited(
-              _appLogger?.warn(
-                'sync.uidvalidity_changed',
-                'The server renumbered $mailboxPath: ${kept.length} '
-                    'mail(s) with a queued change are kept until the change '
-                    'is applied or fails; the folder is fetched again',
-                accountId: account.id,
-                mailboxPath: mailboxPath,
-                data: {'keptEmailIds': kept.take(100).toList()},
-              ),
-            );
-          }
+      final validityChanged =
+          checkpoint != null && checkpoint['uidValidity'] != uidValidity;
+      // A force resync keeps the UIDVALIDITY and asks for a full fetch
+      // ([_Sync._forceFullImapCheckpoints]).
+      if (checkpoint == null ||
+          validityChanged ||
+          checkpoint[_forceFullKey] == true) {
+        // First run, UID validity changed, or a force resync — full sync.
+        // UID validity changed: the folder's UIDs name other mails now.
+        // Its rows are gone; one with a queued change stays (hidden, or
+        // where the change shows it) until the change settles. Without a
+        // known previous UIDVALIDITY, the rows stamped with another one
+        // than the server's are gone the same way.
+        final kept = validityChanged
+            ? await _state.markFolderGone(account.id, mailboxPath)
+            : uidValidity == 0
+                ? const <String>{}
+                : await _state.markFolderGone(
+                    account.id,
+                    mailboxPath,
+                    exceptUidValidity: uidValidity,
+                  );
+        if (kept.isNotEmpty) {
+          unawaited(
+            _appLogger?.warn(
+              'sync.uidvalidity_changed',
+              'The server renumbered $mailboxPath: ${kept.length} '
+                  'mail(s) with a queued change are kept until the change '
+                  'is applied or fails; the folder is fetched again',
+              accountId: account.id,
+              mailboxPath: mailboxPath,
+              data: {'keptEmailIds': kept.take(100).toList()},
+            ),
+          );
         }
         // Use UID SEARCH ALL + UID FETCH so every message gets a reliable UID.
-        // Regular FETCH 1:* may not populate msg.uid on all servers.
+        // Regular FETCH 1:* may not populate msg.uid on all servers. The
+        // read sequence is taken before the search: the sweep below applies
+        // absence only to rows no later read (the fetch, an ack) placed.
+        final enumeration = await _state.beginRead(account.id);
         final allUids = (await client.uidSearchMessages(
               searchCriteria: 'ALL',
             ))
@@ -132,6 +153,20 @@ extension _SyncImap on EmailRepositoryImpl {
             uidValidity: selectedMailbox.uidValidity,
           );
         }
+        // The sweep of a complete refetch (a force resync, which keeps the
+        // rows and forgets the checkpoint, SYNC-REDESIGN.md §6): a cached
+        // row the fetch did not find is gone, and deleted unless the user
+        // has a change of it.
+        final swept = await _reconcileDeletedImap(
+          account.id,
+          mailboxPath,
+          allUids,
+          serverMessageCount: selectedMailbox.messagesExists,
+          read: enumeration,
+          complete: true,
+          uidValidity: uidValidity == 0 ? null : uidValidity,
+        );
+        _logSwept(account.id, mailboxPath, swept);
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
         await saveCheckpoint(maxUid);
         // Record that we've just fetched every flag so the periodic reconcile
@@ -533,12 +568,27 @@ extension _SyncImap on EmailRepositoryImpl {
         // server has it, never by the shown folder: behind a queued move
         // that is already the destination (SYNC-REDESIGN.md §8 phase 2).
         // Without one, the message gets a new row with a new id.
-        final known = await _rowAtImapLocation(
+        final msgId = normaliseMessageId(envelope.messageId);
+        final atLocation = await _rowAtImapLocation(
           account.id,
           mailboxPath,
           uid,
           uidValidity: uidValidity,
         );
+        // A row recorded without a UIDVALIDITY matches this UID under any
+        // one; when it holds another mail (its Message-ID differs), the UID
+        // was reused: it is not this mail's row, and must not take its
+        // headers over its own body and attachments. The deletion
+        // reconcile marks it gone once a stamped row holds the UID.
+        final storedMsgId = normaliseMessageId(atLocation?.messageId);
+        final reused = atLocation != null &&
+            atLocation.srvUidValidity == null &&
+            uidValidity != null &&
+            uidValidity != 0 &&
+            msgId != null &&
+            storedMsgId != null &&
+            storedMsgId != msgId;
+        final known = reused ? null : atLocation;
         // Don't bring back, as a new row, a mail the user moved or deleted
         // from here: its row has left this location (a move's answer
         // relocated it), but the change is still queued, being sent or
@@ -556,7 +606,6 @@ extension _SyncImap on EmailRepositoryImpl {
         bytes += msg.size ?? 0;
         final emailId = known?.id ?? _newId(account.id);
         final serverEmailId = serverEmailIdByUid[uid];
-        final msgId = normaliseMessageId(envelope.messageId);
         final inReplyTo = normaliseMessageId(envelope.inReplyTo);
         final refs = normaliseReferences(msg.getHeaderValue('References'));
         final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
@@ -580,65 +629,55 @@ extension _SyncImap on EmailRepositoryImpl {
         final keywords = ServerKeywords.imap(msg.flags);
 
         final isNew = known == null;
-        final headers = EmailsCompanion(
-          uid: Value(uid),
-          subject: Value(subject),
-          sentAt: Value(envelope.date),
+        final headers = ServerRowHeaders(
+          uid: uid,
+          subject: subject,
+          sentAt: envelope.date,
           // The server's arrival time, like JMAP `receivedAt`. Never
           // the local fetch time when the server knows better: mail
           // without a Date header used to be re-dated to "now" on every
           // re-fetch, so a resync or reinstall moved it to the top.
-          receivedAt: Value(
-            parseImapDateTime(msg.internalDate) ??
-                envelope.date ??
-                DateTime.now(),
-          ),
-          fromJson: Value(_encodeAddresses(envelope.from)),
-          toAddresses: Value(_encodeAddresses(envelope.to)),
-          ccJson: Value(_encodeAddresses(envelope.cc)),
-          replyToJson: Value(_encodeAddresses(envelope.replyTo)),
-          bccJson: Value(_encodeAddresses(envelope.bcc)),
-          sizeBytes: msg.size == null ? const Value.absent() : Value(msg.size),
-          preview: Value(
-            previewFromSnippet(msg, previewSnippetByUid[uid]),
-          ),
+          receivedAt: parseImapDateTime(msg.internalDate) ??
+              envelope.date ??
+              DateTime.now(),
+          fromJson: _encodeAddresses(envelope.from),
+          toJson: _encodeAddresses(envelope.to),
+          ccJson: _encodeAddresses(envelope.cc),
+          replyToJson: _encodeAddresses(envelope.replyTo),
+          bccJson: _encodeAddresses(envelope.bcc),
+          sizeBytes: msg.size,
+          preview: previewFromSnippet(msg, previewSnippetByUid[uid]),
           // enough_mail counts parts with Content-Disposition: attachment;
           // JMAP's hasAttachment (below) is server-defined, so the two
           // protocols may disagree on e.g. inline images.
-          hasAttachment: Value(msg.hasAttachments()),
-          threadId: Value(threadId),
-          messageId: Value(msgId),
-          inReplyTo: Value(inReplyTo),
-          references: Value(refs),
-          listUnsubscribeHeader: Value(listUnsubscribe),
-          // Preserve a previously captured id if this fetch couldn't
-          // read one, rather than clobbering it with null.
-          serverEmailId: serverEmailId == null
-              ? const Value.absent()
-              : Value(serverEmailId),
-          srvUid: Value(uid),
-          srvUidValidity: Value(
-            uidValidity == null || uidValidity == 0 ? null : uidValidity,
-          ),
+          hasAttachment: msg.hasAttachments(),
+          threadId: threadId,
+          messageId: msgId,
+          inReplyTo: inReplyTo,
+          references: refs,
+          listUnsubscribeHeader: listUnsubscribe,
+          // A previously captured id stays when this fetch could not read
+          // one (null is not written).
+          serverEmailId: serverEmailId,
+          srvUid: uid,
+          srvUidValidity:
+              uidValidity == null || uidValidity == 0 ? null : uidValidity,
         );
         // The read/star/snooze state and the folder only through the
         // server-write gate: with the row's other server facts for a new
         // row, else on their own (a whole-row write would also overwrite the
         // user's pending values, and a moved mail would jump back).
         if (isNew) {
-          await _db.into(_db.emails).insert(
-                EmailStateWriter.newRow(
-                  headers,
-                  id: emailId,
-                  accountId: account.id,
-                  mailboxPath: mailboxPath,
-                  keywords: keywords,
-                  seq: read.seq,
-                ),
-              );
+          await _state.insertServerRow(
+            headers,
+            id: emailId,
+            accountId: account.id,
+            mailboxPath: mailboxPath,
+            keywords: keywords,
+            seq: read.seq,
+          );
         } else {
-          await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-              .write(headers);
+          await _state.writeServerHeaders(emailId, headers);
           // The mail is here: a row marked gone by an older read shows again.
           final moved = await read.writeLocation(emailId, mailboxPath);
           if (moved != null && moved.changed) {
@@ -832,14 +871,15 @@ extension _SyncImap on EmailRepositoryImpl {
     String mailboxPath,
     List<int> serverUids, {
     int? serverMessageCount,
-  }) async =>
-      _reconcileDeletedImap(
-        accountId,
-        mailboxPath,
-        serverUids,
-        serverMessageCount: serverMessageCount,
-        read: await _state.beginRead(accountId),
-      );
+  }) async {
+    await _reconcileDeletedImap(
+      accountId,
+      mailboxPath,
+      serverUids,
+      serverMessageCount: serverMessageCount,
+      read: await _state.beginRead(accountId),
+    );
+  }
 
   /// The location read of [mailboxPath]'s `UID SEARCH ALL` ([read], taken
   /// before the search): every row the server has there (by
@@ -849,22 +889,41 @@ extension _SyncImap on EmailRepositoryImpl {
   /// deleted only when it has no change left ([EmailStateWriter.cleanUpGone]):
   /// one the user still has a change queued for stays until that change
   /// settles (SYNC-REDESIGN.md §2, clean-up rule).
-  Future<void> _reconcileDeletedImap(
+  ///
+  /// A row counts as present only under the folder's UIDVALIDITY
+  /// ([uidValidity], else the checkpoint's): a row stamped with another one
+  /// is gone (its UID names another mail now), and an unstamped row only
+  /// while no row stamped with the current one holds its UID (else it is a
+  /// stale duplicate).
+  ///
+  /// [complete]: every UID of [serverUids] was fetched after [read] was
+  /// taken (the full fetch), so each row the server still has there was
+  /// written by a later read. The selection is then every row of the folder
+  /// not marked gone yet (`srv_gone = 0`), not only the rows with a UID
+  /// (`srv_uid IS NOT NULL`): a row without a UID could not be found by the
+  /// fetch, so it is gone (or a stale duplicate of the row the fetch
+  /// stored), unless a read after [read] placed it (SYNC-REDESIGN.md §6, the
+  /// sweep of a force resync). Returns the rows marked gone, as read
+  /// before.
+  Future<List<Email>> _reconcileDeletedImap(
     String accountId,
     String mailboxPath,
     List<int> serverUids, {
     int? serverMessageCount,
     required KeywordRead read,
+    bool complete = false,
+    int? uidValidity,
   }) async {
     // The rows the server has in this folder, wherever they are shown: a
     // UID names a message only in its server folder. A row without a UID
-    // (local, or its location taken by another mail) cannot be checked.
+    // (local, or its location taken by another mail) cannot be checked,
+    // except after a complete fetch.
     final localRows = await (_db.select(_db.emails)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
                 t.srvMailboxPath.equals(mailboxPath) &
-                t.srvUid.isNotNull() &
+                (complete ? t.srvGone.equals(false) : t.srvUid.isNotNull()) &
                 t.isLocal.equals(false),
           ))
         .get();
@@ -886,14 +945,30 @@ extension _SyncImap on EmailRepositoryImpl {
         '$mailboxPath but local DB has ${localRows.length} emails '
         '(EXISTS=${serverMessageCount ?? '?'})',
       );
-      return;
+      return const [];
     }
 
     final serverUidSet = serverUids.toSet();
+    final validity =
+        uidValidity ?? await _knownUidValidity(accountId, mailboxPath);
+    // UIDs a row stamped with the folder's UIDVALIDITY holds: an unstamped
+    // row at one of them is a stale duplicate, not that mail.
+    final stampedUids = {
+      for (final row in localRows)
+        if (validity != null && row.srvUidValidity == validity) row.srvUid,
+    };
+    bool isPresent(Email row) {
+      if (!serverUidSet.contains(row.srvUid)) return false;
+      if (validity == null) return true;
+      final stamp = row.srvUidValidity;
+      if (stamp == null) return !stampedUids.contains(row.srvUid);
+      return stamp == validity;
+    }
+
     final present = <Email>[];
     final gone = <Email>[];
     for (final row in localRows) {
-      if (serverUidSet.contains(row.srvUid)) {
+      if (isPresent(row)) {
         present.add(row);
         continue;
       }
@@ -925,10 +1000,11 @@ extension _SyncImap on EmailRepositoryImpl {
       if (!shown.contains(row.id)) continue;
       await _rethreadRow(row.id);
     }
-    await _settleGoneRows(
-      accountId,
-      gone,
-      await read.markGone([for (final row in gone) row.id]),
-    );
+    final marked = await read.markGone([for (final row in gone) row.id]);
+    await _settleGoneRows(accountId, gone, marked);
+    return [
+      for (final row in gone)
+        if (marked.contains(row.id)) row,
+    ];
   }
 }

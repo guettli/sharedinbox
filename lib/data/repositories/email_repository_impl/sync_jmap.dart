@@ -442,12 +442,16 @@ extension _SyncJmap on EmailRepositoryImpl {
         !resumed && _jmapEnumerationComplete(seenIds, reportedTotal);
     var pruned = 0;
     if (complete) {
-      pruned = await _pruneJmapMailboxToServerIds(
+      final swept = await _pruneJmapMailboxToServerIds(
         accountId,
         mailboxJmapId,
         seenIds,
         read: enumeration,
       );
+      // The sweep of a force resync (SYNC-REDESIGN.md §6), or of a first
+      // full sync after the state was lost.
+      _logSwept(accountId, mailboxJmapId, swept);
+      pruned = swept.length;
     }
     log(
       'JMAP-sync: full mailbox=$mailboxJmapId fetched=$fetched pruned=$pruned '
@@ -828,9 +832,9 @@ extension _SyncJmap on EmailRepositoryImpl {
   /// wherever it is shown) is confirmed present, or marked gone when its id
   /// is not listed; acked changes settle. Mirrors
   /// [_SyncImap._reconcileDeletedImap]: a row marked gone is deleted only
-  /// once it has no change left ([_settleGoneRows]). Returns the number of
-  /// rows marked gone.
-  Future<int> _pruneJmapMailboxToServerIds(
+  /// once it has no change left ([_settleGoneRows]). Returns the rows
+  /// marked gone, as read before.
+  Future<List<Email>> _pruneJmapMailboxToServerIds(
     String accountId,
     String mailboxJmapId,
     Set<String> serverIds, {
@@ -864,7 +868,10 @@ extension _SyncJmap on EmailRepositoryImpl {
     }
     final marked = await read.markGone([for (final row in gone) row.id]);
     await _settleGoneRows(accountId, gone, marked);
-    return marked.length;
+    return [
+      for (final row in gone)
+        if (marked.contains(row.id)) row,
+    ];
   }
 
   /// Periodic safety net: at most once per [_jmapReconcileInterval] per
@@ -949,12 +956,13 @@ extension _SyncJmap on EmailRepositoryImpl {
     // Skipping them would mean flag drift (#407) and phantom threads (#523)
     // were never corrected for exactly the mailboxes having trouble.
     if (_jmapEnumerationComplete(serverIds, reportedTotal)) {
-      final removed = await _pruneJmapMailboxToServerIds(
+      final removed = (await _pruneJmapMailboxToServerIds(
         accountId,
         mailboxJmapId,
         serverIds,
         read: enumeration,
-      );
+      ))
+          .length;
       if (removed > 0) {
         log(
           'JMAP-sync: reconcile mailbox=$mailboxJmapId pruned=$removed '
@@ -1190,47 +1198,43 @@ extension _SyncJmap on EmailRepositoryImpl {
           ? (decodeMailHeader(rawSubjectHeader) ?? m['subject'] as String?)
           : m['subject'] as String?;
 
-      final headers = EmailsCompanion(
-        uid: const Value(0), // not used for JMAP accounts
-        subject: Value(subject),
-        sentAt: Value(sentAt),
-        receivedAt: Value(receivedAt),
-        fromJson: Value(from),
-        toAddresses: Value(to),
-        ccJson: Value(cc),
-        replyToJson: Value(replyTo),
-        bccJson: Value(bcc),
-        sizeBytes:
-            m['size'] is int ? Value(m['size'] as int) : const Value.absent(),
-        preview: Value(m['preview'] as String?),
+      final headers = ServerRowHeaders(
+        uid: 0, // not used for JMAP accounts
+        subject: subject,
+        sentAt: sentAt,
+        receivedAt: receivedAt,
+        fromJson: from,
+        toJson: to,
+        ccJson: cc,
+        replyToJson: replyTo,
+        bccJson: bcc,
+        sizeBytes: m['size'] is int ? m['size'] as int : null,
+        preview: m['preview'] as String?,
         // Server-defined (RFC 8621); IMAP instead counts
         // Content-Disposition: attachment parts.
-        hasAttachment: Value((m['hasAttachment'] as bool?) ?? false),
-        threadId: Value(jmapThreadId),
-        messageId: Value(jmapMessageId),
-        inReplyTo: Value(jmapInReplyTo),
-        references: Value(jmapReferences),
-        listUnsubscribeHeader: Value(jmapListUnsubscribe),
-        srvJmapId: Value(jmapId),
+        hasAttachment: (m['hasAttachment'] as bool?) ?? false,
+        threadId: jmapThreadId,
+        messageId: jmapMessageId,
+        inReplyTo: jmapInReplyTo,
+        references: jmapReferences,
+        listUnsubscribeHeader: jmapListUnsubscribe,
+        srvJmapId: jmapId,
       );
       // The read/star/snooze state and the folder only through the
       // server-write gate (see [_SyncImap._fetchAndUpsertImapGuarded]): a
       // move or snooze the user made meanwhile keeps showing (#1238).
       if (existingRow == null) {
-        await _db.into(_db.emails).insert(
-              EmailStateWriter.newRow(
-                headers,
-                id: dbId,
-                accountId: accountId,
-                mailboxPath: mailboxPath,
-                keywords: keywords,
-                seq: read.seq,
-              ),
-            );
+        await _state.insertServerRow(
+          headers,
+          id: dbId,
+          accountId: accountId,
+          mailboxPath: mailboxPath,
+          keywords: keywords,
+          seq: read.seq,
+        );
         affectedByMailbox.putIfAbsent(mailboxPath, () => {}).add(jmapThreadId);
       } else {
-        await (_db.update(_db.emails)..where((t) => t.id.equals(dbId)))
-            .write(headers);
+        await _state.writeServerHeaders(dbId, headers);
         final moved = await read.writeLocation(dbId, mailboxPath);
         await read.write(dbId, keywords);
         // The thread in the folder it showed in before (also when the

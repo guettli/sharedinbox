@@ -2239,19 +2239,6 @@ class MailboxStateWriter {
     await rebuildDisplayPaths(accountId);
   }
 
-  /// Force resync: forgets [accountId]'s cached mailboxes, except the ones
-  /// a queued mailbox op still needs (a folder created offline, a pending
-  /// rename): the next listing finds them again by their path.
-  Future<void> clearForResync(String accountId) => _db.customUpdate(
-        'DELETE FROM mailboxes WHERE account_id = ?1 '
-        'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
-        "WHERE p.resource_type = '$mailboxResourceType' "
-        'AND p.resource_id = mailboxes.id)',
-        variables: [Variable.withString(accountId)],
-        updates: {_db.mailboxes},
-        updateKind: UpdateKind.delete,
-      );
-
   // ── Consistency ────────────────────────────────────────────────────────
 
   /// The mailboxes (of [accountId], all when null) that break the

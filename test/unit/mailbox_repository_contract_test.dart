@@ -9,13 +9,15 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
+import 'helpers/stateful_fake_imap.dart';
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 /// Verifies the [MailboxRepository] interface contract.
 ///
-/// Tests cover only the locally-observable part of the interface
-/// (observe / find) since sync methods require live IMAP/JMAP servers.
+/// Tests cover the locally-observable part of the interface (observe /
+/// find), and the folder listing against a server that holds [serverFolders]
+/// ([removeFolderOnServer] drops one).
 abstract class MailboxRepositoryContract {
   static const _account = Account(
     id: 'm-acc',
@@ -38,6 +40,12 @@ abstract class MailboxRepositoryContract {
     int unread = 0,
     int total = 0,
   });
+
+  /// The folders the server has when a repository is made.
+  static const serverFolders = ['INBOX', 'Old'];
+
+  /// Another client deletes folder [path] on the server.
+  void removeFolderOnServer(String path);
 
   void run() {
     test('observeMailboxes starts empty', () async {
@@ -72,11 +80,23 @@ abstract class MailboxRepositoryContract {
       expect(box!.role, 'archive');
     });
 
-    test('clearForResync removes all mailboxes for the account', () async {
+    test('clearForResync keeps the mailboxes: the next listing sweeps them',
+        () async {
+      // Mark-and-sweep (#1236): a force resync deletes nothing up front, so
+      // a listing that fails leaves the folder list as it was.
       final repo = await makeRepo();
       await insertMailbox(repo, id: 'mb', path: 'INBOX');
+      await insertMailbox(repo, id: 'old', path: 'Old');
       await repo.clearForResync(_account.id);
-      expect(await repo.observeMailboxes(_account.id).first, isEmpty);
+      var boxes = await repo.observeMailboxes(_account.id).first;
+      expect(boxes.map((m) => m.path), ['INBOX', 'Old']);
+
+      removeFolderOnServer('Old');
+      await repo.syncMailboxes(_account.id);
+
+      boxes = await repo.observeMailboxes(_account.id).first;
+      expect(boxes.map((m) => m.path), ['INBOX'], reason: 'Old swept');
+      expect(boxes.single.id, 'mb', reason: 'kept, not recreated');
     });
   }
 }
@@ -88,17 +108,26 @@ class _MailboxRepositoryImplContract extends MailboxRepositoryContract {
 
   late AppDatabase _db;
   late AccountRepositoryImpl _accountRepo;
+  late StatefulFakeImapServer _server;
+
+  @override
+  void removeFolderOnServer(String path) => _server.deleteFolder(path);
 
   @override
   Future<MailboxRepository> makeRepo() async {
     _db = openTestDatabase();
     _accountRepo = AccountRepositoryImpl(_db, MapSecureStorage());
     await _accountRepo.addAccount(_account, 'pw');
+    _server = StatefulFakeImapServer(
+      uidValidityByFolder: {
+        for (final (i, path) in MailboxRepositoryContract.serverFolders.indexed)
+          path: i + 1,
+      },
+    );
     return MailboxRepositoryImpl(
       _db,
       _accountRepo,
-      imapConnect: (_, __, ___) =>
-          Future.error(UnsupportedError('no IMAP in unit tests')),
+      imapConnect: (_, __, ___) async => _server.connect(),
     );
   }
 

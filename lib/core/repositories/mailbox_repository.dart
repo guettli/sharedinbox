@@ -14,7 +14,9 @@ abstract class MailboxRepository {
   /// Returns the first mailbox with the given [role] for [accountId], or null.
   Future<Mailbox?> findMailboxByRole(String accountId, String role);
 
-  /// Deletes all locally-cached mailbox rows for [accountId].
+  /// Force resync of [accountId]: makes the next [syncMailboxes] a
+  /// complete listing, which prunes the cached folders the server no
+  /// longer lists. Deletes no mailbox row (mark-and-sweep, #1236).
   Future<void> clearForResync(String accountId);
 
   /// Creates a new mailbox named [name] for [accountId] and tags it with

@@ -82,6 +82,7 @@ const _allMail = Mailbox(
   when(m.clearForResync(_accountId)).thenAnswer((_) async {});
 
   when(e.clearForResync(_accountId)).thenAnswer((_) async {});
+  when(e.sweepRowsOutsideFolders(_accountId)).thenAnswer((_) async {});
   when(e.clearMailboxForResync(_accountId, _inbox.path))
       .thenAnswer((_) async {});
   when(e.watchJmapPush(any, any)).thenAnswer((_) => const Stream.empty());
@@ -160,6 +161,42 @@ void main() {
       rig.emails.flushPendingChanges(_accountId, 'pw'),
       rig.emails.clearForResync(_accountId),
     ]);
+  });
+
+  test(
+      'forceResync sweeps mail outside the folders only after the folder '
+      'list was read again', () async {
+    final rig = makeRig();
+    _stubEmptySync(rig.emails);
+
+    await rig.manager.forceResync(_accountId).toList();
+
+    // A folder missing from the list read before the clear must not have
+    // its mail swept: the sweep follows the listing after the clear.
+    verifyInOrder([
+      rig.emails.clearForResync(_accountId),
+      rig.mailboxes.clearForResync(_accountId),
+      rig.mailboxes.syncMailboxes(_accountId),
+      rig.emails.sweepRowsOutsideFolders(_accountId),
+      rig.emails.syncEmails(_accountId, _inbox.path),
+    ]);
+  });
+
+  test('forceResync sweeps nothing when the listing after the clear fails',
+      () async {
+    final rig = makeRig();
+    _stubEmptySync(rig.emails);
+    var listings = 0;
+    when(rig.mailboxes.syncMailboxes(_accountId)).thenAnswer((_) async {
+      // The probe succeeds, the listing after the clear does not.
+      if (++listings > 1) throw Exception('offline');
+      return 1;
+    });
+
+    final snapshots = await rig.manager.forceResync(_accountId).toList();
+
+    expect(snapshots.last.phase, ForceResyncPhase.failed);
+    verifyNever(rig.emails.sweepRowsOutsideFolders(any));
   });
 
   test(

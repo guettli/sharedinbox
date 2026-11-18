@@ -415,6 +415,55 @@ void main() {
     expect(remaining.first.subject, 'keep');
   });
 
+  // Mark-and-sweep (#1236, SYNC-REDESIGN.md §6, phase 6a): the refetch finds
+  // the cached rows again, so they keep id and body; only what the server
+  // lost is swept.
+  test('force resync keeps found rows with their body and sweeps lost ones',
+      () async {
+    await appendToInbox('resync-keep', body: 'kept body');
+    await appendToInbox('resync-lost');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+    final before = await r.emails.observeEmails('test', 'INBOX').first;
+    final kept = before.singleWhere((e) => e.subject == 'resync-keep');
+    final fetched = await r.emails.getEmailBody(kept.id);
+    expect(fetched.textBody, contains('kept body'));
+
+    final imap = await connectImap(env: env, user: user);
+    try {
+      await imap.selectMailboxByPath('INBOX');
+      final search = await imap.uidSearchMessages(
+        searchCriteria: 'SUBJECT "resync-lost"',
+      );
+      final seq = MessageSequence.fromIds(
+        search.matchingSequence!.toList(),
+        isUid: true,
+      );
+      await imap.uidMarkDeleted(seq);
+      await imap.uidExpunge(seq);
+    } finally {
+      await imap.logout();
+    }
+
+    await r.emails.clearForResync('test');
+    expect(
+      await r.emails.observeEmails('test', 'INBOX').first,
+      hasLength(2),
+      reason: 'nothing is deleted before the refetch',
+    );
+    await r.emails.syncEmails('test', 'INBOX');
+
+    final after = await r.emails.observeEmails('test', 'INBOX').first;
+    expect(after.map((e) => e.subject), ['resync-keep']);
+    expect(after.single.id, kept.id, reason: 'found again in place');
+    final body = await (r.db.select(r.db.emailBodies)
+          ..where((t) => t.emailId.equals(kept.id)))
+        .getSingleOrNull();
+    expect(body?.textBody, contains('kept body'));
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 
