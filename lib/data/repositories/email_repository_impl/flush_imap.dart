@@ -53,7 +53,8 @@ extension _FlushImap on EmailRepositoryImpl {
     await _state.dropOrphanedAcks(accountId);
     // Rows gone on the server whose last change settled since (failed or
     // was discarded): nothing can bring them back (clean-up rule).
-    await _state.cleanUpGone(accountId);
+    final cleaned = await _state.cleanUpGone(accountId);
+    if (cleaned.isNotEmpty) await _logCleanedWithFailures(accountId, cleaned);
     final now = _now();
     final rows = await (_db.select(_db.pendingChanges)
           // A failed change waits for the user's Retry or Discard; a stuck one
@@ -88,6 +89,36 @@ extension _FlushImap on EmailRepositoryImpl {
       );
     } finally {
       await _releaseUnsettledClaims(accountId, token);
+    }
+  }
+
+  /// App Log line for each row [EmailStateWriter.cleanUpGone] deleted whose
+  /// failed change is still listed: the change stays on the Pending Changes
+  /// screen without its mail.
+  Future<void> _logCleanedWithFailures(
+    String accountId,
+    List<String> cleaned,
+  ) async {
+    final failed = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) => t.resourceId.isIn(cleaned) & t.state.equals(_failedState),
+          ))
+        .get();
+    for (final change in failed) {
+      unawaited(
+        _appLogger?.warn(
+          'pending_change.row_removed',
+          'Removed a mail the server no longer has; its failed '
+              '${_describeChange(change)} stays on the Pending Changes '
+              'screen',
+          accountId: accountId,
+          data: {
+            'removedEmailId': change.resourceId,
+            'changeId': change.id,
+            'changeType': change.changeType,
+          },
+        ),
+      );
     }
   }
 
@@ -332,6 +363,9 @@ extension _FlushImap on EmailRepositoryImpl {
     } catch (e) {
       return (moved: <PendingChangeRow>{}, error: e, moveSent: false);
     }
+    // Taken before the MOVE (SYNC-REDESIGN.md §4.1): its answer is at least
+    // this new.
+    final moveSeq = await _state.nextReadSeq();
     final imap.GenericImapResult result;
     try {
       result = await client.uidMove(
@@ -352,6 +386,7 @@ extension _FlushImap on EmailRepositoryImpl {
         sourceUid: uid,
         destMailboxPath: dest,
         moveResult: result,
+        seq: moveSeq,
       );
       moved.add(row);
     }
@@ -698,6 +733,7 @@ extension _FlushImap on EmailRepositoryImpl {
         if (payload['clearSnooze'] == true) {
           await _removeImapSnoozeFlags(client, seq);
         }
+        final moveSeq = await _state.nextReadSeq();
         final result = await client.uidMove(seq, targetMailboxPath: dest);
         final movedNothing = _imapMoveMovedNothing(client, result);
         if (!movedNothing &&
@@ -707,6 +743,7 @@ extension _FlushImap on EmailRepositoryImpl {
               sourceUid: uid,
               destMailboxPath: dest,
               moveResult: result,
+              seq: moveSeq,
             )) {
           return;
         }
@@ -743,6 +780,7 @@ extension _FlushImap on EmailRepositoryImpl {
         }
 
         await tag(seq);
+        final moveSeq = await _state.nextReadSeq();
         final snoozeResult = await client.uidMove(seq, targetMailboxPath: dest);
         final movedNothing = _imapMoveMovedNothing(client, snoozeResult);
         if (!movedNothing &&
@@ -752,6 +790,7 @@ extension _FlushImap on EmailRepositoryImpl {
               sourceUid: uid,
               destMailboxPath: dest,
               moveResult: snoozeResult,
+              seq: moveSeq,
             )) {
           return;
         }
@@ -773,6 +812,7 @@ extension _FlushImap on EmailRepositoryImpl {
           await client.createMailbox(dest);
         } catch (_) {}
         await _removeImapSnoozeFlags(client, seq);
+        final moveSeq = await _state.nextReadSeq();
         final unsnoozeResult =
             await client.uidMove(seq, targetMailboxPath: dest);
         final unsnoozedNothing = _imapMoveMovedNothing(client, unsnoozeResult);
@@ -783,6 +823,7 @@ extension _FlushImap on EmailRepositoryImpl {
               sourceUid: uid,
               destMailboxPath: dest,
               moveResult: unsnoozeResult,
+              seq: moveSeq,
             )) {
           return;
         }
@@ -903,6 +944,8 @@ extension _FlushImap on EmailRepositoryImpl {
         .getSingleOrNull();
     final mid = messageId ?? local?.messageId;
     if (mid == null || mid.isEmpty) return;
+    // Taken before the searches: a location they find is at least this new.
+    final searchSeq = await _state.nextReadSeq();
 
     // After a MOVE that moved nothing, the source is still selected.
     final resolvedUid = await _searchUidByMessageId(
@@ -932,6 +975,7 @@ extension _FlushImap on EmailRepositoryImpl {
         destMailboxPath: destMailboxPath,
         newUid: destUid,
         mergeDuplicate: sourceEmpty,
+        seq: searchSeq,
       );
       // Possibly moved there by another client, after read/star changes of
       // ours went to the UID it had left: the flags it has there are not
@@ -969,6 +1013,7 @@ extension _FlushImap on EmailRepositoryImpl {
     await client.selectUnicodeMailboxByPath(mailboxPath);
     final resolvedSeq = imap.MessageSequence.fromId(resolvedUid, isUid: true);
     await beforeMove?.call(resolvedSeq);
+    final moveSeq = await _state.nextReadSeq();
     final result = await client.uidMove(
       resolvedSeq,
       targetMailboxPath: destMailboxPath,
@@ -979,6 +1024,7 @@ extension _FlushImap on EmailRepositoryImpl {
       sourceUid: resolvedUid,
       destMailboxPath: destMailboxPath,
       moveResult: result,
+      seq: moveSeq,
     );
     if (located) return;
     throw StateError(
@@ -1006,6 +1052,7 @@ extension _FlushImap on EmailRepositoryImpl {
     required int sourceUid,
     required String destMailboxPath,
     required imap.GenericImapResult moveResult,
+    int? seq,
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(oldId)))
         .getSingleOrNull();
@@ -1045,6 +1092,7 @@ extension _FlushImap on EmailRepositoryImpl {
       id: oldId,
       destMailboxPath: destMailboxPath,
       newUid: newUid,
+      seq: seq,
     );
     return true;
   }
@@ -1057,6 +1105,7 @@ extension _FlushImap on EmailRepositoryImpl {
     required String destMailboxPath,
     required int newUid,
     bool mergeDuplicate = true,
+    int? seq,
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
@@ -1073,6 +1122,7 @@ extension _FlushImap on EmailRepositoryImpl {
       newUid: newUid,
       newMailboxPath: destMailboxPath,
       mergeDuplicate: mergeDuplicate,
+      seq: seq,
     );
 
     // Rebuild thread aggregates in both mailboxes from the now-updated emails.

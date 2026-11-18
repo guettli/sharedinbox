@@ -35,7 +35,12 @@
 #        literal, `newRow(…)` / `withServerLocation(…)` or a local variable
 #        initialised with one of these (an `Email` data row carries every
 #        column, and an `EmailsCompanion.insert(…)` the shown folder, which
-#        an upsert would write over a pending move).
+#        an upsert would write over a pending move). `newRow` and
+#        `withServerLocation` only as the argument of a plain `.insert(…)`
+#        without `mode:` / `onConflict:` (an upsert or replace would reset
+#        the overlay of a row that exists); no `replace` at all.
+#    SQL split into adjacent string literals ("UPDATE " + "emails …", also
+#    across a line break) is read joined.
 #
 # 2. Every other write of `emails` — `EmailsCompanion`, `.toCompanion(`,
 #    Drift's update/into/delete/insert/replace on `emails` (also in a batch,
@@ -89,7 +94,7 @@ lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo
 '
 
 files=$(grep -rlE --include='*.dart' \
-  'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|toCompanion\(' \
+  'emails|EMAILS|Emails|srvIsSeen|srvIsFlagged|srvSnoozedUntil|srvKeywordsSeq|localIsSeen|localIsFlagged|localSnoozedUntil|srvMailboxPath|localMailboxPath|localHidden|srvGone|srvLocationSeq|toCompanion\(' \
   "$dir" | grep -v '\.g\.dart$' \
   | grep -v 'lib/data/repositories/email_state_writer\.dart$' || true)
 
@@ -134,7 +139,7 @@ for f in $files; do
     # emptied, named arguments dropped, a conditional split into its two
     # branches. Each must be an EmailsCompanion(…) / .custom(…) literal,
     # newRow(…) / withServerLocation(…) or a variable holding one.
-    function rowArgOk(a,   flat, i, c, d, parts, n, k, v, q, branches, m, j) {
+    function rowArgOk(a, method,   flat, i, c, d, parts, n, k, v, q, branches, m, j, plain) {
       flat = ""; d = 0
       for (i = 1; i <= length(a); i++) {
         c = substr(a, i, 1)
@@ -143,6 +148,16 @@ for f in $files; do
         if (d == 0) flat = flat c
       }
       n = split(flat, parts, ",")
+      # A new row (newRow / withServerLocation) only through a plain
+      # insert: an upsert or a replace would reset the overlay columns of
+      # a row that exists (and a replace deletes it, its body cascading).
+      plain = (method == "insert")
+      for (k = 1; k <= n; k++) {
+        v = parts[k]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        if (v ~ /^(mode|onConflict):/) plain = 0
+      }
+      if (method == "replace") return 0
       for (k = 1; k <= n; k++) {
         v = parts[k]
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
@@ -154,8 +169,9 @@ for f in $files; do
           v = branches[j]
           gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
           if (v ~ /^(const[[:space:]]+)?EmailsCompanion(\.custom)?\(\)$/) continue
-          if (v ~ /^(EmailStateWriter\.)?(newRow|withServerLocation)\(\)$/) continue
+          if (plain && v ~ /^(EmailStateWriter\.)?(newRow|withServerLocation)\(\)$/) continue
           if (v ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && (v in compVar)) continue
+          if (plain && v ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && (v in rowVar)) continue
           return 0
         }
       }
@@ -168,7 +184,7 @@ for f in $files; do
     }
     # A closing brace at indent 0 ends the type or top-level function (not
     # the `}) async {` of a signature).
-    /^};?[[:space:]]*$/ { inType = 0; member = ""; split("", compVar) }
+    /^};?[[:space:]]*$/ { inType = 0; member = ""; split("", compVar); split("", rowVar) }
     {
       decl = 0
       if (!inType && $0 ~ /^[A-Za-z_@]/) decl = 1
@@ -190,7 +206,7 @@ for f in $files; do
           # A signature continued on the next line.
           member = "(signature)"; sigNext = 1
         }
-        if (member != before) split("", compVar)
+        if (member != before) { split("", compVar); split("", rowVar) }
       } else if (sigNext && match($0, /[A-Za-z_][A-Za-z0-9_]*(<[^()]*>)?\(/)) {
         member = substr($0, RSTART, RLENGTH)
         sub(/<.*$/, "", member); sub(/\($/, "", member)
@@ -211,6 +227,17 @@ for f in $files; do
       sub(/^[[:space:]]*\/\/.*$/, "", code); sub(/[[:space:]]\/\/.*$/, "", code)
       sql = tolower(code)
       gsub(/\[|\]/, "", sql)
+      # Adjacent string literals (an UPDATE split as "UPDATE " + "emails",
+      # also without the +) read as one, also across a line break (sqlJ:
+      # the last literal of the line above joined with the first one of this line).
+      gsub(/['"'"'"][[:space:]]*\+?[[:space:]]*['"'"'"]/, "", sql)
+      cur = sql
+      startsLit = sub(/^[[:space:]]*\+?[[:space:]]*['"'"'"]/, "", cur)
+      sqlJ = (prevLitEnd && startsLit) ? prevLit cur : sql
+      t = sql
+      prevLitEnd = sub(/['"'"'"][[:space:]]*,?[[:space:]]*\+?[[:space:]]*$/, "", t)
+      if (match(t, /['"'"'"][^'"'"'"]*$/)) t = substr(t, RSTART + 1)
+      prevLit = t
     }
 
     # ── Check 1: the overlay columns ──────────────────────────────────────
@@ -267,8 +294,9 @@ for f in $files; do
     # Companion variables of an allowed member, for the argument check.
     allowedHere && match($0, /(final|var)[[:space:]]+([A-Za-z_][A-Za-z0-9_<>?]*[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(const[[:space:]]+)?(EmailsCompanion(\.custom)?\(|(EmailStateWriter\.)?(newRow|withServerLocation)\()/) {
       v = substr($0, RSTART, RLENGTH)
+      isRow = (v ~ /(newRow|withServerLocation)\($/)
       sub(/[[:space:]]*=.*$/, "", v); sub(/^.*[[:space:]]/, "", v)
-      compVar[v] = 1
+      if (isRow) rowVar[v] = 1; else compVar[v] = 1
     }
     # The argument of a Drift insert/write/replace into emails, in an
     # allowed member: no data row.
@@ -279,13 +307,15 @@ for f in $files; do
         p = index(rest, "emails)")
         rest = substr(rest, p + 7)
       }
-      if (!inArg && line ~ /(insert|update|replace|insertAllOnConflictUpdate)\([[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?emails[[:space:]]*,/) {
+      if (!inArg && match(line, /(insert|update|replace|insertAllOnConflictUpdate)\([[:space:]]*([A-Za-z_][A-Za-z0-9_]*\.)?emails[[:space:]]*,/)) {
+        argMethod = substr(line, RSTART, RLENGTH); sub(/\(.*$/, "", argMethod)
         p = index(rest, "emails,")
         if (p == 0) p = index(rest, "emails ,")
         if (p > 0) { inArg = 1; adepth = 1; argText = ""; argStart = FNR; argLine = $0; rest = substr(rest, p + 7) }
       }
       if (pendArg && !inArg) {
         if (match(rest, /\.(insert|insertOnConflictUpdate|insertOne|insertReturning|replace|write)\(/)) {
+          argMethod = substr(rest, RSTART + 1, RLENGTH - 2)
           pendArg = 0; inArg = 1; adepth = 1; argText = ""; argStart = FNR; argLine = $0
           rest = substr(rest, RSTART + RLENGTH)
         } else if (FNR - pendStart > 8) pendArg = 0
@@ -299,7 +329,7 @@ for f in $files; do
             adepth--
             if (adepth == 0) {
               inArg = 0
-              if (!rowArgOk(argText)) print "overlay\t" FILENAME ":" argStart ": [" member "] " argLine
+              if (!rowArgOk(argText, argMethod)) print "overlay\t" FILENAME ":" argStart ": [" member "] " argLine
               break
             }
           }
@@ -311,6 +341,8 @@ for f in $files; do
     # SQL: the SET list of an UPDATE emails, the column list of an INSERT.
     {
       s = sql
+      if (!inSet && !inIns && s !~ updSql && s !~ insSql \
+          && (sqlJ ~ updSql || sqlJ ~ insSql)) s = sqlJ
       # String literals split over lines read as one; quoted names unquoted.
       gsub(/['"'"'"][[:space:]]*,?[[:space:]]*$/, "", s); gsub(/^[[:space:]]*['"'"'"]/, " ", s)
       if (!inSet && !inIns) {
@@ -358,6 +390,7 @@ for f in $files; do
       if (line ~ /managers\.emails/) w = 1
       if (line ~ /updates:[[:space:]]*\{[^}]*emails/) w = 1
       if (sql ~ updSql || sql ~ insSql || sql ~ delSql) w = 1
+      if (sqlJ ~ updSql || sqlJ ~ insSql || sqlJ ~ delSql) w = 1
       # Backstop: a bare reference to the table that is not a read.
       if (!w && match(joined, dbRef "([^A-Za-z0-9_.]|$)")) {
         headText = substr(joined, 1, RSTART)

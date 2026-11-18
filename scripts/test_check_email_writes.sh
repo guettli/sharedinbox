@@ -535,6 +535,64 @@ extension _SyncJmap on EmailRepositoryImpl {
 }
 EOF
 
+# ── Review round 2: upserts of new rows, split SQL, the pre-filter ─────────
+expect fail 'an upsert of newRow in an allowed member' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    await _db.into(_db.emails).insertOnConflictUpdate(
+          EmailStateWriter.newRow(headers, id: id, seq: read.seq),
+        );
+  }
+}
+EOF
+
+expect fail 'newRow inserted with mode: insertOrReplace' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    await _db.into(_db.emails).insert(
+          EmailStateWriter.newRow(headers, id: id, seq: read.seq),
+          mode: InsertMode.insertOrReplace,
+        );
+  }
+}
+EOF
+
+expect fail 'a newRow variable written over an existing row' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() async {
+    final row = EmailStateWriter.newRow(headers, id: id, seq: read.seq);
+    await (_db.update(_db.emails)..where((t) => t.id.equals(id))).write(row);
+  }
+}
+EOF
+
+expect fail 'UPDATE emails split over adjacent literals on one line' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() => _db.customUpdate(
+        'UPDATE ' + 'emails SET mailbox_path = ?1 WHERE id = ?2',
+      );
+}
+EOF
+
+expect fail 'UPDATE emails split over literals on two lines' \
+  "$repo/sync_imap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncImap on EmailRepositoryImpl {
+  Future<void> _fetchAndUpsertImapGuarded() => _db.customUpdate(
+        'UPDATE '
+        'emails SET local_hidden = 1 WHERE id = ?2',
+      );
+}
+EOF
+
+expect fail 'a location column given a Value in a file not naming the table' \
+  "core/models/thing.dart" 'read/star/snooze' <<'EOF'
+final c = SomeCompanion(srvGone: const Value(true));
+EOF
+
 # ── Near-misses that must pass ──────────────────────────────────────────────
 
 expect pass 'reads, other tables and models' "$repo/queries.dart" <<'EOF'

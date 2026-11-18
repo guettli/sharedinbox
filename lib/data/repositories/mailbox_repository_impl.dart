@@ -1183,7 +1183,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // the rows show. A row that still records a location under the new
         // path (that folder did not exist on the server) is stale: it gives
         // the location up, so one location keeps one row.
-        released += await EmailStateWriter(_db)
+        released += await EmailStateWriter(_db, appLogger: _appLogger)
             .renameFolder(d.accountId, d.path, rewrittenPath);
         await (_db.update(_db.threads)
               ..where(
@@ -1440,6 +1440,7 @@ Future<void> removeLocalMailbox(
   AppLogger? appLogger,
 }) async {
   final failed = <PendingChangeRow>[];
+  var kept = <String>{};
   final writer = EmailStateWriter(db, appLogger: appLogger);
   await db.transaction(() async {
     await (db.delete(db.threads)
@@ -1486,7 +1487,7 @@ Future<void> removeLocalMailbox(
     // server's folder and read/star/snooze state again.
     final shownElsewhere =
         await writer.refoldAll([for (final row in failed) row.resourceId]);
-    await writer.markFolderGone(accountId, path);
+    kept = await writer.markFolderGone(accountId, path);
     for (final row in await (db.select(db.emails)
           ..where((t) => t.id.isIn(shownElsewhere)))
         .get()) {
@@ -1504,6 +1505,19 @@ Future<void> removeLocalMailbox(
           ))
         .go();
   });
+  if (kept.isNotEmpty) {
+    unawaited(
+      appLogger?.warn(
+        'email.server_gone_with_changes',
+        'The folder "$path" was removed on the server: ${kept.length} '
+            'mail(s) of it are kept, hidden, while a change of them is being '
+            'sent or confirmed',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'emailIds': kept.take(100).toList()},
+      ),
+    );
+  }
   for (final row in failed) {
     unawaited(
       appLogger?.warn(

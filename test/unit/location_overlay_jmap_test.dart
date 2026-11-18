@@ -6,6 +6,7 @@
 
 import 'dart:async';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
@@ -230,15 +231,27 @@ void main() {
         'Email/changes destroyed keeps a row with a queued move; the move '
         'then surfaces as failed', () async {
       await r.emails.moveEmail(id, _archive);
+      await r.db.into(r.db.emailBodies).insert(
+            EmailBodiesCompanion.insert(
+              emailId: id,
+              textBody: const Value('offline body'),
+            ),
+          );
       mailboxIds = null;
       destroyed = ['e1'];
 
       await sync();
 
+      // Before phase 4a the row (and its offline body) was deleted here
+      // while the user's move was still queued.
       final e = (await row())!;
       expect(e.srvGone, isTrue);
       expect(e.mailboxPath, _archive, reason: 'the queued move still shows');
       expect((await ops()).single.state, 'pending');
+      expect(
+        (await r.db.select(r.db.emailBodies).getSingle()).textBody,
+        'offline body',
+      );
       await expectConsistent();
 
       await flush();

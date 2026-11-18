@@ -870,12 +870,15 @@ As implemented, phase 4 is two PRs:
      WHERE srv_gone = 1` for the clean-up rule.
    - **Migration.** A row without `srv_mailbox_path` gets the source of its
      first queued move/snooze/unsnooze, else the folder it shows. The
-     foldable ops are folded once (both groups). An acked op from before
-     v73 whose destination is not where the server has the mail is
-     dropped: only its keyword part was tracked, and folding its folder now
-     would move the mail back. Only rows whose shown folder changes are
-     rewritten (a row with a failed move whose revert was skipped shows
-     its server folder from now on).
+     foldable ops are folded once (both groups). An acked op keeps folding,
+     as at runtime, until a read settles it (dropping it would flash an
+     acked snooze without COPYUID back to its source); a `contradicted_seq`
+     recorded before v73 concerned its keywords only and is cleared for
+     one whose destination is not where the server has the mail. Only rows
+     whose shown folder changes are rewritten (a row with a failed move
+     whose revert was skipped shows its server folder from now on); they
+     are listed in the App Log (warn `migration.location_overlay`, one line
+     per account).
    - **Fold.** `foldLocation` / `locationColumnsOf` / `locationAgreesWith`
      in `keyword_fold.dart` next to the keyword fold; `refold` writes both
      groups in one statement. `move`/`snooze`/`unsnooze` write
@@ -893,8 +896,9 @@ As implemented, phase 4 is two PRs:
      Undo's cancel of a queued move, snooze or delete is now enough to put
      the mail back (the reverse move finds it in place and queues nothing):
      the local-only snooze source comes back from the cancelled payload
-     (`prevSnoozedFrom`), and `UndoService` also cancels a counterpart's
-     forward change when the reverse step mirrored nothing to it.
+     (`prevSnoozedFrom`). `moveEmail` mirrors to the counterparts also when
+     the row is in the destination already, so a counterpart whose mirrored
+     change was sent (and cannot be cancelled) still gets its reverse move.
    - **Gate.** `KeywordRead` (the read object of 3a) also writes the
      location group: `writeLocation` (presence in a folder: IMAP FETCH of
      an existing row, JMAP `Email/get`), `confirmPresent` (an enumeration
@@ -918,8 +922,8 @@ As implemented, phase 4 is two PRs:
      ack, stamped with `ack_seq`: the JMAP move's mailbox (`mailboxIds` is
      replaced), the gone state of a delete for good (IMAP expunge, JMAP
      destroy or `notFound`). An IMAP move's new location (COPYUID or
-     Message-ID search) is written by `relocate` with a fresh sequence just
-     before the ack. `_settleAcked` is shared by both groups and reads the
+     Message-ID search) is written by `relocate`, stamped with a sequence
+     taken before the MOVE (or the search) that learnt it (§4.1). `_settleAcked` is shared by both groups and reads the
      row's `srv_*` after the write: an acked op settles once every group it
      has columns in was written by a read after its ack (so a snooze waits
      for both, §4.5), dropped when they agree and by the two-read rule when
@@ -941,8 +945,18 @@ As implemented, phase 4 is two PRs:
      it shown in the destination). An IMAP move answered without COPYUID
      for a row hidden by its queued delete takes the destination UID only
      from a unique Message-ID match, as for a row that is gone. The UIDVALIDITY
-     reset logs the rows it keeps (`sync.uidvalidity_changed`). Force
-     resync still deletes (#1236's mark-and-sweep is later).
+     reset logs the rows it keeps (`sync.uidvalidity_changed`), and so does
+     `removeLocalMailbox` (`email.server_gone_with_changes`);
+     `markFolderGone` runs in one transaction and clears the UID only of the
+     rows it marked that are still recorded in that folder. A failed move
+     whose mail is in neither folder (`_dropGoneRow`) marks it gone too,
+     and it is deleted only without a change left. The warning is not
+     logged for a row whose only change is the user's own delete for good;
+     a flush that cleans up a row whose failed change stays listed logs
+     `pending_change.row_removed`. Force resync (whole account or one
+     folder) still deletes the rows, except those with a change, which
+     the refetch finds again by their server location (#1236's
+     mark-and-sweep is later).
    - **Sync scans** filter by `srv_mailbox_path` (and the row's `srv_uid` /
      `srv_jmap_id`), never by the shown folder: the IMAP deletion
      reconcile, the JMAP prune and flag reconcile (the IMAP flag reconcile
@@ -953,8 +967,9 @@ As implemented, phase 4 is two PRs:
      hidden row reads as deleted), `findEmailByMessageId`, the FTS/body/
      notes search, `searchEmailsStructured`, `getEmailsByAddress`,
      `searchAddresses`, the thread across folders, the counterpart lookup,
-     `_localRowFor`, `_hasArrivedOutsideSent`, `wakeUpEmails` and the folder
-     statistics. `_updateThread` ignores `''`; a re-fold refreshes the
+     `_localRowFor`, `_hasArrivedOutsideSent`, `wakeUpEmails`, the folder
+     statistics, the body prefetch (`BodyCacheService`) and the note log's
+     Message-ID lookup. `_updateThread` ignores `''`; a re-fold refreshes the
      thread in the folder the row showed before and the one it shows now
      (`Refold`). Every user action (flag, move, delete, snooze, unsnooze)
      on a hidden row does nothing.
@@ -971,16 +986,22 @@ As implemented, phase 4 is two PRs:
    - **Rename and the Snoozed placeholder.** `EmailStateWriter.renameFolder`
      moves `srv_mailbox_path`, `local_mailbox_path`,
      `snoozed_from_mailbox_path` and the `dest`/`src`/`mailboxPath` of the
-     account's queued payloads from one folder to another in one
-     transaction; the IMAP folder rename and `_repointSnoozedPlaceholder`
-     use it (phase 5 makes both ops).
+     account's queued payloads (and `prevSnoozedFrom`), and the folders
+     stored in Undo actions, from one folder to another in one
+     transaction (App Log warn `pending_change.folder_renamed`); the IMAP
+     folder rename and `_repointSnoozedPlaceholder` use it (phase 5 makes
+     both ops).
    - **Enforcement.** `check_email_writes.sh` check 1 covers the location
      columns (`mailbox_path`, `srv_mailbox_path`, `local_mailbox_path`,
      `local_hidden`, `srv_gone`, `srv_location_seq`; `mailboxPath` stays
      allowed in `EmailsCompanion.insert(…)`, where Drift requires it), and
      an insert/write argument must be an `EmailsCompanion(…)` literal,
      `newRow(…)`/`withServerLocation(…)` or a variable holding one (no
-     `EmailsCompanion.insert(…)` upsert, no bare `withServerKeywords`). The
+     `EmailsCompanion.insert(…)` upsert, no bare `withServerKeywords`);
+     `newRow`/`withServerLocation` only in a plain `.insert(…)` without
+     `mode:`/`onConflict:`, and no `replace`. SQL split over adjacent string
+     literals is read joined, and the file pre-filter knows the location
+     column names. The
      allow-list shrinks from 16 members to 5 (the new-row inserts of sync,
      the virtual rows and Undo's restore); `relocate`, `releaseLocation`,
      `renameFolder` and `writeSnoozedFrom` moved into the writer.
@@ -988,13 +1009,22 @@ As implemented, phase 4 is two PRs:
      checks `mailbox_path`, `local_mailbox_path`, `local_hidden` and a
      missing `srv_mailbox_path`; the repair re-folds (and records the shown
      folder as the server's for a row without one).
+   - **Undo's restore** of a row the clean-up deleted records the
+     snapshot's server folder (and UID unless another row holds it), not
+     the folder it showed: a snapshot taken behind a queued move shows the
+     destination, where no sync could confirm it.
    - **Tests.** `location_overlay_test.dart` (IMAP rig: fold, stale source
      sync, ack and drop, refused move, delete hides then cleans up, Undo
-     cancel keeps the body, #1239 with a queued move, the late FETCH, the
-     rename, the consistency repair), `location_overlay_jmap_test.dart`
-     (#1238 with a queued and with a just-sent move and with a snooze,
-     #1239 `destroyed` and `notFound`, delete for good, a foreign move),
-     and the v72→v73 migration test.
+     cancel keeps the body, a gone mail with a queued move, a refused
+     delete showing the mail again, a removed folder putting a moved-in
+     mail back in its source (#1239), the late FETCH, the rename incl.
+     `prevSnoozedFrom` and Undo, the consistency repair),
+     `location_overlay_jmap_test.dart` (#1238 with a queued and with a
+     just-sent move and with a queued and an in-flight snooze, #1239
+     `destroyed` keeping row and body and `notFound`, delete for good, a
+     foreign move), Undo of a move whose counterpart change was sent
+     (`undo_logic_test.dart`), fixtures for the new check rules, and the
+     v72→v73 migration test.
 2. **4b (open):** what 4a leaves as before.
    - Virtual rows: the absence rules and the in-place matching of §6
      (`_maybeDissolveLocalMessage` still deletes the virtual row and

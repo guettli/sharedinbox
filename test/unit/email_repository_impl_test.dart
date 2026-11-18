@@ -771,8 +771,13 @@ void main() {
 
       await r.emails.clearMailboxForResync('acc-1', 'INBOX');
 
-      // The INBOX rows and its checkpoint are gone…
-      expect(await r.emails.observeEmails('acc-1', 'INBOX').first, isEmpty);
+      // The INBOX checkpoint is gone; its row stays, because the user has a
+      // change queued for it (clean-up rule): the refetch finds it again by
+      // its server location.
+      expect(
+        await r.emails.observeEmails('acc-1', 'INBOX').first,
+        hasLength(1),
+      );
       final inboxState = await (r.db.select(r.db.syncStates)
             ..where((t) => t.resourceType.equals('IMAP:INBOX')))
           .get();

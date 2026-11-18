@@ -711,19 +711,22 @@ class EmailStateWriter {
     required String mailboxPath,
     required int uid,
     required int? uidValidity,
+    int? seq,
   }) async {
-    final seq = await nextReadSeq();
+    // A confirmed fact: written whatever read wrote last, stamped with the
+    // sequence taken before the request that learnt it (or now).
+    final stamp = seq ?? await nextReadSeq();
     await _db.customUpdate(
       'UPDATE emails SET uid = ?1, srv_mailbox_path = ?2, srv_uid = ?1, '
       'srv_uid_validity = ?3, srv_jmap_id = NULL, srv_gone = 0, '
-      'srv_location_seq = ?4, '
+      'srv_location_seq = MAX(srv_location_seq, ?4), '
       'mailbox_path = ${_shownPathSql(srv: '?2', gone: '0')} '
       'WHERE id = ?5',
       variables: [
         Variable.withInt(uid),
         Variable.withString(mailboxPath),
         Variable<int>(uidValidity),
-        Variable.withInt(seq),
+        Variable.withInt(stamp),
         Variable.withString(emailId),
       ],
       updates: {_db.emails},
@@ -747,7 +750,9 @@ class EmailStateWriter {
   /// folder of its rows, the destinations and sources of the queued changes
   /// (payload `dest`, `src`, `mailboxPath`), the pending moves folded from
   /// them and `snoozed_from_mailbox_path` follow, in one transaction, and so
-  /// does the folder the rows show. A row that still records an IMAP
+  /// do the folder the rows show, the `prevSnoozedFrom` of the queued
+  /// changes and the folders stored in Undo actions (App Log warn
+  /// `pending_change.folder_renamed` when any queued data changed). A row that still records an IMAP
   /// location under [to] (that folder did not exist on the server) gives it
   /// up first: one location, one row. Returns how many rows gave one up.
   Future<int> renameFolder(String accountId, String from, String to) =>
@@ -769,20 +774,45 @@ class EmailStateWriter {
         final ops = await (_db.select(_db.pendingChanges)
               ..where((t) => t.accountId.equals(accountId)))
             .get();
+        var rewrittenOps = 0;
         for (final op in ops) {
           final payload = _payloadOf(op);
           if (payload == null) continue;
           var changed = false;
-          for (final key in const ['dest', 'src', 'mailboxPath']) {
+          for (final key in const [
+            'dest',
+            'src',
+            'mailboxPath',
+            'prevSnoozedFrom',
+          ]) {
             if (payload[key] != from) continue;
             payload[key] = to;
             changed = true;
           }
           if (!changed) continue;
+          rewrittenOps++;
           final rewritten = jsonEncode(payload);
           await (_db.update(_db.pendingChanges)
                 ..where((t) => t.id.equals(op.id)))
               .write(PendingChangesCompanion(payload: Value(rewritten)));
+        }
+        final rewrittenUndo = await _renameInUndoActions(accountId, from, to);
+        if (rewrittenOps > 0 || rewrittenUndo > 0) {
+          _logOutside(
+            (logger) => logger.warn(
+              'pending_change.folder_renamed',
+              'Folder "$from" is "$to" now: $rewrittenOps queued change(s) '
+                  'and $rewrittenUndo Undo entr${rewrittenUndo == 1 ? 'y' : 'ies'} '
+                  'name the new folder',
+              accountId: accountId,
+              data: {
+                'from': from,
+                'to': to,
+                'changes': rewrittenOps,
+                'undoActions': rewrittenUndo,
+              },
+            ),
+          );
         }
         await _db.customUpdate(
           'UPDATE emails SET '
@@ -812,6 +842,56 @@ class EmailStateWriter {
         return released;
       });
 
+  /// [renameFolder] for the stored Undo actions of [accountId]: their
+  /// source and destination folders and the folders of their snapshots.
+  /// Returns how many were rewritten.
+  Future<int> _renameInUndoActions(
+    String accountId,
+    String from,
+    String to,
+  ) async {
+    var count = 0;
+    for (final r in await _db.customSelect(
+      'SELECT id, data_json FROM undo_actions WHERE account_id = ?1',
+      variables: [Variable.withString(accountId)],
+    ).get()) {
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(r.read<String>('data_json'));
+      } catch (_) {
+        continue;
+      }
+      if (decoded is! Map<String, dynamic>) continue;
+      var changed = false;
+      void swap(Map<String, dynamic> map, String key) {
+        if (map[key] != from) return;
+        map[key] = to;
+        changed = true;
+      }
+
+      swap(decoded, 'sourceMailboxPath');
+      swap(decoded, 'destinationMailboxPath');
+      for (final e in decoded['originalEmails'] as List<dynamic>? ?? []) {
+        if (e is! Map<String, dynamic>) continue;
+        swap(e, 'mailboxPath');
+        swap(e, 'srvMailboxPath');
+        swap(e, 'snoozedFromMailboxPath');
+      }
+      if (!changed) continue;
+      count++;
+      await _db.customUpdate(
+        'UPDATE undo_actions SET data_json = ?1 WHERE id = ?2',
+        variables: [
+          Variable.withString(jsonEncode(decoded)),
+          Variable.withString(r.read<String>('id')),
+        ],
+        updates: {_db.undoActions},
+        updateKind: UpdateKind.update,
+      );
+    }
+    return count;
+  }
+
   /// Folder [mailboxPath] of [accountId] is gone on the server (deleted, or
   /// its UIDVALIDITY changed): its rows are marked gone ([KeywordRead.markGone]
   /// with a fresh read sequence) and lose their UID, and the rows without a
@@ -822,36 +902,45 @@ class EmailStateWriter {
   Future<Set<String>> markFolderGone(
     String accountId,
     String mailboxPath,
-  ) async {
-    final read = await beginRead(accountId);
-    final ids = [
-      for (final r in await _db.customSelect(
-        'SELECT id FROM emails WHERE account_id = ?1 '
-        'AND srv_mailbox_path = ?2 AND is_local = 0',
-        variables: [
-          Variable.withString(accountId),
-          Variable.withString(mailboxPath),
-        ],
-      ).get())
-        r.read<String>('id'),
-    ];
-    await read.markGone(ids);
-    for (var i = 0; i < ids.length; i += 500) {
-      final chunk = ids.sublist(i, min(i + 500, ids.length));
-      await _db.customUpdate(
-        'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL '
-        'WHERE id IN (${List.filled(chunk.length, '?').join(', ')})',
-        variables: [for (final id in chunk) Variable.withString(id)],
-        updates: {_db.emails},
-        updateKind: UpdateKind.update,
-      );
-    }
-    final deleted = (await cleanUpGone(accountId)).toSet();
-    return {
-      for (final id in ids)
-        if (!deleted.contains(id)) id,
-    };
-  }
+  ) =>
+      // One transaction: a flush relocating one of these rows meanwhile
+      // (another isolate) must not have its new UID cleared.
+      _db.transaction(() async {
+        final read = await beginRead(accountId);
+        final ids = [
+          for (final r in await _db.customSelect(
+            'SELECT id FROM emails WHERE account_id = ?1 '
+            'AND srv_mailbox_path = ?2 AND is_local = 0',
+            variables: [
+              Variable.withString(accountId),
+              Variable.withString(mailboxPath),
+            ],
+          ).get())
+            r.read<String>('id'),
+        ];
+        // Only the rows this marked (no later read placed them elsewhere),
+        // and only while they are still recorded in this folder.
+        final marked = (await read.markGone(ids)).toList();
+        for (var i = 0; i < marked.length; i += 500) {
+          final chunk = marked.sublist(i, min(i + 500, marked.length));
+          await _db.customUpdate(
+            'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL '
+            'WHERE srv_mailbox_path = ?1 AND srv_gone = 1 '
+            'AND id IN (${List.filled(chunk.length, '?').join(', ')})',
+            variables: [
+              Variable.withString(mailboxPath),
+              for (final id in chunk) Variable.withString(id),
+            ],
+            updates: {_db.emails},
+            updateKind: UpdateKind.update,
+          );
+        }
+        final deleted = (await cleanUpGone(accountId)).toSet();
+        return {
+          for (final id in marked)
+            if (!deleted.contains(id)) id,
+        };
+      });
 
   // ── Other columns ──────────────────────────────────────────────────────
   // Writes of `emails` that touch no overlay column, kept here so that one
@@ -863,18 +952,24 @@ class EmailStateWriter {
   Future<void> deleteRow(String emailId) =>
       (_db.delete(_db.emails)..where((t) => t.id.equals(emailId))).go();
 
-  /// Deletes every row of [accountId] the server has in [mailboxPath], or
-  /// every row of the account when [mailboxPath] is null (force resync).
+  /// Force resync: deletes every row of [accountId] the server has in
+  /// [mailboxPath], or every row of the account when [mailboxPath] is null,
+  /// except a row with a pending, in-flight, stuck or acked change (the
+  /// clean-up rule): it keeps its id, body and changes, and the refetch
+  /// finds it again by its server location (or marks it gone).
   Future<void> deleteRowsOf(String accountId, {String? mailboxPath}) =>
-      (_db.delete(_db.emails)
-            ..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  (mailboxPath == null
-                      ? const Constant(true)
-                      : t.srvMailboxPath.equals(mailboxPath)),
-            ))
-          .go();
+      _db.customUpdate(
+        'DELETE FROM emails WHERE account_id = ?1 '
+        '${mailboxPath == null ? '' : 'AND srv_mailbox_path = ?2 '}'
+        'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
+        'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql))',
+        variables: [
+          Variable.withString(accountId),
+          if (mailboxPath != null) Variable.withString(mailboxPath),
+        ],
+        updates: {_db.emails},
+        updateKind: UpdateKind.delete,
+      );
 
   /// Fills header columns of row [emailId] that a later schema added or an
   /// earlier sync missed (null leaves a column alone). No user intent, so

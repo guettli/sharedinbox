@@ -48,6 +48,7 @@ extension _RowIdentity on EmailRepositoryImpl {
     required int newUid,
     required String newMailboxPath,
     bool mergeDuplicate = false,
+    int? seq,
   }) async {
     var displaced = const <Email>[];
     Email? merged;
@@ -112,6 +113,7 @@ extension _RowIdentity on EmailRepositoryImpl {
         mailboxPath: newMailboxPath,
         uid: newUid,
         uidValidity: newUidValidity,
+        seq: seq,
       );
       await _rewritePendingChangeUids(
         resourceId: id,

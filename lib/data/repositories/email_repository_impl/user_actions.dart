@@ -276,10 +276,16 @@ extension _UserActions on EmailRepositoryImpl {
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
         .getSingleOrNull();
-    if (row == null) return;
-    if (row.mailboxPath == destMailboxPath) return;
-
-    await _moveRow(row, destMailboxPath);
+    // A hidden row takes no action.
+    if (row == null || row.mailboxPath.isEmpty) return;
+    if (row.mailboxPath != destMailboxPath) {
+      await _moveRow(row, destMailboxPath);
+    }
+    // Also when the row is in the destination already: Undo's reverse move
+    // finds it there once cancelling the original put it back (the folder
+    // is the fold of its queued changes), and a counterpart whose mirrored
+    // change could not be cancelled (sent already) still needs its reverse
+    // move. A counterpart already there is skipped.
     await _mirrorMoveToCounterparts(
       row.accountId,
       row.messageId,
@@ -872,10 +878,7 @@ extension _UserActions on EmailRepositoryImpl {
       await _refoldAndRethread(e.id);
       return;
     }
-    // The row comes back where the snapshot says the mail is now; its UID is
-    // known only when that is where the snapshot recorded it.
-    final imapKnown =
-        srvPath != null && srvUid != null && srvPath == e.mailboxPath;
+    final imapKnown = srvPath != null && srvUid != null;
     final restored = EmailsCompanion(
       uid: Value(e.uid),
       subject: Value(e.subject),
@@ -911,7 +914,11 @@ extension _UserActions on EmailRepositoryImpl {
             restored,
             id: e.id,
             accountId: e.accountId,
-            mailboxPath: e.mailboxPath,
+            // Where the snapshot says the server has it (a snapshot taken
+            // behind a queued move shows the destination, but the server
+            // still had it in the source); the shown folder would record
+            // a location without a UID that no sync could ever confirm.
+            mailboxPath: e.srvMailboxPath ?? e.mailboxPath,
             keywords: ServerKeywords(
               seen: e.isSeen,
               flagged: e.isFlagged,

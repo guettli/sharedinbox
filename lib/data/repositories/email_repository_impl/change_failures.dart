@@ -287,9 +287,10 @@ extension _ChangeFailures on EmailRepositoryImpl {
   /// copy that mail's flags onto it, and the user's changes would act on
   /// it (#1268). If the mail is in a third folder, sync shows it there.
   /// The failed change itself stays on the Pending Changes screen; changes
-  /// queued behind it find no mail and fail there too. Returns the dropped
-  /// row, or null; the caller logs it with [_logGoneRowDropped] once the
-  /// transaction has committed.
+  /// queued behind it find no mail and fail there too. Returns the row when
+  /// it was deleted, or null (also when a change of it keeps it, hidden);
+  /// the caller logs it with [_logGoneRowDropped] once the transaction has
+  /// committed.
   Future<Email?> _dropGoneRow(PendingChangeRow failed) async {
     // A delete for good whose folder is gone: its row is hidden by it, and
     // once the change is settled nothing would hide it any more.
@@ -298,13 +299,18 @@ extension _ChangeFailures on EmailRepositoryImpl {
           ..where((t) => t.id.equals(failed.resourceId)))
         .getSingleOrNull();
     if (email == null || !_sameMessage(failed, email.messageId)) return null;
-    await _state.deleteRow(email.id);
+    // The server has no copy here: marked gone (hidden), and deleted only
+    // when no change of it is left (clean-up rule); one with a change still
+    // queued keeps its row and body until that change settles.
+    final read = await _state.beginRead(email.accountId);
+    await read.markGone([email.id]);
+    final deleted = await _state.cleanUpGone(email.accountId);
     await _updateThread(
       email.accountId,
       email.mailboxPath,
       email.threadId ?? email.id,
     );
-    return email;
+    return deleted.contains(email.id) ? email : null;
   }
 
   /// App Log line for a row [_dropGoneRow] removed: the mail vanishes from

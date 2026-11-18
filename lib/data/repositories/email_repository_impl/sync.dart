@@ -77,7 +77,9 @@ extension _Sync on EmailRepositoryImpl {
       await _updateThread(accountId, row.mailboxPath, row.threadId ?? row.id);
       if (deleted.contains(row.id)) continue;
       final live = await _liveChanges(row.id);
-      if (live.isNotEmpty) kept.add((row, live));
+      // The user's own delete for good: nothing to warn about.
+      if (live.every((c) => c.changeType == 'delete')) continue;
+      kept.add((row, live));
     }
     for (final (row, live) in kept) {
       unawaited(
@@ -173,6 +175,7 @@ extension _Sync on EmailRepositoryImpl {
     await _db.customStatement('PRAGMA foreign_keys = OFF');
     try {
       await _db.transaction(() async {
+        // A row the user still has a change for stays (clean-up rule).
         await _state.deleteRowsOf(accountId);
         // NB: pending_changes are deliberately NOT deleted here. A queued
         // change (e.g. a just-starred mail whose \Flagged flag hasn't reached
@@ -211,6 +214,7 @@ extension _Sync on EmailRepositoryImpl {
         // before clearing; anything still queued (offline) survives and is
         // retried on the next sync, its payload carrying the uid/id needed to
         // apply it even though the email row was deleted.
+        // A row the user still has a change for stays (clean-up rule).
         await _state.deleteRowsOf(accountId, mailboxPath: mailboxPath);
         await (_db.delete(_db.threads)
               ..where(

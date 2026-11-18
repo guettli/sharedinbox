@@ -3,6 +3,8 @@
 // (empty when hidden), a delete for good hides the row instead of deleting
 // it, and sync no longer deletes a row the user still has a change for.
 
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -164,7 +166,7 @@ void main() {
 
   test(
       'a mail gone on the server while the user has a move queued is kept '
-      'and the change surfaces as failed (#1239)', () async {
+      'and the change surfaces as failed', () async {
     final id = (await rowOfA()).id;
     await emails.moveEmail(id, 'Archive');
     server.expungeElsewhere('a@test');
@@ -273,6 +275,48 @@ void main() {
     expect(e.mailboxPath, 'Old');
     expect(e.localMailboxPath, 'Old');
     expect((await ops()).single.payload, contains('"dest":"Old"'));
+    await expectConsistent();
+  });
+
+  test(
+      'a rename reaches the folder a queued change remembers a snooze came '
+      'from, and the stored Undo actions', () async {
+    final id = (await rowOfA()).id;
+    await emails.snoozeEmail(id, DateTime.utc(2030));
+    final (_, captured) =
+        await emails.captureOps(() => emails.moveEmail(id, 'Archive'));
+    await db.into(db.undoActions).insert(
+          UndoActionsCompanion.insert(
+            id: 'u1',
+            accountId: _account.id,
+            dataJson: jsonEncode({
+              'sourceMailboxPath': 'INBOX',
+              'destinationMailboxPath': 'Archive',
+              'originalEmails': [
+                {'mailboxPath': 'INBOX', 'snoozedFromMailboxPath': 'INBOX'},
+              ],
+            }),
+            createdAt: DateTime.utc(2026),
+          ),
+        );
+
+    await EmailStateWriter(db).renameFolder(_account.id, 'INBOX', 'Inbox2');
+    // Undo cancels the move out of Snoozed: the folder the snooze came
+    // from is the renamed one, not one that no longer exists.
+    expect(await emails.cancelOps(captured[id]!), hasLength(1));
+
+    final e = await rowOfA();
+    expect(e.mailboxPath, 'Snoozed');
+    expect(e.snoozedFromMailboxPath, 'Inbox2');
+    final undo =
+        jsonDecode((await db.select(db.undoActions).getSingle()).dataJson)
+            as Map<String, dynamic>;
+    expect(undo['sourceMailboxPath'], 'Inbox2');
+    expect(undo['destinationMailboxPath'], 'Archive');
+    expect(
+      (undo['originalEmails'] as List).single,
+      {'mailboxPath': 'Inbox2', 'snoozedFromMailboxPath': 'Inbox2'},
+    );
     await expectConsistent();
   });
 

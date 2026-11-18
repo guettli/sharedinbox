@@ -60,7 +60,10 @@ class NoteRepositoryImpl implements NoteRepository {
     final row = await (_db.select(_db.emails)
           ..where(
             (t) =>
-                t.accountId.equals(accountId) & t.messageId.equals(messageId),
+                t.accountId.equals(accountId) &
+                t.messageId.equals(messageId) &
+                // Not a hidden row (deleted for good, or gone).
+                t.mailboxPath.equals('').not(),
           )
           ..limit(1))
         .getSingleOrNull();

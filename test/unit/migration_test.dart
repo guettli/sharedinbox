@@ -1320,7 +1320,8 @@ void main() {
         state: 'failed',
       );
       // An acked snooze whose destination is not where the server has it
-      // (before v73 only its keyword part was tracked) is dropped.
+      // keeps folding, as at runtime, until a read settles it; its old
+      // (keyword) contradiction is forgotten.
       email('e-6', 'acc-j', 'inbox-id');
       change(
         4,
@@ -1332,6 +1333,9 @@ void main() {
         account: 'acc-j',
       );
       rawDb
+        ..execute(
+          'UPDATE pending_changes SET contradicted_seq = 5 WHERE id = 4',
+        )
         ..execute('PRAGMA user_version = 72;')
         ..close();
 
@@ -1362,9 +1366,21 @@ void main() {
       expect(await row('e-4'), containsPair('srv_mailbox_path', 'inbox-id'));
       expect(await row('e-5'), containsPair('mailbox_path', 'INBOX'));
       expect(await row('e-5'), containsPair('local_mailbox_path', null));
-      expect(await row('e-6'), containsPair('mailbox_path', 'inbox-id'));
+      expect(await row('e-6'), containsPair('mailbox_path', 'snoozed-id'));
       final ops = await db.select(db.pendingChanges).get();
-      expect(ops.map((o) => o.id), [1, 2, 3]);
+      expect(ops.map((o) => o.id), [1, 2, 3, 4]);
+      expect(ops.last.contradictedSeq, isNull);
+      // e-3 (JMAP, its server folder newly recorded) shows where its move
+      // puts it, as before; e-5's failed move no longer shows; e-6 shows
+      // its acked snooze: noted in the App Log.
+      final logs = await db
+          .customSelect(
+            'SELECT account_id, data_json FROM app_logs '
+            "WHERE event = 'migration.location_overlay' ORDER BY account_id",
+          )
+          .get();
+      expect(logs.map((l) => l.read<String>('account_id')), ['acc-i', 'acc-j']);
+      expect(logs.first.read<String>('data_json'), contains('"emailId":"e-5"'));
 
       // A row inserted without a server folder gets the one it shows.
       await db.customStatement(

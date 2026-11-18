@@ -462,8 +462,11 @@ the same statement and never rewrites the whole row.
   acked change is deleted (`cleanUpGone`, after every absence write and at the start of
   every flush); its body and attachments go with it. A row with such a change stays until
   the change settles: sync never deletes a row the user has a change for (#1239), and
-  logs it (warn `email.server_gone_with_changes`). A `failed` change stays listed
-  without its row.
+  logs it (warn `email.server_gone_with_changes`; not when the only change is the
+  user's own delete for good). A `failed` change stays listed without its row
+  (`pending_change.row_removed` when the flush cleans the row up). A force resync
+  deletes the rows of the account or folder except those with such a change: the
+  refetch finds them again by their server location.
 - **Location reads.** IMAP: the new-mail FETCH (a new row with the read's folder, an
   existing one confirmed there), the deletion reconcile's `UID SEARCH ALL` (rows of the
   folder by `srv_mailbox_path` confirmed present or marked gone), the move's answer
@@ -499,7 +502,9 @@ the same statement and never rewrites the whole row.
   `toCompanion`, a `copyWith` naming one, or an insert/write whose argument is not an
   `EmailsCompanion(…)` literal, `newRow(…)`/`withServerLocation(…)` or a variable
   holding one (an upsert of an `EmailsCompanion.insert` would write the shown folder
-  over a pending move). Any other write of `emails` (companions, Drift
+  over a pending move); `newRow`/`withServerLocation` only in a plain `.insert(…)`
+  without `mode:`/`onConflict:`, and no `replace`. SQL split over adjacent string
+  literals is read joined. Any other write of `emails` (companions, Drift
   `update`/`into`/`delete`/`insert`/`replace`, the table managers,
   `updates: {…emails…}`, raw SQL, and any other bare reference to the table outside
   reads, which catches aliases) must be in the writer, the migrations, or a member on

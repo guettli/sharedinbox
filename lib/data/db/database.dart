@@ -2004,10 +2004,11 @@ class AppDatabase extends _$AppDatabase {
   /// another took over) gets the source of its first queued move, snooze or
   /// unsnooze, else the folder it shows. The queued changes are folded once
   /// into `local_mailbox_path` / `local_hidden` (and the keyword columns
-  /// again). An acked change whose destination is not where the server has
-  /// the mail is dropped: before v73 only its keyword part was tracked, and
-  /// folding its folder now would move the mail back. A row without a queued
-  /// location change shows the server's folder.
+  /// again). An acked change keeps folding, as at runtime, until a read
+  /// confirms or (twice) contradicts it; a contradiction recorded before v73
+  /// was about its keywords only and is forgotten. A row without a queued
+  /// location change shows the server's folder; the rows whose shown folder
+  /// changes are noted in the App Log (warn `migration.location_overlay`).
   Future<void> _overlayLocation() async {
     final hasQueue = await _tableExists(this, 'pending_changes');
     if (hasQueue) {
@@ -2066,10 +2067,9 @@ class AppDatabase extends _$AppDatabase {
             locationColumnsOf(type, payload).isNotEmpty &&
             payload?['dest'] != srv) {
           await customStatement(
-            'DELETE FROM pending_changes WHERE id = ?1',
+            'UPDATE pending_changes SET contradicted_seq = NULL WHERE id = ?1',
             [r.read<int>('id')],
           );
-          continue;
         }
         (opsByRow[id] ??= []).add(
           FoldOp(
@@ -2101,6 +2101,45 @@ class AppDatabase extends _$AppDatabase {
             location.mailboxPath,
             _sqlBool(location.hidden),
             id,
+          ],
+        );
+      }
+    }
+    const shownSql = '''CASE WHEN local_hidden THEN ''
+        ELSE COALESCE(local_mailbox_path, srv_mailbox_path) END''';
+    final moved = await customSelect(
+      'SELECT id, account_id, mailbox_path, $shownSql AS shown FROM emails '
+      'WHERE mailbox_path IS NOT ($shownSql)',
+    ).get();
+    if (moved.isNotEmpty && await _tableExists(this, 'app_logs')) {
+      final byAccount = <String, List<QueryRow>>{};
+      for (final r in moved) {
+        (byAccount[r.read<String>('account_id')] ??= []).add(r);
+      }
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      for (final MapEntry(key: account, value: rows) in byAccount.entries) {
+        await customStatement(
+          'INSERT INTO app_logs (created_at, level, event, message, '
+          'data_json, account_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+          [
+            now,
+            'warn',
+            'migration.location_overlay',
+            'Upgrade to schema v73: ${rows.length} mail(s) now show in the '
+                'folder the server has them in, or as their queued change '
+                'puts them',
+            jsonEncode({
+              'total': rows.length,
+              'rows': [
+                for (final r in rows.take(100))
+                  {
+                    'emailId': r.read<String>('id'),
+                    'from': r.read<String>('mailbox_path'),
+                    'to': r.read<String>('shown'),
+                  },
+              ],
+            }),
+            account,
           ],
         );
       }

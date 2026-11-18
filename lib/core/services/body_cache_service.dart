@@ -173,6 +173,8 @@ class BodyCacheService {
       'SELECT e.id FROM emails e '
       'LEFT JOIN email_bodies eb ON eb.email_id = e.id '
       'WHERE eb.email_id IS NULL '
+      // Not a hidden row (deleted for good, or gone on the server).
+      "AND e.mailbox_path <> '' "
       'ORDER BY e.received_at DESC, e.uid DESC, e.id DESC '
       'LIMIT ?',
       variables: [Variable.withInt(_batchSize + _failedAt.length)],
