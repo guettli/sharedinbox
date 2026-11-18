@@ -120,7 +120,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
         _appLogger = appLogger,
-        _state = EmailStateWriter(db, appLogger: appLogger),
+        _state = EmailStateWriter(db, appLogger: appLogger, now: now),
         _consistencySampler = consistencySampler,
         _sendOperationTimeout = sendOperationTimeout;
 
@@ -484,14 +484,16 @@ class EmailRepositoryImpl implements EmailRepository {
 
   // ── Counterparts (email_repository_impl/counterparts.dart) ─────────────────
 
+  /// Matches row [realEmailId], just stored by sync, with a row waiting for
+  /// its server copy (a virtual row, SYNC-REDESIGN.md §6).
   @visibleForTesting
-  Future<void> maybeDissolveLocalMessageForTest(
+  Future<void> matchArrivalForTest(
     String accountId,
     String arrivalMailboxPath,
     String realEmailId,
     String? messageId,
   ) =>
-      _maybeDissolveLocalMessageForTest(
+      _matchArrivalForTest(
         accountId,
         arrivalMailboxPath,
         realEmailId,

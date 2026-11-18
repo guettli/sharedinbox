@@ -281,15 +281,14 @@ extension _UserActions on EmailRepositoryImpl {
     if (row.mailboxPath != destMailboxPath) {
       await _moveRow(row, destMailboxPath);
     }
-    // Also when the row is in the destination already: Undo's reverse move
-    // finds it there once cancelling the original put it back (the folder
-    // is the fold of its queued changes), and a counterpart whose mirrored
-    // change could not be cancelled (sent already) still needs its reverse
-    // move. A counterpart already there is skipped.
+    // The counterparts get a shadow of the move just queued (none when
+    // nothing was queued: the row is in the destination already, e.g. after
+    // Undo cancelled the original move, which took its shadows along).
     await _mirrorMoveToCounterparts(
       row.accountId,
       row.messageId,
       destMailboxPath,
+      sourceRowId: row.id,
     );
   }
 
@@ -394,7 +393,11 @@ extension _UserActions on EmailRepositoryImpl {
     if (row == null) return null;
 
     final dest = await _deleteRow(row);
-    await _mirrorDeleteToCounterparts(row.accountId, row.messageId);
+    await _mirrorDeleteToCounterparts(
+      row.accountId,
+      row.messageId,
+      sourceRowId: row.id,
+    );
     return dest;
   }
 
@@ -450,6 +453,8 @@ extension _UserActions on EmailRepositoryImpl {
           dest = await _deleteRow(row);
           final mid = normaliseMessageId(row.messageId);
           if (mid == null) continue;
+          // The twins get shadows of the change just queued on [row].
+          final primary = await _latestQueuedOp(row.id, _deleteOpTypes);
           for (final counterpart in counterparts[row.accountId] ??
               const <account_model.Account>[]) {
             final twin = await _findEmailRowByNormalisedMessageId(
@@ -457,7 +462,8 @@ extension _UserActions on EmailRepositoryImpl {
               mid,
             );
             if (twin == null || !handled.add(twin.id)) continue;
-            await _deleteRow(twin);
+            if (primary == null) continue;
+            await _asShadowOf(primary, () => _deleteRow(twin));
           }
         }
       }),
@@ -544,8 +550,9 @@ extension _UserActions on EmailRepositoryImpl {
     // The queued delete folds into the row as `local_hidden`: it is hidden,
     // not deleted, so its body survives a failure or an Undo, and a late
     // sync answer finds it (SYNC-REDESIGN.md §2). It is deleted once the
-    // server confirms the mail is gone. A row with no server copy queues
-    // nothing and is deleted at once.
+    // server confirms the mail is gone. A row with no server copy gets a
+    // parked delete: hidden too, and sent once its server copy arrives
+    // (else the delivered mail would show up again).
     final queued = await _enqueueChange(
       account.id,
       emailId,
@@ -580,6 +587,7 @@ extension _UserActions on EmailRepositoryImpl {
       row.accountId,
       row.messageId,
       until: until,
+      sourceRowId: row.id,
     );
   }
 
@@ -725,6 +733,7 @@ extension _UserActions on EmailRepositoryImpl {
         row.accountId,
         row.messageId,
         until: null,
+        sourceRowId: row.id,
       );
       woken++;
     }
@@ -732,9 +741,9 @@ extension _UserActions on EmailRepositoryImpl {
   }
 
   /// After Undo cancelled a move out of the Snoozed folder: the cancelled
-  /// move no longer folds, so the row shows its snooze again by itself; only
-  /// the local-only [fromMailboxPath] needs restoring. A row without a
-  /// server copy (no change was queued) stores [until] as its own.
+  /// move no longer folds, so the row shows its snooze again by itself (a
+  /// row without a server copy too: its changes are parked ops); only the
+  /// local-only [fromMailboxPath] needs restoring.
   Future<void> _restoreLocalSnooze(
     String emailId, {
     required DateTime until,
@@ -745,9 +754,6 @@ extension _UserActions on EmailRepositoryImpl {
         .getSingleOrNull();
     if (row == null) return;
     await _state.writeSnoozedFrom(emailId, fromMailboxPath);
-    if (await _hasNoServerCopy(row)) {
-      await _state.writeOwn(emailId, snoozedUntil: until);
-    }
   }
 
   /// Un-snoozes a single [row] on its own account: moves it back to that

@@ -1,7 +1,6 @@
 # Sync redesign: overlay columns + operation log
 
-Status: **chosen direction, partly implemented** (phases 0–3 and 4a, see
-§8). Goal: make offline-first (the rules in
+Status: **chosen direction, partly implemented** (phases 0–4, see §8). Goal: make offline-first (the rules in
 `OFFLINE-FIRST.md`, PR #1249) a property of the data model instead of a rule
 every sync path has to remember. This is a staged migration of the existing
 sync code, not a rewrite: the IMAP/JMAP transport code and its edge-case
@@ -1025,27 +1024,172 @@ As implemented, phase 4 is two PRs:
      foreign move), Undo of a move whose counterpart change was sent
      (`undo_logic_test.dart`), fixtures for the new check rules, and the
      v72→v73 migration test.
-2. **4b (open):** what 4a leaves as before.
-   - Virtual rows: the absence rules and the in-place matching of §6
-     (`_maybeDissolveLocalMessage` still deletes the virtual row and
-     replays its state as new ops; a virtual row has its own folder in
-     `srv_mailbox_path`), the expiry, and parked ops instead of
-     `writeOwn`/`writeOwnLocation`.
-   - The appear side of carry-over: an acked IMAP move whose destination
-     UID was never learnt (no COPYUID and no Message-ID) is dropped by the
-     source's absence, the row is hidden and cleaned up, and the
-     destination's sync stores the mail as a new row (§4.5 wants it
-     carried over). Same for a foreign move whose source folder is synced
-     before the destination (2c's gap).
-   - Counterpart shadow ops: the mirroring still queues real changes on
-     the twin, and `_dropStaleCounterpartRow` still deletes the twin row
-     (a user action, not sync).
-   - The unread-count delta (§7).
-   - Undo's `restoreEmails` stays for rows sync cleaned up; with hidden
-     rows it is rarely needed (§2 "Former writers").
+2. **4b (done, schema v74):** rows without a server copy, counterpart
+   shadow ops, the appear side of carry-over and the unread-count delta.
+   - **Schema.** `pending_changes.origin` (§3; `counterpart:<id>` for a
+     shadow, NULL otherwise) and `mailboxes.unread_seq` (§7). Nothing
+     queued is converted: virtual rows had no ops (3a's `writeOwn`), and
+     the changes mirrored onto a twin before v74 are real ones, which
+     flush as before. Two new states, `parked` and `shadow`; both fold
+     (`foldableOpStates`), neither is flushed (the flush selects `pending`
+     and due `stuck` only).
+   - **Parked ops.** `_enqueueChange` queues a change of a row without a
+     server copy (a virtual row; a JMAP row without `srv_jmap_id` or
+     `srv_uid`) as `parked`, unstamped, and does not kick a flush.
+     `writeOwn` and `writeOwnLocation` are gone: no user action writes a
+     `srv_` column any more, for these rows either (point 3 of the 4b
+     brief, the JMAP rows without a server id, included). Undo cancels a
+     parked op like a pending one (`_unsentStates`), a new read/star
+     change supersedes a parked one, a delete for good of a virtual row
+     hides it (parked delete) instead of deleting it, Retry of a failed
+     change of a row still without a server copy parks it again, and
+     `removeLocalMailbox` fails parked ops naming the folder. The Pending
+     Changes screen lists them ("waiting for the server copy of this
+     mail"); they count as unsynced work.
+   - **Absence rules.** A virtual row has no server copy, so no absence
+     applies: the deletion reconcile and `markFolderGone` skip `is_local`
+     rows, the JMAP prune skips rows without `srv_jmap_id`, and
+     `notFound` / `destroyed` / empty `mailboxIds` address rows by server
+     id. It ends only by the in-place match or by its expiry.
+   - **In-place match** (`_matchArrival`, replacing
+     `_maybeDissolveLocalMessage`). After a sync stored rows, each is
+     matched with a row that waits for exactly that mail: a virtual row
+     (role rule of §6: a Sent arrival only with the virtual Sent copy; also
+     a hidden one), and, for a newly stored row only, a row waiting with
+     an acked move into that folder (below) or a JMAP row of that folder
+     without a server id (unique Message-ID match). The waiting row keeps
+     its id: the stored row is merged into it (`_mergeDuplicateRow`, so
+     its references follow; a virtual row's draft-text body is dropped
+     first, so the server's replaces it), it takes the stored row's
+     server facts, headers and read stamps (`takeOverRow`, the
+     carry-over's copy; the local-only `snoozed_from_mailbox_path` is
+     kept), its parked ops become `pending` (`_unparkOps`: in queue order
+     each payload gets the server's UID, folder, UIDVALIDITY and JMAP id,
+     a later one the destination of the one before it plus the
+     `uidAfterMove` marker, as if queued now; ids and so Undo's
+     references stay), and its acked ops settle against the new location
+     (`EmailStateWriter.settle`). App Log warn `email.local_row_matched`
+     (kind `virtual`, `moved` or `no_server_id`, with the merged row's id).
+     The sync guard `_hasLocalMessages` became `_hasWaitingRows` (a local,
+     gone, or location-less row exists).
+   - **Expiry** (`EmailStateWriter.expireParked`, at the start of every
+     flush). A virtual row stored more than 7 days ago is dropped (its
+     body cascades; App Log warn `email.virtual_expired`) and its parked
+     ops become `failed` ("the server copy of this mail never arrived"),
+     listed without their row; a parked op of another row older than 7
+     days becomes `failed` ("the server id of this mail never became
+     known") and stops folding, the row stays (App Log warn
+     `pending_change.parked_expired` for each).
+   - **Virtual row creation** moved into the writer (`insertLocalRow`,
+     `writeLocalRowHeaders` with a `LocalRowHeaders` value, the
+     `create_local` step): `local_rows.dart` builds no `EmailsCompanion`
+     any more. The own folder and keywords are still stored as `srv_*`
+     with stamp 0 at insert (the columns are NOT NULL; no read ever writes
+     a virtual row, and the match replaces them).
+   - **Counterpart shadow ops.** The mirroring (`_mirrorMove/Delete/
+     SnoozeToCounterparts`, the bulk delete) runs the twin's action inside
+     `_asShadowOf(primary)`, where the primary is the latest change queued
+     on the source row (none: nothing is mirrored; so `moveEmail` of a row
+     already in the destination no longer mirrors, which 4a needed for a
+     twin whose real change was sent). `_enqueueChange` then inserts a
+     `shadow` op with `origin = counterpart:<primary>` (one per primary
+     and row), folds it, does not capture it for Undo and does not kick a
+     flush. Lifecycle: `EmailStateWriter.ack` acks the primary's shadows
+     with the same `ack_seq` (the read sequence is global), or drops one
+     whose twin is gone; the counterpart's own reads then settle it like
+     any acked op. `dropOrphanedShadows` drops a `shadow` whose primary no
+     longer exists or failed (and acks one whose primary is acked) and
+     re-folds the twin; it runs in `_refoldAndRethread` (so in the
+     transaction of every cancel, discard, retry and failure), after the
+     enqueue's supersede of a read/star change, in `removeLocalMailbox`,
+     in `expireParked` and at the start of every flush.
+     `_dropStaleCounterpartRow` (a move into a folder the counterpart does
+     not know) is a shadow `delete` with `awayFrom` (the twin's server
+     folder; `locationAgreesWith` accepts gone or any other folder)
+     instead of deleting the row: an Undo or failure of the primary shows
+     the twin again, with its body. Shadows are hidden from the Pending
+     Changes screen, the failed list and the unsynced-work count.
+   - **Appear side of carry-over.** In `_settleAcked`, an acked move,
+     snooze or unsnooze (not a shadow) whose row becomes gone after the
+     ack while `srv_mailbox_path` is not its destination, whose row has a
+     Message-ID, and which is the row's newest move, snooze, unsnooze or
+     delete (a later delete for good the server confirmed must hide the
+     row; the stale-answer fuzz found that resurrection), is kept instead
+     of dropped: the row keeps showing
+     in the destination (gone with a `local_mailbox_path`), `lease_until`
+     records the deadline (`awaitAppearWindow`, 1 hour), and the clean-up
+     rule keeps the row. The destination's next sync matches the new row
+     in place (`awaitingRowFor`: gone, an acked op waiting with that
+     destination, same Message-ID, unique), and the op settles as
+     confirmed. `expireAwaitedMoves` (flush start) resolves an expired
+     wait as satisfied (`op.gone`), the row is hidden and cleaned up. A
+     change queued on a waiting row is marked `uidAfterMove`
+     (`_markUidAfterQueuedMove` counts the waiting acked move), so the
+     flush finds the mail by Message-ID instead of acting on the source's
+     UID in the destination.
+   - **Unread-count delta** (§7). The IMAP `STATUS` loop and the JMAP
+     `Mailbox/get` paths store the read sequence taken before the read in
+     `unread_seq`; `observeMailboxes` adds `unreadDeltaSql`: over the rows
+     with a pending/inflight/stuck/parked/shadow op or one acked after
+     `unread_seq`, unread rows shown in the folder minus unread rows the
+     server has there (`srv_*`, not gone), virtual rows excluded; never
+     below 0. It covers read/unread changes and moves, deletes and snoozes
+     of unread mail. Approximation: the delta compares a row's whole
+     effective state with its whole `srv_*` state, so a row with one
+     change the count reflects and another it does not can be off by one
+     until the reflected one drops.
+   - **Enforcement.** The allow-list of `check_email_writes.sh` loses the
+     two `local_rows.dart` members (3 left: the new-row inserts of the
+     IMAP fetch and the JMAP upsert, and Undo's restore); fixtures for an
+     emails write in `local_rows.dart` (fails) and the writer calls
+     (passes), and the allowed-member fixtures moved to `sync_jmap.dart`.
+     `consistencyProblems` reports a shadow whose primary is gone or
+     failed (field `shadow`), which the sampler's repair drops.
+   - **App Log.** New warn lines where sync drops or rewrites local data:
+     `email.local_row_matched`, `email.virtual_expired`,
+     `pending_change.parked_expired`; `op.gone` now also for an expired
+     wait. The `pending_change.no_server_id` warning remains only for a
+     JMAP change whose row is gone.
+   - **Tests.** `rows_without_server_copy_test.dart` (a JMAP row without
+     a server id: parked, matched in place, expired; an acked move
+     without a known location: shown in the destination while it waits,
+     matched in place by the destination's copy, resolved after the
+     window), `counterpart_shadow_test.dart` (shadow shown and never sent,
+     Undo, ack and settle by the counterpart's read, an orphan found by
+     the consistency check and dropped, delete, the hiding shadow and its
+     settle, the unread delta), the self-send tests (parked, in place,
+     Undo, expiry), Undo of a mirrored move with the original sent, the
+     v73→v74 columns in the migration test, and the Stalwart backend test
+     of #565 now also checks the row keeps its id and the parked star
+     reaches the server. The stale-answer fuzz moves the app's clock past
+     the wait when it settles (time passes while the queue drains).
+   - **Not done, documented.**
+     - A foreign move whose source folder is synced before the
+       destination still deletes the row and stores a new one (2c's
+       gap): carrying it over needs the vanished row to wait without a
+       change of the user's, which the clean-up rule does not allow;
+       phase 6's mark-and-sweep (§6 "Force resync") is the place.
+     - An IMAP move answered without COPYUID whose mail has no
+       Message-ID (and no move-stable id) cannot be matched in its
+       destination, so it still ends as a new row there. With a
+       Message-ID, the flush's own search in the destination
+       (`_retryImapMoveByMessageId`) already finds the new UID, so the
+       wait above mainly covers a server whose search lags.
+     - A failed primary takes its shadows along, and its Retry does not
+       re-create them: the twin shows the change again only after the
+       retried change is acked and the counterpart reads it.
+     - Undo's `restoreEmails` stays for rows sync cleaned up (§2 "Former
+       writers"); with hidden rows it is rarely needed.
 
 **Phase 5 — mailbox ops.** Offline folder create, rename, move and delete
-(#1242), and the Snoozed placeholder.
+(#1242), and the Snoozed placeholder. Left for it after 4b: the folder
+rename and `_repointSnoozedPlaceholder` still rewrite rows and payloads
+directly (`EmailStateWriter.renameFolder`) instead of being ops; a move
+into a folder that does not exist yet is not parked on a `create_mailbox`
+op (§7), so the `parked` state is used only by rows without a server copy;
+a counterpart that does not know a folder hides its twin (shadow
+`delete` with `awayFrom`) rather than parking a move on the folder's
+creation.
 
 **Phase 6 — clean-up.** Remove the remaining guard helpers, such as
 `_pendingDeleteOrMoveUids` and the per-path queue checks, and update SYNC.md.
@@ -1118,9 +1262,9 @@ fields and the public API forwarders stay in `email_repository_impl.dart`.
 | `flush_imap.dart` | Flush: `_applyPendingChangeImap`, `_settleImapChange`, `_remapEmailAfterImapMove`, `_retryImapMoveByMessageId` |
 | `flush_jmap.dart` | Flush: `_applyPendingChangeJmap`, `_repointSnoozedPlaceholder` |
 | `user_actions.dart` | User actions: flags, `markAllAsRead`, move, delete, snooze, wake up, `restoreLocalSnooze`, `restoreEmails` |
-| `counterparts.dart` | User actions: `_mirror*ToCounterparts`, `_dropStaleCounterpartRow`; sync: `_maybeDissolveLocalMessage` |
+| `counterparts.dart` | User actions: `_mirror*ToCounterparts` and `_dropStaleCounterpartRow` (shadow ops since 4b); sync: `_matchArrival` (the in-place match, 4b) |
 | `sieve.dart` | User actions: Sieve `_enqueueSieveMove/Delete/Flags` |
-| `local_rows.dart` | Local row creation: `_storeSentCopyLocally`, `_createLocalSelfMessages` |
+| `local_rows.dart` | Local row creation: `_storeSentCopyLocally`, `_createLocalSelfMessages` (their row writes through the writer's `insertLocalRow` since 4b) |
 | `send.dart` | Sending (SMTP, JMAP submission, outbox); its row writes go through `local_rows.dart` |
 | `threads.dart` | Derived: `_updateThread`, `_reconcileSourceThreads`, `_sweepOrphanThreads` |
 | `queries.dart`, `row_mapping.dart` | Reads and row ↔ model mapping (no writes) |
@@ -1131,7 +1275,9 @@ The email state writer (§2) is `lib/data/repositories/email_state_writer.dart`
 Since phase 3b it also holds the row deletes, the header backfills and the
 carry-over's whole-row copy, since 4a the location overlay, the clean-up
 rule and the server location facts (`relocate`, `releaseLocation`,
-`renameFolder`), and `scripts/check_email_writes.sh` lists the members that
+`renameFolder`), since 4b the local rows (`insertLocalRow`), the parked-op
+expiry, the shadow-op lifecycle and the appear side of carry-over, and
+`scripts/check_email_writes.sh` lists the members that
 still write `emails` themselves (allow-list, with the phase that moves
 each). The thread aggregate is `refreshThreadAggregate`
 (`lib/data/repositories/thread_aggregate.dart`, 4a), shared with
@@ -1158,7 +1304,8 @@ The line numbers below are from before the split (`33c67b4`).
 - `_healMismatchedImapBody` (891), which updates `srv_uid` and no longer
   re-keys.
 - `_storeSentCopyLocally` (7427), a server fact from APPENDUID.
-- `_maybeDissolveLocalMessage` (5519), replaced by the in-place match.
+- `_maybeDissolveLocalMessage` (5519), replaced by the in-place match
+  (`_matchArrival`, 4b).
 - `BodyCacheService` (foreground and background isolate) reaches body
   healing and the header backfill through its own repository instance.
 

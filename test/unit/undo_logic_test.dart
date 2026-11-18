@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -673,12 +673,14 @@ void main() {
     });
   });
 
-  // The twin's mirrored move either waits in the queue (cancelled with the
-  // original) or is being sent already (then it needs its own reverse move).
-  for (final twinSent in [false, true]) {
+  // The twin of a paired account gets a shadow of the move (never sent,
+  // SYNC-REDESIGN.md §6): cancelled with the original, or, when the
+  // original is being sent already, followed by a shadow of the reverse
+  // move.
+  for (final sent in [false, true]) {
     test(
         'Undo of a move mirrored to a paired account '
-        '(${twinSent ? 'twin already sent' : 'nothing sent'})', () async {
+        '(${sent ? 'original already sent' : 'nothing sent'})', () async {
       // The same mailbox seen through IMAP and JMAP: a move is mirrored.
       await accounts.addAccount(
         const Account(
@@ -735,7 +737,14 @@ void main() {
       final original = (await repo.getEmail('imap-p:5'))!;
       final (_, ops) =
           await repo.captureOps(() => repo.moveEmail('imap-p:5', 'Archive'));
-      expect(ops.keys, containsAll(['imap-p:5', 'jmap-p:e1']));
+      expect(ops.keys, ['imap-p:5'], reason: 'a shadow is not captured');
+      expect(
+        [
+          for (final c in await db.select(db.pendingChanges).get())
+            '${c.resourceId} ${c.state}',
+        ],
+        ['imap-p:5 pending', 'jmap-p:e1 shadow'],
+      );
       final undo = container.read(undoServiceProvider.notifier);
       await undo.pushAction(
         UndoAction(
@@ -750,11 +759,11 @@ void main() {
         ),
       );
 
-      if (twinSent) {
-        // A flush of the JMAP account claimed the twin's move: it cannot be
+      if (sent) {
+        // A flush of the IMAP account claimed the move: it cannot be
         // cancelled any more.
         await (db.update(db.pendingChanges)
-              ..where((t) => t.resourceId.equals('jmap-p:e1')))
+              ..where((t) => t.resourceId.equals('imap-p:5')))
             .write(
           const PendingChangesCompanion(
             state: Value('inflight'),
@@ -767,19 +776,28 @@ void main() {
 
       expect((await repo.getEmail('imap-p:5'))!.mailboxPath, 'INBOX');
       expect((await repo.getEmail('jmap-p:e1'))!.mailboxPath, 'mbx-inbox');
-      final left = await db.select(db.pendingChanges).get();
-      if (!twinSent) {
+      final left = await (db.select(db.pendingChanges)
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      if (!sent) {
         // Nothing reached the server: nothing left to send, for either
-        // account.
+        // account; the shadow went with its primary.
         expect(left, isEmpty);
         return;
       }
-      // The twin moves back on its server too.
+      // The reverse move is sent once, by the IMAP account; the twin shows
+      // it through a shadow of it.
       expect(
         [for (final c in left) '${c.resourceId} ${c.changeType} ${c.state}'],
-        ['jmap-p:e1 move inflight', 'jmap-p:e1 move pending'],
+        [
+          'imap-p:5 move inflight',
+          'jmap-p:e1 move shadow',
+          'imap-p:5 move pending',
+          'jmap-p:e1 move shadow',
+        ],
       );
       expect(left.last.payload, contains('"dest":"mbx-inbox"'));
+      expect(left.last.origin, 'counterpart:${left[2].id}');
     });
   }
 }

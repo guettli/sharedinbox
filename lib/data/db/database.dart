@@ -82,6 +82,12 @@ class Mailboxes extends Table {
   TextColumn get name => text()();
   IntColumn get unreadCount => integer().withDefault(const Constant(0))();
   IntColumn get totalCount => integer().withDefault(const Constant(0))();
+  // Added in schema v74: the read sequence (SYNC-REDESIGN.md §4.1) taken
+  // right before the server read that stored [unreadCount] (IMAP STATUS,
+  // JMAP Mailbox/get). The unread count shown is the server's plus the
+  // effect of the changes it does not reflect yet: the ones not acked, and
+  // the ones acked after this sequence (§7).
+  IntColumn get unreadSeq => integer().withDefault(const Constant(0))();
   // Added in schema v8: JMAP role (e.g. "inbox", "sent", "trash").
   TextColumn get role => text().nullable()();
   // Added in schema v47: hierarchical, human-readable path used by the UI
@@ -137,10 +143,10 @@ class Emails extends Table {
   TextColumn get listUnsubscribeHeader => text().nullable()();
 
   // Added in schema v52: a local "virtual" copy of a self-sent message, shown
-  // in the inbox immediately for note-taking and dissolved into the real
-  // message once it arrives via sync (#545). Local rows have uid 0 and no
-  // server counterpart, so sync's deletion reconciliation must skip them and
-  // outbound mutations must not be queued against them.
+  // in the inbox immediately for note-taking; the real message fills it in
+  // place once it arrives via sync (#545). Local rows have uid 0 and no
+  // server counterpart, so sync's deletion reconciliation must skip them,
+  // and their changes are parked until the server copy is matched (v74).
   BoolColumn get isLocal => boolean().withDefault(const Constant(false))();
 
   // Added in schema v71: a local row ([isLocal]) that is the Sent-folder copy
@@ -303,6 +309,9 @@ class PendingChanges extends Table {
   // be sending it right now) | "failed" (gave up: retry limit reached or
   // the server refused it). A failed row is never flushed and protects no
   // local value from sync; it waits for Retry or Discard (SYNC.md §6).
+  // Since v72 also "stuck" and "acked", since v74 "parked" (the mail has
+  // no server copy yet: a virtual row, a JMAP mail without a known id; not
+  // flushed until it has one) and "shadow" (see [origin]).
   TextColumn get state => text().withDefault(const Constant('pending'))();
   // While "inflight": until when the claim holds. A flush that finds an
   // expired lease (the app was killed mid-send) treats the change as maybe
@@ -322,6 +331,15 @@ class PendingChanges extends Table {
   // The read sequence of the first post-ack read that contradicted an
   // acked change; a later contradicting read drops it (`op.contradicted`).
   IntColumn get contradictedSeq => integer().nullable()();
+  // Added in schema v74: who queued the change (SYNC-REDESIGN.md §3). Null
+  // for the user's own (and the app's automatic) changes;
+  // `counterpart:<id>` for a shadow change: the effect, on the twin row of
+  // a counterpart account (the same server mailbox seen through the other
+  // protocol), of the change `<id>` queued on the primary row. A shadow
+  // (state "shadow") folds but is never flushed; it is acked with its
+  // primary and dropped when its primary is cancelled, superseded, failed
+  // or discarded (§6).
+  TextColumn get origin => text().nullable()();
 }
 
 /// The read sequence (SYNC-REDESIGN.md §4.1): one persistent counter, taken
@@ -1995,6 +2013,19 @@ class AppDatabase extends _$AppDatabase {
       }
       await _overlayLocation();
       await _createLocationOverlaySchema();
+    }
+    if (from < 74) {
+      // Virtual rows and counterpart shadow ops (phase 4b of
+      // SYNC-REDESIGN.md). Nothing queued needs converting: a virtual row
+      // had no ops (its values were stored as its own), and the changes
+      // mirrored onto a counterpart twin so far are real ones, which flush
+      // as before.
+      if (await _tableExists(this, 'pending_changes')) {
+        await _addColumnIfMissing(m, pendingChanges, pendingChanges.origin);
+      }
+      if (await _tableExists(this, 'mailboxes')) {
+        await _addColumnIfMissing(m, mailboxes, mailboxes.unreadSeq);
+      }
     }
   }
 

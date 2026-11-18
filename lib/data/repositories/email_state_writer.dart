@@ -41,17 +41,37 @@ String _shownPathSql({
 ///   and settles the row's acked ops;
 /// - the **fold** ([refold]): recomputes `local_*` from the row's foldable
 ///   ops; called in the transaction of anything that changes them;
-/// - **rows without a server copy** ([writeOwn], [writeOwnLocation]): a
-///   local virtual row (or a mail whose server id is unknown) has no op to
-///   fold, so the user's value is its "server" value until phase 4b adds
-///   parked ops.
+/// - **local row creation** ([insertLocalRow]): a virtual row (a self-sent
+///   note, the Sent copy of a send without APPENDUID) is inserted with its
+///   own folder and read/star state, stamped 0; no read ever writes it. A
+///   user change of it, like one of a JMAP mail whose server id is unknown,
+///   is a `parked` op, folded like any other and flushed once the server
+///   copy is matched in place (SYNC-REDESIGN.md §6).
 ///
 /// Its own file and class, so `mailbox_repository_impl.dart` can use it too.
 class EmailStateWriter {
-  EmailStateWriter(this._db, {AppLogger? appLogger}) : _appLogger = appLogger;
+  EmailStateWriter(
+    this._db, {
+    AppLogger? appLogger,
+    DateTime Function() now = DateTime.now,
+  })  : _appLogger = appLogger,
+        _now = now;
 
   final AppDatabase _db;
   final AppLogger? _appLogger;
+  final DateTime Function() _now;
+
+  /// How long an acked move whose new location the server never named (no
+  /// COPYUID, no Message-ID match) keeps showing the mail in its
+  /// destination once its source no longer has it, waiting for the
+  /// destination's sync to store the mail (the appear side of carry-over,
+  /// SYNC-REDESIGN.md §4.5). Then it resolves as satisfied and the row is
+  /// hidden ([expireAwaitedMoves]).
+  static const awaitAppearWindow = Duration(hours: 1);
+
+  /// How long a virtual row waits for its server copy, and a parked change
+  /// for its mail's server id, before [expireParked] gives up on them.
+  static const parkedExpiry = Duration(days: 7);
 
   /// The next value of the read sequence (SYNC-REDESIGN.md §4.1). Take it
   /// right before sending a server read, and at an ack.
@@ -210,54 +230,6 @@ class EmailStateWriter {
     return changed;
   }
 
-  /// Sets the keyword values of row [emailId] that has no server copy to
-  /// change (a local virtual row, a mail whose server id is unknown): no op
-  /// is queued for it, so the value is stored as its server value. Null
-  /// leaves a field; [snoozedUntil] [snoozeCleared] ends a snooze.
-  Future<void> writeOwn(
-    String emailId, {
-    bool? seen,
-    bool? flagged,
-    DateTime? snoozedUntil,
-  }) async {
-    if (seen == null && flagged == null && snoozedUntil == null) return;
-    await _db.customUpdate(
-      'UPDATE emails SET '
-      'srv_is_seen = COALESCE(?1, srv_is_seen), '
-      'srv_is_flagged = COALESCE(?2, srv_is_flagged), '
-      'srv_snoozed_until = CASE WHEN ?3 IS NULL THEN srv_snoozed_until '
-      'ELSE NULLIF(?3, 0) END, '
-      'is_seen = COALESCE(local_is_seen, ?1, srv_is_seen), '
-      'is_flagged = COALESCE(local_is_flagged, ?2, srv_is_flagged), '
-      'snoozed_until = NULLIF(COALESCE(local_snoozed_until, ?3, '
-      'srv_snoozed_until), 0) '
-      'WHERE id = ?4',
-      variables: [
-        Variable<bool>(seen),
-        Variable<bool>(flagged),
-        Variable<int>(snoozedUntil == null ? null : _seconds(snoozedUntil)),
-        Variable.withString(emailId),
-      ],
-      updates: {_db.emails},
-      updateKind: UpdateKind.update,
-    );
-  }
-
-  /// [writeOwn] for the folder: row [emailId], which has no server copy to
-  /// move, is in [mailboxPath] now.
-  Future<void> writeOwnLocation(String emailId, String mailboxPath) =>
-      _db.customUpdate(
-        'UPDATE emails SET srv_mailbox_path = ?1, srv_gone = 0, '
-        'mailbox_path = ${_shownPathSql(srv: '?1', gone: '0')} '
-        'WHERE id = ?2',
-        variables: [
-          Variable.withString(mailboxPath),
-          Variable.withString(emailId),
-        ],
-        updates: {_db.emails},
-        updateKind: UpdateKind.update,
-      );
-
   /// Records the folder a snoozed row [emailId] came from (local-only, the
   /// server keeps only the `snz:` keyword); null clears it.
   Future<void> writeSnoozedFrom(String emailId, String? mailboxPath) =>
@@ -308,8 +280,16 @@ class EmailStateWriter {
             ..addColumns([_db.emails.id])
             ..where(_db.emails.id.equals(op.resourceId)))
           .getSingleOrNull();
-      if (row == null) return false;
       final ackSeq = await nextReadSeq();
+      if (row == null) {
+        // The caller deletes [op]; the change still reached the
+        // counterpart's twin (one server), unless the claim was lost.
+        final claimed = await (_db.select(_db.pendingChanges)
+              ..where((t) => t.id.equals(op.id) & t.state.equals('inflight')))
+            .getSingleOrNull();
+        if (claimed != null) await _ackShadows(op.id, ackSeq);
+        return false;
+      }
       final count = await (_db.update(_db.pendingChanges)
             ..where((t) => t.id.equals(op.id) & t.state.equals('inflight')))
           .write(
@@ -323,6 +303,8 @@ class EmailStateWriter {
         ),
       );
       if (count == 0) return true;
+      // One server: the change reached the counterpart's twin too.
+      await _ackShadows(op.id, ackSeq);
       if (confirmedMailboxPath != null) {
         await _writeLocationAt(ackSeq, op.resourceId, confirmedMailboxPath);
       }
@@ -349,6 +331,273 @@ class EmailStateWriter {
       return true;
     });
   }
+
+  // ── Shadow ops (counterpart accounts, SYNC-REDESIGN.md §6) ──────────────
+
+  /// `pending_changes.origin` of a shadow of change [primaryId].
+  static String shadowOrigin(int primaryId) => 'counterpart:$primaryId';
+
+  /// The shadows of [primaryId] (still in state `shadow`) follow its ack:
+  /// acked with the same [ackSeq] (the read sequence is one counter for
+  /// every account), so the twin row keeps showing the change until a read
+  /// of the counterpart account confirms it. A shadow whose twin the server
+  /// no longer has is dropped instead: no read of that row would come to
+  /// settle it.
+  Future<void> _ackShadows(int primaryId, int ackSeq) async {
+    final shadows = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.origin.equals(shadowOrigin(primaryId)) &
+                t.state.equals('shadow'),
+          ))
+        .get();
+    for (final shadow in shadows) {
+      final twin = await (_db.selectOnly(_db.emails)
+            ..addColumns([_db.emails.srvGone])
+            ..where(_db.emails.id.equals(shadow.resourceId)))
+          .getSingleOrNull();
+      if (twin == null || (twin.read(_db.emails.srvGone) ?? false)) {
+        await _dropOp(shadow);
+        await refold(shadow.resourceId);
+        continue;
+      }
+      await (_db.update(_db.pendingChanges)
+            ..where((t) => t.id.equals(shadow.id)))
+          .write(
+        PendingChangesCompanion(
+          state: const Value('acked'),
+          ackSeq: Value(ackSeq),
+        ),
+      );
+    }
+  }
+
+  /// Settles the shadows whose primary ended without reaching the server:
+  /// one whose primary no longer exists (cancelled, superseded, discarded)
+  /// or failed is dropped and its twin row re-folded, so no shadow folds
+  /// forever; one whose primary is acked is acked with it. Cheap: shadows
+  /// are few. Run in the transaction that ended the primary
+  /// ([_ChangeFailures._refoldAndRethread] and the enqueue's supersede) and
+  /// at the start of every flush. Returns the twin rows whose shown value
+  /// changed, with the folders they showed before and show now (for their
+  /// thread aggregates).
+  Future<Map<String, Refold>> dropOrphanedShadows() =>
+      _db.transaction(() async {
+        final rows = await _db.customSelect(
+          'SELECT s.id, s.resource_id, p.state AS primary_state, '
+          'p.ack_seq AS primary_ack FROM pending_changes s '
+          "LEFT JOIN pending_changes p ON s.origin = 'counterpart:' || p.id "
+          "WHERE s.state = 'shadow'",
+          readsFrom: {_db.pendingChanges},
+        ).get();
+        final refoldIds = <String>{};
+        for (final r in rows) {
+          final state = r.readNullable<String>('primary_state');
+          final id = r.read<int>('id');
+          if (state == 'acked') {
+            await (_db.update(_db.pendingChanges)
+                  ..where((t) => t.id.equals(id)))
+                .write(
+              PendingChangesCompanion(
+                state: const Value('acked'),
+                ackSeq: Value(r.readNullable<int>('primary_ack') ?? 0),
+              ),
+            );
+            continue;
+          }
+          if (state != null && state != 'failed') continue;
+          await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(id)))
+              .go();
+          refoldIds.add(r.read<String>('resource_id'));
+        }
+        final changed = <String, Refold>{};
+        for (final id in refoldIds) {
+          final refold = await refoldRow(id);
+          if (refold != null && refold.changed) changed[id] = refold;
+        }
+        return changed;
+      });
+
+  // ── Rows without a server copy (SYNC-REDESIGN.md §6) ────────────────────
+
+  /// Inserts a local row (SYNC-REDESIGN.md §2 "local row creation", the
+  /// `create_local` step): a virtual self-sent note or Sent copy, or the
+  /// Sent copy at the location the server named for it (APPENDUID, the
+  /// JMAP id, in [headers]). Its folder [mailboxPath] and [keywords] are
+  /// its own, stamped 0: a read of the server copy corrects them, and no
+  /// read ever writes a virtual row.
+  Future<void> insertLocalRow(
+    LocalRowHeaders headers, {
+    required String id,
+    required String accountId,
+    required String mailboxPath,
+    required ServerKeywords keywords,
+  }) =>
+      _db.into(_db.emails).insert(
+            newRow(
+              headers._companion,
+              id: id,
+              accountId: accountId,
+              mailboxPath: mailboxPath,
+              keywords: keywords,
+              seq: 0,
+            ),
+          );
+
+  /// Writes [headers] over row [emailId] (the Sent copy of a later send of
+  /// the same message, or the row a sync already stored for it): header
+  /// columns and server location facts, no overlay column.
+  Future<void> writeLocalRowHeaders(String emailId, LocalRowHeaders headers) =>
+      (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
+          .write(headers._companion);
+
+  /// Gives up on what waited [parkedExpiry] for a server copy: a virtual
+  /// row of [accountId] stored before then is dropped (its body cascades)
+  /// and its parked changes become `failed` (listed on the Pending Changes
+  /// screen, without their mail); a parked change of another row (a JMAP
+  /// mail whose server id never became known) queued before then becomes
+  /// `failed` and stops folding. Returns what it did, for the App Log and
+  /// the thread aggregates.
+  Future<ParkedExpiry> expireParked(String accountId) =>
+      _db.transaction(() async {
+        final cutoff = _now().subtract(parkedExpiry);
+        final virtual = await (_db.select(_db.emails)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.isLocal.equals(true) &
+                    t.receivedAt.isSmallerThanValue(cutoff),
+              ))
+            .get();
+        final failedOps = <PendingChangeRow>[];
+        Future<void> fail(PendingChangeRow op, String why) async {
+          final count = await (_db.update(_db.pendingChanges)
+                ..where((t) => t.id.equals(op.id) & t.state.equals('parked')))
+              .write(
+            PendingChangesCompanion(
+              state: const Value('failed'),
+              lastError: Value(why),
+            ),
+          );
+          if (count > 0) failedOps.add(op);
+        }
+
+        for (final row in virtual) {
+          for (final op in await (_db.select(_db.pendingChanges)
+                ..where(
+                  (t) => t.resourceId.equals(row.id) & t.state.equals('parked'),
+                ))
+              .get()) {
+            await fail(op, 'the server copy of this mail never arrived');
+          }
+          // Shadows on it go with it (they never flush).
+          await (_db.delete(_db.pendingChanges)
+                ..where(
+                  (t) => t.resourceId.equals(row.id) & t.state.equals('shadow'),
+                ))
+              .go();
+          await deleteRow(row.id);
+        }
+        final stale = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.state.equals('parked') &
+                    t.createdAt.isSmallerThanValue(cutoff),
+              ))
+            .get();
+        final refoldIds = <String>{};
+        for (final op in stale) {
+          await fail(op, 'the server id of this mail never became known');
+          refoldIds.add(op.resourceId);
+        }
+        final changed = await refoldAll(refoldIds);
+        changed.addAll((await dropOrphanedShadows()).keys);
+        return ParkedExpiry(
+          droppedRows: virtual,
+          failedOps: failedOps,
+          changedRows: changed,
+        );
+      });
+
+  // ── The appear side of carry-over (SYNC-REDESIGN.md §4.5) ───────────────
+
+  /// Gives up waiting for the destination copy of the acked moves of
+  /// [accountId] whose mail left its source with no new location known,
+  /// once [awaitAppearWindow] passed (`lease_until`): each resolves as
+  /// satisfied, is dropped (App Log `op.gone`) and its row hidden, for
+  /// [cleanUpGone]; a copy the destination's sync stores later is a row of
+  /// its own. Returns the rows re-folded.
+  Future<Set<String>> expireAwaitedMoves(String accountId) =>
+      _db.transaction(() async {
+        final ops = await (_db.select(_db.pendingChanges)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.state.equals('acked') &
+                    t.leaseUntil.isSmallerOrEqualValue(_now()),
+              ))
+            .get();
+        final rows = <String>{};
+        for (final op in ops) {
+          final row = await (_db.selectOnly(_db.emails)
+                ..addColumns([_db.emails.srvMailboxPath, _db.emails.srvGone])
+                ..where(_db.emails.id.equals(op.resourceId)))
+              .getSingleOrNull();
+          if (row != null && !(row.read(_db.emails.srvGone) ?? false)) {
+            continue;
+          }
+          await _dropOp(op);
+          _logGone(op, row?.read(_db.emails.srvMailboxPath));
+          rows.add(op.resourceId);
+        }
+        await refoldAll(rows);
+        return rows;
+      });
+
+  /// The row of [accountId] that waits for its mail to appear in
+  /// [mailboxPath]: marked gone, with an acked move, snooze or unsnooze
+  /// into [mailboxPath] whose new location the server never named, and
+  /// Message-ID [messageId] (either stored form). Null unless exactly one
+  /// matches (a row carries over only on a unique match, §6).
+  Future<Email?> awaitingRowFor(
+    String accountId,
+    String mailboxPath,
+    String messageId, {
+    required String exceptId,
+  }) async {
+    final candidates = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.srvGone.equals(true) &
+                t.id.equals(exceptId).not() &
+                (t.messageId.equals(messageId) |
+                    t.messageId.equals('<$messageId>')),
+          ))
+        .get();
+    final matches = <Email>[];
+    for (final row in candidates) {
+      final awaiting = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(row.id) &
+                  t.state.equals('acked') &
+                  t.leaseUntil.isNotNull(),
+            ))
+          .get();
+      if (awaiting.any((op) => _payloadOf(op)?['dest'] == mailboxPath)) {
+        matches.add(row);
+      }
+    }
+    return matches.length == 1 ? matches.single : null;
+  }
+
+  /// Settles the acked ops of row [emailId] against what its `srv_*`
+  /// columns say now, as the read [read] that wrote them would (after
+  /// [takeOverRow] gave the row a copy's server facts).
+  Future<void> settle(KeywordRead read, String emailId) =>
+      _db.transaction(() => _settleAcked(read, emailId));
 
   /// Deletes acked ops whose row no longer exists (deleted by sync, merged
   /// away): nothing will ever read them back.
@@ -385,7 +634,8 @@ class EmailStateWriter {
   /// an effective column that is not `COALESCE(local, srv)` (for
   /// `mailbox_path`: empty when hidden or gone), a `local_*` value that is
   /// not the fold of the row's foldable ops (which covers one on a row
-  /// without any), or no `srv_mailbox_path`. Rows of [accountId] (all
+  /// without any), no `srv_mailbox_path`, or a counterpart shadow op whose
+  /// primary is gone or failed (field `shadow`). Rows of [accountId] (all
   /// accounts when null); only [emailIds] when given, otherwise every row
   /// that has a `local_*` value, a foldable op or an effective column out of
   /// line. Empty when consistent. For tests, the fuzz property and
@@ -446,12 +696,52 @@ class EmailStateWriter {
         (opsByRow[op.resourceId] ??= []).add(op);
       }
     }
-    return [
+    final problems = [
       for (final r in rows)
         if (_problemOf(r, opsByRow[r.read<String>('id')] ?? const [])
             case final problem?)
           problem,
     ];
+    return _withOrphanedShadows(
+      problems,
+      accountId: accountId,
+      emailIds: emailIds?.toSet(),
+    );
+  }
+
+  /// [problems] plus the rows with a shadow op whose primary no longer
+  /// exists or failed (SYNC-REDESIGN.md §6: a shadow is dropped with its
+  /// primary, so none folds forever): field `shadow`.
+  Future<List<ConsistencyProblem>> _withOrphanedShadows(
+    List<ConsistencyProblem> problems, {
+    required String? accountId,
+    required Set<String>? emailIds,
+  }) async {
+    final orphans = await _db.customSelect(
+      'SELECT s.id, s.resource_id, s.account_id FROM pending_changes s '
+      "LEFT JOIN pending_changes p ON s.origin = 'counterpart:' || p.id "
+      "WHERE s.state = 'shadow' AND (p.id IS NULL OR p.state = 'failed')"
+      '${accountId == null ? '' : ' AND s.account_id = ?1'}',
+      variables: [if (accountId != null) Variable.withString(accountId)],
+    ).get();
+    if (orphans.isEmpty) return problems;
+    final byRow = {for (final p in problems) p.emailId: p};
+    for (final o in orphans) {
+      final rowId = o.read<String>('resource_id');
+      if (emailIds != null && !emailIds.contains(rowId)) continue;
+      final known = byRow[rowId];
+      byRow[rowId] = ConsistencyProblem(
+        emailId: rowId,
+        accountId: o.read<String>('account_id'),
+        fields: [...?known?.fields, 'shadow'],
+        withoutOps: false,
+        values: {
+          ...?known?.values,
+          'orphanedShadow': '#${o.read<int>('id')}',
+        },
+      );
+    }
+    return byRow.values.toList();
   }
 
   static const _overlaySelect = 'SELECT e.id, e.account_id, '
@@ -605,6 +895,9 @@ class EmailStateWriter {
       );
     }
     final changed = <String>{};
+    if (problems.any((p) => p.fields.contains('shadow'))) {
+      changed.addAll((await dropOrphanedShadows()).keys);
+    }
     for (final p in problems) {
       if (p.fields.contains('srv_mailbox_path')) {
         // No server folder recorded: the folder it shows is the best guess.
@@ -1195,8 +1488,8 @@ class EmailStateWriter {
   Future<void> _settleAcked(KeywordRead read, String emailId) async {
     final row = await _db.customSelect(
       'SELECT srv_is_seen, srv_is_flagged, srv_snoozed_until, '
-      'srv_keywords_seq, srv_mailbox_path, srv_gone, srv_location_seq '
-      'FROM emails WHERE id = ?1',
+      'srv_keywords_seq, srv_mailbox_path, srv_gone, srv_location_seq, '
+      'message_id FROM emails WHERE id = ?1',
       variables: [Variable.withString(emailId)],
     ).getSingleOrNull();
     if (row == null) return;
@@ -1212,6 +1505,9 @@ class EmailStateWriter {
     final srvPath = row.readNullable<String>('srv_mailbox_path');
     final gone = row.read<bool>('srv_gone');
     final locationSeq = row.read<int>('srv_location_seq');
+    // Only a mail with a Message-ID can be matched when it appears in its
+    // destination ([awaitingRowFor]).
+    final matchable = (row.readNullable<String>('message_id') ?? '').isNotEmpty;
     final ops = await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
@@ -1241,8 +1537,41 @@ class EmailStateWriter {
       }
       final hasLocation = locationColumnsOf(op.changeType, payload).isNotEmpty;
       if (gone && locationSeq > ackSeq) {
+        // An acked move whose new location the server never named: that
+        // its source no longer has the mail is expected. It keeps showing
+        // the mail in its destination until that folder's sync stores it
+        // (carried over in place) or [awaitAppearWindow] passes
+        // ([expireAwaitedMoves]).
+        final dest = payload?['dest'];
+        // Only while it is the row's newest move or delete: a later delete
+        // for good the server confirmed must hide the row, and a later move
+        // waits itself.
+        final newest = !ops.any(
+          (o) =>
+              o.id > op.id &&
+              const ['move', 'snooze', 'unsnooze', 'delete']
+                  .contains(o.changeType),
+        );
+        if (matchable &&
+            newest &&
+            hasLocation &&
+            op.changeType != 'delete' &&
+            op.origin == null &&
+            dest is String &&
+            dest != srvPath) {
+          if (op.leaseUntil == null) {
+            await (_db.update(_db.pendingChanges)
+                  ..where((t) => t.id.equals(op.id)))
+                .write(
+              PendingChangesCompanion(
+                leaseUntil: Value(_now().add(awaitAppearWindow)),
+              ),
+            );
+          }
+          continue;
+        }
         // Gone on the server after the ack: a delete is confirmed, and a
-        // move's mail is gone (or its destination copy is a new row).
+        // move's mail is gone.
         await _dropOp(op);
         dropped = true;
         if (hasLocation && op.changeType != 'delete') {
@@ -1577,6 +1906,90 @@ class _Effective {
 
   @override
   int get hashCode => Object.hash(seen, flagged, snoozedUntil, mailboxPath);
+}
+
+/// The header columns and server location facts of a local row
+/// ([EmailStateWriter.insertLocalRow]): no overlay column.
+class LocalRowHeaders {
+  const LocalRowHeaders({
+    required this.subject,
+    required this.sentAt,
+    required this.receivedAt,
+    required this.fromJson,
+    required this.toJson,
+    required this.ccJson,
+    required this.preview,
+    required this.hasAttachment,
+    required this.threadId,
+    required this.messageId,
+    this.bccJson,
+    this.isLocal = true,
+    this.isVirtualSentCopy = false,
+    this.uid,
+    this.srvUidValidity,
+    this.srvJmapId,
+  });
+
+  final String? subject;
+  final DateTime sentAt;
+  final DateTime receivedAt;
+  final String fromJson;
+  final String toJson;
+  final String ccJson;
+  final String? bccJson;
+  final String preview;
+  final bool hasAttachment;
+  final String threadId;
+  final String? messageId;
+
+  /// No server copy is known: a virtual row.
+  final bool isLocal;
+  final bool isVirtualSentCopy;
+
+  /// The IMAP UID the server named (APPENDUID), with [srvUidValidity].
+  final int? uid;
+  final int? srvUidValidity;
+  final String? srvJmapId;
+
+  EmailsCompanion get _companion => EmailsCompanion(
+        uid: Value(uid ?? 0),
+        subject: Value(subject),
+        sentAt: Value(sentAt),
+        receivedAt: Value(receivedAt),
+        fromJson: Value(fromJson),
+        toAddresses: Value(toJson),
+        ccJson: Value(ccJson),
+        bccJson: Value.absentIfNull(bccJson),
+        preview: Value(preview),
+        hasAttachment: Value(hasAttachment),
+        threadId: Value(threadId),
+        messageId: Value(messageId),
+        isLocal: Value(isLocal),
+        isVirtualSentCopy: Value(isVirtualSentCopy),
+        srvUid: Value(uid),
+        srvUidValidity: Value(srvUidValidity),
+        srvJmapId: Value(srvJmapId),
+      );
+}
+
+/// What [EmailStateWriter.expireParked] did.
+class ParkedExpiry {
+  const ParkedExpiry({
+    required this.droppedRows,
+    required this.failedOps,
+    required this.changedRows,
+  });
+
+  /// The virtual rows dropped (their server copy never arrived).
+  final List<Email> droppedRows;
+
+  /// The parked changes that became `failed`.
+  final List<PendingChangeRow> failedOps;
+
+  /// The rows still there whose shown value changed.
+  final Set<String> changedRows;
+
+  bool get isEmpty => droppedRows.isEmpty && failedOps.isEmpty;
 }
 
 /// A row that breaks the overlays' invariants

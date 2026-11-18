@@ -842,8 +842,8 @@ extension _SyncJmap on EmailRepositoryImpl {
                 t.accountId.equals(accountId) &
                 t.srvMailboxPath.equals(mailboxJmapId) &
                 // Local self-sent "virtual" rows have no server counterpart
-                // and must survive until the real message arrives and
-                // dissolves them (#545). No recorded server id: unknown is
+                // and must survive until the real message arrives and fills
+                // them in place (#545). No recorded server id: unknown is
                 // not missing.
                 t.isLocal.equals(false) &
                 t.srvJmapId.isNotNull(),
@@ -1093,9 +1093,10 @@ extension _SyncJmap on EmailRepositoryImpl {
   }) async {
     var bytes = 0;
     final affectedByMailbox = <String, Set<String>>{};
-    // (mailboxPath, realEmailId, messageId) of each row we just wrote — checked
-    // afterwards for a local self-sent "virtual" counterpart to dissolve (#545).
-    final dissolveCandidates = <(String, String, String?)>[];
+    // (mailboxPath, emailId, messageId, isNew) of each row written: matched
+    // afterwards with a row waiting for its server copy
+    // ([_Counterparts._matchArrival]).
+    final dissolveCandidates = <(String, String, String?, bool)>[];
     // (emailId, mailboxPath, subject, size) of each row stored for the first
     // time — logged so "Show Logs" starts with the fetch (#920).
     final newlyStored = <(String, String, String?, int?)>[];
@@ -1255,7 +1256,8 @@ extension _SyncJmap on EmailRepositoryImpl {
               ),
             );
       }
-      dissolveCandidates.add((mailboxPath, dbId, jmapMessageId));
+      dissolveCandidates
+          .add((mailboxPath, dbId, jmapMessageId, existingRow == null));
       if (existingRow == null) {
         newlyStored.add((dbId, mailboxPath, subject, m['size'] as int?));
       }
@@ -1276,13 +1278,14 @@ extension _SyncJmap on EmailRepositoryImpl {
         await _updateThread(accountId, mailboxPath, tid);
       }
     }
-    if (dissolveCandidates.isNotEmpty && await _hasLocalMessages(accountId)) {
-      for (final (mailboxPath, emailId, msgId) in dissolveCandidates) {
-        await _maybeDissolveLocalMessage(
+    if (dissolveCandidates.isNotEmpty && await _hasWaitingRows(accountId)) {
+      for (final (mailboxPath, emailId, msgId, isNew) in dissolveCandidates) {
+        await _matchArrival(
           accountId,
           mailboxPath,
           emailId,
           msgId,
+          isNew: isNew,
         );
       }
     }

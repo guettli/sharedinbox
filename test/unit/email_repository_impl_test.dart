@@ -7997,9 +7997,8 @@ void main() {
       expect(change.lastError, contains('No server id'));
     });
 
-    test('a JMAP row without a server id queues no change', () async {
-      final recorder = _PushStatusRecorder();
-      final r = _makeRepos(appLogger: AppLogger(recorder));
+    test('a JMAP row without a server id parks its change', () async {
+      final r = _makeRepos();
       await r.accounts.addAccount(_jmapAccount, 'pw');
       await r.db.into(r.db.emails).insert(
             EmailsCompanion.insert(
@@ -8012,14 +8011,13 @@ void main() {
           );
 
       await r.emails.setFlag('jmap-1:~x', seen: true);
-      await pumpEventQueue();
 
-      expect(await r.db.select(r.db.pendingChanges).get(), isEmpty);
+      // Folded, and sent once the server copy is matched (SYNC-REDESIGN.md
+      // §6); its server value stays the server's.
+      final change = await r.db.select(r.db.pendingChanges).getSingle();
+      expect(change.state, 'parked');
       expect((await r.emails.getEmail('jmap-1:~x'))!.isSeen, isTrue);
-      expect(
-        recorder.entries.map((e) => e.event),
-        contains('pending_change.no_server_id'),
-      );
+      expect(await r.emails.flushPendingChanges('jmap-1', 'pw'), 0);
     });
 
     test('sends flag_seen and removes change on success', () async {
@@ -10715,7 +10713,7 @@ void main() {
       expect(
         sent.single.isLocal,
         isTrue,
-        reason: 'dissolved into the real message by the next sync',
+        reason: 'filled in place by the real message on the next sync',
       );
 
       // A virtual row has no server copy to fetch, so its body is always
@@ -10752,8 +10750,8 @@ void main() {
     });
 
     test(
-      'the virtual Sent copy dissolves against the Sent arrival, and the '
-      'inbox note against the inbox arrival',
+      'the virtual Sent copy matches the Sent arrival in place, and the '
+      'inbox note the inbox arrival',
       () async {
         // A mail to yourself leaves both virtual rows behind. Pairing them up
         // the wrong way round would move the inbox arrival into Sent.
@@ -10778,16 +10776,12 @@ void main() {
         await r.emails.enqueueSend('acc-1', selfDraft);
         await r.emails.sendNow('acc-1');
 
-        expect(
-          (await r.emails.observeEmails('acc-1', 'INBOX').first).single.isLocal,
-          isTrue,
-        );
-        expect(
-          (await r.emails.observeEmails('acc-1', 'INBOX.Sent').first)
-              .single
-              .isLocal,
-          isTrue,
-        );
+        final note =
+            (await r.emails.observeEmails('acc-1', 'INBOX').first).single;
+        expect(note.isLocal, isTrue);
+        final sentCopy =
+            (await r.emails.observeEmails('acc-1', 'INBOX.Sent').first).single;
+        expect(sentCopy.isLocal, isTrue);
 
         // The real message is delivered to the inbox.
         await r.db.into(r.db.emails).insert(
@@ -10804,19 +10798,21 @@ void main() {
                 srvUid: const Value(42),
               ),
             );
-        await r.emails.maybeDissolveLocalMessageForTest(
+        await r.emails.matchArrivalForTest(
           'acc-1',
           'INBOX',
           'acc-1:INBOX:42',
           'self-1@example.com',
         );
 
-        // The inbox note is gone, replaced by the real message — and it stayed
-        // in the inbox rather than being dragged into Sent. Matching the Sent
-        // copy here would have queued a move to INBOX.Sent.
+        // The real message filled the inbox note in place (it keeps its id
+        // and is a server row now) — and it stayed in the inbox rather than
+        // being dragged into Sent. Matching the Sent copy here would have
+        // queued a move to INBOX.Sent.
         final inbox = await r.emails.observeEmails('acc-1', 'INBOX').first;
         expect(inbox, hasLength(1));
-        expect(inbox.single.id, 'acc-1:INBOX:42');
+        expect(inbox.single.id, note.id);
+        expect(inbox.single.isLocal, isFalse);
         expect(await _changeTypes(r.db), isNot(contains('move')));
 
         // The Sent copy is untouched; it waits for the Sent arrival.
@@ -10824,7 +10820,7 @@ void main() {
         expect(sent, hasLength(1));
         expect(sent.single.isLocal, isTrue);
 
-        // Which now dissolves it.
+        // Which now fills it in place.
         await r.db.into(r.db.emails).insert(
               EmailsCompanion.insert(
                 id: 'acc-1:INBOX.Sent:7',
@@ -10839,7 +10835,7 @@ void main() {
                 srvUid: const Value(7),
               ),
             );
-        await r.emails.maybeDissolveLocalMessageForTest(
+        await r.emails.matchArrivalForTest(
           'acc-1',
           'INBOX.Sent',
           'acc-1:INBOX.Sent:7',
@@ -10849,7 +10845,8 @@ void main() {
         final sentAfter =
             await r.emails.observeEmails('acc-1', 'INBOX.Sent').first;
         expect(sentAfter, hasLength(1));
-        expect(sentAfter.single.id, 'acc-1:INBOX.Sent:7');
+        expect(sentAfter.single.id, sentCopy.id);
+        expect(sentAfter.single.isLocal, isFalse);
         expect(await _changeTypes(r.db), isNot(contains('move')));
       },
     );

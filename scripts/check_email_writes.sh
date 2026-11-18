@@ -84,13 +84,13 @@ allowed='
 # Row inserts of new rows and the header columns of existing ones. The
 # overlay columns come only from EmailStateWriter.newRow /
 # withServerLocation (check 1); an existing row is written with an
-# EmailsCompanion naming no overlay column. Phase 4b turns the virtual
-# rows and Undo into create_local steps and parked ops.
-lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|IMAP new-mail fetch: new rows and headers (phase 4b)
-lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|JMAP Email/get: new rows and headers (phase 4b)
-lib/data/repositories/email_repository_impl/local_rows.dart|_storeSentCopyLocally|virtual Sent copy, create_local (phase 4b)
-lib/data/repositories/email_repository_impl/local_rows.dart|_createLocalSelfMessages|virtual self-send rows, create_local (phase 4b)
-lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo brings a row back that sync cleaned up (phase 4b)
+# EmailsCompanion naming no overlay column. The local rows (virtual rows,
+# the Sent copy) moved into the writer in phase 4b (insertLocalRow,
+# writeLocalRowHeaders). These three build a header companion
+# from a server answer or an Undo snapshot, which phase 6 may move too.
+lib/data/repositories/email_repository_impl/sync_imap.dart|_fetchAndUpsertImapGuarded|IMAP new-mail fetch: new rows and headers (phase 6)
+lib/data/repositories/email_repository_impl/sync_jmap.dart|_upsertJmapEmails|JMAP Email/get: new rows and headers (phase 6)
+lib/data/repositories/email_repository_impl/user_actions.dart|_restoreEmail|Undo brings a row back that sync cleaned up (phase 6)
 '
 
 files=$(grep -rlE --include='*.dart' \

@@ -17,11 +17,11 @@ extension _LocalRows on EmailRepositoryImpl {
   /// that server location, so a sync of [mailboxPath] finds and updates this
   /// row rather than inserting a duplicate. With neither, the row is
   /// inserted as a virtual `isLocal` one (`isVirtualSentCopy`) that
-  /// [_Counterparts._maybeDissolveLocalMessage] folds into the real message later — the
+  /// [_Counterparts._matchArrival] fills in place later — the
   /// same machinery self-send notes use (#545) — which needs a [messageId]
   /// to match on, so a message without one is skipped rather than left as a
   /// permanent duplicate. A mail sent to yourself gets both rows, the inbox
-  /// note and the Sent copy: they must not dissolve against each other's
+  /// note and the Sent copy: they must not be matched with each other's
   /// arrival.
   Future<void> _storeSentCopyLocally({
     required String accountId,
@@ -63,24 +63,23 @@ extension _LocalRows on EmailRepositoryImpl {
       final body = draft.body;
       final preview = body.length > 200 ? body.substring(0, 200) : body;
 
-      final copy = EmailsCompanion(
-        uid: Value(uid ?? 0),
-        subject: Value(draft.subject),
-        sentAt: Value(now),
-        receivedAt: Value(now),
-        fromJson: Value(_encodeModelAddresses([draft.from])),
-        toAddresses: Value(_encodeModelAddresses(draft.to)),
-        ccJson: Value(_encodeModelAddresses(draft.cc)),
-        bccJson: Value(_encodeModelAddresses(draft.bcc)),
-        preview: Value(preview),
-        hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-        threadId: Value(threadId),
-        messageId: Value(mid),
-        isLocal: Value(isLocal),
-        isVirtualSentCopy: Value(isLocal),
-        srvUid: Value(uid),
-        srvUidValidity: Value(uidValidity),
-        srvJmapId: Value(uid == null ? jmapId : null),
+      final copy = LocalRowHeaders(
+        uid: uid,
+        subject: draft.subject,
+        sentAt: now,
+        receivedAt: now,
+        fromJson: _encodeModelAddresses([draft.from]),
+        toJson: _encodeModelAddresses(draft.to),
+        ccJson: _encodeModelAddresses(draft.cc),
+        bccJson: _encodeModelAddresses(draft.bcc),
+        preview: preview,
+        hasAttachment: draft.attachmentFilePaths.isNotEmpty,
+        threadId: threadId,
+        messageId: mid,
+        isLocal: isLocal,
+        isVirtualSentCopy: isLocal,
+        srvUidValidity: uidValidity,
+        srvJmapId: uid == null ? jmapId : null,
       );
       // You wrote it — mirrors the \Seen flag the APPEND sets, and never
       // nags with an unread badge on your own mail. A row sync already
@@ -88,19 +87,15 @@ extension _LocalRows on EmailRepositoryImpl {
       // A virtual copy (no server location yet) has the Sent folder as its
       // own folder.
       if (known == null) {
-        await _db.into(_db.emails).insert(
-              EmailStateWriter.newRow(
-                copy,
-                id: emailId,
-                accountId: accountId,
-                mailboxPath: mailboxPath,
-                keywords: _ownMailKeywords,
-                seq: 0,
-              ),
-            );
+        await _state.insertLocalRow(
+          copy,
+          id: emailId,
+          accountId: accountId,
+          mailboxPath: mailboxPath,
+          keywords: _ownMailKeywords,
+        );
       } else {
-        await (_db.update(_db.emails)..where((t) => t.id.equals(emailId)))
-            .write(copy);
+        await _state.writeLocalRowHeaders(emailId, copy);
       }
       await _db.into(_db.emailBodies).insertOnConflictUpdate(
             EmailBodiesCompanion.insert(
@@ -117,8 +112,8 @@ extension _LocalRows on EmailRepositoryImpl {
   /// For every configured account whose address is among [draft]'s recipients,
   /// insert a local "virtual" copy of the message into that account's inbox so
   /// it shows up right after sending for note-taking (#545), instead of only
-  /// once the next sync of the inbox fetches it. Dissolved into the real
-  /// message by [_Counterparts._maybeDissolveLocalMessage] once it arrives via sync.
+  /// once the next sync of the inbox fetches it. The real message fills it
+  /// in place ([_Counterparts._matchArrival]) once it arrives via sync.
   ///
   /// Only call this after the server accepted the message: a note for a mail
   /// that was rejected or discarded would be a phantom inbox message.
@@ -159,7 +154,7 @@ extension _LocalRows on EmailRepositoryImpl {
       // half-written (row without body or thread aggregate).
       await _db.transaction(() async {
         // A fast server can deliver the real message, and a sync can store
-        // it, before we get here. Its arrival found no note to dissolve, so a
+        // it, before we get here. Its arrival found no note to match, so a
         // note inserted now would stay behind as a permanent duplicate.
         if (await _hasArrivedOutsideSent(account.id, mid)) return;
 
@@ -169,32 +164,28 @@ extension _LocalRows on EmailRepositoryImpl {
         if (await _localRowFor(account.id, mid, sentCopy: false) != null) {
           return;
         }
-        await _db.into(_db.emails).insert(
-              EmailStateWriter.newRow(
-                EmailsCompanion(
-                  uid: const Value(0),
-                  subject: Value(draft.subject),
-                  sentAt: Value(now),
-                  receivedAt: Value(now),
-                  fromJson: Value(_encodeModelAddresses([draft.from])),
-                  toAddresses: Value(_encodeModelAddresses(draft.to)),
-                  ccJson: Value(_encodeModelAddresses(draft.cc)),
-                  preview: Value(preview),
-                  hasAttachment: Value(draft.attachmentFilePaths.isNotEmpty),
-                  threadId: Value(threadId),
-                  messageId: Value(mid),
-                  isLocal: const Value(true),
-                ),
-                id: emailId,
-                accountId: account.id,
-                // A virtual row has no server copy: its folder and its
-                // read/star/snooze values are its own.
-                mailboxPath: inbox.path,
-                // Self-sent: you wrote it, so don't nag with an unread badge.
-                keywords: _ownMailKeywords,
-                seq: 0,
-              ),
-            );
+        await _state.insertLocalRow(
+          LocalRowHeaders(
+            subject: draft.subject,
+            sentAt: now,
+            receivedAt: now,
+            fromJson: _encodeModelAddresses([draft.from]),
+            toJson: _encodeModelAddresses(draft.to),
+            ccJson: _encodeModelAddresses(draft.cc),
+            preview: preview,
+            hasAttachment: draft.attachmentFilePaths.isNotEmpty,
+            threadId: threadId,
+            messageId: mid,
+          ),
+          id: emailId,
+          accountId: account.id,
+          // A virtual row has no server copy: its folder and its
+          // read/star/snooze values are its own; the user's changes of it
+          // are parked until the delivered mail is matched in place.
+          mailboxPath: inbox.path,
+          // Self-sent: you wrote it, so don't nag with an unread badge.
+          keywords: _ownMailKeywords,
+        );
         await _db.into(_db.emailBodies).insert(
               EmailBodiesCompanion.insert(
                 emailId: emailId,
@@ -211,7 +202,7 @@ extension _LocalRows on EmailRepositoryImpl {
 
   /// Whether the real (synced, non-local) message with Message-ID [mid] is
   /// already stored on [accountId] in any folder but Sent. Mirrors which
-  /// arrivals [_Counterparts._maybeDissolveLocalMessage] dissolves an inbox note against: a
+  /// arrivals [_Counterparts._matchArrival] matches an inbox note with: a
   /// Sent-folder row is the copy of what we sent, not the delivered message,
   /// and a server rule may have filed the delivery somewhere other than INBOX.
   ///

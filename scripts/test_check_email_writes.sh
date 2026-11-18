@@ -89,27 +89,27 @@ extension _SyncImap on EmailRepositoryImpl {
 EOF
 
 expect fail 'snoozed_until in the column list of an INSERT INTO emails' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() => _db.customStatement(
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() => _db.customStatement(
         'INSERT INTO emails (id, account_id, snoozed_until) VALUES (?, ?, ?)',
       );
 }
 EOF
 
 expect fail 'the opt-out comment does not cover check 1' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() => _db.customUpdate(
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() => _db.customUpdate(
         'UPDATE emails SET is_flagged = 0', // not an emails write
       );
 }
 EOF
 
 expect fail 'a whole-row toCompanion write in an allowed member' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally(Email row) async {
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails(Email row) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
         .write(row.toCompanion(false)); // not an emails write
   }
@@ -166,14 +166,10 @@ Future<void> purgeFolder(AppDatabase db) async {
 EOF
 
 expect fail 'a stale allow-list entry (the member lost its write)' \
-  "$repo/local_rows.dart" 'match no' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'match no' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     await _state.deleteRow(row.id);
-  }
-
-  Future<void> _createLocalSelfMessages() async {
-    await _db.into(_db.emails).insert(EmailStateWriter.newRow(c));
   }
 }
 EOF
@@ -224,9 +220,9 @@ extension _FlushImap on EmailRepositoryImpl {
 EOF
 
 expect fail 'EmailsCompanion.custom naming an overlay column' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion.custom(isSeen: const Constant(true)),
     );
@@ -257,9 +253,9 @@ extension _SyncImap on EmailRepositoryImpl {
 EOF
 
 expect fail 'an Email data row written by update(…).write' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally(Email row) async {
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails(Email row) async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id)))
         .write(row.copyWith(subject: s));
   }
@@ -308,9 +304,9 @@ extension _Queries on EmailRepositoryImpl {
 EOF
 
 expect fail 'a getter after an allowed member does not borrow its name' \
-  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'emails is written only' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(subject: Value(s)),
     );
@@ -321,9 +317,9 @@ extension _LocalRows on EmailRepositoryImpl {
 EOF
 
 expect fail 'a field after an allowed member does not borrow its name' \
-  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
-class LocalRows {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'emails is written only' <<'EOF'
+class SyncJmap {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(subject: Value(s)),
     );
@@ -334,9 +330,9 @@ class LocalRows {
 EOF
 
 expect fail 'a signature over two lines after an allowed member' \
-  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'emails is written only' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(subject: Value(s)),
     );
@@ -351,9 +347,9 @@ extension _LocalRows on EmailRepositoryImpl {
 EOF
 
 expect fail 'an annotated member after an allowed member' \
-  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
-class LocalRows {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" 'emails is written only' <<'EOF'
+class SyncJmap {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(subject: Value(s)),
     );
@@ -434,9 +430,9 @@ extension _SyncImap on EmailRepositoryImpl {
 EOF
 
 expect pass 'the shown folder of a new row, in an EmailsCompanion.insert' \
-  "$repo/local_rows.dart" <<'EOF'
-extension _LocalRows on EmailRepositoryImpl {
-  Future<void> _storeSentCopyLocally() async {
+  "$repo/sync_jmap.dart" <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     final row = EmailStateWriter.withServerLocation(
       EmailsCompanion.insert(
         id: emailId,
@@ -450,18 +446,57 @@ extension _LocalRows on EmailRepositoryImpl {
     );
     await _db.into(_db.emails).insert(row);
   }
+}
+EOF
 
+# ── Phase 4b: local rows are written by the state writer ───────────────────
+expect fail 'an emails insert in local_rows.dart (no longer allowed)' \
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
   Future<void> _createLocalSelfMessages() async {
     await _db.into(_db.emails).insert(EmailStateWriter.newRow(c));
   }
 }
 EOF
 
-# ── Check 1 for the location overlay (phase 4a) ─────────────────────────────
-expect fail 'mailboxPath in an EmailsCompanion, even in an allowed member' \
-  "$repo/local_rows.dart" 'read/star/snooze' <<'EOF'
+expect fail 'an EmailsCompanion for a Sent copy in local_rows.dart' \
+  "$repo/local_rows.dart" 'emails is written only' <<'EOF'
 extension _LocalRows on EmailRepositoryImpl {
   Future<void> _storeSentCopyLocally() async {
+    final copy = EmailsCompanion(subject: Value(draft.subject));
+    await _state.writeLocalRowHeaders(emailId, copy);
+  }
+}
+EOF
+
+expect pass 'local rows through insertLocalRow and LocalRowHeaders' \
+  "$repo/local_rows.dart" <<'EOF'
+extension _LocalRows on EmailRepositoryImpl {
+  Future<void> _storeSentCopyLocally() async {
+    final copy = LocalRowHeaders(subject: draft.subject, isLocal: isLocal);
+    if (known == null) {
+      await _state.insertLocalRow(
+        copy,
+        id: emailId,
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        keywords: _ownMailKeywords,
+      );
+    } else {
+      await _state.writeLocalRowHeaders(emailId, copy);
+    }
+    final rows = await (_db.select(_db.emails)
+          ..where((t) => t.isLocal.equals(true)))
+        .get();
+  }
+}
+EOF
+
+# ── Check 1 for the location overlay (phase 4a) ─────────────────────────────
+expect fail 'mailboxPath in an EmailsCompanion, even in an allowed member' \
+  "$repo/sync_jmap.dart" 'read/star/snooze' <<'EOF'
+extension _SyncJmap on EmailRepositoryImpl {
+  Future<void> _upsertJmapEmails() async {
     await (_db.update(_db.emails)..where((t) => t.id.equals(row.id))).write(
       EmailsCompanion(mailboxPath: Value(destPath)),
     );

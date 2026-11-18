@@ -1,8 +1,15 @@
 part of '../email_repository_impl.dart';
 
-// Counterpart mirroring: copies of the same message in other folders and
-// accounts (by Message-ID), and dissolving a local self-sent row into the
-// server copy.
+// Counterpart mirroring: copies of the same message in other accounts (by
+// Message-ID) get shadow ops of the user's change; and the in-place match of
+// a row without a server copy (a virtual row, a JMAP mail without a known
+// id, an acked move waiting for its destination copy) when the server copy
+// arrives (SYNC-REDESIGN.md §6, §4.5).
+
+/// Change types whose latest queued op on the source row a counterpart
+/// shadow follows, per mirrored action.
+const _moveOpTypes = ['move'];
+const _deleteOpTypes = ['move', 'delete'];
 
 extension _Counterparts on EmailRepositoryImpl {
   /// Mirrors a snooze (or an un-snooze when [until] is null) onto the matching
@@ -13,8 +20,10 @@ extension _Counterparts on EmailRepositoryImpl {
   /// independent [Account] rows, each with its own copy of every message, so
   /// snoozing on one account leaves the other untouched. This bridges them:
   /// messages are correlated by their normalised RFC 2822 Message-ID and the
-  /// same optimistic update + pending change is applied to the counterpart,
-  /// which then flushes through that account's own protocol path.
+  /// counterpart's row gets a shadow of the change queued on [sourceRowId]
+  /// (SYNC-REDESIGN.md §6): it shows there at once, is never sent (the
+  /// server message is changed once, by the primary), and is acked, dropped
+  /// or failed with the primary.
   ///
   /// Best-effort: counterparts that haven't synced the message yet are skipped
   /// (their next sync reconstructs the snooze from the shared server-side
@@ -24,20 +33,18 @@ extension _Counterparts on EmailRepositoryImpl {
     String sourceAccountId,
     String? messageId, {
     required DateTime? until,
+    required String sourceRowId,
   }) async {
-    final mid = normaliseMessageId(messageId);
-    if (mid == null) return;
+    final targets = await _mirrorTargets(
+      sourceAccountId,
+      messageId,
+      sourceRowId: sourceRowId,
+      opTypes: until == null ? const ['unsnooze'] : const ['snooze'],
+    );
+    if (targets == null) return;
+    final (:primary, :twins) = targets;
 
-    final source = await _accounts.getAccount(sourceAccountId);
-    if (source == null) return;
-    final all = await _accounts.observeAccounts().first;
-    final counterparts = AccountComparison.counterpartsOf(source, all);
-    if (counterparts.isEmpty) return;
-
-    for (final counterpart in counterparts) {
-      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
-      if (row == null) continue;
-
+    for (final row in twins) {
       if (until != null) {
         // Already snoozed to (about) the same time → nothing to mirror.
         final current = row.snoozedUntil;
@@ -45,13 +52,55 @@ extension _Counterparts on EmailRepositoryImpl {
             current.difference(until).abs() < const Duration(seconds: 1)) {
           continue;
         }
-        await _snoozeRow(row, until);
+        await _asShadowOf(primary, () => _snoozeRow(row, until));
       } else {
         // Already awake → nothing to mirror.
         if (row.snoozedUntil == null) continue;
-        await _unsnoozeRow(row);
+        await _asShadowOf(primary, () => _unsnoozeRow(row));
       }
     }
+  }
+
+  /// The twin rows of the mail with [messageId] in the counterpart accounts
+  /// of [sourceAccountId], and the change of [opTypes] just queued on its
+  /// row [sourceRowId] that their shadows follow; null when there is none
+  /// (the action queued nothing, or the mail has no Message-ID).
+  Future<({int primary, List<Email> twins})?> _mirrorTargets(
+    String sourceAccountId,
+    String? messageId, {
+    required String sourceRowId,
+    required List<String> opTypes,
+  }) async {
+    final mid = normaliseMessageId(messageId);
+    if (mid == null) return null;
+    final primary = await _latestQueuedOp(sourceRowId, opTypes);
+    if (primary == null) return null;
+    final source = await _accounts.getAccount(sourceAccountId);
+    if (source == null) return null;
+    final all = await _accounts.observeAccounts().first;
+    final twins = <Email>[];
+    for (final counterpart in AccountComparison.counterpartsOf(source, all)) {
+      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
+      if (row != null) twins.add(row);
+    }
+    return (primary: primary, twins: twins);
+  }
+
+  /// The id of the latest change of [types] queued on row [rowId] and not
+  /// sent yet or being sent (the primary a counterpart shadow follows);
+  /// null when none is (the action queued nothing).
+  Future<int?> _latestQueuedOp(String rowId, List<String> types) async {
+    final row = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) =>
+                t.resourceId.equals(rowId) &
+                t.changeType.isIn(types) &
+                t.state.isIn(const [..._liveStates, _parkedState]),
+          )
+          ..orderBy([(t) => OrderingTerm.desc(t.id)])
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.id;
   }
 
   /// Looks up a single email row in [accountId] whose Message-ID matches [mid]
@@ -72,100 +121,206 @@ extension _Counterparts on EmailRepositoryImpl {
         .getSingleOrNull();
   }
 
-  /// Dissolves a local self-sent "virtual" message once its real counterpart
-  /// [realEmailId] arrives in [arrivalMailboxPath] via sync: transfers the
-  /// star, read state and folder the user set on the virtual copy onto the
-  /// real message, then removes the virtual row. Notes need no migration —
-  /// they are keyed by Message-ID, which both rows share. No-op when there is
-  /// no matching local row, so it is safe to call for every synced message
-  /// and safe to replay. See #545.
-  Future<void> _maybeDissolveLocalMessageForTest(
+  /// [_matchArrival], for tests.
+  Future<void> _matchArrivalForTest(
     String accountId,
     String arrivalMailboxPath,
     String realEmailId,
     String? messageId,
   ) =>
-      _maybeDissolveLocalMessage(
+      _matchArrival(
         accountId,
         arrivalMailboxPath,
         realEmailId,
         messageId,
+        isNew: true,
       );
 
-  /// Replays the user's earlier actions on a virtual row onto the real
-  /// message: queued as automatic changes ([_ChangeQueue._asAutomaticChange]).
-  Future<void> _maybeDissolveLocalMessage(
+  /// Sync just stored row [realEmailId], the server's copy of Message-ID
+  /// [messageId] in [arrivalMailboxPath]. When a row of the account waits
+  /// for exactly that mail, the server copy fills it in place
+  /// (SYNC-REDESIGN.md §6): that row keeps its id, its references and the
+  /// user's changes, takes the copy's server facts and headers, and the
+  /// copy is merged into it. Rows that wait:
+  /// - a local virtual row (#545 self-send note, #918 Sent copy), paired by
+  ///   today's role rule: a Sent-folder arrival only with the virtual Sent
+  ///   copy, any other with the note (also one a server-side filter filed
+  ///   elsewhere). Its parked changes become pending ([_unparkOps]);
+  /// - for an [isNew] row only: a row gone from its source whose acked move
+  ///   into [arrivalMailboxPath] never learnt the new UID (§4.5, the appear
+  ///   side of carry-over), and a JMAP row of [arrivalMailboxPath] whose
+  ///   server id was never recorded.
+  /// No-op without a unique match, so it is safe for every synced message
+  /// and safe to replay.
+  Future<void> _matchArrival(
     String accountId,
     String arrivalMailboxPath,
     String realEmailId,
-    String? messageId,
-  ) =>
-      _asAutomaticChange(
-        () => _dissolveLocalMessage(
-          accountId,
-          arrivalMailboxPath,
-          realEmailId,
-          messageId,
-        ),
-      );
-
-  Future<void> _dissolveLocalMessage(
-    String accountId,
-    String arrivalMailboxPath,
-    String realEmailId,
-    String? messageId,
-  ) async {
+    String? messageId, {
+    required bool isNew,
+  }) async {
     final mid = normaliseMessageId(messageId);
     if (mid == null) return;
 
     // A send can leave two virtual rows behind: the self-send note in the
     // inbox (#545) and, when the server gave us no APPENDUID, the Sent copy
     // (#918). Pair each with the arrival it actually is, keyed off
-    // `isVirtualSentCopy` rather than its current folder — the user may well
-    // have filed the note into Trash, and that move is exactly what
-    // dissolving carries over.
-    // Matching the wrong one would move an inbox arrival into Sent.
+    // `isVirtualSentCopy` rather than its current folder: the user may well
+    // have filed the note into Trash, and that move is exactly what the
+    // match carries over. Matching the wrong one would move an inbox arrival
+    // into Sent.
     final arrivalIsSent =
         await _mailboxRole(accountId, arrivalMailboxPath) == 'sent';
     final local = await _localRowFor(accountId, mid, sentCopy: arrivalIsSent);
-    if (local == null || local.id == realEmailId) return;
+    if (local != null && local.id != realEmailId) {
+      await _matchInPlace(local, realEmailId, kind: 'virtual');
+      return;
+    }
+    if (!isNew) return;
+    final awaiting = await _state.awaitingRowFor(
+      accountId,
+      arrivalMailboxPath,
+      mid,
+      exceptId: realEmailId,
+    );
+    if (awaiting != null) {
+      await _matchInPlace(awaiting, realEmailId, kind: 'moved');
+      return;
+    }
+    final idless = await _idlessJmapRowFor(
+      accountId,
+      arrivalMailboxPath,
+      mid,
+      exceptId: realEmailId,
+    );
+    if (idless != null) {
+      await _matchInPlace(idless, realEmailId, kind: 'no_server_id');
+    }
+  }
 
-    final targetMailbox = local.mailboxPath;
-    final wantFlagged = local.isFlagged;
-    final wantSeen = local.isSeen;
-    final localThreadId = local.threadId ?? local.id;
+  /// The JMAP row of [accountId] in [mailboxPath] with Message-ID [mid]
+  /// whose server id was never recorded, when exactly one exists.
+  Future<Email?> _idlessJmapRowFor(
+    String accountId,
+    String mailboxPath,
+    String mid, {
+    required String exceptId,
+  }) async {
+    if ((await _bulkAccount(accountId))?.type !=
+        account_model.AccountType.jmap) {
+      return null;
+    }
+    final rows = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.isLocal.equals(false) &
+                t.srvJmapId.isNull() &
+                t.srvUid.isNull() &
+                t.srvMailboxPath.equals(mailboxPath) &
+                t.id.equals(exceptId).not() &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(2))
+        .get();
+    return rows.length == 1 ? rows.single : null;
+  }
 
-    // Remove the virtual row first so thread aggregates count only the real
-    // message from here on.
-    await _state.deleteRow(local.id);
-    await (_db.delete(_db.emailBodies)
-          ..where((t) => t.emailId.equals(local.id)))
-        .go();
-    await _updateThread(accountId, local.mailboxPath, localThreadId);
-
-    final real = await (_db.select(_db.emails)
-          ..where((t) => t.id.equals(realEmailId)))
+  /// [keep], a row waiting for its server copy ([_matchArrival]), takes the
+  /// place of the just stored row [arrivedId]: the arrived row is merged
+  /// into it ([_RowIdentity._mergeDuplicateRow]: its references follow, and
+  /// its body replaces a virtual row's draft text), [keep] takes its server
+  /// facts, headers and read stamps ([EmailStateWriter.takeOverRow]), its
+  /// parked changes become pending, and an acked move it waited with
+  /// settles against the new location. Logged (App Log warn
+  /// `email.local_row_matched`: sync rewrote a local row and dropped a
+  /// stored one).
+  Future<void> _matchInPlace(
+    Email keep,
+    String arrivedId, {
+    required String kind,
+  }) async {
+    final matched = await _db.transaction(() async {
+      final current = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(keep.id)))
+          .getSingleOrNull();
+      final arrived = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(arrivedId)))
+          .getSingleOrNull();
+      if (current == null || arrived == null) return null;
+      // A virtual row's body is the draft text: the server's copy (stored,
+      // or fetched when opened) replaces it.
+      if (current.isLocal) {
+        await (_db.delete(_db.emailBodies)
+              ..where((t) => t.emailId.equals(current.id)))
+            .go();
+      }
+      await _mergeDuplicateRow(dropId: arrived.id, keepId: current.id);
+      await _state.takeOverRow(current.id, arrived);
+      // Local-only: the folder a snooze of it came from.
+      if (current.snoozedFromMailboxPath case final from?) {
+        await _state.writeSnoozedFrom(current.id, from);
+      }
+      final unparked = await _unparkOps(current.id);
+      await _state.settle(
+        await _state.beginRead(current.accountId),
+        current.id,
+      );
+      await _state.refold(current.id);
+      return (current: current, arrived: arrived, unparked: unparked);
+    });
+    if (matched == null) return;
+    final (:current, :arrived, :unparked) = matched;
+    final now = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(current.id)))
         .getSingleOrNull();
-    if (real == null) return;
-
-    // Carry the user's star / read state onto the real message. setFlag also
-    // enqueues the matching server mutation so the two converge.
-    final seenArg = wantSeen != real.isSeen ? wantSeen : null;
-    final flaggedArg = wantFlagged != real.isFlagged ? wantFlagged : null;
-    if (seenArg != null || flaggedArg != null) {
-      await setFlag(realEmailId, seen: seenArg, flagged: flaggedArg);
+    await _updateThread(
+      current.accountId,
+      current.mailboxPath,
+      current.threadId ?? current.id,
+    );
+    await _updateThread(
+      arrived.accountId,
+      arrived.mailboxPath,
+      arrived.threadId ?? arrived.id,
+    );
+    if (now != null) {
+      await _updateThread(
+        now.accountId,
+        now.mailboxPath,
+        now.threadId ?? now.id,
+      );
     }
-
-    // Carry the folder the user filed the note into (e.g. Trash) onto the real
-    // message. moveEmail enqueues the server move and refreshes threads.
-    if (targetMailbox != real.mailboxPath) {
-      await moveEmail(realEmailId, targetMailbox);
-    }
+    if (unparked > 0) _changeCtrl.add(current.accountId);
+    final what = switch (kind) {
+      'virtual' => 'the local copy shown since sending',
+      'moved' => 'the row of the moved mail',
+      _ => 'the row stored without a server id',
+    };
+    unawaited(
+      _appLogger?.warn(
+        'email.local_row_matched',
+        'The server copy of "${arrived.subject ?? '(no subject)'}" arrived '
+            'in ${arrived.mailboxPath}: $what takes its place'
+            '${unparked > 0 ? ', and its $unparked change(s) are sent now' : ''}',
+        accountId: current.accountId,
+        mailboxPath: arrived.mailboxPath,
+        emailId: current.id,
+        data: {
+          'kind': kind,
+          'droppedEmailId': arrived.id,
+          'unparked': unparked,
+          'shownBefore': current.mailboxPath,
+        },
+      ),
+    );
   }
 
   /// The virtual row for Message-ID [mid] on [accountId] that is — or is not,
   /// per [sentCopy] — the Sent-folder copy of a message we sent (#918), as
-  /// opposed to a self-send inbox note (#545). Null when there is none.
+  /// opposed to a self-send inbox note (#545). Null when there is none. A
+  /// hidden one counts (a parked delete for good hides it): its server copy
+  /// still has to be matched to it, and deleted.
   Future<Email?> _localRowFor(
     String accountId,
     String mid, {
@@ -176,8 +331,7 @@ extension _Counterparts on EmailRepositoryImpl {
             (t) =>
                 t.accountId.equals(accountId) &
                 t.isLocal.equals(true) &
-                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')) &
-                _visible(t),
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
           ))
         .get();
     for (final row in rows) {
@@ -217,16 +371,21 @@ extension _Counterparts on EmailRepositoryImpl {
   Future<void> _mirrorMoveToCounterparts(
     String sourceAccountId,
     String? messageId,
-    String destMailboxPath,
-  ) async {
-    final mid = normaliseMessageId(messageId);
-    if (mid == null) return;
-
-    final source = await _accounts.getAccount(sourceAccountId);
-    if (source == null) return;
-    final all = await _accounts.observeAccounts().first;
-    final counterparts = AccountComparison.counterpartsOf(source, all);
-    if (counterparts.isEmpty) return;
+    String destMailboxPath, {
+    required String sourceRowId,
+  }) async {
+    // The move queued on the source row, which the twin's shadow follows.
+    // None (the row is in the destination already, e.g. Undo's reverse move
+    // after cancelling the original took its shadows along): nothing to
+    // mirror.
+    final targets = await _mirrorTargets(
+      sourceAccountId,
+      messageId,
+      sourceRowId: sourceRowId,
+      opTypes: _moveOpTypes,
+    );
+    if (targets == null || targets.twins.isEmpty) return;
+    final (:primary, :twins) = targets;
 
     // Resolve the destination's role/name on the source account so the same
     // logical mailbox can be found on each counterpart.
@@ -241,12 +400,9 @@ extension _Counterparts on EmailRepositoryImpl {
     final destRole = sourceDest?.role;
     final destName = sourceDest?.name ?? destMailboxPath;
 
-    for (final counterpart in counterparts) {
-      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
-      if (row == null) continue;
-
+    for (final row in twins) {
       final counterpartDest = await _resolveCounterpartMailboxPath(
-        counterpart.id,
+        row.accountId,
         role: destRole,
         name: destName,
       );
@@ -256,50 +412,61 @@ extension _Counterparts on EmailRepositoryImpl {
         // counterpart discovers only on a later mailbox sync. Both accounts
         // point at the same server, so the primary's move relocates the shared
         // message there and the counterpart will observe it leave the inbox on
-        // its next sync. Until then, drop the now-stale local copy so the
+        // its next sync. Until then, hide the now-stale local copy so the
         // combined inbox doesn't re-surface it as a duplicate of the message
         // the user just acted on (see #478).
-        await _dropStaleCounterpartRow(row);
+        await _dropStaleCounterpartRow(row, primary);
         continue;
       }
       // Already in the destination → nothing to mirror.
       if (row.mailboxPath == counterpartDest) continue;
 
-      await _moveRow(row, counterpartDest);
+      await _asShadowOf(primary, () => _moveRow(row, counterpartDest));
     }
   }
 
-  /// Removes a stale local counterpart email [row] from the cache without
-  /// enqueuing a protocol change (the primary account already performs the
-  /// real server move on the shared message) and refreshes its thread so the
-  /// row stops appearing in the combined inbox until the next sync reconciles
-  /// it to its true server location. See [_mirrorMoveToCounterparts].
-  Future<void> _dropStaleCounterpartRow(Email row) async {
-    await _state.deleteRow(row.id);
+  /// Hides a stale counterpart email [row] whose new folder the counterpart
+  /// does not know yet, until its account's sync sees the mail leave
+  /// (SYNC-REDESIGN.md §6): a shadow `delete` of [primarySeq], the move
+  /// the primary account performs on the shared server message. It hides
+  /// the row (the row and its body stay), is never sent, and settles like
+  /// any shadow: dropped with its primary (the row shows again), or acked
+  /// with it and dropped once a read of the counterpart finds the mail
+  /// gone from (or elsewhere than) [Email.srvMailboxPath] ([awayFromKey]);
+  /// the clean-up rule then deletes a gone row. Before, the row was deleted
+  /// at once: a failed or undone move left the counterpart without it.
+  Future<void> _dropStaleCounterpartRow(Email row, int primarySeq) async {
+    await _asShadowOf(
+      primarySeq,
+      () => _enqueueChange(
+        row.accountId,
+        row.id,
+        'delete',
+        jsonEncode({awayFromKey: row.srvMailboxPath ?? row.mailboxPath}),
+      ),
+    );
     await _updateThread(row.accountId, row.mailboxPath, row.threadId ?? row.id);
   }
 
   /// Mirrors a delete onto the matching message in every counterpart account.
-  /// Each counterpart runs its own [_UserActions._deleteRow], so it independently moves the
-  /// message to its own Trash when it has one, or hard-deletes otherwise —
+  /// Each counterpart runs its own [_UserActions._deleteRow] as a shadow of
+  /// the source row's queued move to Trash or delete for good, so it shows
+  /// the message in its own Trash when it has one, or hides it otherwise —
   /// robust when only one side of the pair has a Trash folder.
   Future<void> _mirrorDeleteToCounterparts(
     String sourceAccountId,
-    String? messageId,
-  ) async {
-    final mid = normaliseMessageId(messageId);
-    if (mid == null) return;
-
-    final source = await _accounts.getAccount(sourceAccountId);
-    if (source == null) return;
-    final all = await _accounts.observeAccounts().first;
-    final counterparts = AccountComparison.counterpartsOf(source, all);
-    if (counterparts.isEmpty) return;
-
-    for (final counterpart in counterparts) {
-      final row = await _findEmailRowByNormalisedMessageId(counterpart.id, mid);
-      if (row == null) continue;
-      await _deleteRow(row);
+    String? messageId, {
+    required String sourceRowId,
+  }) async {
+    final targets = await _mirrorTargets(
+      sourceAccountId,
+      messageId,
+      sourceRowId: sourceRowId,
+      opTypes: _deleteOpTypes,
+    );
+    if (targets == null) return;
+    for (final row in targets.twins) {
+      await _asShadowOf(targets.primary, () => _deleteRow(row));
     }
   }
 

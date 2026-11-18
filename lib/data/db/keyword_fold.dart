@@ -19,10 +19,18 @@ bool isSnoozeCleared(DateTime? value) =>
 enum KeywordColumn { seen, flagged, snoozedUntil }
 
 /// `pending_changes.state` values whose op folds into `local_*`: queued,
-/// being sent, stuck (still retried), or acked and not yet confirmed by a
-/// later read (SYNC-REDESIGN.md §4.5). A `failed` op does not fold: the
-/// row shows the server's value again (§5).
-const foldableOpStates = ['pending', 'inflight', 'stuck', 'acked'];
+/// being sent, stuck (still retried), acked and not yet confirmed by a
+/// later read (SYNC-REDESIGN.md §4.5), parked (the mail has no server copy
+/// yet, §6) or a counterpart's shadow (§6). A `failed` op does not fold:
+/// the row shows the server's value again (§5).
+const foldableOpStates = [
+  'pending',
+  'inflight',
+  'stuck',
+  'acked',
+  'parked',
+  'shadow',
+];
 
 /// One queued change of a row, as far as the fold needs it.
 class FoldOp {
@@ -324,10 +332,17 @@ String effectiveMailboxPath({
   return localMailboxPath ?? srvMailboxPath;
 }
 
+/// Payload key of a counterpart's shadow `delete` that only hides the twin
+/// row until its account sees the mail leave this folder: the primary
+/// moved the mail into a folder the counterpart does not know yet
+/// (SYNC-REDESIGN.md §6).
+const awayFromKey = 'awayFrom';
+
 /// Whether what sync last recorded about a row's location agrees with the
 /// location part of [op], an acked op: a move, snooze or unsnooze when the
 /// server has the mail in its destination, a delete when the server no
-/// longer has it.
+/// longer has it (a hiding shadow delete, [awayFromKey]: no longer in that
+/// folder).
 bool locationAgreesWith(
   FoldOp op, {
   required String? srvMailboxPath,
@@ -339,6 +354,8 @@ bool locationAgreesWith(
     case 'unsnooze':
       return !srvGone && srvMailboxPath == op.payload?['dest'];
     case 'delete':
+      final awayFrom = op.payload?[awayFromKey];
+      if (awayFrom is String) return srvGone || srvMailboxPath != awayFrom;
       return srvGone;
   }
   return true;
