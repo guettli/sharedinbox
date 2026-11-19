@@ -1511,10 +1511,15 @@ class MailboxStateWriter {
       );
       if (maybeMoved) moving.add(r.path);
     }
+    // IMAP INBOX is case-insensitive (RFC 3501 §5.1): a server that lists
+    // it as "Inbox" this time still has the cached "INBOX".
+    final listsInbox =
+        !jmap && keepPaths.any((p) => p.toUpperCase() == 'INBOX');
     for (final r in rows) {
       if (keepPaths.contains(r.path) || r.isLocal || r.srvSeq > readSeq) {
         continue;
       }
+      if (listsInbox && r.path.toUpperCase() == 'INBOX') continue;
       if (moving.contains(r.path)) continue;
       if (!jmap && moving.any((p) => r.path.startsWith('$p$separator'))) {
         continue;

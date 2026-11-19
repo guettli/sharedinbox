@@ -192,11 +192,16 @@ class NoteRepositoryImpl implements NoteRepository {
       try {
         selected = await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
-        if (isImapMailboxNotFound(e)) {
-          await _handleNotesFolderMissing(account.id, 'imap');
-          return;
+        if (!isImapMailboxNotFound(e)) rethrow;
+        // Only a definite answer wipes the cached notes (#1312). With none
+        // cached there is nothing to lose, and no LIST is spent on the
+        // servers without a Notes folder that answer without NONEXISTENT.
+        if (await _hasNotesToProtect(account.id) &&
+            !await _notesFolderGone(client, account.id, e)) {
+          rethrow;
         }
-        rethrow;
+        await _handleNotesFolderMissing(account.id, 'imap');
+        return;
       }
 
       final uidValidity = selected.uidValidity ?? 0;
@@ -304,6 +309,41 @@ class NoteRepositoryImpl implements NoteRepository {
     } finally {
       await closeImapClient(client);
     }
+  }
+
+  /// Whether [accountId] has notes a missing Notes folder would wipe: a
+  /// synced note or a queued delete (a note still to upload is kept anyway).
+  Future<bool> _hasNotesToProtect(String accountId) async =>
+      (await (_db.select(_db.emailNotes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.pendingUpload.equals(false),
+            )
+            ..limit(1))
+          .getSingleOrNull()) !=
+      null;
+
+  /// Whether the Notes folder is gone for sure after its SELECT failed with
+  /// [error] ([confirmImapMailboxGone]); when not, says so in the App Log
+  /// (the cached notes are kept and the sync fails, tried again later).
+  Future<bool> _notesFolderGone(
+    imap.ImapClient client,
+    String accountId,
+    Object error,
+  ) async {
+    if (await confirmImapMailboxGone(client, _notesFolder, error)) return true;
+    unawaited(
+      _appLogger?.warn(
+        'note.sync.select_failed_kept',
+        'Could not open the Notes folder; it reads like "no such folder", '
+            'but the server did not say NONEXISTENT and still lists it (or '
+            'its listing could not be read): the cached notes and queued '
+            'note deletes are kept',
+        accountId: accountId,
+        error: error,
+      ),
+    );
+    return false;
   }
 
   /// The Notes folder doesn't exist (yet) — the default on most servers.
@@ -799,6 +839,7 @@ class NoteRepositoryImpl implements NoteRepository {
         await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
         if (!isImapMailboxNotFound(e)) rethrow;
+        if (!await _notesFolderGone(client, account.id, e)) rethrow;
         // No Notes folder (and nothing to upload): nothing left to delete.
         for (final row in deletes) {
           await _dropTombstone(row);

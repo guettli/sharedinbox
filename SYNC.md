@@ -99,9 +99,52 @@ on the Pending Changes screen). The mails the server had there are marked gone a
 deleted unless a change of theirs is still in flight or acked (§6a, clean-up rule); a
 mail the user had moved into the folder shows in its source again, where the server
 still has it (its failed move no longer folds).
+A listing that may be a server or connection glitch is not trusted (#1312): it is
+empty while folders are cached, it leaves out the inbox (IMAP `INBOX`, or the folder
+with the `inbox` role) or any folder with a role, or it leaves out at least 2 cached
+server folders that are more than half of them. Such a listing adds and updates folders
+as usual but removes none it did not mark before, App Log warn
+`mailbox.listing_untrusted` (reason; how many were listed, missing, kept, removed,
+confirmed gone, removed after waiting, still there), and marks the folders it left out
+in `sync_states` (`Mailbox:PendingPrune`: per folder since when, and by how many
+listings). A marked folder that a later untrusted listing leaves out again is asked
+about on its own: IMAP `STATUS` (gone on `NONEXISTENT`, or an error a LIST confirms,
+see below; there when it answers), JMAP `Mailbox/get` of its id (gone when in
+`notFound`). Gone: removed. There: kept. No definite answer: removed only once it has
+been missing for at least 1 hour and 3 listings (the marking one and 2 more), so a
+glitch that outlasts the 30 s poll does not confirm itself, while a real mass deletion
+still goes through. The IMAP INBOX is never removed (RFC 3501: every account has one;
+a listing that names it in another case, "Inbox", still keeps the cached `INBOX`). A
+listing that lists a marked folder again clears its mark (App Log info
+`mailbox.listing_untrusted_cleared`). The marks are read and written in one
+transaction. On JMAP, while a folder is kept unconfirmed, the `Mailbox` state is not
+saved, so the next sync lists in full again (`Mailbox/changes` would never name the
+folders it left out). A JMAP `Mailbox/changes` `destroyed` is explicit and removes the
+folder, except the inbox: it is kept and marked, the state is forgotten, and the full
+listing that follows removes it only when the server confirms it is gone. A listing
+that is not trusted drops no counterpart stand-in folder, also when it removes
+confirmed folders.
 If a folder is deleted between mailbox-sync and the per-mailbox email-sync of the same
 cycle, `SELECT` fails with `NO [NONEXISTENT]`; the email loop catches that, prunes the
-local cache, and returns zero instead of surfacing an error. The UI's email list bounces
+local cache, and returns zero instead of surfacing an error. Only a definite answer
+removes the folder (`confirmImapMailboxGone`, `imap_errors.dart`): the `[NONEXISTENT]`
+response code, or a LIST that has INBOX and not the folder. INBOX itself is never
+taken for gone, whatever the server answers. An error that only reads
+like "no such folder" (`isImapMailboxNotFound`: "not found", "does not exist",
+`TRYCREATE`) with the folder still listed, or with a LIST that is empty, lacks INBOX
+or fails, keeps the folder and its mail: the sync of the folder fails (retried by the
+next cycle) and App Log warn `mailbox.select_failed_kept` says so. The LIST is the
+full one, not one of the path alone: enough_mail 2.1.7 encodes only a LIST pattern's
+last segment, so a folder below a non-ASCII parent would list nothing. The same check
+guards the flush (a change whose folder SELECT fails that way is kept and retried,
+`pending_change.select_failed_kept`, instead of dropped as moot with its moved row)
+and the Notes sync and push (no wipe of the cached notes or queued note deletes,
+`note.sync.select_failed_kept`). The LIST's verdict is kept per connection and folder,
+and a flush pass neither selects such a folder again nor logs it again for its other
+changes; the Notes sync asks the LIST only when it has notes or note deletes to
+lose. The
+move destination check (`NO [TRYCREATE]` fails the move, listed) still matches by
+text: it removes nothing. The UI's email list bounces
 the user back to the account's folder list when the currently open folder disappears.
 
 **Row identity** — every `emails` row records where the server has the message:
@@ -504,7 +547,11 @@ the same statement and never rewrites the whole row.
   cached rows of a renumbered folder are removed and come back as new rows),
   `sync.reconcile_pruned` (the periodic JMAP check removing mail no change reported
   deleted), `draft.server_gone` and `draft.folder_changed`; info `body_cache.evicted`
-  and `mailbox.listing_skipped_arriving`. The body cache never evicts, nor counts
+  and `mailbox.listing_skipped_arriving`. Added in #1312: `mailbox.listing_untrusted`
+  (a folder listing not trusted, or a JMAP inbox `destroyed`: nothing removed until
+  confirmed), info `mailbox.listing_untrusted_cleared`, `mailbox.select_failed_kept`, `pending_change.select_failed_kept` and
+  `note.sync.select_failed_kept` (a SELECT error that only reads like "no such folder":
+  nothing removed). The body cache never evicts, nor counts
   against its limit, a body that cannot be fetched again: a virtual row's
   (`is_local`, the user's text, no server copy yet) or a mail's gone on the server
   but kept for a change (`srv_gone`); and prefetching stops at 90 % of the limit, so
@@ -770,7 +817,10 @@ changes the row's `path`, never its id; sync finds rows by `path`.
   folder just created or renamed), and do not store again a path an IMAP rename acked
   after the listing started moved away from (the payload's `fromPath`). A folder the
   server no longer lists is removed (`removeLocalMailbox`, App Log warn
-  `mailbox.removed_gone` with how many cached mails went with it): its queued folder
+  `mailbox.removed_gone` with how many cached mails went with it), unless the
+  listing is not trusted (empty, without the inbox or a role folder, or most
+  folders missing: kept until the server confirms, `mailbox.listing_untrusted`, see
+  "Mailbox deletion reconciliation"): its queued folder
   ops and the changes naming it become `failed` (`folder removed on the server`, App
   Log warn `pending_change.folder_removed`), never dropped. An IMAP listing that
   already lists the new path of a rename or move being sent (and no longer the old

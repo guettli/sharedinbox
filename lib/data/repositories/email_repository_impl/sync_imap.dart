@@ -60,23 +60,40 @@ extension _SyncImap on EmailRepositoryImpl {
           enableCondStore: supportsCondStore,
         );
       } catch (e) {
-        if (isImapMailboxNotFound(e)) {
-          // The folder was deleted on the server between mailbox-sync and
-          // email-sync of this cycle. Drop the local cache so subsequent
-          // syncs don't keep retrying the same SELECT.
-          log(
-            'IMAP SELECT failed for "$mailboxPath" (folder deleted on '
-            'server) — pruning local cache: $e',
+        if (!isImapMailboxNotFound(e)) rethrow;
+        // Only a definite answer removes the folder and its cached mail:
+        // `NO [NONEXISTENT]`, or a LIST without it (#1312). A text that
+        // merely reads like "not found" may be a glitch.
+        if (!await confirmImapMailboxGone(client, mailboxPath, e)) {
+          log('IMAP SELECT failed for "$mailboxPath", folder kept: $e');
+          unawaited(
+            _appLogger?.warn(
+              'mailbox.select_failed_kept',
+              'Could not open the folder "$mailboxPath" on the server; it '
+                  'reads like "no such folder", but the server did not say '
+                  'NONEXISTENT and still lists it (or its listing could not '
+                  'be read): the folder and its mail are kept',
+              accountId: account.id,
+              mailboxPath: mailboxPath,
+              error: e,
+            ),
           );
-          await removeLocalMailbox(
-            _db,
-            account.id,
-            mailboxPath,
-            appLogger: _appLogger,
-          );
-          return model.SyncEmailsResult.zero;
+          rethrow;
         }
-        rethrow;
+        // The folder was deleted on the server between mailbox-sync and
+        // email-sync of this cycle. Drop the local cache so subsequent
+        // syncs don't keep retrying the same SELECT.
+        log(
+          'IMAP SELECT failed for "$mailboxPath" (folder deleted on '
+          'server) — pruning local cache: $e',
+        );
+        await removeLocalMailbox(
+          _db,
+          account.id,
+          mailboxPath,
+          appLogger: _appLogger,
+        );
+        return model.SyncEmailsResult.zero;
       }
       final uidValidity = selectedMailbox.uidValidity ?? 0;
       final serverModSeq = selectedMailbox.highestModSequence;

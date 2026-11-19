@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -104,6 +105,81 @@ void main() {
       {'transport': 'imap', 'wiped': 1, 'checkpointCleared': true},
     );
     expect(await db.select(db.emailNotes).get(), isEmpty);
+  });
+
+  /// The App Log rows of [event], once every row logged so far landed.
+  Future<List<AppLogRow>> logsOf(String event) async {
+    unawaited(logger.info(_sentinelEvent, 'flush'));
+    for (var i = 0;; i++) {
+      final rows = await db.select(db.appLogs).get();
+      if (rows.any((r) => r.event == _sentinelEvent)) break;
+      if (i > 100) fail('sentinel log row never landed');
+      await Future<void>.delayed(Duration.zero);
+    }
+    return (db.select(db.appLogs)..where((t) => t.event.equals(event))).get();
+  }
+
+  Future<void> seedNote({bool pendingDelete = false}) =>
+      db.into(db.emailNotes).insert(
+            EmailNotesCompanion.insert(
+              id: 'n-1',
+              accountId: _accountId,
+              messageId: '<a@ex.com>',
+              noteText: 'keep me',
+              serverId: '5',
+              createdAt: DateTime(2026),
+              pendingDelete: Value(pendingDelete),
+            ),
+          );
+
+  // #1312: a SELECT error that only reads like "no such folder" wipes
+  // nothing while the Notes folder is still listed.
+  SelectingFakeImapClient notesListedButSelectFails() =>
+      SelectingFakeImapClient(
+        selectError:
+            imap.ImapException(imap.ImapClient(), 'NO Mailbox not found'),
+        listedPaths: ['INBOX', 'Notes'],
+      );
+
+  test('IMAP sync: a vague SELECT error keeps the cached notes', () async {
+    await seedNote();
+
+    await expectLater(
+      imapRepo(notesListedButSelectFails()).syncAllNotes(_accountId),
+      throwsA(isA<imap.ImapException>()),
+    );
+
+    expect(await db.select(db.emailNotes).get(), hasLength(1));
+    final kept = await logsOf('note.sync.select_failed_kept');
+    expect(kept.single.level, 'warn');
+  });
+
+  test('IMAP push: a vague SELECT error keeps the queued note delete',
+      () async {
+    await seedNote(pendingDelete: true);
+    final client = notesListedButSelectFails();
+
+    await expectLater(
+      imapRepo(client).syncAllNotes(_accountId),
+      throwsA(isA<imap.ImapException>()),
+    );
+
+    final tombstone = await db.select(db.emailNotes).getSingle();
+    expect(tombstone.pendingDelete, isTrue);
+    // The push and the pull after it each say so; one LIST for both (the
+    // same connection here).
+    expect(await logsOf('note.sync.select_failed_kept'), hasLength(2));
+    expect(client.listCalls, 1);
+  });
+
+  test('IMAP sync: no cached notes, no LIST for a vague SELECT error',
+      () async {
+    final client = notesListedButSelectFails();
+
+    await imapRepo(client).syncAllNotes(_accountId);
+
+    expect(client.listCalls, 0);
+    expect(await logsOf('note.sync.select_failed_kept'), isEmpty);
   });
 
   test('IMAP: incremental syncs with no changes log nothing', () async {

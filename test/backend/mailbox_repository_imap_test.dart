@@ -457,4 +457,74 @@ void main() {
       await drop();
     }
   });
+
+  // #1312: a SELECT error removes a folder only on a definite answer. The
+  // folder another client deleted between the listing and its SELECT is
+  // removed with its mail (Stalwart answers NONEXISTENT, or the LIST does
+  // not have it); every other folder, and its mail, stays.
+  test('a folder deleted elsewhere before its SELECT is removed, nothing else',
+      () async {
+    final r = makeRepo();
+    final emails = emailsOf(r);
+    await r.accounts.addAccount(account, user.password);
+    const gone = 'G1312Gone';
+    const kept = 'G1312Kept';
+    Future<void> drop() => dropFolders(r, const {gone, kept});
+
+    await drop();
+    try {
+      final client = await connectImap(env: env, user: user);
+      try {
+        for (final path in [gone, kept]) {
+          await client.createMailbox(path);
+          await appendMessage(
+            client,
+            subject: 'g1312-$path',
+            userEmail: user.email,
+            mailboxPath: path,
+          );
+        }
+      } finally {
+        await client.logout();
+      }
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', gone);
+      await emails.syncEmails('test', kept);
+
+      final other = await connectImap(env: env, user: user);
+      try {
+        final box =
+            (await other.listMailboxes()).singleWhere((b) => b.path == gone);
+        await other.deleteMailbox(box);
+      } finally {
+        await other.logout();
+      }
+
+      final result = await emails.syncEmails('test', gone);
+      expect(result.fetched, 0);
+      final paths = [
+        for (final m in await r.mailboxes.observeMailboxes('test').first)
+          m.path,
+      ];
+      expect(paths, isNot(contains(gone)));
+      expect(paths, containsAll(['INBOX', kept]));
+      final subjects = [
+        for (final e in await r.db.select(r.db.emails).get()) e.subject,
+      ];
+      expect(subjects, isNot(contains('g1312-$gone')));
+      expect(subjects, contains('g1312-$kept'));
+
+      // The next listing agrees and removes nothing more.
+      await r.mailboxes.syncMailboxes('test');
+      expect(
+        [
+          for (final m in await r.mailboxes.observeMailboxes('test').first)
+            m.path,
+        ],
+        containsAll(['INBOX', kept]),
+      );
+    } finally {
+      await drop();
+    }
+  });
 }
