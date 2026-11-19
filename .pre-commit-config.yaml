@@ -126,9 +126,11 @@ repos:
         pass_filenames: false
         files: ^scripts/(run_firebase_test|test_run_firebase_test)\.sh$
 
-  # Block commits that contain secrets. Config with excludes: .betterleaks.toml
-  - repo: https://github.com/betterleaks/betterleaks
-    rev: v1.10.1
+  # Block commits that contain secrets. betterleaks is pinned in mise.toml.
+  - repo: local
     hooks:
       - id: betterleaks
-        args: [--config, .betterleaks.toml]
+        name: betterleaks (secrets)
+        entry: mise exec betterleaks -- betterleaks git --pre-commit --staged --redact --verbose --config .betterleaks.toml
+        language: system
+        pass_filenames: false
