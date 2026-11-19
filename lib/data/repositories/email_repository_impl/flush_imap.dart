@@ -31,6 +31,19 @@ class _ImapSourceMailboxGoneException implements Exception {
   String toString() => cause.toString();
 }
 
+/// The folder a queued IMAP change acts in could not be selected with an
+/// error that reads like "no such folder", but the server did not say
+/// `NONEXISTENT` and a LIST did not confirm it ([confirmImapMailboxGone]):
+/// the change is retried, never dropped as moot (#1312).
+class _ImapSourceSelectFailedException implements Exception {
+  _ImapSourceSelectFailedException(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => cause.toString();
+}
+
 /// A queued IMAP change whose folder's UIDVALIDITY changed, and whose
 /// message is not found exactly once again by Message-ID.
 class _ImapUidValidityChangedException implements Exception {
@@ -689,6 +702,25 @@ extension _FlushImap on EmailRepositoryImpl {
         );
         return (applied: 0, connectionLost: null);
       }
+      if (e is _ImapSourceSelectFailedException) {
+        // Not a definite "gone": kept and retried with backoff.
+        log('IMAP change ${row.id}: source folder not opened, kept ($e)');
+        unawaited(
+          _appLogger?.warn(
+            'pending_change.select_failed_kept',
+            'Could not open the folder of ${_describeChange(row)}; it reads '
+                'like "no such folder", but the server did not say '
+                'NONEXISTENT and still lists it (or its listing could not be '
+                'read): the change is kept and tried again',
+            accountId: account.id,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType},
+            error: e.cause,
+          ),
+        );
+        await _recordChangeError(row, e.cause);
+        return (applied: 0, connectionLost: null);
+      }
       final sourceGone = e is _ImapSourceMailboxGoneException;
       if (!sourceGone &&
           isImapMailboxNotFound(e) &&
@@ -794,6 +826,11 @@ extension _FlushImap on EmailRepositoryImpl {
       selected = await client.selectUnicodeMailboxByPath(mailboxPath);
     } catch (e) {
       if (!isImapMailboxNotFound(e)) rethrow;
+      // Dropping the change as moot (and the row a move left) needs a
+      // definite answer (#1312).
+      if (!await confirmImapMailboxGone(client, mailboxPath, e)) {
+        throw _ImapSourceSelectFailedException(e);
+      }
       throw _ImapSourceMailboxGoneException(e);
     }
     if (row.changeType == 'move' && payload[_uidAfterMoveKey] == true) {

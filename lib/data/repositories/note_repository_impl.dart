@@ -192,11 +192,11 @@ class NoteRepositoryImpl implements NoteRepository {
       try {
         selected = await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
-        if (isImapMailboxNotFound(e)) {
-          await _handleNotesFolderMissing(account.id, 'imap');
-          return;
-        }
-        rethrow;
+        if (!isImapMailboxNotFound(e)) rethrow;
+        // Only a definite answer wipes the cached notes (#1312).
+        if (!await _notesFolderGone(client, account.id, e)) rethrow;
+        await _handleNotesFolderMissing(account.id, 'imap');
+        return;
       }
 
       final uidValidity = selected.uidValidity ?? 0;
@@ -310,6 +310,29 @@ class NoteRepositoryImpl implements NoteRepository {
   /// Clears any stale checkpoint and drops orphaned local notes so the local
   /// cache mirrors reality. This runs on every sync cycle, and every App Log
   /// row is persisted, so it logs only when something was actually cleared.
+  /// Whether the Notes folder is gone for sure after its SELECT failed with
+  /// [error] ([confirmImapMailboxGone]); when not, says so in the App Log
+  /// (the cached notes are kept and the sync fails, tried again later).
+  Future<bool> _notesFolderGone(
+    imap.ImapClient client,
+    String accountId,
+    Object error,
+  ) async {
+    if (await confirmImapMailboxGone(client, _notesFolder, error)) return true;
+    unawaited(
+      _appLogger?.warn(
+        'note.sync.select_failed_kept',
+        'Could not open the Notes folder; it reads like "no such folder", '
+            'but the server did not say NONEXISTENT and still lists it (or '
+            'its listing could not be read): the cached notes and queued '
+            'note deletes are kept',
+        accountId: accountId,
+        error: error,
+      ),
+    );
+    return false;
+  }
+
   Future<void> _handleNotesFolderMissing(
     String accountId,
     String transport,
@@ -799,6 +822,7 @@ class NoteRepositoryImpl implements NoteRepository {
         await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
         if (!isImapMailboxNotFound(e)) rethrow;
+        if (!await _notesFolderGone(client, account.id, e)) rethrow;
         // No Notes folder (and nothing to upload): nothing left to delete.
         for (final row in deletes) {
           await _dropTombstone(row);

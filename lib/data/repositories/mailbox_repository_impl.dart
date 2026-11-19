@@ -60,6 +60,11 @@ const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
     "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow', "
     "'acked')";
 
+/// `sync_states` key (per account) of the folders a listing that was not
+/// trusted left out (#1312): a JSON list of paths (JMAP: mailbox ids). The
+/// next listing that leaves them out too removes them.
+const pendingPruneKey = 'Mailbox:PendingPrune';
+
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
     this._db,
@@ -230,7 +235,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         listSeq,
         allListed: serverPaths,
       );
-      await _prune(account.id, serverPaths, listSeq);
+      final trusted = await _prune(account.id, serverPaths, listSeq);
       final renamedAway = await _writer.renamedAwaySince(account.id, listSeq);
 
       for (final mb in mailboxes) {
@@ -305,7 +310,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
       }
       await _writer.rebuildDisplayPaths(account.id);
-      await _afterListing(account.id, listSeq);
+      await _afterListing(account.id, listSeq, trusted: trusted);
       return mailboxes.length;
     } finally {
       await closeImapClient(client);
@@ -359,13 +364,17 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final serverIds = {
       for (final mb in mailboxes) (mb as Map<String, dynamic>)['id'] as String,
     };
-    await _prune(accountId, serverIds, readSeq);
+    final trusted = await _prune(accountId, serverIds, readSeq);
 
     await _upsertJmapMailboxes(accountId, mailboxes, readSeq: readSeq);
-    await _afterListing(accountId, readSeq);
-    await _saveSyncState(accountId, 'Mailbox', newState);
+    await _afterListing(accountId, readSeq, trusted: trusted);
+    // A listing not trusted keeps no state: the next sync lists in full
+    // again, and that listing confirms the absence or not
+    // (`Mailbox/changes` would never name the folders it left out).
+    if (trusted) await _saveSyncState(accountId, 'Mailbox', newState);
     log(
-      'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState',
+      'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState'
+      '${trusted ? '' : ' (not trusted, state not kept)'}',
     );
     return mailboxes.length;
   }
@@ -406,7 +415,31 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
 
     // Remove destroyed mailboxes (and their cached emails / sync state).
+    // `destroyed` is explicit and honoured, except for the inbox: an
+    // account without one is more likely a server glitch (#1312). It is
+    // kept, and the next sync lists in full ([_prune] confirms or not).
+    var inboxDestroyed = false;
     for (final jmapId in destroyed) {
+      final row = await _writer.rowByPath(accountId, jmapId);
+      if (row != null && !row.isLocal && _isInbox(row)) {
+        inboxDestroyed = true;
+        await _savePendingPrune(
+          accountId,
+          {...await _loadPendingPrune(accountId), jmapId},
+        );
+        unawaited(
+          _appLogger?.warn(
+            'mailbox.listing_untrusted',
+            'The server reports the inbox "${row.name}" destroyed: kept, and '
+                'the folder list is read in full again; it is removed only '
+                'when that listing does not have it either',
+            accountId: accountId,
+            mailboxPath: jmapId,
+            data: {'reason': 'inbox destroyed', 'destroyed': destroyed.length},
+          ),
+        );
+        continue;
+      }
       await removeLocalMailbox(
         _db,
         accountId,
@@ -416,7 +449,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
 
     await _afterListing(accountId, readSeq);
-    await _saveSyncState(accountId, 'Mailbox', newState);
+    if (inboxDestroyed) {
+      await _forgetSyncState(accountId, 'Mailbox');
+    } else {
+      await _saveSyncState(accountId, 'Mailbox', newState);
+    }
     log(
       'JMAP incremental mailbox sync: +${created.length} '
       '~${updated.length} -${destroyed.length}, state=$newState',
@@ -582,6 +619,36 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
   }
 
+  Future<void> _forgetSyncState(String accountId, String resourceType) =>
+      (_db.delete(_db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.resourceType.equals(resourceType),
+            ))
+          .go();
+
+  /// The folders (paths; JMAP ids) a listing that was not trusted left out
+  /// ([_prune]): the next listing that leaves them out too removes them.
+  Future<Set<String>> _loadPendingPrune(String accountId) async {
+    final raw = await _loadSyncState(accountId, pendingPruneKey);
+    if (raw == null) return {};
+    try {
+      return {...(jsonDecode(raw) as List<dynamic>).cast<String>()};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _savePendingPrune(String accountId, Set<String> paths) async {
+    if (paths.isEmpty) return _forgetSyncState(accountId, pendingPruneKey);
+    await _saveSyncState(
+      accountId,
+      pendingPruneKey,
+      jsonEncode(paths.toList()..sort()),
+    );
+  }
+
   // ── helpers ───────────────────────────────────────────────────────────────
 
   /// Extracts the argument map from a methodResponse at [index].
@@ -677,9 +744,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// After a folder listing that started at [readSeq]: the acked ops it
   /// settles as a whole (creates found by a read, deletes), and the
   /// counterpart stand-in folders it did not find.
-  Future<void> _afterListing(String accountId, int readSeq) async {
+  /// A listing that was not [trusted] ([_prune]) drops no stand-in either.
+  Future<void> _afterListing(
+    String accountId,
+    int readSeq, {
+    bool trusted = true,
+  }) async {
     await _writer.settleReadConfirmed(accountId, readSeq);
     await _writer.settleAckedDeletes(accountId, readSeq);
+    if (!trusted) return;
     await _writer.dropOrphanedCounterpartFolders(
       accountId,
       listedSeq: readSeq,
@@ -938,12 +1011,60 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// queued changes naming it fail and stay listed. A listing that started
   /// at [readSeq] removes nothing created offline, nor a folder a later
   /// read or ack wrote (just created or renamed): [MailboxStateWriter.prunable].
-  Future<void> _prune(
+  ///
+  /// A listing that may be a server or connection glitch is not trusted
+  /// (#1312, [_untrustedReason]): it is empty, or it would remove the
+  /// inbox, or at least [_untrustedMinMissing] cached server folders that
+  /// are more than half of them. Then only the folders the previous
+  /// untrusted listing left out too are removed (a confirmed absence: a
+  /// real mass deletion goes through with the second listing); the others
+  /// are kept and remembered in `sync_states` ([pendingPruneKey]), and App
+  /// Log warn `mailbox.listing_untrusted` gives the counts. Returns whether
+  /// the listing was trusted, i.e. no folder is held back.
+  Future<bool> _prune(
     String accountId,
     Set<String> keepPaths,
     int readSeq,
   ) async {
-    for (final row in await _writer.prunable(accountId, keepPaths, readSeq)) {
+    final candidates = await _writer.prunable(accountId, keepPaths, readSeq);
+    final pending = await _loadPendingPrune(accountId);
+    var remove = candidates;
+    var held = const <MailboxRow>[];
+    final reason = await _untrustedReason(accountId, keepPaths, candidates);
+    if (reason != null) {
+      remove = [
+        for (final r in candidates)
+          if (pending.contains(r.path)) r,
+      ];
+      held = [
+        for (final r in candidates)
+          if (!pending.contains(r.path)) r,
+      ];
+      unawaited(
+        _appLogger?.warn(
+          'mailbox.listing_untrusted',
+          'The server listed ${keepPaths.length} folder(s) and left out '
+              '${candidates.length} cached one(s) ($reason): this may be a '
+              'glitch, so ${held.length} of them are kept until the next '
+              'listing confirms they are gone; ${remove.length} the previous '
+              'listing left out too are removed',
+          accountId: accountId,
+          data: {
+            'reason': reason,
+            'listed': keepPaths.length,
+            'missing': candidates.length,
+            'kept': held.length,
+            'removed': remove.length,
+            'keptPaths': [for (final r in held.take(50)) r.path],
+          },
+        ),
+      );
+    }
+    final heldPaths = {for (final r in held) r.path};
+    if (pending.length != heldPaths.length || !pending.containsAll(heldPaths)) {
+      await _savePendingPrune(accountId, heldPaths);
+    }
+    for (final row in remove) {
       log('Mailbox "${row.path}" deleted on server — removing local cache');
       await removeLocalMailbox(
         _db,
@@ -952,7 +1073,37 @@ class MailboxRepositoryImpl implements MailboxRepository {
         appLogger: _appLogger,
       );
     }
+    return held.isEmpty;
   }
+
+  /// A listing that leaves out at least this many cached server folders,
+  /// and more than half of them, is not trusted ([_prune]).
+  static const _untrustedMinMissing = 3;
+
+  /// Why a listing ([keepPaths]) that leaves out the cached folders
+  /// [missing] is not trusted, or null when it is.
+  Future<String?> _untrustedReason(
+    String accountId,
+    Set<String> keepPaths,
+    List<MailboxRow> missing,
+  ) async {
+    if (missing.isEmpty) return null;
+    if (keepPaths.isEmpty) return 'empty listing';
+    if (missing.any(_isInbox)) return 'inbox missing';
+    if (missing.length < _untrustedMinMissing) return null;
+    final cached = (await (_db.select(_db.mailboxes)
+              ..where(
+                (t) => t.accountId.equals(accountId) & t.isLocal.equals(false),
+              ))
+            .get())
+        .length;
+    if (missing.length * 2 > cached) return 'most folders missing';
+    return null;
+  }
+
+  /// The account's inbox: role `inbox`, or the IMAP INBOX.
+  static bool _isInbox(MailboxRow row) =>
+      row.role == 'inbox' || row.path.toUpperCase() == 'INBOX';
 
   @override
   Future<model.Mailbox> createMailboxWithRole(

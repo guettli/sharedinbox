@@ -48,10 +48,21 @@ mixin StaleAnswerHook {
 
 /// [FakeImapClient] whose SELECT succeeds for any path, returning an empty
 /// mailbox of that name — or throws [selectError] when one is given.
-class SelectingFakeImapClient extends FakeImapClient {
-  SelectingFakeImapClient({this.selectError});
+class SelectingFakeImapClient extends FakeImapClient with StubMailboxList {
+  SelectingFakeImapClient({
+    this.selectError,
+    this.listedPaths = const ['INBOX'],
+  });
 
   final Object? selectError;
+
+  /// The folders LIST answers with (by default INBOX only: a SELECT error
+  /// that reads like "no such folder" for any other path is confirmed).
+  final List<String> listedPaths;
+
+  @override
+  List<imap.Mailbox> get listedMailboxes =>
+      [for (final p in listedPaths) fakeMailbox(p)];
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(

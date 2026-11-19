@@ -96,6 +96,14 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// failure that may pass, retried.
   bool failDeletes = false;
 
+  /// When it returns true for a folder path, LIST leaves the folder out
+  /// although it exists: a partial or empty listing (a glitch, #1312).
+  bool Function(String path)? listHides;
+
+  /// When it returns a text for a folder path, `SELECT` of it fails with
+  /// that `NO`, whether the folder exists or not (#1312).
+  String? Function(String path)? selectError;
+
   /// Another client deletes folder [path] (with its messages).
   void deleteFolder(String path) => folders.remove(path);
 
@@ -266,12 +274,13 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) =>
       _answer('LIST', [
         for (final f in server.folders.values)
-          imap.Mailbox(
-            encodedName: f.path.split('/').last,
-            encodedPath: f.path,
-            pathSeparator: '/',
-            flags: [],
-          ),
+          if (!(server.listHides?.call(f.path) ?? false))
+            imap.Mailbox(
+              encodedName: f.path.split('/').last,
+              encodedPath: f.path,
+              pathSeparator: '/',
+              flags: [],
+            ),
       ]);
 
   @override
@@ -338,6 +347,10 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) async {
     final folder = server.folders[path];
     // A failed SELECT leaves no mailbox selected (RFC 3501 §6.3.1).
+    if (server.selectError?.call(path) case final text?) {
+      _selected = null;
+      throw _no(text);
+    }
     _selected = folder;
     if (folder == null) throw _no('NO Mailbox does not exist');
     return _answer(

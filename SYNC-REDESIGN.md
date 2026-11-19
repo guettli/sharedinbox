@@ -1894,13 +1894,25 @@ What remains after phase 6, with where it is handled today:
   visibly as "folder removed"). `check_email_writes.sh` check 3 keeps
   `mailboxes` writes in the mailbox writer, which is the only caller.
 - **A folder is removed when the server seems not to have it**: by a
-  listing without it, a JMAP `destroyed`, or an IMAP SELECT error that
-  `isImapMailboxNotFound` matches by text ("nonexistent", "does not
-  exist", "trycreate", "not found"). A listing that is empty or partial is
-  not guarded against (the JMAP mail enumeration is, the folder listing is
-  not), and a SELECT error that merely contains "not found" removes the
-  folder. Its mail goes with it unless a change of it is queued. Logged
-  since 6b (`mailbox.removed_gone`).
+  listing without it, a JMAP `destroyed`, or an IMAP SELECT error. Its mail
+  goes with it unless a change of it is queued (logged since 6b,
+  `mailbox.removed_gone`). Guarded since #1312: a listing that is empty,
+  lacks the inbox, or would remove at least 3 cached server folders that
+  are more than half of them is not trusted (`mailbox.listing_untrusted`):
+  the folders it left out are kept, remembered in `sync_states`
+  (`Mailbox:PendingPrune`), and removed by the next listing that leaves
+  them out too, so a real mass deletion takes two listings (on
+  JMAP the untrusted `Mailbox/get` keeps no state, so the next sync lists in
+  full again). A JMAP `destroyed` is honoured except for the inbox, which
+  waits for a full listing the same way. A SELECT error removes a folder
+  only on `[NONEXISTENT]` or a LIST (the full one, with INBOX) without it
+  (`confirmImapMailboxGone`); a plain "not found" keeps it
+  (`mailbox.select_failed_kept`), also in the flush and the Notes sync.
+  Left: two glitched listings in a row that miss the same folders still
+  remove them (no time gap is required between the two); and in the
+  flush, an error that reads like "not found" from a command after a
+  successful SELECT (STORE, MOVE) still drops that one change as done
+  (`pending_change.skipped_gone`); it removes no folder or mail.
 - **The `_pendingDeleteOrMoveUids` guard** (6a) is the one in-memory-free
   but payload-based guard left: the late FETCH answer for a vacated
   location is recognised only through the queued op's payload. If a read
