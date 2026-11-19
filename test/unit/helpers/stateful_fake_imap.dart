@@ -141,9 +141,10 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// it is refused with `NO`: a permanent server error.
   bool Function(String messageId)? refuses;
 
-  /// When it returns an error for a command (`STORE`, `MOVE`, `CREATE`,
-  /// `RENAME` or `DELETE`), the command throws it before it changes
-  /// anything: e.g. [badAnswer], or a `SocketException`.
+  /// When it returns an error for a command (`SELECT`, `STORE`, `MOVE`,
+  /// `EXPUNGE` for both kinds, `STATUS`, `CREATE`, `RENAME` or `DELETE`),
+  /// the command throws it before it changes anything: e.g. [badAnswer], or
+  /// a `SocketException`.
   Object? Function(String command)? failBefore;
 
   /// The [imap.ImapException] enough_mail throws for a tagged `BAD` [text]:
@@ -346,6 +347,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     imap.Mailbox box,
     List<imap.StatusFlags> flags,
   ) async {
+    _failBefore('STATUS');
     if (server.statusError?.call(box.encodedPath) case final text?) {
       throw _no(text);
     }
@@ -378,6 +380,10 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) async {
     final folder = server.folders[path];
     // A failed SELECT leaves no mailbox selected (RFC 3501 §6.3.1).
+    if (server.failBefore?.call('SELECT') case final error?) {
+      _selected = null;
+      throw error;
+    }
     if (server.selectError?.call(path) case final text?) {
       _selected = null;
       throw _no(text);
@@ -558,12 +564,14 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
     // UID EXPUNGE is part of UIDPLUS (RFC 4315).
     if (!server.uidPlus) throw _no('BAD Unknown command UID EXPUNGE');
+    _failBefore('EXPUNGE');
     _expungeDeleted(_named(sequence));
     return _answer('UID EXPUNGE', null);
   }
 
   @override
   Future<imap.Mailbox?> expunge() async {
+    _failBefore('EXPUNGE');
     _expungeDeleted(_folder.messages.values.toList());
     return _answer('EXPUNGE', null);
   }

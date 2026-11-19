@@ -417,13 +417,25 @@ pass. A tagged `BAD` to a change's command (STORE, MOVE, EXPUNGE / UID EXPUNGE,
 the SELECT before them; a folder op's CREATE, RENAME, DELETE and the STATUS
 before a DELETE) fails the change at once, since the same command would get the
 same answer (a Message-ID SEARCH that fails is retried, as before), except when
-its text points at the connection's state: it contains `state`, `select`,
-`authenticat`, `login`, `log in` or `logged in` ("command not allowed in this
-state", "no mailbox selected", "not authenticated"), or an RFC 5530 "try later"
-code (`[UNAVAILABLE]`, `[SERVERBUG]`, `[INUSE]`). A fresh connection may fix
-those, so they are retried like a plain `NO`. A `BAD` is checked before the
-"not found" wording, which its text may contain without saying that anything is
-gone. JMAP has no such case left: every per-item SetError (`invalidPatch`,
+its text points at the connection's state: the reason (the text after its last
+`: `, past Dovecot's "Error in IMAP command SELECT" prefix) contains a phrase
+such as "no mailbox selected", "not selected", "select a mailbox", "in this
+state", "invalid state", "not authenticated", "not logged in" or "login first"
+(`_stateBadPhrases`; phrases, not words, so a command name or an echoed folder
+or keyword does not count), or the text carries an RFC 5530 "try later" code
+(`[UNAVAILABLE]`, `[SERVERBUG]`, `[INUSE]`). A fresh connection may fix those,
+so they are retried like a plain `NO`. A `BAD` is checked before the "not
+found" wording (also on the SELECT), which its text may contain without saying
+that anything is gone.
+
+When a change is refused for good (a `BAD` like this, or a `NO` with a
+permanent code) after its earlier commands edited flags in the source folder,
+those edits are taken back as a best effort (`_ImapUndoJournal`): a delete's
+`\Deleted` when its EXPUNGE is refused, a snooze's `snz:` keyword when its MOVE
+is refused, the snooze keywords an unsnooze or a move out of Snoozed removed.
+App Log warn `pending_change.server_edits_undone` says whether that worked. A
+move found already done in its destination stays done when the flag edit there
+is refused (warn `pending_change.dest_flags_refused`). JMAP has no such case left: every per-item SetError (`invalidPatch`,
 `invalidProperties`, …) already fails the change; a method-level error (the
 whole `Email/set` call refused) is retried.
 

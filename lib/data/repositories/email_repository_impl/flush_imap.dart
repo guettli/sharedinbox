@@ -64,6 +64,36 @@ class _ImapUidValidityChangedException implements Exception {
   String toString() => message;
 }
 
+/// The flag edits one queued IMAP change made in its source folder [path]
+/// before a later command of it (MOVE, EXPUNGE) was sent, each with the
+/// command that takes it back: run when that later command is refused for
+/// good, so the server does not keep half a change (#1316).
+class _ImapUndoJournal {
+  _ImapUndoJournal(this.client, this.path);
+
+  final imap.ImapClient client;
+  final String path;
+  final List<Future<void> Function()> _steps = [];
+
+  bool get isEmpty => _steps.isEmpty;
+
+  void add(Future<void> Function() step) => _steps.add(step);
+
+  /// Selects [path] again and takes the edits back, the latest first.
+  /// Returns null when all of them were undone, else the first error.
+  Future<Object?> run() async {
+    try {
+      await client.selectUnicodeMailboxByPath(path);
+      for (final step in _steps.reversed) {
+        await step();
+      }
+      return null;
+    } catch (e) {
+      return e;
+    }
+  }
+}
+
 /// Upper bound on the UIDs sent in one batched `UID MOVE`.
 const _maxImapMoveBatch = 50;
 
@@ -586,6 +616,7 @@ extension _FlushImap on EmailRepositoryImpl {
     PendingChangeRow row,
     Map<String, dynamic> payload,
     String mailboxPath,
+    _ImapUndoJournal undo,
   ) async {
     final messageId = payload['messageId'] as String?;
     if (messageId == null || messageId.isEmpty) {
@@ -605,7 +636,7 @@ extension _FlushImap on EmailRepositoryImpl {
       // The source is selected; look in the destination before moving.
       movedNothing: true,
       beforeMove: payload['clearSnooze'] == true
-          ? (s) => _removeImapSnoozeFlags(client, s)
+          ? (s) => _removeImapSnoozeFlags(client, s, undo: undo)
           : null,
     );
   }
@@ -859,7 +890,9 @@ extension _FlushImap on EmailRepositoryImpl {
     try {
       selected = await client.selectUnicodeMailboxByPath(mailboxPath);
     } catch (e) {
-      if (!isImapMailboxNotFound(e)) rethrow;
+      // A `BAD` about the command fails the change, even when its text
+      // reads like "not found": it does not say the folder is gone.
+      if (isImapPermanentBad(e) || !isImapMailboxNotFound(e)) rethrow;
       // Dropping the change as moot (and the row a move left) needs a
       // definite answer (#1312).
       if (!await confirmImapMailboxGone(client, mailboxPath, e)) {
@@ -868,8 +901,64 @@ extension _FlushImap on EmailRepositoryImpl {
       }
       throw _ImapSourceMailboxGoneException(e);
     }
+    final undo = _ImapUndoJournal(client, mailboxPath);
+    try {
+      await _sendImapChange(client, row, payload, mailboxPath, selected, undo);
+    } catch (e) {
+      if (isImapPermanentBad(e) || isImapPermanentRefusal(e)) {
+        await _undoImapEdits(row, undo, e);
+      }
+      rethrow;
+    }
+  }
+
+  /// After [row] was refused for good with [error]: undoes, as a best
+  /// effort, the flag edits its earlier commands made on the server
+  /// ([undo]), e.g. the `\Deleted` of a delete whose EXPUNGE was refused, and
+  /// says in the App Log what was undone or could not be.
+  Future<void> _undoImapEdits(
+    PendingChangeRow row,
+    _ImapUndoJournal undo,
+    Object error,
+  ) async {
+    if (undo.isEmpty) return;
+    final failure = await undo.run();
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.server_edits_undone',
+        failure == null
+            ? 'Undid the flag edits ${_describeChange(row)} had made on the '
+                'server before it was refused'
+            : 'Could not undo the flag edits ${_describeChange(row)} had '
+                'made on the server before it was refused (e.g. the mail '
+                'stays marked deleted or keeps its snooze keyword there): '
+                '$failure',
+        accountId: row.accountId,
+        emailId: row.resourceId,
+        data: {'changeType': row.changeType, 'changeId': row.id},
+        error: error,
+      ),
+    );
+  }
+
+  /// Sends [row] to [mailboxPath], selected as [selected]; flag edits that
+  /// a later refused command would leave behind go into [undo].
+  Future<void> _sendImapChange(
+    imap.ImapClient client,
+    PendingChangeRow row,
+    Map<String, dynamic> payload,
+    String mailboxPath,
+    imap.Mailbox selected,
+    _ImapUndoJournal undo,
+  ) async {
     if (row.changeType == 'move' && payload[_uidAfterMoveKey] == true) {
-      await _applyMoveAfterUnansweredMove(client, row, payload, mailboxPath);
+      await _applyMoveAfterUnansweredMove(
+        client,
+        row,
+        payload,
+        mailboxPath,
+        undo,
+      );
       return;
     }
     final uid = await _currentImapUid(
@@ -896,7 +985,7 @@ extension _FlushImap on EmailRepositoryImpl {
       case 'move':
         final dest = payload['dest'] as String;
         if (payload['clearSnooze'] == true) {
-          await _removeImapSnoozeFlags(client, seq);
+          await _removeImapSnoozeFlags(client, seq, undo: undo);
         }
         final moveSeq = await _state.nextReadSeq();
         final result = await client.uidMove(seq, targetMailboxPath: dest);
@@ -921,10 +1010,13 @@ extension _FlushImap on EmailRepositoryImpl {
           messageId: payload['messageId'] as String?,
           movedNothing: movedNothing,
           beforeMove: payload['clearSnooze'] == true
-              ? (s) => _removeImapSnoozeFlags(client, s)
+              ? (s) => _removeImapSnoozeFlags(client, s, undo: undo)
               : null,
         );
       case 'delete':
+        // A refused EXPUNGE must not leave the mail flagged `\Deleted`:
+        // any client's next EXPUNGE would remove it.
+        undo.add(() => client.uidMarkUndeleted(seq));
         await deleteAndExpungeUids(client, [uid]);
       case 'snooze':
         final until = payload['until'] as String;
@@ -939,8 +1031,15 @@ extension _FlushImap on EmailRepositoryImpl {
         // would read back whichever comes first.
         final resnooze = payload['prevSnoozedUntil'] != null;
         Future<void> tag(imap.MessageSequence s) async {
-          if (resnooze) await _removeImapSnoozeFlags(client, s);
+          if (resnooze) await _removeImapSnoozeFlags(client, s, undo: undo);
           await client.uidStore(s, [keyword], action: imap.StoreAction.add);
+          undo.add(
+            () => client.uidStore(
+              s,
+              [keyword],
+              action: imap.StoreAction.remove,
+            ),
+          );
         }
 
         await tag(seq);
@@ -974,7 +1073,7 @@ extension _FlushImap on EmailRepositoryImpl {
         // Back to the inbox, which exists; a folder that is gone is not
         // created again on the side (a failed move, listed, instead).
         final dest = payload['dest'] as String;
-        await _removeImapSnoozeFlags(client, seq);
+        await _removeImapSnoozeFlags(client, seq, undo: undo);
         final moveSeq = await _state.nextReadSeq();
         final unsnoozeResult =
             await client.uidMove(seq, targetMailboxPath: dest);
@@ -1000,7 +1099,7 @@ extension _FlushImap on EmailRepositoryImpl {
           mailboxPath: mailboxPath,
           destMailboxPath: dest,
           messageId: payload['messageId'] as String?,
-          beforeMove: (s) => _removeImapSnoozeFlags(client, s),
+          beforeMove: (s) => _removeImapSnoozeFlags(client, s, undo: undo),
           movedNothing: unsnoozedNothing,
         );
       case 'clear_snooze':
@@ -1018,14 +1117,18 @@ extension _FlushImap on EmailRepositoryImpl {
   /// Returns false when no message exists at [seq] (a stale UID).
   Future<bool> _removeImapSnoozeFlags(
     imap.ImapClient client,
-    imap.MessageSequence seq,
-  ) async {
+    imap.MessageSequence seq, {
+    _ImapUndoJournal? undo,
+  }) async {
     final fetch = await client.uidFetchMessages(seq, 'FLAGS');
     if (fetch.messages.isEmpty) return false;
     final flags = fetch.messages.first.flags ?? [];
     final snzFlags = flags.where((f) => f.startsWith('snz:')).toList();
     if (snzFlags.isEmpty) return true;
     await client.uidStore(seq, snzFlags, action: imap.StoreAction.remove);
+    undo?.add(
+      () => client.uidStore(seq, snzFlags, action: imap.StoreAction.add),
+    );
     return true;
   }
 
@@ -1131,8 +1234,29 @@ extension _FlushImap on EmailRepositoryImpl {
         throwOnFailure: true,
       );
       if (destUid == null) return false;
-      await client.selectUnicodeMailboxByPath(destMailboxPath);
-      await beforeMove?.call(imap.MessageSequence.fromId(destUid, isUid: true));
+      try {
+        await client.selectUnicodeMailboxByPath(destMailboxPath);
+        await beforeMove
+            ?.call(imap.MessageSequence.fromId(destUid, isUid: true));
+      } catch (e) {
+        // The move happened: a refusal of the flag edit after it must not
+        // fail the change, which would show the mail in its source again.
+        if (!isImapPermanentBad(e) && !isImapPermanentRefusal(e)) rethrow;
+        log('IMAP change ${row.id}: moved, but its flag edit in '
+            '$destMailboxPath was refused ($e)');
+        unawaited(
+          _appLogger?.warn(
+            'pending_change.dest_flags_refused',
+            'The ${_describeChange(row)} is done, but the server refused '
+                'its flag edit in $destMailboxPath (e.g. the snooze keyword '
+                'is not set there)',
+            accountId: row.accountId,
+            emailId: row.resourceId,
+            data: {'changeType': row.changeType, 'changeId': row.id},
+            error: e,
+          ),
+        );
+      }
       await _relocateEmailAfterImapMove(
         id: row.resourceId,
         destMailboxPath: destMailboxPath,

@@ -1882,8 +1882,8 @@ What remains after phase 6, with where it is handled today:
   the connection's state ("not allowed in this state", "no mailbox
   selected", "not authenticated") or carries a "try later" code is retried
   as before, since a fresh connection may fix it (SYNC.md §6, "IMAP
-  `BAD`"). Left open: the rule matches words, so a server whose `BAD` for
-  a state problem uses other words fails a change that a retry would
+  `BAD`"). Left open: the rule matches phrases, so a server whose `BAD`
+  for a state problem words it otherwise fails a change that a retry would
   have applied; Retry sends it again.
 - **Ops still carry UIDs.** §3 wanted ops to resolve the server location
   from the row's `srv_*` columns at flush time. Queued IMAP payloads still

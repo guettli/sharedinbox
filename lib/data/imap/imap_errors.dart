@@ -109,20 +109,33 @@ String? imapBadText(Object error) {
   return text;
 }
 
-/// Words in a `BAD` text that point at the connection's state rather than
-/// at the command ([isImapPermanentBad]), lower case.
-const _stateBadWords = [
-  'state',
-  'select',
-  'authenticat',
-  'login',
-  'log in',
-  'logged in',
-  // RFC 5530 codes that say "try later".
-  '[unavailable]',
-  '[serverbug]',
-  '[inuse]',
+/// Phrases in a `BAD` text that point at the connection's state rather than
+/// at the command ([isImapPermanentBad]), lower case. Phrases, not single
+/// words: Dovecot words a `BAD` as "Error in IMAP command SELECT: …", and a
+/// text may echo a folder or keyword such as "state".
+const _stateBadPhrases = [
+  'no mailbox selected',
+  'not selected',
+  'select a mailbox',
+  'select first',
+  'selected state',
+  'in this state',
+  'in the current state',
+  'invalid state',
+  'wrong state',
+  'not authenticated',
+  'not-authenticated',
+  'authenticated state',
+  'authenticate first',
+  'not logged in',
+  'login first',
+  'log in first',
+  'please login',
+  'please log in',
 ];
+
+/// RFC 5530 codes that say "try later", lower case.
+const _tryLaterCodes = ['[unavailable]', '[serverbug]', '[inuse]'];
 
 /// Returns true when [error] is a tagged `BAD` ([imapBadText]) that says the
 /// command itself is wrong (RFC 3501 §7.1.3: a syntax error, or an argument
@@ -133,12 +146,16 @@ const _stateBadWords = [
 /// Not when the text points at the connection's state: "not
 /// authenticated", "no mailbox selected", "command not allowed in this
 /// state" (e.g. after the server dropped the SELECT). A fresh connection may
-/// fix those, so they stay failures that may pass. Matched by the words in
-/// [_stateBadWords]; so are the RFC 5530 "try later" codes.
+/// fix those, so they stay failures that may pass. Matched by the phrases
+/// in [_stateBadPhrases], in the text after its last ": " (the reason, past
+/// a prefix that names the command); nor with a "try later" code
+/// ([_tryLaterCodes]) anywhere in it.
 bool isImapPermanentBad(Object error) {
   final text = imapBadText(error)?.toLowerCase();
   if (text == null) return false;
-  return !_stateBadWords.any(text.contains);
+  if (_tryLaterCodes.any(text.contains)) return false;
+  final reason = text.substring(text.lastIndexOf(': ') + 1);
+  return !_stateBadPhrases.any(reason.contains);
 }
 
 /// Returns true when [error] means the IMAP connection itself is gone or no

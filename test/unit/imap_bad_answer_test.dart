@@ -92,6 +92,134 @@ void main() {
     expect(server.find('a@test')!.folder.path, 'Archive');
   });
 
+  test(
+      'a BAD on SELECT that reads like "not found" fails the change; it is '
+      'not dropped as gone', () async {
+    final filler = (await db.select(db.emails).get())
+        .singleWhere((e) => e.messageId == 'filler@test');
+    await emails.setFlag(filler.id, flagged: true);
+    // A listing without Archive would confirm a NO "not found" as gone.
+    server.listHides = (path) => path == 'Archive';
+    fail('SELECT', StatefulFakeImapServer.badAnswer('Mailbox not found'));
+
+    await flush();
+
+    await expectFailedOnBad(await change(), 'Mailbox not found');
+    expect(
+      (await db.select(db.emails).get()).map((e) => e.messageId),
+      contains('filler@test'),
+    );
+    expect(
+      logs.rows.map((r) => r.event),
+      isNot(contains('pending_change.skipped_gone')),
+    );
+  });
+
+  test('a Dovecot-style BAD on SELECT fails the change', () async {
+    await emails.setFlag((await rowOfA()).id, flagged: true);
+    const text = 'Error in IMAP command SELECT: Invalid mailbox name';
+    fail('SELECT', StatefulFakeImapServer.badAnswer(text));
+
+    await flush();
+
+    await expectFailedOnBad(await change(), text);
+  });
+
+  test('a BAD on UID EXPUNGE fails the delete and takes its \\Deleted back',
+      () async {
+    await emails.deleteEmail((await rowOfA()).id);
+    fail('EXPUNGE', StatefulFakeImapServer.badAnswer('Invalid arguments'));
+
+    await flush();
+
+    await expectFailedOnBad(await change(), 'Invalid arguments');
+    final onServer = server.find('a@test')!;
+    expect(onServer.folder.path, 'INBOX');
+    expect(onServer.message.flags, isNot(contains(r'\Deleted')));
+    expect(
+      logs.rows.map((r) => r.event),
+      contains('pending_change.server_edits_undone'),
+    );
+  });
+
+  test('a BAD on the MOVE of a snooze takes its snooze keyword back', () async {
+    final id = (await rowOfA()).id;
+    await emails.snoozeEmail(id, DateTime.utc(2030));
+    // The Snoozed folder is created first; then the snooze's MOVE fails.
+    fail('MOVE', StatefulFakeImapServer.badAnswer('Invalid arguments'));
+
+    await flush();
+
+    final snooze =
+        (await rigOps()).singleWhere((c) => c.changeType == 'snooze');
+    expect(snooze.state, 'failed');
+    expect(snooze.lastError, 'BAD Invalid arguments');
+    final onServer = server.find('a@test')!;
+    expect(onServer.folder.path, 'INBOX');
+    expect(onServer.message.flags.where((f) => f.startsWith('snz:')), isEmpty);
+  });
+
+  test('a BAD on the MOVE of an unsnooze gives the snooze keyword back',
+      () async {
+    final id = (await rowOfA()).id;
+    await emails.snoozeEmail(id, DateTime.utc(2030));
+    await flush();
+    expect(server.find('a@test')!.folder.path, 'Snoozed');
+    final keywords = server
+        .find('a@test')!
+        .message
+        .flags
+        .where((f) => f.startsWith('snz:'))
+        .toList();
+    expect(keywords, isNotEmpty);
+    await emails.syncEmails(_acc.id, 'Snoozed');
+    await emails.moveEmail((await rowOfA()).id, 'INBOX');
+    fail('MOVE', StatefulFakeImapServer.badAnswer('Invalid arguments'));
+
+    await flush();
+
+    final failed = (await rigOps()).where((c) => c.state == 'failed');
+    expect(failed, hasLength(1));
+    final onServer = server.find('a@test')!;
+    expect(onServer.folder.path, 'Snoozed');
+    expect(
+      onServer.message.flags.where((f) => f.startsWith('snz:')),
+      keywords,
+    );
+  });
+
+  test('a BAD on a folder RENAME fails the rename', () async {
+    await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+    fail('RENAME', StatefulFakeImapServer.badAnswer('Invalid mailbox name'));
+
+    await flush();
+
+    final c = await change();
+    expect((c.changeType, c.state), ('rename_mailbox', 'failed'));
+    expect(c.lastError, contains('BAD Invalid mailbox name'));
+    expect(server.folders.keys, contains('Archive'));
+    await pumpEventQueue();
+    expect(badWarns(), hasLength(1));
+  });
+
+  for (final command in ['STATUS', 'DELETE']) {
+    test('a BAD on the $command of a folder delete fails the delete', () async {
+      server.addFolder('Empty');
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Empty');
+      fail(command, StatefulFakeImapServer.badAnswer('Invalid arguments'));
+
+      await flush();
+
+      final c = await change();
+      expect((c.changeType, c.state), ('delete_mailbox', 'failed'));
+      expect(c.lastError, contains('BAD Invalid arguments'));
+      expect(server.folders.keys, contains('Empty'));
+      await pumpEventQueue();
+      expect(badWarns(), hasLength(1));
+    });
+  }
+
   test('a BAD on a folder CREATE fails the create at once', () async {
     await rig.mailboxes.createMailbox(_acc.id, 'Projects');
     fail('CREATE', StatefulFakeImapServer.badAnswer('Invalid mailbox name'));

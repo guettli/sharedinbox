@@ -93,6 +93,37 @@ void main() {
       ('BAD parse error', answer('BAD Could not parse command'), true),
       ('BAD [CLIENTBUG]', answer('BAD [CLIENTBUG] Invalid arguments'), true),
       ('lower-case bad', answer('bad Invalid mailbox name'), true),
+      // Dovecot names the command before the reason.
+      (
+        'Dovecot SELECT, bad name',
+        answer('BAD Error in IMAP command SELECT: Invalid mailbox name'),
+        true,
+      ),
+      (
+        'Dovecot STORE, keyword echoed',
+        answer('BAD Error in IMAP command UID STORE: Invalid flag: state'),
+        true,
+      ),
+      (
+        'Dovecot STORE, no mailbox selected',
+        answer('BAD Error in IMAP command UID STORE: No mailbox selected.'),
+        false,
+      ),
+      (
+        'folder named like a state',
+        answer('BAD Mailbox "Not selected" in this state: name too long'),
+        true,
+      ),
+      (
+        'Exchange invalid state',
+        answer('BAD Command received in Invalid state.'),
+        false,
+      ),
+      (
+        'Cyrus select first',
+        answer('BAD Please select a mailbox first'),
+        false,
+      ),
       (
         'BAD in this state',
         answer('BAD Command not allowed in this state'),
