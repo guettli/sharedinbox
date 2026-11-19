@@ -733,6 +733,14 @@ extension _FlushImap on EmailRepositoryImpl {
         await _recordChangeError(row, e.cause);
         return (applied: 0, connectionLost: null);
       }
+      if (isImapPermanentBad(e)) {
+        // A tagged `BAD` about the command itself (a flag or path the server
+        // rejects): the same command would get it again. Checked before the
+        // "not found" wording, which a `BAD` text may contain without saying
+        // that anything is gone.
+        await _failOnImapBad(row, e);
+        return (applied: 0, connectionLost: null);
+      }
       final sourceGone = e is _ImapSourceMailboxGoneException;
       if (!sourceGone &&
           isImapMailboxNotFound(e) &&
@@ -824,6 +832,16 @@ extension _FlushImap on EmailRepositoryImpl {
       await _recordChangeError(row, e);
       return (applied: 0, connectionLost: null);
     }
+  }
+
+  /// Marks [row] failed at once after a command of it got a tagged `BAD`
+  /// [error] about the command itself ([isImapPermanentBad]), with an App
+  /// Log warn that quotes the server. The mail shows the server's state
+  /// again; Retry / Discard are on the Pending Changes screen.
+  Future<void> _failOnImapBad(PendingChangeRow row, Object error) async {
+    if (!await _markChangeFailed(row, error)) return;
+    log('IMAP change ${row.id} failed: BAD answer ($error)');
+    _logImapBadFailure(row, error);
   }
 
   Future<void> _applyPendingChangeImap(

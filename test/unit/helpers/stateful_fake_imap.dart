@@ -141,6 +141,16 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// it is refused with `NO`: a permanent server error.
   bool Function(String messageId)? refuses;
 
+  /// When it returns an error for a command (`STORE`, `MOVE`, `CREATE`,
+  /// `RENAME` or `DELETE`), the command throws it before it changes
+  /// anything: e.g. [badAnswer], or a `SocketException`.
+  Object? Function(String command)? failBefore;
+
+  /// The [imap.ImapException] enough_mail throws for a tagged `BAD` [text]:
+  /// unlike a `NO`, its message keeps the `BAD ` status word.
+  static imap.ImapException badAnswer(String text) =>
+      imap.ImapException(imap.ImapClient(), 'BAD $text');
+
   int _modSeq = 1;
 
   StatefulFakeImapClient connect() => StatefulFakeImapClient(this);
@@ -261,6 +271,12 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     ];
   }
 
+  /// Throws what [StatefulFakeImapServer.failBefore] returns for [command].
+  void _failBefore(String command) {
+    final error = server.failBefore?.call(command);
+    if (error != null) throw error;
+  }
+
   void _checkAllowed(List<FakeServerMessage> messages) {
     final refuses = server.refuses;
     if (refuses == null) return;
@@ -294,6 +310,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
+    _failBefore('CREATE');
     server.folderCommands.add('CREATE $path');
     if (server.folders.containsKey(path)) {
       throw _no('NO [ALREADYEXISTS] Mailbox already exists');
@@ -308,6 +325,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
+    _failBefore('RENAME');
     final from = box.encodedPath;
     server.folderCommands.add('RENAME $from->$newName');
     if (!server.folders.containsKey(from)) {
@@ -341,6 +359,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
+    _failBefore('DELETE');
     final path = box.encodedPath;
     server.folderCommands.add('DELETE $path');
     if (!server.folders.containsKey(path)) {
@@ -486,6 +505,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     List<String> flags,
     imap.StoreAction action,
   ) async {
+    _failBefore('STORE');
     final messages = _named(sequence);
     _checkAllowed(messages);
     for (final m in messages) {
@@ -511,6 +531,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     imap.MessageSequence sequence,
     String? targetMailboxPath,
   ) async {
+    _failBefore('MOVE');
     final dest = server.folders[targetMailboxPath];
     if (dest == null) throw _no('NO [TRYCREATE] Mailbox does not exist');
     final src = _folder;

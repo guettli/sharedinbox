@@ -93,6 +93,54 @@ bool isImapPermanentRefusal(Object error) {
       s.contains('[READ-ONLY]');
 }
 
+/// The server's text of a tagged `BAD` answer in [error] (e.g.
+/// `BAD Invalid flag name`), or null when [error] is anything else.
+///
+/// enough_mail 2.1.7 fails a command with an [ImapException] whose message
+/// is the tagged line after the tag: for a `NO` with the `NO ` cut off, for
+/// a `BAD` with `BAD ` kept. So a message that starts with `BAD ` is a
+/// tagged `BAD`. A lost connection, a timeout (message `timeout`) and an
+/// untagged `* BYE` (enough_mail only logs it, then the connection closes)
+/// never look like this.
+String? imapBadText(Object error) {
+  if (error is! ImapException) return null;
+  final text = error.message?.trim();
+  if (text == null || !text.toUpperCase().startsWith('BAD ')) return null;
+  return text;
+}
+
+/// Words in a `BAD` text that point at the connection's state rather than
+/// at the command ([isImapPermanentBad]), lower case.
+const _stateBadWords = [
+  'state',
+  'select',
+  'authenticat',
+  'login',
+  'log in',
+  'logged in',
+  // RFC 5530 codes that say "try later".
+  '[unavailable]',
+  '[serverbug]',
+  '[inuse]',
+];
+
+/// Returns true when [error] is a tagged `BAD` ([imapBadText]) that says the
+/// command itself is wrong (RFC 3501 §7.1.3: a syntax error, or an argument
+/// the server rejects, such as a flag or folder name). Sending the same
+/// command again cannot help, so a queued change that gets one fails at once
+/// (SYNC.md §6).
+///
+/// Not when the text points at the connection's state: "not
+/// authenticated", "no mailbox selected", "command not allowed in this
+/// state" (e.g. after the server dropped the SELECT). A fresh connection may
+/// fix those, so they stay failures that may pass. Matched by the words in
+/// [_stateBadWords]; so are the RFC 5530 "try later" codes.
+bool isImapPermanentBad(Object error) {
+  final text = imapBadText(error)?.toLowerCase();
+  if (text == null) return false;
+  return !_stateBadWords.any(text.contains);
+}
+
 /// Returns true when [error] means the IMAP connection itself is gone or no
 /// longer trustworthy, so every further command on the same client is doomed:
 ///   * an [IOException] such as a `SocketException` ("Software caused

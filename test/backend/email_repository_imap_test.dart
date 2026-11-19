@@ -723,6 +723,39 @@ void main() {
     }
   });
 
+  test('a STORE the server answers with BAD fails at once (#1316)', () async {
+    await appendToInbox('bad-flag-test');
+
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+    final email = (await r.emails.observeEmails('test', 'INBOX').first).single;
+    // `(` cannot be in a keyword: Stalwart answers `BAD Unsupported flag.`
+    await r.db.into(r.db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: 'test',
+            resourceType: 'Email',
+            resourceId: email.id,
+            changeType: 'add_keywords',
+            payload: jsonEncode({
+              'uid': email.uid,
+              'mailboxPath': 'INBOX',
+              'keywords': ['bad(flag'],
+            }),
+            createdAt: DateTime.now(),
+          ),
+        );
+
+    await r.emails.flushPendingChanges('test', user.password);
+
+    final change = await r.db.select(r.db.pendingChanges).getSingle();
+    expect(change.state, 'failed', reason: change.lastError);
+    expect(change.attempts, 1);
+    expect(change.lastError, startsWith('BAD '));
+    final failed = await r.emails.observeFailedMutations('test').first;
+    expect(failed.single.failed, isTrue);
+  });
+
   test('flushPendingChanges moves email to destination folder', () async {
     await appendToInbox('move-test');
 
