@@ -1,0 +1,33 @@
+# Betterleaks config, used by the pre-commit hook (see .pre-commit-config.yaml).
+# Scan all files: betterleaks dir . --config .betterleaks.toml
+#
+# Inherits the built-in rules and filters. The [[allowlists]] below are added
+# on top of them (unlike a top-level `filter`, which would replace the
+# built-in global filter in betterleaks v1).
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Code-duplication baseline: key holds content hashes"
+paths = ['''^duplication-baseline\.json$''']
+
+[[allowlists]]
+description = "Tests use fake credentials against local Stalwart"
+targetRules = ["generic-api-key", "generic-password", "generic-credential-uri"]
+paths = ['''^test/''']
+
+[[allowlists]]
+description = "Docs log in with the fake password 'secret'"
+condition = "AND"
+targetRules = ["generic-api-key", "generic-password", "generic-credential-uri"]
+paths = ['''\.md$''']
+regexTarget = "line"
+regexes = ['''"secret"\)''']
+
+[[allowlists]]
+description = "References to env vars and doc comments, not values"
+condition = "AND"
+paths = ['''^Taskfile\.yml$''', '''^lib/core/sync/account_sync_manager\.dart$''']
+regexTarget = "line"
+regexes = ['''env://GMAIL_PASSWORD''', '''user:pass@host''']

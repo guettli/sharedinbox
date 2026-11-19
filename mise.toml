@@ -1,4 +1,5 @@
 [tools]
+betterleaks = "1.10.1"
 # prek runs the git pre-commit hooks (.pre-commit-config.yaml). Pinned here so
 # a host with mise (e.g. a tc codeN seat) resolves the `prek` shim; without a
 # version mise refuses ("No version is set for shim: prek") and every commit
