@@ -141,6 +141,17 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// it is refused with `NO`: a permanent server error.
   bool Function(String messageId)? refuses;
 
+  /// When it returns an error for a command (`SELECT`, `STORE`, `MOVE`,
+  /// `EXPUNGE` for both kinds, `STATUS`, `CREATE`, `RENAME` or `DELETE`),
+  /// the command throws it before it changes anything: e.g. [badAnswer], or
+  /// a `SocketException`.
+  Object? Function(String command)? failBefore;
+
+  /// The [imap.ImapException] enough_mail throws for a tagged `BAD` [text]:
+  /// unlike a `NO`, its message keeps the `BAD ` status word.
+  static imap.ImapException badAnswer(String text) =>
+      imap.ImapException(imap.ImapClient(), 'BAD $text');
+
   int _modSeq = 1;
 
   StatefulFakeImapClient connect() => StatefulFakeImapClient(this);
@@ -261,6 +272,12 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     ];
   }
 
+  /// Throws what [StatefulFakeImapServer.failBefore] returns for [command].
+  void _failBefore(String command) {
+    final error = server.failBefore?.call(command);
+    if (error != null) throw error;
+  }
+
   void _checkAllowed(List<FakeServerMessage> messages) {
     final refuses = server.refuses;
     if (refuses == null) return;
@@ -294,6 +311,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> createMailbox(String path) async {
+    _failBefore('CREATE');
     server.folderCommands.add('CREATE $path');
     if (server.folders.containsKey(path)) {
       throw _no('NO [ALREADYEXISTS] Mailbox already exists');
@@ -308,6 +326,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> renameMailbox(imap.Mailbox box, String newName) async {
+    _failBefore('RENAME');
     final from = box.encodedPath;
     server.folderCommands.add('RENAME $from->$newName');
     if (!server.folders.containsKey(from)) {
@@ -328,6 +347,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     imap.Mailbox box,
     List<imap.StatusFlags> flags,
   ) async {
+    _failBefore('STATUS');
     if (server.statusError?.call(box.encodedPath) case final text?) {
       throw _no(text);
     }
@@ -341,6 +361,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   @override
   Future<imap.Mailbox> deleteMailbox(imap.Mailbox box) async {
+    _failBefore('DELETE');
     final path = box.encodedPath;
     server.folderCommands.add('DELETE $path');
     if (!server.folders.containsKey(path)) {
@@ -359,6 +380,10 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) async {
     final folder = server.folders[path];
     // A failed SELECT leaves no mailbox selected (RFC 3501 §6.3.1).
+    if (server.failBefore?.call('SELECT') case final error?) {
+      _selected = null;
+      throw error;
+    }
     if (server.selectError?.call(path) case final text?) {
       _selected = null;
       throw _no(text);
@@ -486,6 +511,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     List<String> flags,
     imap.StoreAction action,
   ) async {
+    _failBefore('STORE');
     final messages = _named(sequence);
     _checkAllowed(messages);
     for (final m in messages) {
@@ -511,6 +537,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     imap.MessageSequence sequence,
     String? targetMailboxPath,
   ) async {
+    _failBefore('MOVE');
     final dest = server.folders[targetMailboxPath];
     if (dest == null) throw _no('NO [TRYCREATE] Mailbox does not exist');
     final src = _folder;
@@ -537,12 +564,14 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   Future<imap.Mailbox?> uidExpunge(imap.MessageSequence sequence) async {
     // UID EXPUNGE is part of UIDPLUS (RFC 4315).
     if (!server.uidPlus) throw _no('BAD Unknown command UID EXPUNGE');
+    _failBefore('EXPUNGE');
     _expungeDeleted(_named(sequence));
     return _answer('UID EXPUNGE', null);
   }
 
   @override
   Future<imap.Mailbox?> expunge() async {
+    _failBefore('EXPUNGE');
     _expungeDeleted(_folder.messages.values.toList());
     return _answer('EXPUNGE', null);
   }

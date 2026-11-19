@@ -366,6 +366,35 @@ extension _ChangeFailures on EmailRepositoryImpl {
     );
   }
 
+  /// App Log warn for [row], failed at once because the server answered a
+  /// command of it with a tagged `BAD` ([isImapPermanentBad]): not retried,
+  /// so the user must be able to see the server's words. A folder op passes
+  /// its folder's [mailboxPath].
+  void _logImapBadFailure(
+    PendingChangeRow row,
+    Object error, {
+    String? mailboxPath,
+  }) {
+    final folder = row.resourceType == mailboxResourceType;
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.bad_command',
+        'The server rejected ${_describeChange(row)} as a bad command '
+            '(${imapBadText(error)}); not retried, kept on the Pending '
+            'Changes screen to retry or discard',
+        accountId: row.accountId,
+        emailId: folder ? null : row.resourceId,
+        mailboxPath: mailboxPath,
+        data: {
+          'changeType': row.changeType,
+          'changeId': row.id,
+          'serverText': imapBadText(error),
+        },
+        error: error,
+      ),
+    );
+  }
+
   /// App Log warnings for the [dependents] failed together with [row].
   void _logDependentFailures(
     PendingChangeRow row,

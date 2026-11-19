@@ -93,6 +93,71 @@ bool isImapPermanentRefusal(Object error) {
       s.contains('[READ-ONLY]');
 }
 
+/// The server's text of a tagged `BAD` answer in [error] (e.g.
+/// `BAD Invalid flag name`), or null when [error] is anything else.
+///
+/// enough_mail 2.1.7 fails a command with an [ImapException] whose message
+/// is the tagged line after the tag: for a `NO` with the `NO ` cut off, for
+/// a `BAD` with `BAD ` kept. So a message that starts with `BAD ` is a
+/// tagged `BAD`. A lost connection, a timeout (message `timeout`) and an
+/// untagged `* BYE` (enough_mail only logs it, then the connection closes)
+/// never look like this.
+String? imapBadText(Object error) {
+  if (error is! ImapException) return null;
+  final text = error.message?.trim();
+  if (text == null || !text.toUpperCase().startsWith('BAD ')) return null;
+  return text;
+}
+
+/// Phrases in a `BAD` text that point at the connection's state rather than
+/// at the command ([isImapPermanentBad]), lower case. Phrases, not single
+/// words: Dovecot words a `BAD` as "Error in IMAP command SELECT: …", and a
+/// text may echo a folder or keyword such as "state".
+const _stateBadPhrases = [
+  'no mailbox selected',
+  'not selected',
+  'select a mailbox',
+  'select first',
+  'selected state',
+  'in this state',
+  'in the current state',
+  'invalid state',
+  'wrong state',
+  'not authenticated',
+  'not-authenticated',
+  'authenticated state',
+  'authenticate first',
+  'not logged in',
+  'login first',
+  'log in first',
+  'please login',
+  'please log in',
+];
+
+/// RFC 5530 codes that say "try later", lower case.
+const _tryLaterCodes = ['[unavailable]', '[serverbug]', '[inuse]'];
+
+/// Returns true when [error] is a tagged `BAD` ([imapBadText]) that says the
+/// command itself is wrong (RFC 3501 §7.1.3: a syntax error, or an argument
+/// the server rejects, such as a flag or folder name). Sending the same
+/// command again cannot help, so a queued change that gets one fails at once
+/// (SYNC.md §6).
+///
+/// Not when the text points at the connection's state: "not
+/// authenticated", "no mailbox selected", "command not allowed in this
+/// state" (e.g. after the server dropped the SELECT). A fresh connection may
+/// fix those, so they stay failures that may pass. Matched by the phrases
+/// in [_stateBadPhrases], in the text after its last ": " (the reason, past
+/// a prefix that names the command); nor with a "try later" code
+/// ([_tryLaterCodes]) anywhere in it.
+bool isImapPermanentBad(Object error) {
+  final text = imapBadText(error)?.toLowerCase();
+  if (text == null) return false;
+  if (_tryLaterCodes.any(text.contains)) return false;
+  final reason = text.substring(text.lastIndexOf(': ') + 1);
+  return !_stateBadPhrases.any(reason.contains);
+}
+
 /// Returns true when [error] means the IMAP connection itself is gone or no
 /// longer trustworthy, so every further command on the same client is doomed:
 ///   * an [IOException] such as a `SocketException` ("Software caused

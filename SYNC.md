@@ -402,10 +402,42 @@ retried with a growing backoff (15 minutes, doubling, at most 6 hours, kept in
 `lease_until`) until it applies or the user discards it. Only a refusal becomes
 `state = 'failed'`, at once: an IMAP `NO` with a permanent response code
 (`[CANNOT]`, `[NOPERM]`, `[CONTACTADMIN]`, `[PRIVACYREQUIRED]`, `[READ-ONLY]`),
-permanent per-item JMAP errors (`forbidden`, `notFound` for a flag or move), and an
-IMAP change whose message is gone (or cannot be found again after a UIDVALIDITY
-reset). A JMAP `notFound` for a delete, and an IMAP change whose
-source folder no longer exists, count as applied: the mail is already gone.
+an IMAP tagged `BAD` about the command itself (`isImapPermanentBad`, e.g. a flag
+or folder name the server rejects; App Log warn `pending_change.bad_command`
+with the server's text), permanent per-item JMAP errors (`forbidden`, `notFound`
+for a flag or move), and an IMAP change whose message is gone (or cannot be found
+again after a UIDVALIDITY reset). A JMAP `notFound` for a delete, and an IMAP change
+whose source folder no longer exists, count as applied: the mail is already gone.
+
+**IMAP `BAD`** (#1316). enough_mail 2.1.7 fails a command with an `ImapException`
+whose message keeps the `BAD ` status word (a `NO`'s message has `NO ` cut off), so
+a message starting with `BAD ` is a tagged `BAD` answer; a lost connection, a
+timeout and an untagged `* BYE` never look like that and stay failures that may
+pass. A tagged `BAD` to a change's command (STORE, MOVE, EXPUNGE / UID EXPUNGE,
+the SELECT before them; a folder op's CREATE, RENAME, DELETE and the STATUS
+before a DELETE) fails the change at once, since the same command would get the
+same answer (a Message-ID SEARCH that fails is retried, as before), except when
+its text points at the connection's state: the reason (the text after its last
+`: `, past Dovecot's "Error in IMAP command SELECT" prefix) contains a phrase
+such as "no mailbox selected", "not selected", "select a mailbox", "in this
+state", "invalid state", "not authenticated", "not logged in" or "login first"
+(`_stateBadPhrases`; phrases, not words, so a command name or an echoed folder
+or keyword does not count), or the text carries an RFC 5530 "try later" code
+(`[UNAVAILABLE]`, `[SERVERBUG]`, `[INUSE]`). A fresh connection may fix those,
+so they are retried like a plain `NO`. A `BAD` is checked before the "not
+found" wording (also on the SELECT), which its text may contain without saying
+that anything is gone.
+
+When a change is refused for good (a `BAD` like this, or a `NO` with a
+permanent code) after its earlier commands edited flags in the source folder,
+those edits are taken back as a best effort (`_ImapUndoJournal`): a delete's
+`\Deleted` when its EXPUNGE is refused, a snooze's `snz:` keyword when its MOVE
+is refused, the snooze keywords an unsnooze or a move out of Snoozed removed.
+App Log warn `pending_change.server_edits_undone` says whether that worked. A
+move found already done in its destination stays done when the flag edit there
+is refused (warn `pending_change.dest_flags_refused`). JMAP has no such case left: every per-item SetError (`invalidPatch`,
+`invalidProperties`, …) already fails the change; a method-level error (the
+whole `Email/set` call refused) is retried.
 
 **Claim** — a flush claims each change right before sending it: `state = 'inflight'`
 with `lease_until` = now + 5 minutes and the flush's random `claim_token`, as one
@@ -789,6 +821,8 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     `jmapMailboxSetErrorText`, the server's description appended), an IMAP `NO` with a
     permanent code, a name the server has already on the first try (a clash: never
     adopted), a folder gone on the server; App Log error `pending_change.rejected`;
+    an IMAP `BAD` about the command (§6, "IMAP `BAD`"), App Log warn
+    `pending_change.bad_command` with the server's text;
   - *transient* → retried, `stuck` after 5 attempts; *not sent* (connect failed) →
     nothing charged; *ambiguous* (connection lost after sending) → kept, maybe sent.
 - **Ack.** `acked` with `ack_seq`, and what the server confirmed written at once,

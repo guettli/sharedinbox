@@ -9,6 +9,19 @@ part of '../email_repository_impl.dart';
 /// folder that exists), not by our command's answer.
 typedef _MailboxDone = ({String path, String name, bool read});
 
+/// The refusal for an IMAP folder command that failed with [error], when
+/// sending it again cannot help: a `NO` with a permanent code
+/// ([isImapPermanentRefusal]) or a tagged `BAD` about the command
+/// ([isImapPermanentBad]). [what] starts its message. Null when the error
+/// may pass.
+MailboxOpRefused? _imapFolderRefusal(Object error, String what) {
+  if (isImapPermanentBad(error)) {
+    return MailboxOpRefused('$what: $error', badAnswer: error);
+  }
+  if (isImapPermanentRefusal(error)) return MailboxOpRefused('$what: $error');
+  return null;
+}
+
 extension _FlushMailbox on EmailRepositoryImpl {
   /// Sends [accountId]'s queued mailbox ops (pending, and stuck ones that
   /// are due) in queue order, before its email changes: a move into a
@@ -196,6 +209,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
           blocked.add(row.resourceId);
           final dependents = await _mailboxState.fail(row, e.message);
           if (dependents == null) continue;
+          _mailboxState.logDependents(row, dependents);
+          if (e.badAnswer case final bad?) {
+            _logImapBadFailure(row, bad, mailboxPath: mailbox?.path);
+            continue;
+          }
           unawaited(
             _appLogger?.error(
               'pending_change.rejected',
@@ -208,7 +226,6 @@ extension _FlushMailbox on EmailRepositoryImpl {
               error: e,
             ),
           );
-          _mailboxState.logDependents(row, dependents);
         } catch (e) {
           final lost = jmap != null
               ? isJmapNetworkError(e)
@@ -387,9 +404,8 @@ extension _FlushMailbox on EmailRepositoryImpl {
         if (mine) return (path: target, name: name, read: true);
         throw MailboxOpRefused('a folder named "$name" already exists');
       }
-      if (isImapPermanentRefusal(e)) {
-        throw MailboxOpRefused('the server refused the folder: $e');
-      }
+      final refused = _imapFolderRefusal(e, 'the server refused the folder');
+      if (refused != null) throw refused;
       rethrow;
     }
     return (path: target, name: name, read: false);
@@ -447,9 +463,8 @@ extension _FlushMailbox on EmailRepositoryImpl {
           'the folder no longer exists on the server',
         );
       }
-      if (isImapPermanentRefusal(e)) {
-        throw MailboxOpRefused('the server refused it: $e');
-      }
+      final refused = _imapFolderRefusal(e, 'the server refused it');
+      if (refused != null) throw refused;
       rethrow;
     }
   }
@@ -649,9 +664,8 @@ extension _FlushMailbox on EmailRepositoryImpl {
       if (!imapClient.isConnected || isImapConnectionLost(e)) rethrow;
       final list = await imapClient.listMailboxes(recursive: true);
       if (!list.any((m) => m.path == path)) return true;
-      if (isImapPermanentRefusal(e)) {
-        throw MailboxOpRefused('the server refused it: $e');
-      }
+      final refused = _imapFolderRefusal(e, 'the server refused it');
+      if (refused != null) throw refused;
       rethrow;
     }
     return true;

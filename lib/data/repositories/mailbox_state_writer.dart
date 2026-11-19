@@ -22,9 +22,12 @@ class MailboxExistsException implements Exception {
 
 /// A mailbox op the server refused for good: it becomes `failed`.
 class MailboxOpRefused implements Exception {
-  MailboxOpRefused(this.message);
+  MailboxOpRefused(this.message, {this.badAnswer});
 
   final String message;
+
+  /// The server's tagged IMAP `BAD` answer, when that is the refusal.
+  final Object? badAnswer;
 
   @override
   String toString() => message;

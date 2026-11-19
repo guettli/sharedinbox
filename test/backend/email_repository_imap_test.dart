@@ -12,6 +12,7 @@ import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -19,6 +20,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import '../unit/recording_app_log_repository.dart';
 import 'stalwart_harness.dart';
 
 Future<void> _ensureMailbox(ImapClient client, String mailboxPath) async {
@@ -50,7 +52,7 @@ void main() {
   });
 
   ({AppDatabase db, AccountRepositoryImpl accounts, EmailRepositoryImpl emails})
-      makeRepo() {
+      makeRepo({AppLogger? appLogger}) {
     final db = openTestDatabase();
     final storage = MapSecureStorage();
     final accounts = AccountRepositoryImpl(db, storage);
@@ -60,6 +62,7 @@ void main() {
       imapConnect: testImapConnect,
       smtpConnect: testSmtpConnect,
       getCacheDir: () async => cacheDir,
+      appLogger: appLogger,
     );
     return (db: db, accounts: accounts, emails: emails);
   }
@@ -721,6 +724,44 @@ void main() {
     } finally {
       await client.logout();
     }
+  });
+
+  test('a STORE the server answers with BAD fails at once (#1316)', () async {
+    await appendToInbox('bad-flag-test');
+
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    await r.emails.syncEmails('test', 'INBOX');
+    final email = (await r.emails.observeEmails('test', 'INBOX').first).single;
+    // `(` cannot be in a keyword: Stalwart answers `BAD Unsupported flag.`
+    await r.db.into(r.db.pendingChanges).insert(
+          PendingChangesCompanion.insert(
+            accountId: 'test',
+            resourceType: 'Email',
+            resourceId: email.id,
+            changeType: 'add_keywords',
+            payload: jsonEncode({
+              'uid': email.uid,
+              'mailboxPath': 'INBOX',
+              'keywords': ['bad(flag'],
+            }),
+            createdAt: DateTime.now(),
+          ),
+        );
+
+    await r.emails.flushPendingChanges('test', user.password);
+
+    final change = await r.db.select(r.db.pendingChanges).getSingle();
+    expect(change.state, 'failed', reason: change.lastError);
+    expect(change.attempts, 1);
+    expect(change.lastError, startsWith('BAD '));
+    final failed = await r.emails.observeFailedMutations('test').first;
+    expect(failed.single.failed, isTrue);
+    await pumpEventQueue();
+    final warn =
+        logs.rows.singleWhere((l) => l.event == 'pending_change.bad_command');
+    expect(warn.message, contains(change.lastError));
   });
 
   test('flushPendingChanges moves email to destination folder', () async {

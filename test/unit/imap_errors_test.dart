@@ -83,6 +83,72 @@ void main() {
     }
   });
 
+  group('isImapPermanentBad', () {
+    // enough_mail keeps the `BAD ` status word in the message, and cuts
+    // `NO ` off.
+    imap.ImapException answer(String text) =>
+        imap.ImapException(imap.ImapClient(), text);
+    for (final (name, error, expected) in <(String, Object, bool)>[
+      ('BAD invalid flag', answer('BAD Invalid flag name'), true),
+      ('BAD parse error', answer('BAD Could not parse command'), true),
+      ('BAD [CLIENTBUG]', answer('BAD [CLIENTBUG] Invalid arguments'), true),
+      ('lower-case bad', answer('bad Invalid mailbox name'), true),
+      // Dovecot names the command before the reason.
+      (
+        'Dovecot SELECT, bad name',
+        answer('BAD Error in IMAP command SELECT: Invalid mailbox name'),
+        true,
+      ),
+      (
+        'Dovecot STORE, keyword echoed',
+        answer('BAD Error in IMAP command UID STORE: Invalid flag: state'),
+        true,
+      ),
+      (
+        'Dovecot STORE, no mailbox selected',
+        answer('BAD Error in IMAP command UID STORE: No mailbox selected.'),
+        false,
+      ),
+      (
+        'folder named like a state',
+        answer('BAD Mailbox "Not selected" in this state: name too long'),
+        true,
+      ),
+      (
+        'Exchange invalid state',
+        answer('BAD Command received in Invalid state.'),
+        false,
+      ),
+      (
+        'Cyrus select first',
+        answer('BAD Please select a mailbox first'),
+        false,
+      ),
+      (
+        'BAD in this state',
+        answer('BAD Command not allowed in this state'),
+        false
+      ),
+      ('BAD no mailbox selected', answer('BAD No mailbox selected'), false),
+      ('BAD not authenticated', answer('BAD Not authenticated'), false),
+      ('BAD please login', answer('BAD Please login first'), false),
+      ('BAD [UNAVAILABLE]', answer('BAD [UNAVAILABLE] try later'), false),
+      ('NO (prefix cut off)', answer('[CANNOT] Invalid flag'), false),
+      ('enough_mail timeout', answer('timeout'), false),
+      ('socket error', const SocketException('BAD gateway'), false),
+      ('not an IMAP error', Exception('BAD Invalid flag'), false),
+    ]) {
+      test('$name → $expected', () {
+        expect(isImapPermanentBad(error), expected);
+      });
+    }
+
+    test('imapBadText quotes the server', () {
+      expect(imapBadText(answer('BAD Invalid flag')), 'BAD Invalid flag');
+      expect(imapBadText(answer('Mailbox does not exist')), isNull);
+    });
+  });
+
   group('confirmImapMailboxGone', () {
     imap.ImapException no(String text) =>
         imap.ImapException(imap.ImapClient(), text);

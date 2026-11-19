@@ -1875,12 +1875,16 @@ What remains after phase 6, with where it is handled today:
   does then was not tested. Not measured on large accounts.
   Drift change streams are per connection, so a background write
   refreshes the foreground lists only at their next query.
-- **IMAP `BAD` is treated as transient.** Only `NO` with a permanent
-  response code (`[CANNOT]`, `[NOPERM]`, …) refuses a change at once; a
-  `BAD` (a command the server cannot parse, e.g. a path or flag it
-  rejects) is retried with backoff and ends `stuck` after 5 attempts, not
-  `failed`, so it keeps folding and is retried for good with a long
-  backoff instead of being listed with Retry / Discard.
+- **IMAP `BAD` is classified by its text** (#1316, was: always
+  transient). A tagged `BAD` to a change's command (a flag or path the
+  server rejects) fails the change at once, listed with Retry / Discard
+  and an App Log warn with the server's text. A `BAD` whose text points at
+  the connection's state ("not allowed in this state", "no mailbox
+  selected", "not authenticated") or carries a "try later" code is retried
+  as before, since a fresh connection may fix it (SYNC.md §6, "IMAP
+  `BAD`"). Left open: the rule matches phrases, so a server whose `BAD`
+  for a state problem words it otherwise fails a change that a retry would
+  have applied; Retry sends it again.
 - **Ops still carry UIDs.** §3 wanted ops to resolve the server location
   from the row's `srv_*` columns at flush time. Queued IMAP payloads still
   hold the UID, folder and UIDVALIDITY they were queued with, and the
