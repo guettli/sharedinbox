@@ -1,43 +1,33 @@
-# Betterleaks config. Used by the pre-commit hook (see .pre-commit-config.yaml).
-# Scan everything: betterleaks dir . --config .betterleaks.toml
+# Betterleaks config, used by the pre-commit hook (see .pre-commit-config.yaml).
+# Scan all files: betterleaks dir . --config .betterleaks.toml
 #
-# A top-level "filter" REPLACES the global filter of the built-in config.
-# So the first part below is a copy of the default global filter of
-# betterleaks v1.10.1 (betterleaks config show). Re-sync it when upgrading.
-# The second part holds the excludes for this repo.
-
-filter = '''
-// --- default global filter (betterleaks v1.10.1) ---
-(matchesAny(finding["secret"], [
-  `(?i)^true|false|null$`,
-  `^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$`,
-  `^\$(?:\d+|{\d+})$`,
-  `^\$(?:[A-Z_]+|[a-z_]+)$`,
-  `^\${(?:[A-Z_]+|[a-z_]+)}$`,
-  `^\{\{[ \t]*[\w ().|]+[ \t]*}}$`,
-  `^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$`,
-  `^%(?:[A-Z_]+|[a-z_]+)%$`,
-  `^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$`,
-  `^\{\d{0,2}}$`,
-  `^@(?:[A-Z_]+|[a-z_]+)@$`,
-  `^/Users/(?i)[a-z0-9]+/[\w .-/]+$`,
-  `^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$`
-]) || containsAny(finding["secret"], [
-  "abcdefghijklmnopqrstuvwxyz",
-  "014df517-39d1-4453-b7b3-9930c563627c"
-]))
-
-|| (
-  // Code-duplication baseline: "key" holds content hashes.
-  (attributes["path"] == "duplication-baseline.json")
-  // Tests and docs use fake credentials against local Stalwart.
-  || (finding["rule_id"] startsWith "generic-" && filter.matchesAny(attributes["path"], [`^test/`]))
-  || (finding["rule_id"] startsWith "generic-" && filter.matchesAny(attributes["path"], [`\.md$`]) && filter.containsAny(finding["line"], ["\"secret\")"]))
-  // References to env vars and doc comments, not values.
-  || (attributes["path"] == "Taskfile.yml" && filter.containsAny(finding["line"], ["env://GMAIL_PASSWORD"]))
-  || (attributes["path"] == "lib/core/sync/account_sync_manager.dart" && filter.containsAny(finding["line"], ["user:pass@host"]))
-)
-'''
+# Inherits the built-in rules and filters. The [[allowlists]] below are added
+# on top of them (unlike a top-level `filter`, which would replace the
+# built-in global filter in betterleaks v1).
 
 [extend]
 useDefault = true
+
+[[allowlists]]
+description = "Code-duplication baseline: key holds content hashes"
+paths = ['''^duplication-baseline\.json$''']
+
+[[allowlists]]
+description = "Tests use fake credentials against local Stalwart"
+targetRules = ["generic-api-key", "generic-password", "generic-credential-uri"]
+paths = ['''^test/''']
+
+[[allowlists]]
+description = "Docs log in with the fake password 'secret'"
+condition = "AND"
+targetRules = ["generic-api-key", "generic-password", "generic-credential-uri"]
+paths = ['''\.md$''']
+regexTarget = "line"
+regexes = ['''"secret"\)''']
+
+[[allowlists]]
+description = "References to env vars and doc comments, not values"
+condition = "AND"
+paths = ['''^Taskfile\.yml$''', '''^lib/core/sync/account_sync_manager\.dart$''']
+regexTarget = "line"
+regexes = ['''env://GMAIL_PASSWORD''', '''user:pass@host''']
