@@ -125,3 +125,10 @@ repos:
         entry: bash -c 'cd "$(git rev-parse --show-toplevel)" && bash scripts/test_run_firebase_test.sh'
         pass_filenames: false
         files: ^scripts/(run_firebase_test|test_run_firebase_test)\.sh$
+
+  # Block commits that contain secrets. Config with excludes: .betterleaks.toml
+  - repo: https://github.com/betterleaks/betterleaks
+    rev: v1.10.1
+    hooks:
+      - id: betterleaks
+        args: [--config, .betterleaks.toml]
