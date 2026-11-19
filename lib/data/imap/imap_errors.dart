@@ -41,36 +41,42 @@ bool isImapNonexistent(Object error) =>
 /// e.g. a plain "not found") is checked with a LIST over [client]: gone
 /// when a listing that has INBOX does not have [path]. An empty listing, one
 /// without INBOX, a failed LIST, any other error or a lost connection say
-/// nothing: false.
+/// nothing: false. INBOX itself is never gone (RFC 3501 §5.1: every account
+/// has one), whatever the server answers.
 ///
 /// The LIST is the account's full `LIST "" *`, not one of [path] alone:
 /// enough_mail 2.1.7 encodes a LIST pattern's last segment only, so a path
 /// with a non-ASCII parent would list nothing and look gone; the full
-/// listing also shows whether the answer is complete (INBOX).
+/// listing also shows whether the answer is complete (INBOX). Its verdict
+/// is kept per connection and path, so a pass that hits the same folder
+/// again (a flush of several changes) lists once.
 Future<bool> confirmImapMailboxGone(
   ImapClient client,
   String path,
   Object error,
 ) async {
+  if (path.toUpperCase() == 'INBOX') return false;
   if (isImapNonexistent(error)) return true;
   if (!isImapMailboxNotFound(error) || isImapConnectionLost(error)) {
     return false;
   }
   if (!client.isConnected) return false;
+  final verdicts = _listVerdicts[client] ??= {};
+  if (verdicts[path] case final known?) return known;
+  final bool gone;
   try {
     final listed = await client.listMailboxes(recursive: true);
-    if (!listed.any((m) => m.path.toUpperCase() == 'INBOX')) return false;
-    final isInbox = path.toUpperCase() == 'INBOX';
-    return !listed.any(
-      (m) =>
-          m.path == path ||
-          m.encodedPath == path ||
-          (isInbox && m.path.toUpperCase() == 'INBOX'),
-    );
+    gone = listed.any((m) => m.path.toUpperCase() == 'INBOX') &&
+        !listed.any((m) => m.path == path || m.encodedPath == path);
   } catch (_) {
+    // Not kept: the next try may get an answer.
     return false;
   }
+  return verdicts[path] = gone;
 }
+
+/// [confirmImapMailboxGone]'s LIST verdicts, per connection and path.
+final _listVerdicts = Expando<Map<String, bool>>('imapListVerdicts');
 
 /// Returns true when [error] is a `NO` with a response code saying the
 /// command can never succeed as sent (RFC 5530): `[CANNOT]`, `[NOPERM]`,

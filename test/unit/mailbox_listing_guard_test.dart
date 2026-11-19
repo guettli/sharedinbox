@@ -1,7 +1,9 @@
 // A folder and its cached mail are removed only on evidence that is not a
-// server or connection glitch (#1312): an empty or partial folder listing is
-// not trusted until the next listing confirms it, and a SELECT error removes
-// a folder only on `NO [NONEXISTENT]` or a LIST without it.
+// server or connection glitch (#1312): a folder listing that is empty, leaves
+// out the inbox or a role folder, or most folders is not trusted; a folder it
+// left out is removed only when the server confirms it is gone (or after a
+// minimum time and number of listings without an answer), and a SELECT error
+// removes a folder only on `NO [NONEXISTENT]` or a LIST without it.
 
 import 'dart:convert';
 
@@ -17,13 +19,18 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'db_test_helper.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/jmap_test_server.dart';
+import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
 
 const _account = statefulRigAccount;
 
-/// The folders of the IMAP rig: five, so three missing are "most".
+/// The folders of the IMAP rig: five, so three missing are "most". INBOX
+/// and Archive have a role, the others none.
 const _imapFolders = ['INBOX', 'Archive', 'Work', 'Lists', 'Old'];
+
+/// The folders without a role that most-missing tests leave out.
+const _plain = {'Work', 'Lists', 'Old'};
 
 Future<List<String>> _folderPaths(AppDatabase db, String accountId) async => [
       for (final r in await (db.select(db.mailboxes)
@@ -33,15 +40,19 @@ Future<List<String>> _folderPaths(AppDatabase db, String accountId) async => [
         r.path,
     ];
 
-Future<String?> _pendingPrune(AppDatabase db, String accountId) async =>
-    (await (db.select(db.syncStates)
-              ..where(
-                (t) =>
-                    t.accountId.equals(accountId) &
-                    t.resourceType.equals(pendingPruneKey),
-              ))
-            .getSingleOrNull())
-        ?.state;
+/// The marked paths ([pendingPruneKey]), or null without marks.
+Future<List<String>?> _marked(AppDatabase db, String accountId) async {
+  final raw = (await (db.select(db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.resourceType.equals(pendingPruneKey),
+            ))
+          .getSingleOrNull())
+      ?.state;
+  if (raw == null) return null;
+  return (jsonDecode(raw) as Map<String, dynamic>).keys.toList()..sort();
+}
 
 List<Map<String, Object?>> _events(
   RecordingAppLogRepository logs,
@@ -52,10 +63,13 @@ List<Map<String, Object?>> _events(
         if (r['event'] == event) r,
     ];
 
+Map<String, dynamic> _data(Map<String, Object?> row) =>
+    jsonDecode(row['dataJson']! as String) as Map<String, dynamic>;
+
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('IMAP', () {
+  group('IMAP listing', () {
     late RecordingAppLogRepository logs;
 
     setUp(() async {
@@ -69,6 +83,10 @@ void main() {
           for (final path in _imapFolders.skip(2)) (path, ''),
         ],
       );
+      for (final path in _plain) {
+        server.deliver(path, 'in-$path@test');
+        await emails.syncEmails(_account.id, path);
+      }
     });
     tearDown(() => db.close());
 
@@ -81,6 +99,14 @@ void main() {
             e.messageId ?? '',
         ];
 
+    const allMail = [
+      'a@test',
+      'filler@test',
+      'in-Lists@test',
+      'in-Old@test',
+      'in-Work@test',
+    ];
+
     test('an empty listing removes nothing and logs why', () async {
       server.listHides = (_) => true;
 
@@ -90,19 +116,21 @@ void main() {
         await _folderPaths(db, _account.id),
         unorderedEquals(_imapFolders),
       );
-      expect(await cachedMessageIds(), ['a@test', 'filler@test']);
+      expect(await cachedMessageIds(), allMail);
       final warn = _events(logs, 'mailbox.listing_untrusted').single;
       expect(warn['level'], AppLogLevel.warn);
-      final data = jsonDecode(warn['dataJson']! as String) as Map;
+      final data = _data(warn);
       expect(data['reason'], 'empty listing');
       expect(data['listed'], 0);
       expect(data['missing'], 5);
       expect(data['kept'], 5);
       expect(data['removed'], 0);
       expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
+      expect(await _marked(db, _account.id), [..._imapFolders]..sort());
     });
 
-    test('a listing without INBOX keeps INBOX and its mail', () async {
+    test('a listing without INBOX keeps it; listed again, the mark is cleared',
+        () async {
       server.listHides = (path) => path == 'INBOX';
 
       await listFolders();
@@ -110,25 +138,49 @@ void main() {
       expect(await _folderPaths(db, _account.id), contains('INBOX'));
       expect(await cachedMessageIds(), contains('a@test'));
       final warn = _events(logs, 'mailbox.listing_untrusted').single;
-      expect(
-        (jsonDecode(warn['dataJson']! as String) as Map)['reason'],
-        'inbox missing',
-      );
-      expect(jsonDecode((await _pendingPrune(db, _account.id))!), ['INBOX']);
+      expect(_data(warn)['reason'], 'inbox missing');
+      expect(await _marked(db, _account.id), ['INBOX']);
 
-      // The next listing has it again: nothing is pending any more.
       server.listHides = null;
       await listFolders();
-      expect(await _pendingPrune(db, _account.id), isNull);
+      expect(await _marked(db, _account.id), isNull);
       expect(
         await _folderPaths(db, _account.id),
         unorderedEquals(_imapFolders),
       );
+      final cleared = _events(logs, 'mailbox.listing_untrusted_cleared').single;
+      expect(cleared['level'], AppLogLevel.info);
+      expect(_data(cleared)['paths'], ['INBOX']);
     });
 
-    test('most folders missing, confirmed by the next listing: removed',
+    test('INBOX left out by many listings over hours is never removed',
         () async {
-      for (final path in ['Archive', 'Work', 'Lists']) {
+      server.listHides = (path) => path == 'INBOX';
+      server.statusError = (path) => path == 'INBOX' ? 'NO busy' : null;
+
+      for (var i = 0; i < 4; i++) {
+        await listFolders();
+        now = now.add(const Duration(hours: 1));
+      }
+
+      expect(await _folderPaths(db, _account.id), contains('INBOX'));
+      expect(await cachedMessageIds(), contains('a@test'));
+      expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
+    });
+
+    test('INBOX listed as "Inbox" keeps the cached INBOX', () async {
+      server.renameFolder('INBOX', 'Inbox');
+
+      await listFolders();
+
+      expect(await _folderPaths(db, _account.id), contains('INBOX'));
+      expect(await cachedMessageIds(), contains('a@test'));
+      expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
+    });
+
+    test('most folders gone: kept, then removed when the server confirms',
+        () async {
+      for (final path in _plain) {
         server.deleteFolder(path);
       }
 
@@ -137,28 +189,27 @@ void main() {
         await _folderPaths(db, _account.id),
         unorderedEquals(_imapFolders),
       );
-      expect(await cachedMessageIds(), contains('filler@test'));
+      expect(await cachedMessageIds(), allMail);
+      expect(await _marked(db, _account.id), ['Lists', 'Old', 'Work']);
       expect(
-        jsonDecode((await _pendingPrune(db, _account.id))!),
-        ['Archive', 'Lists', 'Work'],
+        _data(_events(logs, 'mailbox.listing_untrusted').single)['reason'],
+        'most folders missing',
       );
 
+      // Next listing: STATUS of each answers NONEXISTENT.
       await listFolders();
-      expect(await _folderPaths(db, _account.id), ['INBOX', 'Old']);
-      expect(await cachedMessageIds(), ['a@test']);
-      expect(await _pendingPrune(db, _account.id), isNull);
+      expect(await _folderPaths(db, _account.id), ['Archive', 'INBOX']);
+      expect(await cachedMessageIds(), ['a@test', 'filler@test']);
+      expect(await _marked(db, _account.id), isNull);
       expect(_events(logs, 'mailbox.removed_gone'), hasLength(3));
-      final last = _events(logs, 'mailbox.listing_untrusted').last;
-      final second = jsonDecode(last['dataJson']! as String) as Map;
+      final second = _data(_events(logs, 'mailbox.listing_untrusted').last);
       expect(second['removed'], 3);
+      expect(second['confirmedGone'], 3);
       expect(second['kept'], 0);
     });
 
-    test(
-        'most folders missing, not confirmed by the next listing: nothing lost',
-        () async {
-      server.listHides =
-          (path) => const {'Archive', 'Work', 'Lists'}.contains(path);
+    test('most folders left out, listed again: nothing lost', () async {
+      server.listHides = _plain.contains;
       await listFolders();
       server.listHides = null;
       await listFolders();
@@ -167,27 +218,192 @@ void main() {
         await _folderPaths(db, _account.id),
         unorderedEquals(_imapFolders),
       );
-      expect(await cachedMessageIds(), ['a@test', 'filler@test']);
-      expect(await _pendingPrune(db, _account.id), isNull);
+      expect(await cachedMessageIds(), allMail);
+      expect(await _marked(db, _account.id), isNull);
       expect(_events(logs, 'mailbox.listing_untrusted'), hasLength(1));
+      expect(_events(logs, 'mailbox.listing_untrusted_cleared'), hasLength(1));
       expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
     });
 
-    test('a few folders missing are removed at once', () async {
-      server.deleteFolder('Archive');
+    test('a glitch that outlasts many listings: STATUS finds them, kept',
+        () async {
+      server.listHides = _plain.contains;
+
+      for (var i = 0; i < 5; i++) {
+        await listFolders();
+        now = now.add(const Duration(hours: 1));
+      }
+
+      expect(
+        await _folderPaths(db, _account.id),
+        unorderedEquals(_imapFolders),
+      );
+      expect(await cachedMessageIds(), allMail);
+      expect(_data(_events(logs, 'mailbox.listing_untrusted').last), {
+        'reason': 'most folders missing',
+        'listed': 2,
+        'missing': 3,
+        'kept': 3,
+        'removed': 0,
+        'confirmedGone': 0,
+        'removedAfterWaiting': 0,
+        'stillThere': 3,
+        'keptPaths': unorderedEquals(_plain),
+      });
+    });
+
+    test('no definite answer: removed only after an hour and three listings',
+        () async {
+      server.listHides = _plain.contains;
+      server.statusError = (path) => _plain.contains(path) ? 'NO busy' : null;
+
+      // Three listings within minutes: kept.
+      for (var i = 0; i < 3; i++) {
+        await listFolders();
+        now = now.add(const Duration(minutes: 1));
+      }
+      expect(
+        await _folderPaths(db, _account.id),
+        unorderedEquals(_imapFolders),
+      );
+
+      // An hour after the first: removed.
+      now = now.add(const Duration(hours: 1));
+      await listFolders();
+      expect(await _folderPaths(db, _account.id), ['Archive', 'INBOX']);
+      expect(
+        _data(_events(logs, 'mailbox.listing_untrusted').last)[
+            'removedAfterWaiting'],
+        3,
+      );
+    });
+
+    test('one plain folder gone is removed at once', () async {
+      server.deleteFolder('Work');
 
       await listFolders();
 
       expect(
         await _folderPaths(db, _account.id),
-        unorderedEquals(['INBOX', 'Work', 'Lists', 'Old']),
+        unorderedEquals(['INBOX', 'Archive', 'Lists', 'Old']),
       );
-      expect(await cachedMessageIds(), ['a@test']);
+      expect(await cachedMessageIds(), isNot(contains('in-Work@test')));
       expect(_events(logs, 'mailbox.listing_untrusted'), isEmpty);
       expect(_events(logs, 'mailbox.removed_gone'), hasLength(1));
     });
 
-    test('a SELECT "not found" without NONEXISTENT of a listed folder keeps it',
+    test('a role folder gone: kept by the first listing, then confirmed',
+        () async {
+      server.deleteFolder('Archive');
+
+      await listFolders();
+      expect(await _folderPaths(db, _account.id), contains('Archive'));
+      expect(
+        _data(_events(logs, 'mailbox.listing_untrusted').single)['reason'],
+        'role folder missing',
+      );
+
+      await listFolders();
+      expect(await _folderPaths(db, _account.id), isNot(contains('Archive')));
+      expect(await cachedMessageIds(), isNot(contains('filler@test')));
+    });
+
+    test('a stand-in folder is kept by every untrusted listing', () async {
+      await db.into(db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: '${_account.id}:Standin',
+              accountId: _account.id,
+              path: 'Standin',
+              name: 'Standin',
+              isLocal: const Value(true),
+            ),
+          );
+      for (final path in _plain) {
+        server.deleteFolder(path);
+      }
+
+      // Untrusted, keeps everything.
+      await listFolders();
+      expect(await _folderPaths(db, _account.id), contains('Standin'));
+      // Untrusted still (most folders missing), though it removes them all.
+      await listFolders();
+      expect(
+        await _folderPaths(db, _account.id),
+        ['Archive', 'INBOX', 'Standin'],
+      );
+      // A trusted listing drops the stand-in nobody needs.
+      await listFolders();
+      expect(await _folderPaths(db, _account.id), ['Archive', 'INBOX']);
+    });
+  });
+
+  group('IMAP listing, three folders', () {
+    late RecordingAppLogRepository logs;
+
+    Future<void> open(List<(String, String)> folders) async {
+      logs = RecordingAppLogRepository();
+      rig = await StatefulImapRig.open(
+        StatefulFakeImapServer(
+          uidValidityByFolder: {
+            for (final (i, (path, _)) in folders.indexed) path: 7 * (i + 1),
+          },
+        ),
+        folders: folders,
+        appLogger: AppLogger(logs),
+      );
+    }
+
+    tearDown(() => db.close());
+
+    test('INBOX, Sent, Trash: a listing of INBOX only keeps Sent and Trash',
+        () async {
+      await open([('INBOX', 'inbox'), ('Sent', 'sent'), ('Trash', 'trash')]);
+      server.listHides = (path) => path != 'INBOX';
+
+      await rig.mailboxes.syncMailboxes(_account.id);
+
+      expect(
+        await _folderPaths(db, _account.id),
+        ['INBOX', 'Sent', 'Trash'],
+      );
+      expect(
+        _data(_events(logs, 'mailbox.listing_untrusted').single)['reason'],
+        'role folder missing',
+      );
+    });
+
+    test('2 of 3 plain folders missing is not trusted', () async {
+      await open([('INBOX', 'inbox'), ('A', ''), ('B', '')]);
+      server.listHides = (path) => path != 'INBOX';
+
+      await rig.mailboxes.syncMailboxes(_account.id);
+
+      expect(await _folderPaths(db, _account.id), ['A', 'B', 'INBOX']);
+      expect(
+        _data(_events(logs, 'mailbox.listing_untrusted').single)['reason'],
+        'most folders missing',
+      );
+    });
+  });
+
+  group('IMAP SELECT', () {
+    late RecordingAppLogRepository logs;
+
+    setUp(() async {
+      logs = await openRigInboxArchive();
+      server.deliver('Archive', 'b@test');
+      await emails.syncEmails(_account.id, 'Archive');
+    });
+    tearDown(() => db.close());
+
+    Future<List<String>> cachedMessageIds() async => [
+          for (final e in await (db.select(db.emails)
+                ..orderBy([(t) => OrderingTerm(expression: t.messageId)]))
+              .get())
+            e.messageId ?? '',
+        ];
+
+    test('"not found" without NONEXISTENT of a listed folder keeps it',
         () async {
       server.selectError =
           (path) => path == 'Archive' ? 'NO Mailbox not found (busy)' : null;
@@ -203,7 +419,7 @@ void main() {
       expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
     });
 
-    test('a SELECT "not found" with an empty LIST keeps the folder', () async {
+    test('"not found" with an empty LIST keeps the folder', () async {
       server.selectError =
           (path) => path == 'Archive' ? 'NO Mailbox not found' : null;
       server.listHides = (_) => true;
@@ -217,8 +433,7 @@ void main() {
       expect(_events(logs, 'mailbox.select_failed_kept'), hasLength(1));
     });
 
-    test('a SELECT "does not exist" confirmed by LIST removes the folder',
-        () async {
+    test('"does not exist" confirmed by LIST removes the folder', () async {
       // The fake answers a missing folder with a plain `NO Mailbox does not
       // exist`; the LIST then does not have it.
       server.deleteFolder('Archive');
@@ -240,31 +455,52 @@ void main() {
 
       expect(result.fetched, 0);
       expect(await _folderPaths(db, _account.id), isNot(contains('Archive')));
-      expect(await cachedMessageIds(), ['a@test']);
       expect(_events(logs, 'mailbox.removed_gone'), hasLength(1));
       expect(_events(logs, 'mailbox.select_failed_kept'), isEmpty);
     });
 
-    test('a flush keeps a change whose folder SELECT fails vaguely', () async {
-      await emails.setFlag((await rowOfA()).id, seen: true);
+    test('NO [NONEXISTENT] for INBOX does not remove it', () async {
+      server.selectError = (path) =>
+          path == 'INBOX' ? 'NO [NONEXISTENT] Mailbox does not exist' : null;
+
+      await expectLater(
+        emails.syncEmails(_account.id, 'INBOX'),
+        throwsA(anything),
+      );
+
+      expect(await _folderPaths(db, _account.id), contains('INBOX'));
+      expect(await cachedMessageIds(), contains('a@test'));
+    });
+
+    test(
+        'a flush keeps the changes of a folder whose SELECT fails vaguely; '
+        'one LIST and one log line per pass', () async {
+      for (final e in await db.select(db.emails).get()) {
+        if (e.mailboxPath == 'Archive') await emails.setFlag(e.id, seen: true);
+      }
       server.selectError =
-          (path) => path == 'INBOX' ? 'NO Mailbox not found (busy)' : null;
+          (path) => path == 'Archive' ? 'NO Mailbox not found (busy)' : null;
+      final listsBefore = server.listCount;
 
       await emails.flushPendingChanges(_account.id, 'pw');
 
-      final op = (await rigOps()).single;
-      expect(op.changeType, 'flag_seen');
-      expect(op.state, isNot('failed'));
-      expect(op.attempts, 1);
+      final ops = await rigOps();
+      expect(ops, hasLength(2));
+      for (final op in ops) {
+        expect(op.state, isNot('failed'));
+        expect(op.attempts, 1);
+      }
+      expect(server.listCount - listsBefore, 1);
       expect(_events(logs, 'pending_change.select_failed_kept'), hasLength(1));
       expect(_events(logs, 'pending_change.skipped_gone'), isEmpty);
-      expect(await rowsOfA(), hasLength(1));
+      expect(await cachedMessageIds(), contains('b@test'));
 
-      // Once SELECT works again, the change reaches the server.
+      // Once SELECT works again, the changes reach the server.
       server.selectError = null;
       now = now.add(const Duration(hours: 1));
       await emails.flushPendingChanges(_account.id, 'pw');
-      expect(server.find('a@test')!.message.seen, isTrue);
+      expect(server.find('filler@test')!.message.seen, isTrue);
+      expect(server.find('b@test')!.message.seen, isTrue);
     });
   });
 
@@ -283,7 +519,9 @@ void main() {
     late AppDatabase db;
     late RecordingAppLogRepository logs;
     late MailboxRepositoryImpl mailboxes;
-    // What the fake server lists, and what its `Mailbox/changes` reports.
+    // What the fake server has (`Mailbox/get` of ids), what its full
+    // listing shows, and what its `Mailbox/changes` reports.
+    late List<String> existing;
     late List<String> listed;
     late List<String> destroyed;
     var state = 0;
@@ -296,9 +534,33 @@ void main() {
           'totalEmails': 0,
         };
 
+    List<dynamic> mailboxGet(JmapCall call) {
+      final asked = call.args['ids'] == null ? null : call.ids;
+      return [
+        'Mailbox/get',
+        {
+          'accountId': 'acct1',
+          'state': 's${++state}',
+          'list': [
+            if (asked == null)
+              for (final id in listed) mailboxObject(id)
+            else
+              for (final id in asked)
+                if (existing.contains(id)) mailboxObject(id),
+          ],
+          'notFound': [
+            for (final id in asked ?? const <String>[])
+              if (!existing.contains(id)) id,
+          ],
+        },
+        call.callId,
+      ];
+    }
+
     setUp(() async {
       db = openTestDatabase();
       logs = RecordingAppLogRepository();
+      existing = [...allIds];
       listed = [...allIds];
       destroyed = [];
       state = 0;
@@ -310,19 +572,7 @@ void main() {
         httpClient: jmapFakeServer(
           accountId: 'acct1',
           handle: (call) => switch (call.method) {
-            'Mailbox/get' => [
-                'Mailbox/get',
-                {
-                  'accountId': 'acct1',
-                  'state': 's${++state}',
-                  'list': [
-                    for (final id in listed)
-                      if (call.args['ids'] == null || call.ids.contains(id))
-                        mailboxObject(id),
-                  ],
-                },
-                call.callId,
-              ],
+            'Mailbox/get' => mailboxGet(call),
             'Mailbox/changes' => [
                 'Mailbox/changes',
                 {
@@ -377,23 +627,26 @@ void main() {
       expect(_events(logs, 'mailbox.listing_untrusted'), hasLength(1));
     });
 
-    test('a Mailbox/get without the inbox role keeps the inbox', () async {
+    test(
+        'a Mailbox/get without the inbox keeps it while Mailbox/get of its '
+        'id finds it', () async {
       listed = ['mb-a', 'mb-b', 'mb-c', 'mb-d'];
 
+      await mailboxes.syncMailboxes(accountId);
       await mailboxes.syncMailboxes(accountId);
 
       expect(await _folderPaths(db, accountId), contains('mb-inbox'));
       expect(await mailCount(), 5);
-      final warn = _events(logs, 'mailbox.listing_untrusted').single;
       expect(
-        (jsonDecode(warn['dataJson']! as String) as Map)['reason'],
+        _data(_events(logs, 'mailbox.listing_untrusted').first)['reason'],
         'inbox missing',
       );
+      final last = _data(_events(logs, 'mailbox.listing_untrusted').last);
+      expect(last['stillThere'], 1);
     });
 
-    test('most mailboxes missing, confirmed by the next Mailbox/get: removed',
-        () async {
-      listed = ['mb-inbox', 'mb-d'];
+    test('most mailboxes destroyed: removed when notFound confirms', () async {
+      existing = listed = ['mb-inbox', 'mb-d'];
 
       await mailboxes.syncMailboxes(accountId);
       expect(await _folderPaths(db, accountId), unorderedEquals(allIds));
@@ -406,11 +659,11 @@ void main() {
       );
       expect(await mailCount(), 2);
       expect(await mailboxState(), isNotNull);
-      expect(await _pendingPrune(db, accountId), isNull);
+      expect(await _marked(db, accountId), isNull);
       expect(_events(logs, 'mailbox.removed_gone'), hasLength(3));
     });
 
-    test('most mailboxes missing, not confirmed: nothing lost', () async {
+    test('most mailboxes left out, listed again: nothing lost', () async {
       listed = ['mb-inbox', 'mb-d'];
       await mailboxes.syncMailboxes(accountId);
       listed = [...allIds];
@@ -419,14 +672,13 @@ void main() {
       expect(await _folderPaths(db, accountId), unorderedEquals(allIds));
       expect(await mailCount(), 5);
       expect(await mailboxState(), isNotNull);
-      expect(await _pendingPrune(db, accountId), isNull);
+      expect(await _marked(db, accountId), isNull);
       expect(_events(logs, 'mailbox.removed_gone'), isEmpty);
     });
 
     test('Mailbox/changes destroying a plain mailbox removes it', () async {
       await mailboxes.syncMailboxes(accountId);
       destroyed = ['mb-a'];
-      listed = ['mb-inbox', 'mb-b', 'mb-c', 'mb-d'];
 
       await mailboxes.syncMailboxes(accountId);
 
@@ -435,7 +687,7 @@ void main() {
       expect(_events(logs, 'mailbox.listing_untrusted'), isEmpty);
     });
 
-    test('Mailbox/changes destroying the inbox: kept until a listing confirms',
+    test('Mailbox/changes destroying the inbox: kept until confirmed',
         () async {
       await mailboxes.syncMailboxes(accountId);
       destroyed = ['mb-inbox'];
@@ -450,13 +702,13 @@ void main() {
       destroyed = [];
       await mailboxes.syncMailboxes(accountId);
       expect(await _folderPaths(db, accountId), contains('mb-inbox'));
-      expect(await _pendingPrune(db, accountId), isNull);
+      expect(await _marked(db, accountId), isNull);
       expect(await mailboxState(), isNotNull);
 
-      // Destroyed again, and the full listing confirms it: removed.
+      // Destroyed again, and the server confirms it: removed.
       destroyed = ['mb-inbox'];
       await mailboxes.syncMailboxes(accountId);
-      listed = ['mb-a', 'mb-b', 'mb-c', 'mb-d'];
+      existing = listed = ['mb-a', 'mb-b', 'mb-c', 'mb-d'];
       await mailboxes.syncMailboxes(accountId);
       expect(await _folderPaths(db, accountId), isNot(contains('mb-inbox')));
       expect(await mailCount(), 4);

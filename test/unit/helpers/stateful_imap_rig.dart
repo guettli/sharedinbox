@@ -59,6 +59,7 @@ class StatefulImapRig {
       accounts,
       imapConnect: (_, __, ___) async => server.connect(),
       appLogger: appLogger,
+      now: () => rig.now,
     );
     rig.emails = EmailRepositoryImpl(
       db,

@@ -193,8 +193,13 @@ class NoteRepositoryImpl implements NoteRepository {
         selected = await client.selectMailboxByPath(_notesFolder);
       } catch (e) {
         if (!isImapMailboxNotFound(e)) rethrow;
-        // Only a definite answer wipes the cached notes (#1312).
-        if (!await _notesFolderGone(client, account.id, e)) rethrow;
+        // Only a definite answer wipes the cached notes (#1312). With none
+        // cached there is nothing to lose, and no LIST is spent on the
+        // servers without a Notes folder that answer without NONEXISTENT.
+        if (await _hasNotesToProtect(account.id) &&
+            !await _notesFolderGone(client, account.id, e)) {
+          rethrow;
+        }
         await _handleNotesFolderMissing(account.id, 'imap');
         return;
       }
@@ -306,10 +311,18 @@ class NoteRepositoryImpl implements NoteRepository {
     }
   }
 
-  /// The Notes folder doesn't exist (yet) — the default on most servers.
-  /// Clears any stale checkpoint and drops orphaned local notes so the local
-  /// cache mirrors reality. This runs on every sync cycle, and every App Log
-  /// row is persisted, so it logs only when something was actually cleared.
+  /// Whether [accountId] has notes a missing Notes folder would wipe: a
+  /// synced note or a queued delete (a note still to upload is kept anyway).
+  Future<bool> _hasNotesToProtect(String accountId) async =>
+      (await (_db.select(_db.emailNotes)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) & t.pendingUpload.equals(false),
+            )
+            ..limit(1))
+          .getSingleOrNull()) !=
+      null;
+
   /// Whether the Notes folder is gone for sure after its SELECT failed with
   /// [error] ([confirmImapMailboxGone]); when not, says so in the App Log
   /// (the cached notes are kept and the sync fails, tried again later).
@@ -333,6 +346,10 @@ class NoteRepositoryImpl implements NoteRepository {
     return false;
   }
 
+  /// The Notes folder doesn't exist (yet) — the default on most servers.
+  /// Clears any stale checkpoint and drops orphaned local notes so the local
+  /// cache mirrors reality. This runs on every sync cycle, and every App Log
+  /// row is persisted, so it logs only when something was actually cleared.
   Future<void> _handleNotesFolderMissing(
     String accountId,
     String transport,

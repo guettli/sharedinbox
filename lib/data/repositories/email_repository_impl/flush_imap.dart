@@ -36,13 +36,22 @@ class _ImapSourceMailboxGoneException implements Exception {
 /// `NONEXISTENT` and a LIST did not confirm it ([confirmImapMailboxGone]):
 /// the change is retried, never dropped as moot (#1312).
 class _ImapSourceSelectFailedException implements Exception {
-  _ImapSourceSelectFailedException(this.cause);
+  _ImapSourceSelectFailedException(this.cause, {required this.repeat});
 
   final Object cause;
+
+  /// The folder's SELECT failed so earlier in this pass (same connection):
+  /// not sent again, and not logged again.
+  final bool repeat;
 
   @override
   String toString() => cause.toString();
 }
+
+/// Per connection (one flush pass): the folders whose SELECT failed with an
+/// error that only reads like "no such folder", with that error. The
+/// pass's later changes of the folder fail the same way without a SELECT.
+final _vagueSelectFailures = Expando<Map<String, Object>>('vagueSelect');
 
 /// A queued IMAP change whose folder's UIDVALIDITY changed, and whose
 /// message is not found exactly once again by Message-ID.
@@ -703,21 +712,24 @@ extension _FlushImap on EmailRepositoryImpl {
         return (applied: 0, connectionLost: null);
       }
       if (e is _ImapSourceSelectFailedException) {
-        // Not a definite "gone": kept and retried with backoff.
+        // Not a definite "gone": kept and retried with backoff. Logged once
+        // per folder and pass.
         log('IMAP change ${row.id}: source folder not opened, kept ($e)');
-        unawaited(
-          _appLogger?.warn(
-            'pending_change.select_failed_kept',
-            'Could not open the folder of ${_describeChange(row)}; it reads '
-                'like "no such folder", but the server did not say '
-                'NONEXISTENT and still lists it (or its listing could not be '
-                'read): the change is kept and tried again',
-            accountId: account.id,
-            emailId: row.resourceId,
-            data: {'changeType': row.changeType},
-            error: e.cause,
-          ),
-        );
+        if (!e.repeat) {
+          unawaited(
+            _appLogger?.warn(
+              'pending_change.select_failed_kept',
+              'Could not open the folder of ${_describeChange(row)}; it reads '
+                  'like "no such folder", but the server did not say '
+                  'NONEXISTENT and still lists it (or its listing could not be '
+                  'read): the change is kept and tried again',
+              accountId: account.id,
+              emailId: row.resourceId,
+              data: {'changeType': row.changeType},
+              error: e.cause,
+            ),
+          );
+        }
         await _recordChangeError(row, e.cause);
         return (applied: 0, connectionLost: null);
       }
@@ -821,6 +833,10 @@ extension _FlushImap on EmailRepositoryImpl {
     final payload = jsonDecode(row.payload) as Map<String, dynamic>;
     // snooze/unsnooze payloads use 'src' for the source folder; all others use 'mailboxPath'.
     final mailboxPath = (payload['mailboxPath'] ?? payload['src']) as String;
+    final failedBefore = _vagueSelectFailures[client]?[mailboxPath];
+    if (failedBefore != null) {
+      throw _ImapSourceSelectFailedException(failedBefore, repeat: true);
+    }
     final imap.Mailbox selected;
     try {
       selected = await client.selectUnicodeMailboxByPath(mailboxPath);
@@ -829,7 +845,8 @@ extension _FlushImap on EmailRepositoryImpl {
       // Dropping the change as moot (and the row a move left) needs a
       // definite answer (#1312).
       if (!await confirmImapMailboxGone(client, mailboxPath, e)) {
-        throw _ImapSourceSelectFailedException(e);
+        (_vagueSelectFailures[client] ??= {})[mailboxPath] = e;
+        throw _ImapSourceSelectFailedException(e, repeat: false);
       }
       throw _ImapSourceMailboxGoneException(e);
     }

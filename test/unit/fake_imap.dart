@@ -60,9 +60,14 @@ class SelectingFakeImapClient extends FakeImapClient with StubMailboxList {
   /// that reads like "no such folder" for any other path is confirmed).
   final List<String> listedPaths;
 
+  /// How many LISTs were answered.
+  int listCalls = 0;
+
   @override
-  List<imap.Mailbox> get listedMailboxes =>
-      [for (final p in listedPaths) fakeMailbox(p)];
+  List<imap.Mailbox> get listedMailboxes {
+    listCalls++;
+    return [for (final p in listedPaths) fakeMailbox(p)];
+  }
 
   @override
   Future<imap.Mailbox> selectMailboxByPath(

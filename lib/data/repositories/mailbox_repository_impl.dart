@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/mailbox_fold.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/message_id_search.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
@@ -65,6 +66,14 @@ const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
 /// next listing that leaves them out too removes them.
 const pendingPruneKey = 'Mailbox:PendingPrune';
 
+/// What a check of one folder a listing left out says about it
+/// ([MailboxRepositoryImpl._prune]).
+enum _FolderCheck { gone, present, unknown }
+
+/// A folder a listing that was not trusted left out: since when, and how
+/// many listings (that one included) have left it out since.
+typedef _Missing = ({DateTime since, int listings});
+
 class MailboxRepositoryImpl implements MailboxRepository {
   MailboxRepositoryImpl(
     this._db,
@@ -72,9 +81,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
     ImapConnectFn imapConnect = connectImap,
     http.Client? httpClient,
     AppLogger? appLogger,
+    DateTime Function()? now,
   })  : _imapConnect = imapConnect,
         _httpClient = httpClient ?? http.Client(),
         _appLogger = appLogger,
+        _now = now ?? DateTime.now,
         _writer = MailboxStateWriter(_db, appLogger: appLogger);
 
   final AppDatabase _db;
@@ -82,6 +93,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final ImapConnectFn _imapConnect;
   final http.Client _httpClient;
   final AppLogger? _appLogger;
+  final DateTime Function() _now;
 
   /// The only writer of `mailboxes` (SYNC-REDESIGN.md §7).
   final MailboxStateWriter _writer;
@@ -235,7 +247,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
         listSeq,
         allListed: serverPaths,
       );
-      final trusted = await _prune(account.id, serverPaths, listSeq);
+      final (:trusted, settled: _) = await _prune(
+        account.id,
+        serverPaths,
+        listSeq,
+        jmap: false,
+        check: (path) => _imapFolderCheck(client, path, separator),
+      );
       final renamedAway = await _writer.renamedAwaySince(account.id, listSeq);
 
       for (final mb in mailboxes) {
@@ -364,17 +382,23 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final serverIds = {
       for (final mb in mailboxes) (mb as Map<String, dynamic>)['id'] as String,
     };
-    final trusted = await _prune(accountId, serverIds, readSeq);
+    final (:trusted, :settled) = await _prune(
+      accountId,
+      serverIds,
+      readSeq,
+      jmap: true,
+      check: (id) => _jmapFolderCheck(jmap, id),
+    );
 
     await _upsertJmapMailboxes(accountId, mailboxes, readSeq: readSeq);
     await _afterListing(accountId, readSeq, trusted: trusted);
-    // A listing not trusted keeps no state: the next sync lists in full
-    // again, and that listing confirms the absence or not
+    // While a folder it left out is kept, no state: the next sync lists in
+    // full again, and that listing confirms the absence or not
     // (`Mailbox/changes` would never name the folders it left out).
-    if (trusted) await _saveSyncState(accountId, 'Mailbox', newState);
+    if (settled) await _saveSyncState(accountId, 'Mailbox', newState);
     log(
       'JMAP full mailbox sync: ${mailboxes.length} mailboxes, state=$newState'
-      '${trusted ? '' : ' (not trusted, state not kept)'}',
+      '${settled ? '' : ' (folders kept unconfirmed, state not kept)'}',
     );
     return mailboxes.length;
   }
@@ -423,16 +447,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final row = await _writer.rowByPath(accountId, jmapId);
       if (row != null && !row.isLocal && _isInbox(row)) {
         inboxDestroyed = true;
-        await _savePendingPrune(
-          accountId,
-          {...await _loadPendingPrune(accountId), jmapId},
-        );
+        await _db.transaction(() async {
+          final marks = await _loadPendingPrune(accountId);
+          marks[jmapId] ??= (since: _now(), listings: 1);
+          await _savePendingPrune(accountId, marks);
+        });
         unawaited(
           _appLogger?.warn(
             'mailbox.listing_untrusted',
             'The server reports the inbox "${row.name}" destroyed: kept, and '
                 'the folder list is read in full again; it is removed only '
-                'when that listing does not have it either',
+                'when that listing does not have it either and the server '
+                'confirms it is gone',
             accountId: accountId,
             mailboxPath: jmapId,
             data: {'reason': 'inbox destroyed', 'destroyed': destroyed.length},
@@ -628,24 +654,42 @@ class MailboxRepositoryImpl implements MailboxRepository {
             ))
           .go();
 
-  /// The folders (paths; JMAP ids) a listing that was not trusted left out
-  /// ([_prune]): the next listing that leaves them out too removes them.
-  Future<Set<String>> _loadPendingPrune(String accountId) async {
+  /// The folders (paths; JMAP ids) listings that were not trusted left
+  /// out, with since when and how often ([_prune]).
+  Future<Map<String, _Missing>> _loadPendingPrune(String accountId) async {
     final raw = await _loadSyncState(accountId, pendingPruneKey);
     if (raw == null) return {};
     try {
-      return {...(jsonDecode(raw) as List<dynamic>).cast<String>()};
+      return {
+        for (final MapEntry(:key, :value)
+            in (jsonDecode(raw) as Map<String, dynamic>).entries)
+          key: _missingFromJson(value as Map<String, dynamic>),
+      };
     } catch (_) {
       return {};
     }
   }
 
-  Future<void> _savePendingPrune(String accountId, Set<String> paths) async {
-    if (paths.isEmpty) return _forgetSyncState(accountId, pendingPruneKey);
+  static _Missing _missingFromJson(Map<String, dynamic> json) => (
+        since: DateTime.parse(json['since'] as String),
+        listings: json['listings'] as int,
+      );
+
+  Future<void> _savePendingPrune(
+    String accountId,
+    Map<String, _Missing> marks,
+  ) async {
+    if (marks.isEmpty) return _forgetSyncState(accountId, pendingPruneKey);
     await _saveSyncState(
       accountId,
       pendingPruneKey,
-      jsonEncode(paths.toList()..sort()),
+      jsonEncode({
+        for (final path in marks.keys.toList()..sort())
+          path: {
+            'since': marks[path]!.since.toUtc().toIso8601String(),
+            'listings': marks[path]!.listings,
+          },
+      }),
     );
   }
 
@@ -744,7 +788,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// After a folder listing that started at [readSeq]: the acked ops it
   /// settles as a whole (creates found by a read, deletes), and the
   /// counterpart stand-in folders it did not find.
-  /// A listing that was not [trusted] ([_prune]) drops no stand-in either.
+  /// A listing that was not [trusted] ([_prune]: it had a reason to doubt
+  /// it, whatever it removed) drops no stand-in either.
   Future<void> _afterListing(
     String accountId,
     int readSeq, {
@@ -1013,41 +1058,100 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// read or ack wrote (just created or renamed): [MailboxStateWriter.prunable].
   ///
   /// A listing that may be a server or connection glitch is not trusted
-  /// (#1312, [_untrustedReason]): it is empty, or it would remove the
-  /// inbox, or at least [_untrustedMinMissing] cached server folders that
-  /// are more than half of them. Then only the folders the previous
-  /// untrusted listing left out too are removed (a confirmed absence: a
-  /// real mass deletion goes through with the second listing); the others
-  /// are kept and remembered in `sync_states` ([pendingPruneKey]), and App
-  /// Log warn `mailbox.listing_untrusted` gives the counts. Returns whether
-  /// the listing was trusted, i.e. no folder is held back.
-  Future<bool> _prune(
+  /// (#1312, [_untrustedReason]): it is empty, leaves out the inbox or a
+  /// folder with a role, or leaves out at least 2 cached server folders
+  /// that are more than half of them. The folders it left out are kept and
+  /// marked in `sync_states` ([pendingPruneKey]: since when, and by how many
+  /// listings). A marked folder that a later untrusted listing leaves out
+  /// again is asked about on its own ([check]: IMAP `STATUS`, JMAP
+  /// `Mailbox/get` of its id): removed when the server says it is gone
+  /// (`NONEXISTENT`, `notFound`); kept when it is there; when the answer
+  /// says neither, removed only once it has been missing for at least
+  /// [_pruneMinAge] and [_pruneMinListings] listings, so a glitch that
+  /// outlasts a sync interval does not confirm itself. The IMAP INBOX is
+  /// never removed (RFC 3501: every account has one). A listing that lists
+  /// a marked folder again clears its mark (App Log info
+  /// `mailbox.listing_untrusted_cleared`); App Log warn
+  /// `mailbox.listing_untrusted` gives the counts of an untrusted one.
+  ///
+  /// Returns whether the listing was [trusted] (no reason to doubt it) and
+  /// whether it is [settled] (no folder it left out is kept).
+  Future<({bool trusted, bool settled})> _prune(
     String accountId,
     Set<String> keepPaths,
-    int readSeq,
-  ) async {
+    int readSeq, {
+    required bool jmap,
+    required Future<_FolderCheck> Function(String path) check,
+  }) async {
     final candidates = await _writer.prunable(accountId, keepPaths, readSeq);
-    final pending = await _loadPendingPrune(accountId);
-    var remove = candidates;
-    var held = const <MailboxRow>[];
     final reason = await _untrustedReason(accountId, keepPaths, candidates);
+    bool neverRemoved(MailboxRow r) => !jmap && r.path.toUpperCase() == 'INBOX';
+    // The server is asked (network) before the marks are read and written
+    // in one transaction: only about folders an earlier listing marked.
+    final checks = <String, _FolderCheck>{};
     if (reason != null) {
-      remove = [
-        for (final r in candidates)
-          if (pending.contains(r.path)) r,
-      ];
-      held = [
-        for (final r in candidates)
-          if (!pending.contains(r.path)) r,
-      ];
+      final marked = await _loadPendingPrune(accountId);
+      for (final r in candidates) {
+        if (!marked.containsKey(r.path) || neverRemoved(r)) continue;
+        checks[r.path] = await check(r.path);
+      }
+    }
+    final now = _now();
+    final remove = <MailboxRow>[];
+    final held = <MailboxRow>[];
+    final confirmed = <String>[];
+    final aged = <String>[];
+    final present = <String>[];
+    final cleared = <String>[];
+    // One transaction: a concurrent listing (the folder diagnostics screen)
+    // reads the marks this one wrote, never a half.
+    await _db.transaction(() async {
+      final marks = await _loadPendingPrune(accountId);
+      final next = <String, _Missing>{};
+      for (final r in candidates) {
+        final mark = marks[r.path];
+        final missing = mark == null
+            ? (since: now, listings: 1)
+            : (since: mark.since, listings: mark.listings + 1);
+        if (reason == null && !neverRemoved(r)) {
+          remove.add(r);
+          continue;
+        }
+        if (mark != null && !neverRemoved(r)) {
+          final verdict = checks[r.path] ?? _FolderCheck.unknown;
+          if (verdict == _FolderCheck.gone) {
+            confirmed.add(r.path);
+            remove.add(r);
+            continue;
+          }
+          if (verdict == _FolderCheck.present) present.add(r.path);
+          if (verdict == _FolderCheck.unknown &&
+              now.difference(missing.since) >= _pruneMinAge &&
+              missing.listings >= _pruneMinListings) {
+            aged.add(r.path);
+            remove.add(r);
+            continue;
+          }
+        }
+        next[r.path] = missing;
+        held.add(r);
+      }
+      for (final path in marks.keys) {
+        if (keepPaths.contains(path)) cleared.add(path);
+      }
+      await _savePendingPrune(accountId, next);
+    });
+    if (reason != null) {
       unawaited(
         _appLogger?.warn(
           'mailbox.listing_untrusted',
           'The server listed ${keepPaths.length} folder(s) and left out '
               '${candidates.length} cached one(s) ($reason): this may be a '
-              'glitch, so ${held.length} of them are kept until the next '
-              'listing confirms they are gone; ${remove.length} the previous '
-              'listing left out too are removed',
+              'glitch, so ${held.length} of them are kept until the server '
+              'confirms they are gone; ${remove.length} are removed '
+              '(${confirmed.length} confirmed gone, ${aged.length} missing '
+              'for ${_pruneMinAge.inMinutes} min and $_pruneMinListings '
+              'listings)',
           accountId: accountId,
           data: {
             'reason': reason,
@@ -1055,14 +1159,25 @@ class MailboxRepositoryImpl implements MailboxRepository {
             'missing': candidates.length,
             'kept': held.length,
             'removed': remove.length,
+            'confirmedGone': confirmed.length,
+            'removedAfterWaiting': aged.length,
+            'stillThere': present.length,
             'keptPaths': [for (final r in held.take(50)) r.path],
           },
         ),
       );
     }
-    final heldPaths = {for (final r in held) r.path};
-    if (pending.length != heldPaths.length || !pending.containsAll(heldPaths)) {
-      await _savePendingPrune(accountId, heldPaths);
+    if (cleared.isNotEmpty) {
+      unawaited(
+        _appLogger?.info(
+          'mailbox.listing_untrusted_cleared',
+          'The server lists ${cleared.length} folder(s) again that an '
+              'earlier listing left out; they were kept and are no longer '
+              'marked',
+          accountId: accountId,
+          data: {'paths': cleared.take(50).toList()},
+        ),
+      );
     }
     for (final row in remove) {
       log('Mailbox "${row.path}" deleted on server — removing local cache');
@@ -1073,12 +1188,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
         appLogger: _appLogger,
       );
     }
-    return held.isEmpty;
+    return (trusted: reason == null, settled: held.isEmpty);
   }
 
-  /// A listing that leaves out at least this many cached server folders,
-  /// and more than half of them, is not trusted ([_prune]).
-  static const _untrustedMinMissing = 3;
+  /// How long a folder an untrusted listing left out is kept at least when
+  /// the server's answer about it is not definite ([_prune]).
+  static const _pruneMinAge = Duration(hours: 1);
+
+  /// How many listings (the first that left it out included) must leave out
+  /// a folder before it is removed without a definite answer ([_prune]).
+  static const _pruneMinListings = 3;
 
   /// Why a listing ([keepPaths]) that leaves out the cached folders
   /// [missing] is not trusted, or null when it is.
@@ -1090,7 +1209,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
     if (missing.isEmpty) return null;
     if (keepPaths.isEmpty) return 'empty listing';
     if (missing.any(_isInbox)) return 'inbox missing';
-    if (missing.length < _untrustedMinMissing) return null;
+    if (missing.any((r) => r.role?.isNotEmpty ?? false)) {
+      return 'role folder missing';
+    }
+    if (missing.length < 2) return null;
     final cached = (await (_db.select(_db.mailboxes)
               ..where(
                 (t) => t.accountId.equals(accountId) & t.isLocal.equals(false),
@@ -1104,6 +1226,63 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// The account's inbox: role `inbox`, or the IMAP INBOX.
   static bool _isInbox(MailboxRow row) =>
       row.role == 'inbox' || row.path.toUpperCase() == 'INBOX';
+
+  /// [_prune]'s question about the IMAP folder [path] a listing left out:
+  /// `STATUS` of it answers (there), or fails with `NONEXISTENT` or an error
+  /// a LIST confirms ([confirmImapMailboxGone]: gone); anything else says
+  /// nothing.
+  Future<_FolderCheck> _imapFolderCheck(
+    imap.ImapClient client,
+    String path,
+    String separator,
+  ) async {
+    try {
+      await client.statusMailbox(
+        imap.Mailbox(
+          encodedName: path,
+          encodedPath: encodeImapMailboxPath(path, separator),
+          pathSeparator: separator,
+          flags: [],
+        ),
+        [imap.StatusFlags.messages],
+      );
+      return _FolderCheck.present;
+    } catch (e) {
+      if (await confirmImapMailboxGone(client, path, e)) {
+        return _FolderCheck.gone;
+      }
+      return _FolderCheck.unknown;
+    }
+  }
+
+  /// [_prune]'s question about the JMAP mailbox [id] a listing left out:
+  /// `Mailbox/get` of it lists it (there) or names it in `notFound` (gone).
+  Future<_FolderCheck> _jmapFolderCheck(JmapClient jmap, String id) async {
+    try {
+      final responses = await jmap.call([
+        [
+          'Mailbox/get',
+          {
+            'accountId': jmap.accountId,
+            'ids': [id],
+            'properties': ['id'],
+          },
+          '0',
+        ],
+      ]);
+      final result = _responseArgs(responses, 0, 'Mailbox/get');
+      final list = result['list'];
+      if (list is List &&
+          list.any((m) => m is Map<String, dynamic> && m['id'] == id)) {
+        return _FolderCheck.present;
+      }
+      final notFound = result['notFound'];
+      if (notFound is List && notFound.contains(id)) return _FolderCheck.gone;
+      return _FolderCheck.unknown;
+    } catch (_) {
+      return _FolderCheck.unknown;
+    }
+  }
 
   @override
   Future<model.Mailbox> createMailboxWithRole(

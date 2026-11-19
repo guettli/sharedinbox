@@ -375,6 +375,9 @@ void main() {
       server.folders.remove('Archive');
 
       await rig.mailboxes.syncMailboxes(_acc.id);
+      // Archive has a role: the first listing without it keeps it, the
+      // next one removes it on the server's NONEXISTENT (#1312).
+      await rig.mailboxes.syncMailboxes(_acc.id);
 
       final change = await db.select(db.pendingChanges).getSingle();
       expect((change.changeType, change.state), ('rename_mailbox', 'failed'));
@@ -563,6 +566,9 @@ void main() {
       server.folders.remove('Archive');
 
       await rig.mailboxes.syncMailboxes(_acc.id);
+      // Archive has a role: the first listing without it keeps it, the
+      // next one removes it on the server's NONEXISTENT (#1312).
+      await rig.mailboxes.syncMailboxes(_acc.id);
 
       expect(await _ops(db), [
         ('create_mailbox', 'failed'),
@@ -676,6 +682,9 @@ void main() {
       expect(await _ops(db), [('rename_mailbox', 'acked')]);
       server.folders.remove('Old Mail');
 
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      // Archive has a role: the first listing without it keeps it, the
+      // next one removes it on the server's NONEXISTENT (#1312).
       await rig.mailboxes.syncMailboxes(_acc.id);
 
       expect(await _ops(db), isEmpty);
