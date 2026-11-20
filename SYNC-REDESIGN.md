@@ -1504,8 +1504,9 @@ As implemented, phase 5 is two PRs, both done:
      a subset of the mail or an ambiguous match is no rename. `serverPathChanged` follows it
      (`mailbox.renamed_elsewhere`). An empty or never-synced folder renamed
      on a server like Stalwart is not recognised: its queued changes fail
-     visibly as before. `messageIdSearchCriteria` (`lib/data/imap/`) is
-     shared with the flush's Message-ID search.
+     visibly as before (since #1315 it is, by its MAILBOXID, §10).
+     `messageIdSearchCriteria` (`lib/data/imap/`) is shared with the
+     flush's Message-ID search.
    - **Undo.** `undoFolderChange` (repository) / `undoLatest` (writer):
      a never-sent move or delete is cancelled; a sent move gets a move back
      to `fromParent`; a delete being sent or sent cannot be undone (worded
@@ -1571,7 +1572,8 @@ still rewritten when a folder's server path changes (an alias table was
 decided against in 5a); an IMAP folder renamed and moved at once on
 another client, or an empty or never-synced one renamed on a server that
 gives it a new UIDVALIDITY, is not followed (its queued changes fail
-visibly; a server MAILBOXID, RFC 8474, would close this); a counterpart stand-in for a
+visibly; since #1315 the server's MAILBOXID, RFC 8474, closes this where
+the server gives one, §10); a counterpart stand-in for a
 nested folder is made at the top level and adopted on JMAP only when the
 server's folder is top level too (otherwise it is dropped after the
 listing and the twin shows where its account reads it); a folder moved
@@ -1793,12 +1795,12 @@ As implemented, phase 6 is two PRs, both done:
      stays for a listing that stores the path before the op is claimed
      (another device's rename of the same folder); its log line now says
      "created, renamed or moved on this device".
-   - **RFC 8474 MAILBOXID: not done.** enough_mail 2.1.7 neither asks for
-     nor parses `MAILBOXID` (STATUS, LIST-EXTENDED or the SELECT response
-     code), so following folders by id needs a raw command and parser,
-     plus a stored id per folder (a schema change) and a migration that
-     fetches it; not cheap. `_followRenamesElsewhere` keeps its
-     UIDVALIDITY / Message-ID rules (§10).
+   - **RFC 8474 MAILBOXID: not done here; done in #1315 (§10).**
+     enough_mail 2.1.7 neither asks for nor parses `MAILBOXID` (STATUS,
+     LIST-EXTENDED or the SELECT response code), so following folders by
+     id needs a raw command and parser, plus a stored id per folder (a
+     schema change). `_followRenamesElsewhere` kept its UIDVALIDITY /
+     Message-ID rules.
    - **The payload rewrite on a path change** is documented in its final
      place, §7 ("Queued payloads follow a folder's new server path").
    - **App Log audit.** New warn lines where sync removed or rewrote local
@@ -1902,16 +1904,77 @@ What remains after phase 6, with where it is handled today:
   the Email id; left there: the periodic prune of a folder that runs
   between another client's move and the destination's `Email/changes`
   still deletes the row (a narrow window).
-- **A folder renamed or moved on another IMAP client** is followed only
-  when its UIDVALIDITY survives the RENAME and its cached Message-IDs are
-  found, or, on servers that give it a new UIDVALIDITY (Stalwart), when it
-  holds every cached Message-ID with exactly the cached count
-  (`_followRenamesElsewhere`). Not followed: an empty or never-synced
-  folder on such a server, a rename and a move at once (neither leaf nor
-  parent match), two candidates. Then its queued changes fail visibly
-  ("folder removed on the server") and its mail is fetched again under the
-  new path as new rows. RFC 8474 `MAILBOXID` would close this; enough_mail
-  does not support it (6b).
+- **A folder renamed or moved on another IMAP client** is followed by its
+  RFC 8474 `MAILBOXID` since #1315, on servers that advertise `OBJECTID`
+  (Stalwart does; probed: `STATUS … (MAILBOXID)`, LIST-STATUS and the
+  `MAILBOXID` code on CREATE, the id kept across RENAME while the
+  UIDVALIDITY changes). Every folder listing asks its per-folder `STATUS`
+  with `MAILBOXID` (`statusWithMailboxIdFromServer`, a raw command and
+  parser in `lib/data/imap/mailbox_id_status.dart`, as enough_mail 2.1.7
+  can neither ask nor parse it; no extra round trip) and stores it in
+  `mailboxes.srv_mailbox_id` (schema v79, through
+  `MailboxStateWriter.writeServer`). `_followRenamesElsewhere` asks the
+  new folders' ids with their STATUS; a vanished folder with a stored id
+  is followed to the new folder with the same id, whatever its name,
+  parent, UIDVALIDITY or contents: an empty or never-synced folder, a
+  rename and a move at once, two candidates holding the same mail. A new
+  folder whose id differs (or that another vanished folder's id names) is
+  never taken for it by its contents. A cached folder still listed at its
+  path but under another id was replaced there: it follows its own id too,
+  so two folders that swapped names each keep their row
+  (`MailboxStateWriter.serverPathsChanged` moves them through a stand-in
+  path); a replaced folder whose id is listed nowhere is removed when
+  another folder follows its id onto that path (deleted, another renamed
+  onto its name; its queued changes fail visibly) or when it has a delete
+  queued (the delete counts as done), and otherwise stays, with App Log
+  warn `mailbox.id_changed`: its rows give up their UIDs at once and its
+  checkpoint's UIDVALIDITY becomes -1 (not null: a change stamped with the
+  old one must count as stale), so the next sync re-matches its mail by
+  Message-ID. A replaced folder is removed only when every listed folder
+  answered with its id: when a STATUS failed or ids were refused on the
+  way, nothing is removed, no new folder and no changed id is stored, and
+  the listing is not trusted (reason "folder ids incomplete"), so the
+  #1312 marks and checks decide and the next complete listing follows the
+  folders. A `\Noselect` or `\NonExistent` folder (a shared-folders
+  root) does not count for that. A replaced folder whose new id is not
+  settled that way keeps its old id only until it has been replaced for
+  1 hour and 3 listings (`Mailbox:PendingReplace`, like the #1312
+  marks); then it takes the new one (`mailbox.id_changed`), so a STATUS
+  that always fails cannot keep listings in doubt. A new folder whose id
+  is known and that no cached folder has is stored also in doubt. Moves
+  that cannot all be made (two rows, the ones carried by a moving parent
+  and the ones that stay included, would end at one path) are left out
+  before any is made, and a row that stepped aside but could not move on
+  goes back to its path: none stays on a stand-in path. A move whose path
+  (or a carried subfolder's) is held by a row that does not move is not
+  made (no merge). Steps through a stand-in path
+  write no App Log line of their own. A subfolder moved out on
+  its own while its parent was renamed follows its id, not its parent. A
+  role guessed from the name does not stay with a renamed folder when a
+  listed folder gets that role (a renamed "Archive" next to a new one).
+  The STATUS parser matches items in any case, reads a literal folder
+  name, ignores another folder's STATUS, and fails on an OK without a
+  STATUS answer (then a plain STATUS is asked). Every listed folder's
+  STATUS is now asked before the renames are followed (one per folder, as
+  before; a connection lost on the way stops the listing before the
+  prune). App Log warn `mailbox.renamed_elsewhere` with `by: MAILBOXID`
+  and the id. The
+  checkpoint follows, so the new UIDVALIDITY is a UIDVALIDITY change of the
+  folder and its cached mail is re-matched by Message-ID (#1314). A
+  followed rename is no longer a folder missing from the listing, so a
+  role folder renamed elsewhere does not make the listing untrusted
+  (#1312). A server that advertises `OBJECTID` but refuses the item gets a
+  plain `STATUS` (asked once per connection). Left open: without
+  `OBJECTID`, and for a folder no listing stored the id of yet (the first
+  listing after the upgrade, or one created and renamed elsewhere before
+  any listing: the `MAILBOXID` code of our own CREATE is not read), the
+  old rules stay: the UIDVALIDITY survives and the cached Message-IDs are
+  found, or the folder holds every cached Message-ID with exactly the
+  cached count; not followed then: an empty or never-synced folder on a
+  server that gives it a new UIDVALIDITY, a rename and a move at once, two
+  candidates (the queued changes fail visibly, "folder removed on the
+  server", and the mail comes back as new rows). A folder with a queued
+  delete is never followed, by id neither (its delete counts as done).
 - **A UIDVALIDITY change re-matches by Message-ID** (#1314, §6): a cached
   row whose mail the renumbered folder still has keeps its id, body,
   downloaded attachments and queued changes. Left open: a mail without a

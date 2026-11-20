@@ -123,6 +123,12 @@ class Mailboxes extends Table {
   // [parentId] (`effectiveMailboxParent`).
   BoolColumn get localHidden => boolean().withDefault(const Constant(false))();
   TextColumn get localParent => text().nullable()();
+  // Added in schema v79 (#1315): the server's id of an IMAP folder, RFC
+  // 8474 `MAILBOXID` (`OBJECTID` capability), which a RENAME keeps. A
+  // folder listing stores it (STATUS); a folder another client renamed or
+  // moved is followed by it. Null: the server gives none, or no listing
+  // read it yet. Unused on JMAP (there [path] is the id).
+  TextColumn get srvMailboxId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -2260,6 +2266,10 @@ class AppDatabase extends _$AppDatabase {
       ]) {
         await _addColumnIfMissing(m, emails, column);
       }
+    }
+    if (from < 79 && await _tableExists(this, 'mailboxes')) {
+      // The server's folder id, filled by the next folder listing (#1315).
+      await _addColumnIfMissing(m, mailboxes, mailboxes.srvMailboxId);
     }
   }
 

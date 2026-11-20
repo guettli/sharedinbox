@@ -1416,9 +1416,17 @@ class EmailStateWriter {
   ///   never from a direct write of `local_mailbox_path`;
   /// - the local-only `snoozed_from_mailbox_path` and the folders stored in
   ///   Undo actions follow.
-  /// App Log warn `pending_change.folder_renamed` when queued data changed.
+  /// App Log warn `pending_change.folder_renamed` when queued data changed,
+  /// naming the folder [shownFrom] (default [from]); none when [quiet] (a
+  /// step through a stand-in path, logged by the step that ends it).
   /// Returns how many rows gave up a location.
-  Future<int> renameFolder(String accountId, String from, String to) =>
+  Future<int> renameFolder(
+    String accountId,
+    String from,
+    String to, {
+    String? shownFrom,
+    bool quiet = false,
+  }) =>
       _db.transaction(() async {
         final released = await _db.customUpdate(
           'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL '
@@ -1466,16 +1474,17 @@ class EmailStateWriter {
               .write(PendingChangesCompanion(payload: Value(rewritten)));
         }
         final rewrittenUndo = await _renameInUndoActions(accountId, from, to);
-        if (rewrittenOps > 0 || rewrittenUndo > 0) {
+        if (!quiet && (rewrittenOps > 0 || rewrittenUndo > 0)) {
+          final shown = shownFrom ?? from;
           _logOutside(
             (logger) => logger.warn(
               'pending_change.folder_renamed',
-              'Folder "$from" is "$to" on the server now: $rewrittenOps '
+              'Folder "$shown" is "$to" on the server now: $rewrittenOps '
                   'queued change(s) and $rewrittenUndo Undo '
                   'entr${rewrittenUndo == 1 ? 'y' : 'ies'} name the new folder',
               accountId: accountId,
               data: {
-                'from': from,
+                'from': shown,
                 'to': to,
                 'changes': rewrittenOps,
                 'undoActions': rewrittenUndo,

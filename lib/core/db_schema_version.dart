@@ -1,1 +1,1 @@
-const int dbSchemaVersion = 78;
+const int dbSchemaVersion = 79;
