@@ -1248,8 +1248,14 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     it went and whatever it holds (#1315): an empty folder under a new
     UIDVALIDITY, a rename and a move at once, two candidates with the same
     mail. A new folder whose id differs is never taken for it by its
-    contents. Without ids (no `OBJECTID`, or a folder no listing read the id
-    of yet), a vanished folder is taken for renamed to a new folder that
+    contents. A folder still listed at its path under another id was
+    replaced there: it follows its own id as well (two folders that swapped
+    names keep their rows), is removed when another folder follows its id
+    onto that path (deleted, another renamed onto its name: its queued
+    changes fail visibly) or when its delete is queued (done), and else
+    stays with its mail re-matched by Message-ID at the next sync (App Log
+    warn `mailbox.id_changed`). Without ids (no `OBJECTID`, or a folder no
+    listing read the id of yet), a vanished folder is taken for renamed to a new folder that
     shares its leaf (a move) or its parent (a rename) with it, when the
     match is unique both ways and the new folder either has the UIDVALIDITY
     of its sync checkpoint (STATUS; RFC 3501 servers that keep it across

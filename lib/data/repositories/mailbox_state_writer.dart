@@ -1176,7 +1176,12 @@ class MailboxStateWriter {
   /// later one drops it (App Log `op.contradicted`). A new row gets
   /// [displayPath]; the caller rebuilds the display paths after the
   /// listing ([rebuildDisplayPaths]). [mailboxId]: the server's id of
-  /// the folder (IMAP `MAILBOXID`, #1315), stored when given.
+  /// the folder (IMAP `MAILBOXID`, #1315), stored when given. Another id
+  /// than the one stored means another folder has this path now (deleted
+  /// and made again elsewhere; a folder the listing followed by its id has
+  /// moved away before this): its UIDs are forgotten as on a UIDVALIDITY
+  /// change, so the next sync re-matches its mail by Message-ID (#1314;
+  /// App Log warn `mailbox.id_changed`).
   Future<void> writeServer({
     required String accountId,
     required String path,
@@ -1214,6 +1219,21 @@ class MailboxStateWriter {
                 ),
               );
           return;
+        }
+        final stored = row.srvMailboxId;
+        if (stored != null && mailboxId != null && stored != mailboxId) {
+          await _forgetUidValidity(accountId, path);
+          _log(
+            (logger) => logger.warn(
+              'mailbox.id_changed',
+              'The folder "$path" has another server id now ($stored → '
+                  '$mailboxId): another folder took its name on the server. '
+                  'Its mail is matched again by Message-ID',
+              accountId: accountId,
+              mailboxPath: path,
+              data: {'from': stored, 'to': mailboxId, 'mailboxId': row.id},
+            ),
+          );
         }
         await (_db.update(_db.mailboxes)..where((t) => t.id.equals(row.id)))
             .write(
@@ -2203,6 +2223,80 @@ class MailboxStateWriter {
         await rebuildDisplayPaths(accountId);
         return released;
       });
+
+  /// The IMAP sync checkpoint of [path] forgets its UIDVALIDITY: the next
+  /// sync takes it for changed and re-matches the folder's mail by
+  /// Message-ID (#1314) instead of trusting the cached UIDs.
+  Future<void> _forgetUidValidity(String accountId, String path) async {
+    final key = 'IMAP:$path';
+    final old = await (_db.select(_db.syncStates)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.resourceType.equals(key),
+          ))
+        .getSingleOrNull();
+    if (old == null) return;
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(old.state) as Map<String, dynamic>;
+    } catch (_) {
+      return;
+    }
+    data['uidValidity'] = -1;
+    await _db.into(_db.syncStates).insertOnConflictUpdate(
+          SyncStatesCompanion.insert(
+            accountId: accountId,
+            resourceType: key,
+            state: jsonEncode(data),
+            syncedAt: old.syncedAt,
+          ),
+        );
+  }
+
+  /// Folders of [accountId] that the server has at other paths now, all
+  /// found by their server ids in one listing ([moves]: row id and new
+  /// path, parents first): renames elsewhere that may form a chain or a
+  /// swap (A and B trading names). Each moves by [serverPathChanged] once
+  /// its new path is free; a row whose new path another moving row still
+  /// holds waits for it, and in a cycle one row steps aside to a stand-in
+  /// path first, so no row is ever merged into another that is moving. A
+  /// row at a new path that is not moving is the caller's to remove first.
+  Future<void> serverPathsChanged(
+    String accountId,
+    List<(String rowId, String to)> moves,
+  ) =>
+      _db.transaction(() async {
+        final left = [...moves];
+        var aside = 0;
+        while (left.isNotEmpty) {
+          var progress = false;
+          for (final move in [...left]) {
+            final (rowId, to) = move;
+            final row = await rowById(rowId);
+            if (row == null || row.path == to) {
+              left.remove(move);
+              progress = true;
+              continue;
+            }
+            final there = await rowByPath(accountId, to);
+            if (there != null && left.any((m) => m.$1 == there.id)) continue;
+            await serverPathChanged(accountId, row.path, to);
+            left.remove(move);
+            progress = true;
+          }
+          if (progress) continue;
+          // A cycle: the first row steps aside, which frees its path.
+          final row = (await rowById(left.first.$1))!;
+          await serverPathChanged(
+            accountId,
+            row.path,
+            '$_asidePrefix${aside++}:${row.id}',
+          );
+        }
+      });
+
+  /// Prefix of the stand-in path a folder takes for a moment inside
+  /// [serverPathsChanged] (never stored past its transaction).
+  static const _asidePrefix = '\u0001aside:';
 
   /// Local row [local] turned out to be [cached], a row sync already
   /// stored for the server's folder: [local]'s ops move to [cached] and

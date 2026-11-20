@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -16,6 +17,7 @@ import 'package:test/test.dart';
 
 import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import '../unit/db_test_helper.dart';
+import '../unit/recording_app_log_repository.dart';
 import 'stalwart_harness.dart';
 
 void main() {
@@ -36,13 +38,14 @@ void main() {
     AppDatabase db,
     AccountRepositoryImpl accounts,
     MailboxRepositoryImpl mailboxes,
-  }) makeRepo() {
+  }) makeRepo({AppLogger? appLogger}) {
     final db = openTestDatabase();
     final accounts = AccountRepositoryImpl(db, MapSecureStorage());
     final mailboxes = MailboxRepositoryImpl(
       db,
       accounts,
       imapConnect: testImapConnect,
+      appLogger: appLogger,
     );
     return (db: db, accounts: accounts, mailboxes: mailboxes);
   }
@@ -484,7 +487,8 @@ void main() {
   test(
       'an empty folder another client renames and moves at once is followed '
       'by its MAILBOXID', () async {
-    final r = makeRepo();
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
     final emails = emailsOf(r);
     await r.accounts.addAccount(account, user.password);
     const before = 'M1315Empty';
@@ -519,6 +523,10 @@ void main() {
             ..where((t) => t.id.equals(row.id)))
           .getSingle();
       expect((moved.path, moved.srvMailboxId), (after, row.srvMailboxId));
+      await pumpEventQueue();
+      final followed =
+          logs.rows.singleWhere((l) => l.event == 'mailbox.renamed_elsewhere');
+      expect(followed.dataJson, contains('"by":"MAILBOXID"'));
       await expectMoveFollows(r, after, messages: 1);
       await emails.syncEmails('test', after);
       expect(

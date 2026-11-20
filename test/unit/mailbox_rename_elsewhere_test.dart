@@ -7,11 +7,11 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 
 import 'db_test_helper.dart';
+import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
 
@@ -19,33 +19,6 @@ const _acc = statefulRigAccount;
 
 void main() {
   setUpAll(configureSqliteForTests);
-
-  group('parseStatusLine', () {
-    test('reads the counts and the MAILBOXID', () {
-      expect(
-        parseStatusLine(
-          'STATUS "Work" (MESSAGES 3 UNSEEN 1 UIDVALIDITY 77 '
-          'MAILBOXID (eaaaaah))',
-        ),
-        (messages: 3, unseen: 1, uidValidity: 77, mailboxId: 'eaaaaah'),
-      );
-    });
-
-    test('a folder name that looks like an item does not count', () {
-      expect(
-        parseStatusLine('STATUS "MESSAGES 9 (x)" (MAILBOXID (F1))'),
-        (messages: 0, unseen: 0, uidValidity: null, mailboxId: 'F1'),
-      );
-    });
-
-    test('no MAILBOXID, or no STATUS response', () {
-      expect(
-        parseStatusLine('STATUS INBOX (MESSAGES 2)')?.mailboxId,
-        isNull,
-      );
-      expect(parseStatusLine('LIST () "/" "INBOX"'), isNull);
-    });
-  });
 
   late RecordingAppLogRepository logs;
   Future<void> open({required bool objectIds}) async {
@@ -66,6 +39,16 @@ void main() {
   Future<Email> mail(String messageId) =>
       (db.select(db.emails)..where((t) => t.messageId.equals(messageId)))
           .getSingle();
+  Future<void> forgetId(String path) => db.customStatement(
+        'UPDATE mailboxes SET srv_mailbox_id = NULL WHERE path = ?',
+        [path],
+      );
+  final byPattern = RegExp(r'"by":"([^"]+)"');
+  List<String?> renamedBy() => [
+        for (final r in logs.rows)
+          if (r.event == 'mailbox.renamed_elsewhere')
+            byPattern.firstMatch(r.dataJson ?? '')?.group(1),
+      ];
   Future<void> expectConsistent() async {
     expect(await EmailStateWriter(db).consistencyProblems(), isEmpty);
     expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
@@ -78,6 +61,23 @@ void main() {
     }
     await listFolders();
     if (messageIds.isNotEmpty) await emails.syncEmails(_acc.id, 'Work');
+  }
+
+  // Folders A and B with a mail each, synced, and a@test's move into A
+  // queued.
+  Future<({MailboxRow a, MailboxRow b})> foldersAAndB() async {
+    server
+      ..addFolder('A')
+      ..deliver('A', 'a1@test')
+      ..addFolder('B')
+      ..deliver('B', 'b1@test');
+    await listFolders();
+    await emails.syncEmails(_acc.id, 'A');
+    await emails.syncEmails(_acc.id, 'B');
+    final a = await folderAt('A');
+    final b = await folderAt('B');
+    await emails.moveEmail((await rowOfA()).id, 'A');
+    return (a: a, b: b);
   }
 
   group('with OBJECTID', () {
@@ -246,25 +246,200 @@ void main() {
 
     test(
         'a folder no listing read the id of yet keeps the old rules '
-        '(UIDVALIDITY), but not to a folder another one\'s id names', () async {
+        '(UIDVALIDITY)', () async {
       await workWith(const ['w@test']);
       final work = await folderAt('Work');
-      await db.customStatement(
-        'UPDATE mailboxes SET srv_mailbox_id = NULL WHERE path = ?',
-        ['Work'],
-      );
+      await forgetId('Work');
       server.renameFolder('Work', 'Job');
 
       await listFolders();
 
       expect((await folderById(work.id))!.path, 'Job');
-      expect(
-        logs.rows
-            .singleWhere((r) => r.event == 'mailbox.renamed_elsewhere')
-            .dataJson,
-        contains('"by":"UIDVALIDITY"'),
-      );
+      expect(renamedBy(), ['UIDVALIDITY']);
       expect((await folderById(work.id))!.srvMailboxId, isNotNull);
+    });
+
+    test(
+        'a folder without a stored id is not matched by contents to a new '
+        "folder another gone folder's id names", () async {
+      // Work (no stored id) and Other (with one) hold the same mail.
+      server
+        ..addFolder('Work')
+        ..deliver('Work', 'w@test')
+        ..addFolder('Other')
+        ..deliver('Other', 'w@test');
+      await listFolders();
+      await emails.syncEmails(_acc.id, 'Work');
+      await emails.syncEmails(_acc.id, 'Other');
+      final work = await folderAt('Work');
+      final other = await folderAt('Other');
+      await forgetId('Work');
+      // Work goes; Other is renamed next to where Work was. By contents
+      // alone Work2 would be Work's too, and the two matches would cancel
+      // each other out.
+      server
+        ..deleteFolder('Work')
+        ..renameFolder('Other', 'Work2', newUidValidity: true);
+
+      await listFolders();
+
+      expect((await folderById(other.id))!.path, 'Work2');
+      expect(await folderById(work.id), isNull);
+      expect(renamedBy(), ['MAILBOXID']);
+      await expectConsistent();
+    });
+
+    test(
+        'a gone folder with a stored id is not followed by contents to a new '
+        'folder with another id, even with its UIDVALIDITY and mail', () async {
+      await workWith(const ['w1@test', 'w2@test']);
+      final work = await folderAt('Work');
+      // Another folder with Work's UIDVALIDITY and mail, but its own id.
+      final old = server.folders.remove('Work')!;
+      server.folders['Job'] =
+          FakeServerFolder('Job', old.uidValidity, mailboxId: 'F-other')
+            ..messages.addAll(old.messages)
+            ..uidNext = old.uidNext;
+
+      await listFolders();
+
+      expect(await folderById(work.id), isNull);
+      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
+      await expectConsistent();
+    });
+
+    test(
+        'a rename queued here and one done elsewhere: the folder follows its '
+        "id, and the flush renames it to the user's name", () async {
+      await workWith(const []);
+      final work = await folderAt('Work');
+      await rig.mailboxes.renameMailbox(_acc.id, 'Work', 'Mine');
+      server.renameFolder('Work', 'Job', newUidValidity: true);
+
+      await listFolders();
+      expect((await folderById(work.id))!.path, 'Job');
+      await flush();
+      await listFolders();
+
+      final row = (await folderById(work.id))!;
+      expect((row.path, row.name), ('Mine', 'Mine'));
+      expect(server.folders['Mine']!.mailboxId, row.srvMailboxId);
+      expect(server.folders.keys, isNot(contains('Job')));
+      await expectConsistent();
+    });
+
+    test(
+        'two folders that swapped names elsewhere: each row follows its id, '
+        'with its mail and the change queued for it', () async {
+      final (:a, :b) = await foldersAAndB();
+      server
+        ..renameFolder('A', 'tmp')
+        ..renameFolder('B', 'A')
+        ..renameFolder('tmp', 'B');
+
+      await listFolders();
+
+      expect((await folderById(a.id))!.path, 'B');
+      expect((await folderById(b.id))!.path, 'A');
+      expect((await mail('a1@test')).srvMailboxPath, 'B');
+      expect((await mail('b1@test')).srvMailboxPath, 'A');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(move.payload, contains('"dest":"B"'));
+      expect(renamedBy(), ['MAILBOXID', 'MAILBOXID']);
+      expect(events(), isNot(contains('mailbox.id_changed')));
+      await flush();
+      expect(server.find('a@test')!.folder.path, 'B');
+      await expectConsistent();
+    });
+
+    test(
+        'a folder deleted elsewhere and another renamed onto its name: the '
+        'old row goes (its queued move fails), the renamed one takes the path',
+        () async {
+      final (:a, :b) = await foldersAAndB();
+      server
+        ..deleteFolder('A')
+        ..renameFolder('B', 'A');
+
+      await listFolders();
+
+      expect(await folderById(a.id), isNull);
+      expect((await folderById(b.id))!.path, 'A');
+      expect((await mail('b1@test')).srvMailboxPath, 'A');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(
+        (move.state, move.lastError),
+        ('failed', 'folder removed on the server'),
+      );
+      expect(renamedBy(), ['MAILBOXID']);
+      await expectConsistent();
+    });
+
+    test(
+        'a folder deleted and made again elsewhere under its name: the row '
+        'stays, says so, and its mail is matched again', () async {
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      final w = await mail('w@test');
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Work')
+        ..deliver('Work', 'w@test');
+
+      await listFolders();
+
+      final row = (await folderById(work.id))!;
+      expect(row.srvMailboxId, server.folders['Work']!.mailboxId);
+      expect(events(), contains('mailbox.id_changed'));
+      await emails.syncEmails(_acc.id, 'Work');
+      expect((await mail('w@test')).id, w.id);
+      expect(events(), contains('sync.uidvalidity_changed'));
+      await expectConsistent();
+    });
+
+    test(
+        'a subfolder moved out on its own while its parent was renamed and a '
+        'new folder took its old name below: it follows its id', () async {
+      server
+        ..addFolder('P')
+        ..addFolder('P/S')
+        ..addFolder('X');
+      await listFolders();
+      final p = await folderAt('P');
+      final sub = await folderAt('P/S');
+      server
+        ..renameFolder('P/S', 'X/S')
+        ..renameFolder('P', 'Q')
+        ..addFolder('Q/S');
+
+      await listFolders();
+
+      expect((await folderById(p.id))!.path, 'Q');
+      expect((await folderById(sub.id))!.path, 'X/S');
+      final newSub = await folderAt('Q/S');
+      expect(newSub.id, isNot(sub.id));
+      expect(newSub.srvMailboxId, server.folders['Q/S']!.mailboxId);
+      await expectConsistent();
+    });
+
+    test(
+        'a role guessed by name does not follow a renamed folder when a new '
+        'folder has that name', () async {
+      await listFolders();
+      final archive = await folderAt('Archive');
+      server
+        ..renameFolder('Archive', 'Old Archive', newUidValidity: true)
+        ..addFolder('Archive');
+
+      await listFolders();
+
+      expect((await folderById(archive.id))!.path, 'Old Archive');
+      expect((await folderById(archive.id))!.role, isNull);
+      expect((await folderAt('Archive')).role, 'archive');
+      expect(
+        (await db.select(db.mailboxes).get()).where((m) => m.role == 'archive'),
+        hasLength(1),
+      );
     });
 
     test(

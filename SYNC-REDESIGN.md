@@ -1919,8 +1919,26 @@ What remains after phase 6, with where it is handled today:
   parent, UIDVALIDITY or contents: an empty or never-synced folder, a
   rename and a move at once, two candidates holding the same mail. A new
   folder whose id differs (or that another vanished folder's id names) is
-  never taken for it by its contents. App Log warn
-  `mailbox.renamed_elsewhere` with `by: MAILBOXID` and the id. The
+  never taken for it by its contents. A cached folder still listed at its
+  path but under another id was replaced there: it follows its own id too,
+  so two folders that swapped names each keep their row
+  (`MailboxStateWriter.serverPathsChanged` moves them through a stand-in
+  path); a replaced folder whose id is listed nowhere is removed when
+  another folder follows its id onto that path (deleted, another renamed
+  onto its name; its queued changes fail visibly) or when it has a delete
+  queued (the delete counts as done), and otherwise stays, with App Log
+  warn `mailbox.id_changed` and its checkpoint's UIDVALIDITY forgotten, so
+  the next sync re-matches its mail by Message-ID. A subfolder moved out on
+  its own while its parent was renamed follows its id, not its parent. A
+  role guessed from the name does not stay with a renamed folder when a
+  listed folder gets that role (a renamed "Archive" next to a new one).
+  The STATUS parser matches items in any case, reads a literal folder
+  name, ignores another folder's STATUS, and fails on an OK without a
+  STATUS answer (then a plain STATUS is asked). Every listed folder's
+  STATUS is now asked before the renames are followed (one per folder, as
+  before; a connection lost on the way stops the listing before the
+  prune). App Log warn `mailbox.renamed_elsewhere` with `by: MAILBOXID`
+  and the id. The
   checkpoint follows, so the new UIDVALIDITY is a UIDVALIDITY change of the
   folder and its cached mail is re-matched by Message-ID (#1314). A
   followed rename is no longer a folder missing from the listing, so a

@@ -71,6 +71,24 @@ const pendingPruneKey = 'Mailbox:PendingPrune';
 /// ([MailboxRepositoryImpl._prune]).
 enum _FolderCheck { gone, present, unknown }
 
+/// One listed IMAP folder's STATUS: the read sequence taken right before
+/// it, and its answer or the error it failed with.
+typedef _ListedStatus = ({
+  int readSeq,
+  ImapFolderStatus? status,
+  (Object, StackTrace)? error,
+});
+
+/// A match [MailboxRepositoryImpl._followRenamesElsewhere] found for a
+/// cached folder ([row]): the listed paths it may be at now ([to]), by
+/// which rule ([how]), and the server id it went by ([id], MAILBOXID).
+typedef _RenameMatch = ({
+  List<String> to,
+  String how,
+  MailboxRow row,
+  String? id,
+});
+
 /// A folder a listing that was not trusted left out: since when, and how
 /// many listings (that one included) have left it out since.
 typedef _Missing = ({DateTime since, int listings});
@@ -234,9 +252,36 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // its ack moves the folder to the new path (phase 6b).
       final arriving =
           await _writer.pathsArrivingByRename(account.id, serverPaths);
+      // Every listed folder's STATUS first, each with the read sequence of
+      // its count (SYNC-REDESIGN.md §7): with its MAILBOXID where the
+      // server gives folder ids, which the renames elsewhere go by (#1315).
+      final statusOf = <String, _ListedStatus>{};
+      for (final mb in mailboxes) {
+        final readSeq = await EmailStateWriter(_db).nextReadSeq();
+        try {
+          final status = await _status(client, mb, [
+            imap.StatusFlags.messages,
+            imap.StatusFlags.unseen,
+            imap.StatusFlags.uidValidity,
+          ]);
+          statusOf[mb.path] = (readSeq: readSeq, status: status, error: null);
+        } catch (e, stack) {
+          statusOf[mb.path] =
+              (readSeq: readSeq, status: null, error: (e, stack));
+        }
+      }
+      // A connection lost on the way: no folder is followed or pruned on
+      // the STATUS answers that are missing.
+      if (!client.isConnected) {
+        for (final listed in statusOf.values) {
+          if (listed.error case (final e, final stack)) {
+            Error.throwWithStackTrace(e, stack);
+          }
+        }
+      }
       // A folder another client renamed or moved: its mail and the changes
       // queued for it follow instead of failing as "folder removed".
-      await _followRenamesElsewhere(
+      final followed = await _followRenamesElsewhere(
         client,
         account.id,
         [
@@ -246,6 +291,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         ],
         listSeq,
         allListed: serverPaths,
+        statusOf: statusOf,
       );
       final (:trusted, settled: _) = await _prune(
         account.id,
@@ -264,6 +310,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
       )..where((t) => t.accountId.equals(account.id)))
           .get();
       final existingRoles = {for (final r in existingRows) r.path: r.role};
+      // The roles the server's flags or the folder names give: a folder
+      // followed to another path keeps its old role only when no listed
+      // folder has it that way (a renamed "Archive" next to a new one).
+      final listedRoles = {
+        for (final mb in mailboxes)
+          if (_imapRole(mb) case final role?) role,
+      };
 
       for (final mb in mailboxes) {
         final path = mb.path;
@@ -289,20 +342,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
           continue;
         }
 
-        var unread = 0;
-        var total = 0;
-        String? mailboxId;
-        // The read sequence of this count (SYNC-REDESIGN.md §7).
-        final readSeq = await EmailStateWriter(_db).nextReadSeq();
-        try {
-          final status = await _status(client, mb, [
-            imap.StatusFlags.messages,
-            imap.StatusFlags.unseen,
-          ]);
-          unread = status.unseen;
-          total = status.messages;
-          mailboxId = status.mailboxId;
-        } catch (e, stack) {
+        final listed = statusOf[path]!;
+        final readSeq = listed.readSeq;
+        final unread = listed.status?.unseen ?? 0;
+        final total = listed.status?.messages ?? 0;
+        final mailboxId = listed.status?.mailboxId;
+        if (listed.error case (final e, final stack)) {
           log('STATUS skipped for $path: $e');
           // Surface the failure in the App Log so a folder that silently shows
           // no count (falling back to 0) is discoverable (#498).
@@ -322,7 +367,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // existing DB role so that manually-created folders (e.g. a user
         // who just created their Archive folder) keep their role across syncs
         // when the IMAP server does not expose a special-use attribute.
-        final role = _imapRole(mb) ?? existingRoles[path];
+        final kept = existingRoles[path];
+        final role = _imapRole(mb) ??
+            (followed.contains(path) && listedRoles.contains(kept)
+                ? null
+                : kept);
 
         // IMAP paths are already hierarchical + human-readable, so the
         // display path mirrors `path` (with a pending rename's name).
@@ -828,17 +877,24 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// IMAP folders another client renamed or moved (SYNC-REDESIGN.md §8,
   /// phase 5b; #1315): a rename elsewhere lists as a folder gone plus a new
   /// one. A cached folder the listing (its paths [allListed], started at
-  /// [readSeq]) no longer has, and that has no delete queued, is taken for
-  /// renamed to a new folder of [listed] (the listed folders less the paths
-  /// an own rename or move being sent puts a folder at), when that match is
-  /// unique both ways (one new folder for it, no other vanished folder
-  /// matching that one), and
+  /// [readSeq]; each listed folder's STATUS in [statusOf]) no longer has,
+  /// and that has no delete queued, is taken for renamed to a new folder of
+  /// [listed] (the listed folders less the paths an own rename or move
+  /// being sent puts a folder at), when that match is unique both ways (one
+  /// new folder for it, no other folder matching that one), and
   /// - on a server that gives folder ids (RFC 8474 `OBJECTID`), when the
   ///   cached folder has one (`srv_mailbox_id`, stored by an earlier
-  ///   listing): the new folder has the same `MAILBOXID` (STATUS), wherever
-  ///   it went (a rename and a move at once too) and whatever it holds (an
-  ///   empty folder too, under a new UIDVALIDITY too). A new folder whose id
-  ///   differs is never taken for it by its contents;
+  ///   listing): the listed folder has the same `MAILBOXID`, wherever it
+  ///   went (a rename and a move at once too) and whatever it holds (an
+  ///   empty folder too, under a new UIDVALIDITY too). A folder whose id
+  ///   differs is never taken for it by its contents. A cached folder still
+  ///   listed at its path but under another id is "replaced" there: it
+  ///   follows its id the same way (two folders that swapped names), and a
+  ///   replaced folder whose id is listed nowhere is removed when another
+  ///   one follows its id onto its path (deleted, another renamed onto its
+  ///   name), or when it has a delete queued (the delete counts as done);
+  ///   otherwise it stays, and [MailboxStateWriter.writeServer] re-matches
+  ///   its mail (`mailbox.id_changed`);
   /// - else (no ids, or a folder no listing read the id of yet), the new
   ///   folder shares its leaf (a move) or its parent (a rename) with it,
   ///   gives no id or one no other vanished folder has, and
@@ -851,32 +907,47 @@ class MailboxRepositoryImpl implements MailboxRepository {
   ///     many messages as are cached: an empty folder cannot be recognised
   ///     this way.
   /// The cached folder (its row id stays), its subfolders, its mail and the
-  /// queued changes naming it follow ([MailboxStateWriter.serverPathChanged];
-  /// App Log warn `mailbox.renamed_elsewhere`, saying which rule matched).
-  /// The checkpoint follows too: a new UIDVALIDITY is then a UIDVALIDITY
-  /// change of the folder, whose mail is re-matched by Message-ID (#1314).
-  /// Anything else is left to the prune: the changes queued for the folder
-  /// fail, listed.
-  Future<void> _followRenamesElsewhere(
+  /// queued changes naming it follow ([MailboxStateWriter.serverPathChanged],
+  /// [MailboxStateWriter.serverPathsChanged]; App Log warn
+  /// `mailbox.renamed_elsewhere`, saying which rule matched). The checkpoint
+  /// follows too: a new UIDVALIDITY is then a UIDVALIDITY change of the
+  /// folder, whose mail is re-matched by Message-ID (#1314). Anything else
+  /// is left to the prune: the changes queued for the folder fail, listed.
+  /// Returns the paths of the folders it moved.
+  Future<Set<String>> _followRenamesElsewhere(
     imap.ImapClient client,
     String accountId,
     List<imap.Mailbox> listed,
     int readSeq, {
     required Set<String> allListed,
+    required Map<String, _ListedStatus> statusOf,
   }) async {
+    final byId = supportsMailboxIds(client.serverInfo);
+    final rows = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    final listedPaths = {for (final mb in listed) mb.path};
+    String? listedIdAt(String path) =>
+        listedPaths.contains(path) ? statusOf[path]?.status?.mailboxId : null;
+    // The cached folders whose path the server gives another folder now.
+    final replaced = <MailboxRow>[];
+    if (byId) {
+      for (final r in rows) {
+        final id = r.srvMailboxId;
+        final now = listedIdAt(r.path);
+        if (id == null || now == null || now == id) continue;
+        if (r.isLocal || r.srvSeq > readSeq) continue;
+        if (await _writer.mayBeMoving(r.id)) continue;
+        replaced.add(r);
+      }
+    }
     final vanished = await _writer.prunable(accountId, allListed, readSeq);
-    if (vanished.isEmpty) return;
-    final cached = {
-      for (final r in await (_db.select(_db.mailboxes)
-            ..where((t) => t.accountId.equals(accountId)))
-          .get())
-        r.path,
-    };
+    if (vanished.isEmpty && replaced.isEmpty) return const {};
+    final cached = {for (final r in rows) r.path};
     final fresh = [
       for (final mb in listed)
-        if (!cached.contains(mb.path)) mb,
+        if (!cached.contains(mb.path)) mb.path,
     ];
-    if (fresh.isEmpty) return;
     final validityOf = <String, int>{};
     for (final v in vanished) {
       final raw = await _loadSyncState(accountId, 'IMAP:${v.path}');
@@ -887,29 +958,20 @@ class MailboxRepositoryImpl implements MailboxRepository {
         if (validity is int && validity != 0) validityOf[v.path] = validity;
       } catch (_) {}
     }
-    final freshStatus =
-        <String, ({int? validity, int messages, String? mailboxId})>{};
-    for (final mb in fresh) {
-      try {
-        final status = await _status(client, mb, [
-          imap.StatusFlags.uidValidity,
-          imap.StatusFlags.messages,
-        ]);
-        freshStatus[mb.path] = (
-          validity: status.uidValidity,
-          messages: status.messages,
-          mailboxId: status.mailboxId,
-        );
-      } catch (e) {
-        if (!client.isConnected) rethrow;
-      }
-    }
-    // The cached folder ids only count while the server gives ids.
-    final byId = supportsMailboxIds(client.serverInfo);
+    final freshStatus = {
+      for (final path in fresh)
+        if (statusOf[path]?.status case final status?) path: status,
+    };
+    // The paths a folder may have been renamed to, by id: the new ones
+    // and the ones another folder took.
+    final idTargets = {
+      for (final path in [...fresh, for (final r in replaced) r.path])
+        if (listedIdAt(path) case final id?) path: id,
+    };
     String? idOf(MailboxRow row) => byId ? row.srvMailboxId : null;
     // A new folder whose id a vanished folder has is that one's alone.
     final claimed = {
-      for (final v in vanished)
+      for (final v in [...vanished, ...replaced])
         if (idOf(v) case final id?) id,
     };
     final separator = imapSeparatorOf(listed);
@@ -923,11 +985,29 @@ class MailboxRepositoryImpl implements MailboxRepository {
       return cut < 0 ? path : path.substring(cut + separator.length);
     }
 
-    // Every vanished folder's matches first, so a match is taken only
-    // when it is unique both ways: one new folder for the vanished one,
-    // and no other vanished folder matching that new one.
-    final matchesOf =
-        <String, ({List<String> to, String how, String rowId, String? id})>{};
+    // Every folder's matches first, so a match is taken only when it is
+    // unique both ways: one new folder for the gone one, and no other
+    // folder matching that new one.
+    final matchesOf = <String, _RenameMatch>{};
+    final removeFirst = <MailboxRow>[];
+    for (final r in replaced) {
+      // Its delete counts as done, as for a vanished folder: the folder at
+      // its path is another one, never deleted for it.
+      if (await _hasQueuedDelete(r.id)) {
+        removeFirst.add(r);
+        continue;
+      }
+      final id = r.srvMailboxId!;
+      matchesOf[r.path] = (
+        to: [
+          for (final MapEntry(key: path, value: other) in idTargets.entries)
+            if (other == id) path,
+        ],
+        how: 'MAILBOXID',
+        row: r,
+        id: id,
+      );
+    }
     for (final v in vanished) {
       // A folder the user deleted (queued) is never followed: a wrong match
       // would delete another folder. Its delete counts as done by the
@@ -937,12 +1017,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final id = idOf(v);
       if (id != null) {
         final same = [
-          for (final MapEntry(key: path, value: status) in freshStatus.entries)
-            if (status.mailboxId == id) path,
+          for (final MapEntry(key: path, value: other) in idTargets.entries)
+            if (other == id) path,
         ];
         if (same.isNotEmpty) {
           // The server's own folder id: no guess by name or contents.
-          matchesOf[from] = (to: same, how: 'MAILBOXID', rowId: v.id, id: id);
+          matchesOf[from] = (to: same, how: 'MAILBOXID', row: v, id: id);
           continue;
         }
       }
@@ -950,7 +1030,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         for (final MapEntry(key: path, value: status) in freshStatus.entries)
           if ((leafOf(from) == leafOf(path) ||
                   parentOf(from) == parentOf(path)) &&
-              // Ids that differ (or that name another vanished folder): not
+              // Ids that differ (or that name another gone folder): not
               // this folder, whatever it holds.
               (status.mailboxId == null ||
                   (id == null && !claimed.contains(status.mailboxId))))
@@ -963,7 +1043,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
           validityOf.values.where((x) => x == validity).length == 1) {
         final byValidity = [
           for (final path in candidates)
-            if (freshStatus[path]!.validity == validity) path,
+            if (freshStatus[path]!.uidValidity == validity) path,
         ];
         if (byValidity.isNotEmpty) {
           // UIDVALIDITY is not unique across folders: the mail cached for
@@ -974,7 +1054,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
                 if (ids.isEmpty || await _holdsAll(client, path, ids)) path,
             ],
             how: 'UIDVALIDITY',
-            rowId: v.id,
+            row: v,
             id: null,
           );
           continue;
@@ -992,27 +1072,69 @@ class MailboxRepositoryImpl implements MailboxRepository {
               path,
         ],
         how: 'Message-ID',
-        rowId: v.id,
+        row: v,
         id: null,
       );
     }
-    // Parents first: their subfolders move with them.
+    // The unique matches, parents first: their subfolders move with them.
     final ordered = matchesOf.keys.toList()
       ..sort((a, b) => a.length.compareTo(b.length));
+    final taken = <String>[];
     for (final from in ordered) {
-      final (:to, :how, :rowId, :id) = matchesOf[from]!;
+      final to = matchesOf[from]!.to;
       if (to.length != 1) continue;
-      final target = to.single;
       final rivals = matchesOf.entries
-          .where((e) => e.key != from && e.value.to.contains(target));
-      if (rivals.isNotEmpty) continue;
-      // Where the folder is now: a parent's rename may have taken it along,
-      // to the target, or elsewhere when it was moved out on its own too.
-      final row = await _writer.rowById(rowId);
-      if (row == null || row.path == target) continue;
-      if (row.path != from && allListed.contains(row.path)) continue;
-      if (await _writer.rowByPath(accountId, target) != null) continue;
-      await _writer.serverPathChanged(accountId, row.path, target);
+          .where((e) => e.key != from && e.value.to.contains(to.single));
+      if (rivals.isEmpty) taken.add(from);
+    }
+    final byIdMoves = [
+      for (final from in taken)
+        if (matchesOf[from]!.how == 'MAILBOXID') from,
+    ];
+    // A replaced folder whose id is listed nowhere, onto whose path another
+    // folder follows its id: gone (deleted elsewhere, another renamed onto
+    // its name).
+    final movingIds = {for (final from in byIdMoves) matchesOf[from]!.row.id};
+    for (final r in replaced) {
+      if (movingIds.contains(r.id) || removeFirst.contains(r)) continue;
+      if (byIdMoves.any((from) => matchesOf[from]!.to.single == r.path)) {
+        removeFirst.add(r);
+      }
+    }
+    for (final r in removeFirst) {
+      log('Mailbox "${r.path}" is another folder on the server now — '
+          'removing local cache');
+      await removeLocalMailbox(_db, accountId, r.path, appLogger: _appLogger);
+    }
+    final before = {for (final r in rows) r.id: r.path};
+    if (byIdMoves.isNotEmpty) {
+      await _writer.serverPathsChanged(accountId, [
+        for (final from in byIdMoves)
+          (matchesOf[from]!.row.id, matchesOf[from]!.to.single),
+      ]);
+    }
+    // A subfolder that went where its parent went is no rename of its own.
+    bool carried(String from, String target) => taken.any(
+          (p) =>
+              p != from &&
+              from.startsWith('$p$separator') &&
+              target == '${matchesOf[p]!.to.single}${from.substring(p.length)}',
+        );
+    for (final from in taken) {
+      final (:to, :how, :row, :id) = matchesOf[from]!;
+      final target = to.single;
+      if (how != 'MAILBOXID') {
+        // Where the folder is now: a parent's rename may have taken it
+        // along, to the target, or onto a listed folder it is not.
+        final current = await _writer.rowById(row.id);
+        if (current == null || current.path == target) continue;
+        if (current.path != from && allListed.contains(current.path)) continue;
+        if (await _writer.rowByPath(accountId, target) != null) continue;
+        await _writer.serverPathChanged(accountId, current.path, target);
+      } else if ((await _writer.rowById(row.id))?.path != target) {
+        continue;
+      }
+      if (carried(from, target)) continue;
       final recognisedBy = how == 'MAILBOXID'
           ? 'its server folder id (MAILBOXID $id), whatever its UIDVALIDITY '
               'and contents'
@@ -1034,6 +1156,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
         ),
       );
     }
+    return {
+      for (final r in await (_db.select(_db.mailboxes)
+            ..where((t) => t.accountId.equals(accountId)))
+          .get())
+        if (before[r.id] case final old? when old != r.path) r.path,
+    };
   }
 
   /// `STATUS` of [box] for [flags], with the folder's `MAILBOXID` when the
