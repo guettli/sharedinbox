@@ -311,6 +311,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
       )..where((t) => t.accountId.equals(account.id)))
           .get();
       final existingRoles = {for (final r in existingRows) r.path: r.role};
+      // The ids cached folders have: a new folder with another id is no
+      // cached folder, also in a listing in doubt.
+      final cachedIds = {
+        for (final r in existingRows)
+          if (r.srvMailboxId case final id?) id,
+      };
       // The roles the server's flags or the folder names give: a folder
       // followed to another path keeps its old role only when no listed
       // folder has it that way (a renamed "Archive" next to a new one).
@@ -371,6 +377,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         // them may be a cached folder whose id did not come (the next
         // listing follows it there instead of making a second row).
         if (doubt != null &&
+            !_storableInDoubt(listed, cachedIds, client) &&
             await _writer.rowByPath(account.id, path) == null) {
           unawaited(
             _appLogger?.info(
@@ -961,7 +968,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     String? listedIdAt(String path) =>
         listedPaths.contains(path) ? statusOf[path]?.status?.mailboxId : null;
     // Every listed folder answered with its id: an id found nowhere is gone.
-    final idsComplete = byId && listedPaths.every((p) => listedIdAt(p) != null);
+    // A folder that cannot be selected (`\Noselect`, `\NonExistent`: a
+    // shared-folders root, a placeholder parent) holds no mail and may
+    // answer no STATUS; it does not count.
+    final idsComplete = byId &&
+        listed
+            .where((mb) => !_unselectable(mb))
+            .every((mb) => listedIdAt(mb.path) != null);
     // The cached folders whose path the server gives another folder now.
     final replaced = <MailboxRow>[];
     if (byId) {
@@ -1196,22 +1209,33 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final after = await (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    // A replaced folder whose id is listed nowhere while ids are missing:
+    // held (its id kept) until it has been so for [_pruneMinAge] and
+    // [_pruneMinListings] listings, as the #1312 marks; then the new id is
+    // taken ([MailboxStateWriter.writeServer]: `mailbox.id_changed`), so a
+    // STATUS that always fails cannot keep a listing in doubt for good.
+    final unsettled = [
+      for (final r in after)
+        if (byId && !idsComplete)
+          if (r.srvMailboxId case final id?)
+            if (listedIdAt(r.path) case final now? when now != id) r,
+    ];
+    final aged = await _ageReplaced(accountId, unsettled);
     // Ids missing (a STATUS failed, or ids were refused on the way) while
     // a cached folder with an id is gone or replaced: it may be at a path
     // whose id did not come.
     final unsure = supportsMailboxIds(client.serverInfo) &&
         !idsComplete &&
-        (replaced.isNotEmpty || vanished.any((v) => v.srvMailboxId != null));
+        (unsettled.any((r) => !aged.contains(r.id)) ||
+            vanished.any((v) => v.srvMailboxId != null));
     return (
       moved: {
         for (final r in after)
           if (before[r.id] case final old? when old != r.path) r.path,
       },
       hold: {
-        if (byId && !idsComplete)
-          for (final r in after)
-            if (r.srvMailboxId case final id?)
-              if (listedIdAt(r.path) case final now? when now != id) r.path,
+        for (final r in unsettled)
+          if (!aged.contains(r.id)) r.path,
       },
       doubt: blocked.isNotEmpty
           ? 'a folder renamed elsewhere waits for a path'
@@ -1220,6 +1244,77 @@ class MailboxRepositoryImpl implements MailboxRepository {
               : null,
     );
   }
+
+  /// Whether a new folder of a listing in doubt ([listed], its STATUS) is
+  /// stored anyway: its id is known and no cached folder has it, so it is
+  /// no cached folder whose id did not come.
+  bool _storableInDoubt(
+    _ListedStatus listed,
+    Set<String> cachedIds,
+    imap.ImapClient client,
+  ) {
+    final id = listed.status?.mailboxId;
+    return _idsUsable(client) && id != null && !cachedIds.contains(id);
+  }
+
+  /// `sync_states` key (per account) of the cached folders a listing found
+  /// replaced at their path while folder ids were missing (#1315): row id,
+  /// since when, and by how many listings ([_ageReplaced]).
+  static const _pendingReplaceKey = 'Mailbox:PendingReplace';
+
+  /// Records that the rows [unsettled] were replaced at their paths in one
+  /// more listing (marks of other rows are dropped) and returns the ids of
+  /// those replaced for at least [_pruneMinAge] and [_pruneMinListings]
+  /// listings.
+  Future<Set<String>> _ageReplaced(
+    String accountId,
+    List<MailboxRow> unsettled,
+  ) async {
+    final raw = await _loadSyncState(accountId, _pendingReplaceKey);
+    var marks = <String, _Missing>{};
+    if (raw != null) {
+      try {
+        marks = {
+          for (final MapEntry(:key, :value)
+              in (jsonDecode(raw) as Map<String, dynamic>).entries)
+            key: _missingFromJson(value as Map<String, dynamic>),
+        };
+      } catch (_) {}
+    }
+    final now = _now();
+    final next = <String, _Missing>{
+      for (final r in unsettled)
+        r.id: switch (marks[r.id]) {
+          final m? => (since: m.since, listings: m.listings + 1),
+          null => (since: now, listings: 1),
+        },
+    };
+    if (next.isEmpty) {
+      if (raw != null) await _forgetSyncState(accountId, _pendingReplaceKey);
+      return const {};
+    }
+    await _saveSyncState(
+      accountId,
+      _pendingReplaceKey,
+      jsonEncode({
+        for (final MapEntry(:key, :value) in next.entries)
+          key: {
+            'since': value.since.toUtc().toIso8601String(),
+            'listings': value.listings,
+          },
+      }),
+    );
+    return {
+      for (final MapEntry(:key, :value) in next.entries)
+        if (now.difference(value.since) >= _pruneMinAge &&
+            value.listings >= _pruneMinListings)
+          key,
+    };
+  }
+
+  /// A folder that cannot be selected: `\Noselect` or `\NonExistent`.
+  static bool _unselectable(imap.Mailbox mb) =>
+      mb.isNotSelectable || mb.hasFlag(imap.MailboxFlag.nonExistent);
 
   /// Whether [client]'s server gives folder ids and none was refused on
   /// this connection ([_status]).

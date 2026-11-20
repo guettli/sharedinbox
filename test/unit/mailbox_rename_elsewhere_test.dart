@@ -644,6 +644,101 @@ void main() {
     });
 
     test(
+        'a \\Noselect folder answers no STATUS but does not keep a listing in '
+        'doubt: a folder deleted and made again elsewhere takes its new id',
+        () async {
+      server.addFolder('Shared').noSelect = true;
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Work')
+        ..addFolder('New');
+
+      await listFolders();
+
+      expect(
+        (await folderById(work.id))!.srvMailboxId,
+        server.folders['Work']!.mailboxId,
+      );
+      expect(events(), contains('mailbox.id_changed'));
+      expect(events(), isNot(contains('mailbox.listing_untrusted')));
+      expect(events(), isNot(contains('mailbox.listing_skipped_unsure')));
+      expect((await folderAt('New')).srvMailboxId, isNotNull);
+    });
+
+    test(
+        'a selectable folder whose STATUS always fails: a replaced folder '
+        'keeps its id for a while, then takes the new one; a new folder with '
+        'an unknown id is stored meanwhile', () async {
+      server
+        ..addFolder('Bad')
+        ..statusError = (path) => path == 'Bad' ? 'NO broken' : null;
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      final oldId = work.srvMailboxId;
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Work')
+        ..addFolder('Fresh');
+
+      await listFolders();
+      expect((await folderById(work.id))!.srvMailboxId, oldId);
+      expect(events(), isNot(contains('mailbox.id_changed')));
+      expect(
+        (await folderAt('Fresh')).srvMailboxId,
+        server.folders['Fresh']!.mailboxId,
+      );
+
+      now = now.add(const Duration(hours: 1));
+      await listFolders();
+      expect((await folderById(work.id))!.srvMailboxId, oldId);
+      await listFolders();
+
+      expect(
+        (await folderById(work.id))!.srvMailboxId,
+        server.folders['Work']!.mailboxId,
+      );
+      expect(events(), contains('mailbox.id_changed'));
+      logs.rows.clear();
+      await listFolders();
+      expect(events(), isNot(contains('mailbox.listing_skipped_unsure')));
+      expect(events(), isNot(contains('mailbox.id_changed')));
+    });
+
+    test(
+        'moves that cannot all be made (a swap whose path a moving parent '
+        'would take a gone subfolder to) are not made: no row is left on a '
+        'stand-in path or merged', () async {
+      server
+        ..addFolder('Q/c')
+        ..addFolder('Z')
+        ..addFolder('P')
+        ..addFolder('P/c');
+      await listFolders();
+      final before = {
+        for (final m in await db.select(db.mailboxes).get()) m.id: m.path,
+      };
+      server
+        ..deleteFolder('P/c')
+        ..renameFolder('Q/c', 'tmp')
+        ..renameFolder('Z', 'Q/c')
+        ..renameFolder('tmp', 'Z')
+        ..renameFolder('P', 'Q');
+
+      await listFolders();
+
+      final rows = await db.select(db.mailboxes).get();
+      expect(rows.where((m) => m.path.startsWith('\u0001')), isEmpty);
+      for (final MapEntry(key: id, value: path) in before.entries) {
+        expect((await folderById(id))?.path, path);
+      }
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      expect(events(), contains('mailbox.listing_untrusted'));
+      await expectConsistent();
+    });
+
+    test(
         'a server that advertises OBJECTID but refuses the MAILBOXID item: '
         'plain STATUS, asked once per connection', () async {
       server.refusesMailboxIdStatus = true;

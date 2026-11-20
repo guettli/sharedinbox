@@ -1935,8 +1935,19 @@ What remains after phase 6, with where it is handled today:
   way, nothing is removed, no new folder and no changed id is stored, and
   the listing is not trusted (reason "folder ids incomplete"), so the
   #1312 marks and checks decide and the next complete listing follows the
-  folders. A move whose path (or a carried subfolder's) is held by a row
-  that does not move is not made (no merge). Steps through a stand-in path
+  folders. A `\Noselect` or `\NonExistent` folder (a shared-folders
+  root) does not count for that. A replaced folder whose new id is not
+  settled that way keeps its old id only until it has been replaced for
+  1 hour and 3 listings (`Mailbox:PendingReplace`, like the #1312
+  marks); then it takes the new one (`mailbox.id_changed`), so a STATUS
+  that always fails cannot keep listings in doubt. A new folder whose id
+  is known and that no cached folder has is stored also in doubt. Moves
+  that cannot all be made (two rows, the ones carried by a moving parent
+  and the ones that stay included, would end at one path) are left out
+  before any is made, and a row that stepped aside but could not move on
+  goes back to its path: none stays on a stand-in path. A move whose path
+  (or a carried subfolder's) is held by a row that does not move is not
+  made (no merge). Steps through a stand-in path
   write no App Log line of their own. A subfolder moved out on
   its own while its parent was renamed follows its id, not its parent. A
   role guessed from the name does not stay with a renamed folder when a

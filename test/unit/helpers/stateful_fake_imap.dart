@@ -53,6 +53,10 @@ class FakeServerFolder {
   /// The folder's RFC 8474 `MAILBOXID`, which a rename keeps; STATUS gives
   /// it when the server advertises OBJECTID. Null: none.
   final String? mailboxId;
+
+  /// A `\Noselect` folder (a shared-folders root, a placeholder parent):
+  /// listed with that flag; its STATUS fails.
+  bool noSelect = false;
   int uidNext = 1;
   int highestModSeq = 1;
   final SplayTreeMap<int, FakeServerMessage> messages = SplayTreeMap();
@@ -373,7 +377,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
             encodedName: f.path.split('/').last,
             encodedPath: f.path,
             pathSeparator: '/',
-            flags: [],
+            flags: [if (f.noSelect) imap.MailboxFlag.noSelect],
           ),
     ]);
   }
@@ -426,6 +430,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     }
     final folder = server.folders[box.encodedPath];
     if (folder == null) throw _no('NO [NONEXISTENT] Mailbox does not exist');
+    if (folder.noSelect) throw _no('NO Mailbox is not selectable');
     return box
       ..messagesExists = folder.messages.length
       ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length

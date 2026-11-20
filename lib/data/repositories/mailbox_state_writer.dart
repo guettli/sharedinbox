@@ -2291,59 +2291,101 @@ class MailboxStateWriter {
   /// Folders of [accountId] that the server has at other paths now, all
   /// found by their server ids in one listing ([moves]: row id and new
   /// path, parents first): renames elsewhere that may form a chain or a
-  /// swap (A and B trading names). A row moves by [serverPathChanged] once
-  /// the paths it and its subfolders take are free. One that another
-  /// moving row still holds waits for it; in a cycle a row steps aside to
-  /// a stand-in path first (quietly: the App Log names the folder's old
-  /// path at the step that ends it). A row whose new path (or a
-  /// subfolder's) is held by a row that does not move is not moved, so no
-  /// row is ever merged into another: returns the ids of those.
+  /// swap (A and B trading names).
+  ///
+  /// First the moves that cannot all be made are left out: where each row
+  /// ends (its move's path, or below the path of the nearest moving parent
+  /// that takes it along) must be a path no other row ends at, the rows
+  /// that do not move included; a move with a row of its own or one it
+  /// takes along in such a clash is not made, and the check repeats
+  /// without it. The ids of those are returned. Then a row moves by
+  /// [serverPathChanged] once the paths it and its subfolders take are
+  /// free, waiting for a row that still moves out of the way; in a cycle a
+  /// row steps aside to a stand-in path first (quietly: the App Log names
+  /// the folder's old path at the step that ends it). No row is merged
+  /// into another, and a row that stepped aside but could not move on goes
+  /// back to its path.
   Future<Set<String>> serverPathsChanged(
     String accountId,
     List<(String rowId, String to)> moves,
   ) =>
       _db.transaction(() async {
         final separator = await imapSeparator(accountId);
-        final origin = {
-          for (final r in await _rowsOf(accountId)) r.id: r.path,
+        final start = await _rowsOf(accountId);
+        final origin = {for (final r in start) r.id: r.path};
+        final targetOf = {for (final (id, to) in moves) id: to};
+        final active = {
+          for (final (id, _) in moves)
+            if (origin.containsKey(id) && origin[id] != targetOf[id]) id,
         };
-        final left = [...moves];
-        final skipped = <String>{};
+        final skipped = {
+          for (final (id, _) in moves)
+            if (!origin.containsKey(id)) id,
+        };
+        // The move that takes row [r] along: its own, or the nearest
+        // moving parent's; null when it stays.
+        String? moverOf(MailboxRow r) {
+          if (active.contains(r.id)) return r.id;
+          String? best;
+          for (final a in start) {
+            if (!active.contains(a.id)) continue;
+            if (!r.path.startsWith('${a.path}$separator')) continue;
+            if (best == null || a.path.length > origin[best]!.length) {
+              best = a.id;
+            }
+          }
+          return best;
+        }
+
+        String endOf(MailboxRow r) {
+          final mover = moverOf(r);
+          if (mover == null) return r.path;
+          return '${targetOf[mover]}${r.path.substring(origin[mover]!.length)}';
+        }
+
+        while (true) {
+          final at = <String, List<MailboxRow>>{};
+          for (final r in start) {
+            at.putIfAbsent(endOf(r), () => []).add(r);
+          }
+          final clashing = {
+            for (final rows in at.values)
+              if (rows.length > 1)
+                for (final r in rows)
+                  if (moverOf(r) case final mover?) mover,
+          };
+          if (clashing.isEmpty) break;
+          active.removeAll(clashing);
+          skipped.addAll(clashing);
+        }
+        final left = [
+          for (final (id, to) in moves)
+            if (active.contains(id)) (id, to),
+        ];
         var aside = 0;
         while (left.isNotEmpty) {
           var progress = false;
           final waiting = <MailboxRow>[];
+          final rows = await _rowsOf(accountId);
           for (final move in [...left]) {
             final (rowId, to) = move;
-            final row = await rowById(rowId);
-            if (row == null || row.path == to) {
+            final row = rows.firstWhere((r) => r.id == rowId);
+            if (row.path == to) {
               left.remove(move);
               progress = true;
               continue;
             }
-            final rows = await _rowsOf(accountId);
-            bool inTree(MailboxRow r) =>
-                r.path == row.path ||
-                r.path.startsWith('${row.path}$separator');
+            bool under(MailboxRow r, String path) =>
+                r.path == path || r.path.startsWith('$path$separator');
+            // Any row in the way: wait for it to move (or for a subfolder
+            // that has a move of its own to leave first). Never merged.
             var waits = false;
-            var blocked = false;
-            for (final d in rows.where(inTree)) {
+            for (final d in rows.where((r) => under(r, row.path))) {
               final newPath = '$to${d.path.substring(row.path.length)}';
               final there = rows
-                  .where((r) => r.path == newPath && !inTree(r))
+                  .where((r) => r.path == newPath && !under(r, row.path))
                   .firstOrNull;
-              if (there == null) continue;
-              if (left.any((m) => m.$1 == there.id)) {
-                waits = true;
-              } else {
-                blocked = true;
-              }
-            }
-            if (blocked) {
-              left.remove(move);
-              skipped.add(rowId);
-              progress = true;
-              continue;
+              if (there != null) waits = true;
             }
             if (waits) {
               waiting.add(row);
@@ -2358,21 +2400,43 @@ class MailboxStateWriter {
             );
             left.remove(move);
             progress = true;
+            break; // the rows changed: look again
           }
           if (progress) continue;
           // A cycle: a row not aside yet steps aside, which frees its path.
-          // An aside row holds no path another waits for, so one exists.
-          final row = waiting.firstWhere(
-            (r) => !r.path.startsWith(_asidePrefix),
-          );
-          if (aside > 2 * moves.length) {
-            throw StateError('serverPathsChanged: no way through $moves');
-          }
+          // An aside row holds no path another waits for.
+          final row = waiting
+              .where((r) => !r.path.startsWith(_asidePrefix))
+              .firstOrNull;
+          if (row == null || aside > 2 * moves.length) break;
           await serverPathChanged(
             accountId,
             row.path,
             '$_asidePrefix${aside++}:${row.id}',
             quiet: true,
+          );
+        }
+        // Never left on a stand-in path: back where it was, or (when a row
+        // took that path) on to where it was going.
+        for (final r in await _rowsOf(accountId)) {
+          if (!r.path.startsWith(_asidePrefix)) continue;
+          // A subfolder of an aside row goes along with it.
+          if (!r.path.endsWith(':${r.id}')) continue;
+          final home = origin[r.id]!;
+          final target = targetOf[r.id];
+          final dest = await rowByPath(accountId, home) == null
+              ? home
+              : target != null && await rowByPath(accountId, target) == null
+                  ? target
+                  : null;
+          if (dest == null) continue;
+          if (dest == home) skipped.add(r.id);
+          await serverPathChanged(
+            accountId,
+            r.path,
+            dest,
+            shownFrom: home,
+            quiet: dest == home,
           );
         }
         return skipped;
