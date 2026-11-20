@@ -1927,8 +1927,17 @@ What remains after phase 6, with where it is handled today:
   another folder follows its id onto that path (deleted, another renamed
   onto its name; its queued changes fail visibly) or when it has a delete
   queued (the delete counts as done), and otherwise stays, with App Log
-  warn `mailbox.id_changed` and its checkpoint's UIDVALIDITY forgotten, so
-  the next sync re-matches its mail by Message-ID. A subfolder moved out on
+  warn `mailbox.id_changed`: its rows give up their UIDs at once and its
+  checkpoint's UIDVALIDITY becomes -1 (not null: a change stamped with the
+  old one must count as stale), so the next sync re-matches its mail by
+  Message-ID. A replaced folder is removed only when every listed folder
+  answered with its id: when a STATUS failed or ids were refused on the
+  way, nothing is removed, no new folder and no changed id is stored, and
+  the listing is not trusted (reason "folder ids incomplete"), so the
+  #1312 marks and checks decide and the next complete listing follows the
+  folders. A move whose path (or a carried subfolder's) is held by a row
+  that does not move is not made (no merge). Steps through a stand-in path
+  write no App Log line of their own. A subfolder moved out on
   its own while its parent was renamed follows its id, not its parent. A
   role guessed from the name does not stay with a renamed folder when a
   listed folder gets that role (a renamed "Archive" next to a new one).

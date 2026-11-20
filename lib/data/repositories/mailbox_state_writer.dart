@@ -1179,9 +1179,9 @@ class MailboxStateWriter {
   /// the folder (IMAP `MAILBOXID`, #1315), stored when given. Another id
   /// than the one stored means another folder has this path now (deleted
   /// and made again elsewhere; a folder the listing followed by its id has
-  /// moved away before this): its UIDs are forgotten as on a UIDVALIDITY
-  /// change, so the next sync re-matches its mail by Message-ID (#1314;
-  /// App Log warn `mailbox.id_changed`).
+  /// moved away before this): its rows give up their UIDs at once, and
+  /// its checkpoint's UIDVALIDITY is forgotten, so the next sync re-matches
+  /// its mail by Message-ID (#1314; App Log warn `mailbox.id_changed`).
   Future<void> writeServer({
     required String accountId,
     required String path,
@@ -1222,6 +1222,7 @@ class MailboxStateWriter {
         }
         final stored = row.srvMailboxId;
         if (stored != null && mailboxId != null && stored != mailboxId) {
+          await _emails.releaseFolderForRematch(accountId, path);
           await _forgetUidValidity(accountId, path);
           _log(
             (logger) => logger.warn(
@@ -2181,7 +2182,17 @@ class MailboxStateWriter {
   /// cached at [to] (the server's folder was listed before the create was
   /// confirmed) takes over: the local row is merged into it. Returns how
   /// many mails gave up a stale server location.
-  Future<int> serverPathChanged(String accountId, String from, String to) =>
+  ///
+  /// The App Log lines of the queued changes that follow name the folder
+  /// [shownFrom] (default [from]); none are written when [quiet] (a step to
+  /// a stand-in path, [serverPathsChanged]).
+  Future<int> serverPathChanged(
+    String accountId,
+    String from,
+    String to, {
+    String? shownFrom,
+    bool quiet = false,
+  }) =>
       _db.transaction(() async {
         if (from == to) return 0;
         final jmap = await _isJmap(accountId);
@@ -2215,10 +2226,25 @@ class MailboxStateWriter {
             updates: {_db.mailboxes},
             updateKind: UpdateKind.update,
           );
-          await _repointMailboxOps(accountId, d.path, newPath);
+          final shown = shownFrom == null
+              ? null
+              : '$shownFrom${d.path.substring(from.length)}';
+          await _repointMailboxOps(
+            accountId,
+            d.path,
+            newPath,
+            shownFrom: shown,
+            quiet: quiet,
+          );
           await _moveThreads(accountId, d.path, newPath);
           await _moveCheckpoints(accountId, d.path, newPath);
-          released += await _emails.renameFolder(accountId, d.path, newPath);
+          released += await _emails.renameFolder(
+            accountId,
+            d.path,
+            newPath,
+            shownFrom: shown,
+            quiet: quiet,
+          );
         }
         await rebuildDisplayPaths(accountId);
         return released;
@@ -2226,7 +2252,17 @@ class MailboxStateWriter {
 
   /// The IMAP sync checkpoint of [path] forgets its UIDVALIDITY: the next
   /// sync takes it for changed and re-matches the folder's mail by
-  /// Message-ID (#1314) instead of trusting the cached UIDs.
+  /// Message-ID (#1314) instead of trusting the cached UIDs, also when the
+  /// new folder happens to have the old UIDVALIDITY.
+  ///
+  /// -1 rather than null: a change queued before, stamped with the old
+  /// UIDVALIDITY, must count as stale (the email repository's
+  /// `_stampStillValid` takes a missing checkpoint UIDVALIDITY for
+  /// "unknown, still valid"), and a force
+  /// resync keeps a checkpoint only with an int. -1 is never stamped on a
+  /// new change: the folder's rows gave up their UIDs first
+  /// ([EmailStateWriter.releaseFolderForRematch]), and a change of a row
+  /// without a UID gets no stamp.
   Future<void> _forgetUidValidity(String accountId, String path) async {
     final key = 'IMAP:$path';
     final old = await (_db.select(_db.syncStates)
@@ -2255,20 +2291,28 @@ class MailboxStateWriter {
   /// Folders of [accountId] that the server has at other paths now, all
   /// found by their server ids in one listing ([moves]: row id and new
   /// path, parents first): renames elsewhere that may form a chain or a
-  /// swap (A and B trading names). Each moves by [serverPathChanged] once
-  /// its new path is free; a row whose new path another moving row still
-  /// holds waits for it, and in a cycle one row steps aside to a stand-in
-  /// path first, so no row is ever merged into another that is moving. A
-  /// row at a new path that is not moving is the caller's to remove first.
-  Future<void> serverPathsChanged(
+  /// swap (A and B trading names). A row moves by [serverPathChanged] once
+  /// the paths it and its subfolders take are free. One that another
+  /// moving row still holds waits for it; in a cycle a row steps aside to
+  /// a stand-in path first (quietly: the App Log names the folder's old
+  /// path at the step that ends it). A row whose new path (or a
+  /// subfolder's) is held by a row that does not move is not moved, so no
+  /// row is ever merged into another: returns the ids of those.
+  Future<Set<String>> serverPathsChanged(
     String accountId,
     List<(String rowId, String to)> moves,
   ) =>
       _db.transaction(() async {
+        final separator = await imapSeparator(accountId);
+        final origin = {
+          for (final r in await _rowsOf(accountId)) r.id: r.path,
+        };
         final left = [...moves];
+        final skipped = <String>{};
         var aside = 0;
         while (left.isNotEmpty) {
           var progress = false;
+          final waiting = <MailboxRow>[];
           for (final move in [...left]) {
             final (rowId, to) = move;
             final row = await rowById(rowId);
@@ -2277,21 +2321,61 @@ class MailboxStateWriter {
               progress = true;
               continue;
             }
-            final there = await rowByPath(accountId, to);
-            if (there != null && left.any((m) => m.$1 == there.id)) continue;
-            await serverPathChanged(accountId, row.path, to);
+            final rows = await _rowsOf(accountId);
+            bool inTree(MailboxRow r) =>
+                r.path == row.path ||
+                r.path.startsWith('${row.path}$separator');
+            var waits = false;
+            var blocked = false;
+            for (final d in rows.where(inTree)) {
+              final newPath = '$to${d.path.substring(row.path.length)}';
+              final there = rows
+                  .where((r) => r.path == newPath && !inTree(r))
+                  .firstOrNull;
+              if (there == null) continue;
+              if (left.any((m) => m.$1 == there.id)) {
+                waits = true;
+              } else {
+                blocked = true;
+              }
+            }
+            if (blocked) {
+              left.remove(move);
+              skipped.add(rowId);
+              progress = true;
+              continue;
+            }
+            if (waits) {
+              waiting.add(row);
+              continue;
+            }
+            await serverPathChanged(
+              accountId,
+              row.path,
+              to,
+              shownFrom:
+                  row.path.startsWith(_asidePrefix) ? origin[row.id] : null,
+            );
             left.remove(move);
             progress = true;
           }
           if (progress) continue;
-          // A cycle: the first row steps aside, which frees its path.
-          final row = (await rowById(left.first.$1))!;
+          // A cycle: a row not aside yet steps aside, which frees its path.
+          // An aside row holds no path another waits for, so one exists.
+          final row = waiting.firstWhere(
+            (r) => !r.path.startsWith(_asidePrefix),
+          );
+          if (aside > 2 * moves.length) {
+            throw StateError('serverPathsChanged: no way through $moves');
+          }
           await serverPathChanged(
             accountId,
             row.path,
             '$_asidePrefix${aside++}:${row.id}',
+            quiet: true,
           );
         }
+        return skipped;
       });
 
   /// Prefix of the stand-in path a folder takes for a moment inside
@@ -2332,8 +2416,10 @@ class MailboxStateWriter {
   Future<void> _repointMailboxOps(
     String accountId,
     String from,
-    String to,
-  ) async {
+    String to, {
+    String? shownFrom,
+    bool quiet = false,
+  }) async {
     final ops = await (_db.select(_db.pendingChanges)
           ..where(
             (t) =>
@@ -2355,13 +2441,15 @@ class MailboxStateWriter {
       await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
           .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
       if (op.changeType == moveMailboxOp) await _refoldRow(op.resourceId);
+      if (quiet) continue;
+      final shown = shownFrom ?? from;
       _log(
         (logger) => logger.warn(
           'pending_change.folder_renamed',
-          'A queued ${_describe(op)} naming "$from" as parent names "$to" '
+          'A queued ${_describe(op)} naming "$shown" as parent names "$to" '
               'now: the server gave the parent folder that path',
           accountId: accountId,
-          data: {'changeId': op.id, 'from': from, 'to': to},
+          data: {'changeId': op.id, 'from': shown, 'to': to},
         ),
       );
     }

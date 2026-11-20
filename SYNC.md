@@ -1254,7 +1254,12 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     onto that path (deleted, another renamed onto its name: its queued
     changes fail visibly) or when its delete is queued (done), and else
     stays with its mail re-matched by Message-ID at the next sync (App Log
-    warn `mailbox.id_changed`). Without ids (no `OBJECTID`, or a folder no
+    warn `mailbox.id_changed`). Only a listing in which every folder
+    answered with its id removes a replaced folder; one with a failed
+    STATUS or refused ids (App Log warn `mailbox.mailbox_ids_refused`)
+    removes none, stores no new folder (info
+    `mailbox.listing_skipped_unsure`) and is not trusted, so the next
+    complete listing follows the folders. Without ids (no `OBJECTID`, or a folder no
     listing read the id of yet), a vanished folder is taken for renamed to a new folder that
     shares its leaf (a move) or its parent (a rename) with it, when the
     match is unique both ways and the new folder either has the UIDVALIDITY

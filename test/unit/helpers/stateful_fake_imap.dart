@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:io' show SocketException;
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
@@ -132,6 +133,14 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// When set, `STATUS … (MAILBOXID)` is refused with `BAD` although the
   /// server advertises OBJECTID.
   bool refusesMailboxIdStatus = false;
+
+  /// When it returns true for a folder path, `STATUS … (MAILBOXID)` of it
+  /// is refused with `BAD` (a plain STATUS of it works).
+  bool Function(String path)? refusesMailboxIdFor;
+
+  /// When it returns true for a folder path, the connection drops at its
+  /// `STATUS` (the client is not connected any more).
+  bool Function(String path)? dropsAtStatus;
 
   /// When set, `UID SEARCH ALL` lists no message although the folders have
   /// some (a server whose index lags, or a glitch).
@@ -408,6 +417,10 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     List<imap.StatusFlags> flags,
   ) async {
     _failBefore('STATUS');
+    if (server.dropsAtStatus?.call(box.encodedPath) ?? false) {
+      fakeConnected = false;
+      throw const SocketException('connection lost');
+    }
     if (server.statusError?.call(box.encodedPath) case final text?) {
       throw _no(text);
     }
@@ -427,7 +440,9 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     List<imap.StatusFlags> flags,
   ) async {
     server.mailboxIdStatusCount++;
-    if (!server.objectIds || server.refusesMailboxIdStatus) {
+    if (!server.objectIds ||
+        server.refusesMailboxIdStatus ||
+        (server.refusesMailboxIdFor?.call(box.encodedPath) ?? false)) {
       throw _no('BAD Unknown STATUS item MAILBOXID');
     }
     final status = await statusMailbox(box, flags);

@@ -281,7 +281,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
       // A folder another client renamed or moved: its mail and the changes
       // queued for it follow instead of failing as "folder removed".
-      final followed = await _followRenamesElsewhere(
+      final (moved: followed, :hold, :doubt) = await _followRenamesElsewhere(
         client,
         account.id,
         [
@@ -299,6 +299,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
         listSeq,
         jmap: false,
         check: (path) => _imapFolderCheck(client, path, separator),
+        doubt: doubt,
       );
       final renamedAway = await _writer.renamedAwaySince(account.id, listSeq);
 
@@ -346,7 +347,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
         final readSeq = listed.readSeq;
         final unread = listed.status?.unseen ?? 0;
         final total = listed.status?.messages ?? 0;
-        final mailboxId = listed.status?.mailboxId;
+        // An id the follow could not settle is not stored yet, nor any of
+        // a listing that had ids refused on the way.
+        final mailboxId = !_idsUsable(client) || hold.contains(path)
+            ? null
+            : listed.status?.mailboxId;
         if (listed.error case (final e, final stack)) {
           log('STATUS skipped for $path: $e');
           // Surface the failure in the App Log so a folder that silently shows
@@ -361,6 +366,21 @@ class MailboxRepositoryImpl implements MailboxRepository {
               stack: stack,
             ),
           );
+        }
+        // A listing in doubt about folder ids stores no new folder: one of
+        // them may be a cached folder whose id did not come (the next
+        // listing follows it there instead of making a second row).
+        if (doubt != null &&
+            await _writer.rowByPath(account.id, path) == null) {
+          unawaited(
+            _appLogger?.info(
+              'mailbox.listing_skipped_unsure',
+              'Not storing "$path" from this listing yet: $doubt',
+              accountId: account.id,
+              mailboxPath: path,
+            ),
+          );
+          continue;
         }
 
         // Use the server-assigned role when available; fall back to the
@@ -913,8 +933,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// follows too: a new UIDVALIDITY is then a UIDVALIDITY change of the
   /// folder, whose mail is re-matched by Message-ID (#1314). Anything else
   /// is left to the prune: the changes queued for the folder fail, listed.
-  /// Returns the paths of the folders it moved.
-  Future<Set<String>> _followRenamesElsewhere(
+  ///
+  /// The removals of replaced folders need every listed folder's id: when
+  /// a STATUS failed or gave none (ids refused on the way), a folder whose
+  /// id seems listed nowhere may be at that path, so nothing is removed,
+  /// a replaced folder keeps its stored id ([hold], written without one),
+  /// and the listing is not trusted ([doubt], for [_prune]: the #1312
+  /// marks and checks decide about the folders it left out).
+  ///
+  /// Returns the paths of the folders it [moved], the paths whose listed id
+  /// is not stored ([hold]), and why the listing is in doubt, or null.
+  Future<({Set<String> moved, Set<String> hold, String? doubt})>
+      _followRenamesElsewhere(
     imap.ImapClient client,
     String accountId,
     List<imap.Mailbox> listed,
@@ -922,13 +952,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
     required Set<String> allListed,
     required Map<String, _ListedStatus> statusOf,
   }) async {
-    final byId = supportsMailboxIds(client.serverInfo);
+    // Ids refused on the way: this listing goes by the old rules.
+    final byId = _idsUsable(client);
     final rows = await (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
     final listedPaths = {for (final mb in listed) mb.path};
     String? listedIdAt(String path) =>
         listedPaths.contains(path) ? statusOf[path]?.status?.mailboxId : null;
+    // Every listed folder answered with its id: an id found nowhere is gone.
+    final idsComplete = byId && listedPaths.every((p) => listedIdAt(p) != null);
     // The cached folders whose path the server gives another folder now.
     final replaced = <MailboxRow>[];
     if (byId) {
@@ -942,7 +975,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
     }
     final vanished = await _writer.prunable(accountId, allListed, readSeq);
-    if (vanished.isEmpty && replaced.isEmpty) return const {};
+    const none = (moved: <String>{}, hold: <String>{}, doubt: null);
+    if (vanished.isEmpty && replaced.isEmpty) return none;
     final cached = {for (final r in rows) r.path};
     final fresh = [
       for (final mb in listed)
@@ -994,7 +1028,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       // Its delete counts as done, as for a vanished folder: the folder at
       // its path is another one, never deleted for it.
       if (await _hasQueuedDelete(r.id)) {
-        removeFirst.add(r);
+        if (idsComplete) removeFirst.add(r);
         continue;
       }
       final id = r.srvMailboxId!;
@@ -1096,6 +1130,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     // its name).
     final movingIds = {for (final from in byIdMoves) matchesOf[from]!.row.id};
     for (final r in replaced) {
+      if (!idsComplete) break;
       if (movingIds.contains(r.id) || removeFirst.contains(r)) continue;
       if (byIdMoves.any((from) => matchesOf[from]!.to.single == r.path)) {
         removeFirst.add(r);
@@ -1107,12 +1142,14 @@ class MailboxRepositoryImpl implements MailboxRepository {
       await removeLocalMailbox(_db, accountId, r.path, appLogger: _appLogger);
     }
     final before = {for (final r in rows) r.id: r.path};
-    if (byIdMoves.isNotEmpty) {
-      await _writer.serverPathsChanged(accountId, [
-        for (final from in byIdMoves)
-          (matchesOf[from]!.row.id, matchesOf[from]!.to.single),
-      ]);
-    }
+    // A move onto a path a folder holds that is not moving waits for a
+    // later listing ([MailboxStateWriter.serverPathsChanged]).
+    final blocked = byIdMoves.isEmpty
+        ? const <String>{}
+        : await _writer.serverPathsChanged(accountId, [
+            for (final from in byIdMoves)
+              (matchesOf[from]!.row.id, matchesOf[from]!.to.single),
+          ]);
     // A subfolder that went where its parent went is no rename of its own.
     bool carried(String from, String target) => taken.any(
           (p) =>
@@ -1156,13 +1193,39 @@ class MailboxRepositoryImpl implements MailboxRepository {
         ),
       );
     }
-    return {
-      for (final r in await (_db.select(_db.mailboxes)
-            ..where((t) => t.accountId.equals(accountId)))
-          .get())
-        if (before[r.id] case final old? when old != r.path) r.path,
-    };
+    final after = await (_db.select(_db.mailboxes)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    // Ids missing (a STATUS failed, or ids were refused on the way) while
+    // a cached folder with an id is gone or replaced: it may be at a path
+    // whose id did not come.
+    final unsure = supportsMailboxIds(client.serverInfo) &&
+        !idsComplete &&
+        (replaced.isNotEmpty || vanished.any((v) => v.srvMailboxId != null));
+    return (
+      moved: {
+        for (final r in after)
+          if (before[r.id] case final old? when old != r.path) r.path,
+      },
+      hold: {
+        if (byId && !idsComplete)
+          for (final r in after)
+            if (r.srvMailboxId case final id?)
+              if (listedIdAt(r.path) case final now? when now != id) r.path,
+      },
+      doubt: blocked.isNotEmpty
+          ? 'a folder renamed elsewhere waits for a path'
+          : unsure
+              ? 'folder ids incomplete'
+              : null,
+    );
   }
+
+  /// Whether [client]'s server gives folder ids and none was refused on
+  /// this connection ([_status]).
+  bool _idsUsable(imap.ImapClient client) =>
+      supportsMailboxIds(client.serverInfo) &&
+      !(_mailboxIdsRefused[client] ?? false);
 
   /// `STATUS` of [box] for [flags], with the folder's `MAILBOXID` when the
   /// server gives folder ids ([supportsMailboxIds]; #1315). A server that
@@ -1195,6 +1258,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
       final status = await plain();
       _mailboxIdsRefused[client] = true;
       log('STATUS with MAILBOXID refused for ${box.path}: $e');
+      unawaited(
+        _appLogger?.warn(
+          'mailbox.mailbox_ids_refused',
+          'The server advertises folder ids (OBJECTID) but did not give the '
+              'MAILBOXID of "${box.path}" while a plain STATUS works: this '
+              'listing goes on without folder ids',
+          mailboxPath: box.path,
+          error: e,
+        ),
+      );
       return status;
     }
   }
@@ -1321,9 +1394,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
     int readSeq, {
     required bool jmap,
     required Future<_FolderCheck> Function(String path) check,
+    String? doubt,
   }) async {
     final candidates = await _writer.prunable(accountId, keepPaths, readSeq);
-    final reason = await _untrustedReason(accountId, keepPaths, candidates);
+    final reason = candidates.isNotEmpty && doubt != null
+        ? doubt
+        : await _untrustedReason(accountId, keepPaths, candidates);
     bool neverRemoved(MailboxRow r) => !jmap && r.path.toUpperCase() == 'INBOX';
     // The server is asked (network) before the marks are read and written
     // in one transaction: only about folders an earlier listing marked.

@@ -443,6 +443,207 @@ void main() {
     });
 
     test(
+        'a chain of renames (B to C, A to B) while the STATUS of C fails: '
+        'nothing is removed or merged; the next listing follows both',
+        () async {
+      final (:a, :b) = await foldersAAndB();
+      server
+        ..renameFolder('B', 'C', newUidValidity: true)
+        ..renameFolder('A', 'B', newUidValidity: true)
+        ..statusError = (path) => path == 'C' ? 'NO try later' : null;
+
+      await listFolders();
+
+      expect((await folderById(a.id))!.path, 'A');
+      expect((await folderById(b.id))!.path, 'B');
+      expect((await folderById(b.id))!.srvMailboxId, isNot(a.srvMailboxId));
+      expect((await mail('b1@test')).srvMailboxPath, 'B');
+      expect(events(), contains('mailbox.listing_untrusted'));
+      expect(events(), isNot(contains('mailbox.removed_gone')));
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      expect((await rigOps()).map((o) => o.state), isNot(contains('failed')));
+
+      server.statusError = null;
+      await listFolders();
+
+      expect((await folderById(a.id))!.path, 'B');
+      expect((await folderById(b.id))!.path, 'C');
+      expect((await mail('b1@test')).srvMailboxPath, 'C');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(move.state, 'pending');
+      expect(move.payload, contains('"dest":"B"'));
+      await expectConsistent();
+    });
+
+    test(
+        'ids refused part way through a listing: no folder is removed for a '
+        'missing id, none stored, the listing is not trusted', () async {
+      final (:a, :b) = await foldersAAndB();
+      server
+        ..renameFolder('B', 'C', newUidValidity: true)
+        ..renameFolder('A', 'B', newUidValidity: true)
+        ..refusesMailboxIdFor = (path) => path == 'B';
+
+      await listFolders();
+
+      expect(events(), contains('mailbox.mailbox_ids_refused'));
+      expect((await folderById(b.id))!.path, 'B');
+      expect((await folderById(b.id))!.srvMailboxId, b.srvMailboxId);
+      expect(await folderById(a.id), isNotNull);
+      expect(events(), contains('mailbox.listing_untrusted'));
+      expect(events(), isNot(contains('mailbox.removed_gone')));
+    });
+
+    test(
+        "a parent's subfolders wait for a row that moves out of their way "
+        '(B/x moved to D, then A with A/x renamed to B)', () async {
+      server
+        ..addFolder('A')
+        ..addFolder('A/x')
+        ..deliver('A/x', 'ax@test')
+        ..addFolder('B/x')
+        ..deliver('B/x', 'bx@test');
+      await listFolders();
+      await emails.syncEmails(_acc.id, 'A/x');
+      await emails.syncEmails(_acc.id, 'B/x');
+      final aRow = await folderAt('A');
+      final ax = await folderAt('A/x');
+      final bx = await folderAt('B/x');
+      server
+        ..renameFolder('B/x', 'D')
+        ..renameFolder('A', 'B');
+
+      await listFolders();
+
+      expect((await folderById(aRow.id))!.path, 'B');
+      expect((await folderById(ax.id))!.path, 'B/x');
+      expect((await folderById(bx.id))!.path, 'D');
+      expect((await mail('ax@test')).srvMailboxPath, 'B/x');
+      expect((await mail('bx@test')).srvMailboxPath, 'D');
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      await expectConsistent();
+    });
+
+    test('a parent and its subfolder swapped with another pair', () async {
+      server
+        ..addFolder('A')
+        ..addFolder('A/s')
+        ..deliver('A/s', 'as@test')
+        ..addFolder('B')
+        ..addFolder('B/s')
+        ..deliver('B/s', 'bs@test');
+      await listFolders();
+      await emails.syncEmails(_acc.id, 'A/s');
+      await emails.syncEmails(_acc.id, 'B/s');
+      final ids = {
+        for (final p in ['A', 'A/s', 'B', 'B/s']) p: (await folderAt(p)).id,
+      };
+      server
+        ..renameFolder('A', 'tmp')
+        ..renameFolder('B', 'A')
+        ..renameFolder('tmp', 'B');
+
+      await listFolders();
+
+      expect(
+        {for (final e in ids.entries) e.key: (await folderById(e.value))!.path},
+        {'A': 'B', 'A/s': 'B/s', 'B': 'A', 'B/s': 'A/s'},
+      );
+      expect((await mail('as@test')).srvMailboxPath, 'B/s');
+      expect((await mail('bs@test')).srvMailboxPath, 'A/s');
+      expect(events(), isNot(contains('mailbox.local_merged')));
+      expect(
+        logs.rows.where((r) => '${r.message}${r.dataJson}'.contains('aside')),
+        isEmpty,
+      );
+      await expectConsistent();
+    });
+
+    test('three folders that rotated names: each row follows its id', () async {
+      for (final p in ['A', 'B', 'C']) {
+        server
+          ..addFolder(p)
+          ..deliver(p, '${p.toLowerCase()}1@test');
+      }
+      await listFolders();
+      for (final p in ['A', 'B', 'C']) {
+        await emails.syncEmails(_acc.id, p);
+      }
+      final ids = {
+        for (final p in ['A', 'B', 'C']) p: (await folderAt(p)).id,
+      };
+      await emails.moveEmail((await rowOfA()).id, 'A');
+      server
+        ..renameFolder('A', 'tmp')
+        ..renameFolder('C', 'A')
+        ..renameFolder('B', 'C')
+        ..renameFolder('tmp', 'B');
+
+      await listFolders();
+
+      expect(
+        {for (final e in ids.entries) e.key: (await folderById(e.value))!.path},
+        {'A': 'B', 'B': 'C', 'C': 'A'},
+      );
+      expect((await mail('a1@test')).srvMailboxPath, 'B');
+      final move = (await db.select(db.pendingChanges).get()).single;
+      expect(move.payload, contains('"dest":"B"'));
+      final renamed = [
+        for (final r in logs.rows)
+          if (r.event == 'pending_change.folder_renamed') r.dataJson ?? '',
+      ];
+      expect(renamed, isNotEmpty);
+      expect(renamed.where((d) => d.contains('aside')), isEmpty);
+      await flush();
+      expect(server.find('a@test')!.folder.path, 'B');
+      await expectConsistent();
+    });
+
+    test(
+        'a replaced folder with a delete queued: its delete counts as done, '
+        'the folder now at its path and the renamed one stay', () async {
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Work', removeEmails: true);
+      server
+        ..renameFolder('Work', 'Job', newUidValidity: true)
+        ..addFolder('Work');
+
+      await listFolders();
+      await flush();
+
+      expect(await folderById(work.id), isNull);
+      expect(events(), contains('mailbox.delete_found_done'));
+      expect(server.folderCommands, isEmpty);
+      expect(server.folders.keys, containsAll(['Work', 'Job']));
+      // The new folder under the old name: stored once the delete settled.
+      await listFolders();
+      final now = await folderAt('Work');
+      expect(now.srvMailboxId, server.folders['Work']!.mailboxId);
+      await expectConsistent();
+    });
+
+    test(
+        'a connection lost during the STATUS round stops the listing before '
+        'anything is followed or pruned', () async {
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      server
+        ..renameFolder('Work', 'Job', newUidValidity: true)
+        ..dropsAtStatus = (path) => path == 'Job';
+
+      await expectLater(listFolders(), throwsA(anything));
+
+      expect((await folderById(work.id))!.path, 'Work');
+      expect((await mail('w@test')).srvMailboxPath, 'Work');
+      expect(events(), isNot(contains('mailbox.removed_gone')));
+
+      server.dropsAtStatus = null;
+      await listFolders();
+      expect((await folderById(work.id))!.path, 'Job');
+    });
+
+    test(
         'a server that advertises OBJECTID but refuses the MAILBOXID item: '
         'plain STATUS, asked once per connection', () async {
       server.refusesMailboxIdStatus = true;
