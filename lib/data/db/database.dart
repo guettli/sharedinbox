@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' show log;
 import 'dart:io';
@@ -15,6 +16,7 @@ import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/utils/message_id_utils.dart';
+import 'package:sharedinbox/data/db/busy_retry.dart';
 import 'package:sharedinbox/data/db/db_encryption_migration.dart';
 import 'package:sharedinbox/data/db/keyword_fold.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -800,7 +802,138 @@ class UserPreferences extends Table {
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase([QueryExecutor? executor]) : super(executor ?? _openConnection());
+  AppDatabase([QueryExecutor? executor])
+      : this._(BusyRetryInterceptor(), executor ?? _openConnection());
+
+  AppDatabase._(this._busy, QueryExecutor executor)
+      : super(executor.interceptWith(_busy)) {
+    _busy.report = _reportBusy;
+  }
+
+  final BusyRetryInterceptor _busy;
+
+  /// How long a write keeps trying while the other isolate holds the write
+  /// lock (busy_retry.dart). Tests shorten it.
+  BusyRetryPolicy get busyRetryPolicy => _busy.policy;
+  set busyRetryPolicy(BusyRetryPolicy value) => _busy.policy = value;
+
+  /// Marks the zone of a transaction body: a [transaction] called in it is
+  /// nested (a savepoint) and already holds the write lock.
+  static final _inTransaction = Object();
+
+  /// The first statement of every write transaction. Drift starts one with
+  /// a deferred `BEGIN`, which takes the write lock only at the first write;
+  /// when the body read first, SQLite then fails it with SQLITE_BUSY at
+  /// once, without busy_timeout, if the other isolate writes (or wrote since
+  /// the read: SQLITE_BUSY_SNAPSHOT), after the body's work and its side
+  /// effects. A write that matches nothing still takes the lock; as the
+  /// first statement, a busy failure of it leaves nothing to undo, so the
+  /// whole transaction can be retried.
+  static const _takeWriteLock = 'DELETE FROM sync_states WHERE 0';
+
+  /// A lock wait at least this long is logged even when it needed no retry.
+  static const _slowLockWait = Duration(seconds: 2);
+
+  /// Every write transaction takes SQLite's write lock first
+  /// ([_takeWriteLock]) and, when the lock stays busy, is tried again as a
+  /// whole with backoff ([retryOnBusy]): SQLITE_BUSY can only come before
+  /// [action] ran, so [action] runs once. A busy error after the lock was
+  /// taken is not retried. It gives up with `DatabaseBusyException` after
+  /// [busyRetryPolicy]'s budget (SYNC.md "Two writers: SQLITE_BUSY").
+  @override
+  Future<T> transaction<T>(
+    Future<T> Function() action, {
+    bool requireNew = false,
+  }) {
+    if (Zone.current[_inTransaction] == true) {
+      return super.transaction(action, requireNew: requireNew);
+    }
+    var locked = false;
+    var attempts = 0;
+    return retryOnBusy(
+      () {
+        locked = false;
+        attempts++;
+        return runZoned(
+          () => super.transaction(
+            () async {
+              final watch = Stopwatch()..start();
+              await customStatement(_takeWriteLock);
+              locked = true;
+              // A retried one is reported by retryOnBusy.
+              if (attempts == 1 && watch.elapsed >= _slowLockWait) {
+                _reportBusy(
+                  BusyOutcome(
+                    what: 'transaction',
+                    attempts: 1,
+                    waited: watch.elapsed,
+                    failed: false,
+                  ),
+                );
+              }
+              return action();
+            },
+            requireNew: requireNew,
+          ),
+          zoneValues: {_inTransaction: true},
+        );
+      },
+      what: 'transaction',
+      retryable: (_) => !locked,
+      policy: busyRetryPolicy,
+      report: _reportBusy,
+    );
+  }
+
+  /// A batch outside a transaction runs in one ([transaction]), so it takes
+  /// the write lock first and is retried as a whole.
+  @override
+  Future<void> batch(FutureOr<void> Function(Batch batch) runInBatch) {
+    if (Zone.current[_inTransaction] == true) return super.batch(runInBatch);
+    return transaction(() => super.batch(runInBatch));
+  }
+
+  /// App Log warn `db.busy_retried` for a write that waited for the other
+  /// isolate's write lock (retried, or one long wait), error
+  /// `db.busy_failed` for one that gave up. Written straight to `app_logs`
+  /// (the App Logger sits on top of this database), best effort.
+  void _reportBusy(BusyOutcome o) {
+    final ms = o.waited.inMilliseconds;
+    final message = o.failed
+        ? 'A database ${o.what} gave up after waiting $ms ms '
+            '(${o.attempts} attempts) for the write lock, held by another '
+            'connection (background sync)'
+        : 'A database ${o.what} waited $ms ms (${o.attempts} attempts) for '
+            'the write lock, held by another connection (background sync)';
+    log('db: $message${o.error == null ? '' : ': ${o.error}'}');
+    // In the root zone: called from a transaction's body (a long lock
+    // wait), the insert would join that transaction and be lost on its
+    // rollback; from here it waits for it and lands on its own.
+    Zone.root.run(() => unawaited(_writeBusyLog(o, message)));
+  }
+
+  Future<void> _writeBusyLog(BusyOutcome o, String message) async {
+    try {
+      await into(appLogs).insert(
+        AppLogsCompanion.insert(
+          createdAt: DateTime.now(),
+          level: o.failed ? 'error' : 'warn',
+          event: o.failed ? 'db.busy_failed' : 'db.busy_retried',
+          message: message,
+          dataJson: Value(
+            jsonEncode({
+              'what': o.what,
+              'attempts': o.attempts,
+              'waitedMs': o.waited.inMilliseconds,
+              if (o.error != null) 'error': o.error.toString(),
+            }),
+          ),
+        ),
+      );
+    } catch (_) {
+      // Best effort: the lock may still be busy.
+    }
+  }
 
   @override
   int get schemaVersion => dbSchemaVersion;
@@ -1326,8 +1459,18 @@ class AppDatabase extends _$AppDatabase {
   /// name: has_attachment"). BEGIN IMMEDIATE also makes a WorkManager isolate
   /// that opens the database at the same time wait for this upgrade; it then
   /// sees the new version and skips the steps.
+  ///
+  /// Drift runs migrations on its opening executor, past the busy
+  /// interceptor, so `BEGIN IMMEDIATE` is retried here: on the first open
+  /// after an update it failed after about 50 ms while the other isolate
+  /// wrote (#1317).
   Future<void> _upgradeAtomically(Migrator m, int from, int to) async {
-    await customStatement('BEGIN IMMEDIATE');
+    await retryOnBusy(
+      () => customStatement('BEGIN IMMEDIATE'),
+      what: 'migration',
+      policy: busyRetryPolicy,
+      report: _reportBusy,
+    );
     try {
       final current = (await customSelect('PRAGMA user_version').getSingle())
           .read<int>('user_version');
@@ -2969,7 +3112,10 @@ bool isForeignKeyViolation(Object error) =>
 /// stays stable across SQLCipher upstream releases.
 ///
 /// busy_timeout must come after `PRAGMA key` so subsequent statements retry
-/// on SQLITE_BUSY instead of immediately failing.
+/// on SQLITE_BUSY instead of immediately failing. The bundled SQLCipher
+/// build has no HAVE_USLEEP, and its busy handler gives up after about
+/// 50 ms whatever the timeout (#1317, test/unit/sqlite_busy_test.dart); the
+/// waiting is done by busy_retry.dart.
 ///
 /// journal_mode = WAL is wrapped in a try/catch because a concurrent
 /// WorkManager background task may already have the DB open when the app

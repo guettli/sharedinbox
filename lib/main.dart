@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/crash_logger.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/storage/database_busy.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
@@ -22,6 +23,7 @@ import 'package:sharedinbox/ui/router.dart';
 import 'package:sharedinbox/ui/screens/crash_screen.dart';
 import 'package:sharedinbox/ui/screens/database_unreadable_screen.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
+import 'package:sharedinbox/ui/widgets/undo_shell.dart';
 import 'package:stack_trace/stack_trace.dart' as stack_trace;
 
 void main({List<Override> overrides = const []}) {
@@ -77,6 +79,16 @@ void main({List<Override> overrides = const []}) {
           );
           if (_isWidgetTreeError(details)) return;
           if (transient) return;
+          // A user action that gave up on a busy database (the background
+          // sync held the write lock past the retry budget, #1317): nothing
+          // was saved, and the app keeps running. Say so in the shell's
+          // bottom bar (a Scaffold SnackBar is dropped during a route
+          // transition on Android, #255) instead of the crash screen.
+          final exception = details.exception;
+          if (exception is DatabaseBusyException) {
+            showShellMessage(exception.message);
+            return;
+          }
           crashScreen.install(
             () => runApp(
               CrashScreen(
