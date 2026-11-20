@@ -388,10 +388,50 @@ void main() {
     }
   });
 
-  // IMAP has no folder ids: a folder another client renames lists as one
-  // gone and one new. Stalwart gives the renamed folder a new UIDVALIDITY,
-  // so the listing recognises it by the Message-IDs it holds, and a move
-  // queued into it follows instead of failing (phase 5b).
+  // Another client (its own IMAP session) renames folder [from] to [to].
+  Future<void> renameElsewhere(String from, String to) async {
+    final other = await connectImap(env: env, user: user);
+    try {
+      final box =
+          (await other.listMailboxes()).singleWhere((b) => b.path == from);
+      await other.renameMailbox(box, to);
+    } finally {
+      await other.logout();
+    }
+  }
+
+  // The one move queued in [r] names [path] and is pending; the flush sends
+  // it, and the server's [path] then holds [messages] mails.
+  Future<void> expectMoveFollows(
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      MailboxRepositoryImpl mailboxes,
+    }) r,
+    String path, {
+    required int messages,
+  }) async {
+    final move = await (r.db.select(r.db.pendingChanges)
+          ..where((t) => t.changeType.equals('move')))
+        .getSingle();
+    expect(move.state, 'pending');
+    expect(move.payload, contains('"dest":"$path"'));
+
+    await flush(r);
+    final check = await connectImap(env: env, user: user);
+    try {
+      final box = await check.selectMailboxByPath(path);
+      expect(box.messagesExists, messages);
+    } finally {
+      await check.logout();
+    }
+  }
+
+  // A folder another client renames lists as one gone and one new. Stalwart
+  // gives the renamed folder a new UIDVALIDITY but keeps its RFC 8474
+  // MAILBOXID (OBJECTID), so the listing recognises it by that id (#1315;
+  // before, by the Message-IDs it holds), and a move queued into it follows
+  // instead of failing (phase 5b).
   test('a folder another client renames: a move queued into it follows',
       () async {
     final r = makeRepo();
@@ -426,33 +466,65 @@ void main() {
       await emails.moveEmail(mail.id, before);
 
       // Another client renames the folder before our flush.
-      final other = await connectImap(env: env, user: user);
-      try {
-        final box =
-            (await other.listMailboxes()).singleWhere((b) => b.path == before);
-        await other.renameMailbox(box, after);
-      } finally {
-        await other.logout();
-      }
+      await renameElsewhere(before, after);
       await r.mailboxes.syncMailboxes('test');
 
       final row = (await r.mailboxes.observeMailboxes('test').first)
           .singleWhere((m) => m.id == folder.id);
       expect(row.path, after);
-      final move = await (r.db.select(r.db.pendingChanges)
-            ..where((t) => t.changeType.equals('move')))
-          .getSingle();
-      expect(move.state, 'pending');
-      expect(move.payload, contains('"dest":"$after"'));
+      await expectMoveFollows(r, after, messages: 2);
+    } finally {
+      await drop();
+    }
+  });
 
-      await flush(r);
-      final check = await connectImap(env: env, user: user);
+  // #1315: an empty folder another client renames and moves at once (neither
+  // its leaf nor its parent stay), under a new UIDVALIDITY: only its
+  // MAILBOXID can tell, and the move queued into it follows.
+  test(
+      'an empty folder another client renames and moves at once is followed '
+      'by its MAILBOXID', () async {
+    final r = makeRepo();
+    final emails = emailsOf(r);
+    await r.accounts.addAccount(account, user.password);
+    const before = 'M1315Empty';
+    const parent = 'M1315Box';
+    const after = '$parent/M1315Moved';
+    Future<void> drop() => dropFolders(r, const {before, parent, 'M1315Moved'});
+
+    await drop();
+    try {
+      final client = await connectImap(env: env, user: user);
       try {
-        final box = await check.selectMailboxByPath(after);
-        expect(box.messagesExists, 2);
+        await client.createMailbox(before);
+        await client.createMailbox(parent);
+        await appendMessage(client, subject: 'm1315', userEmail: user.email);
       } finally {
-        await check.logout();
+        await client.logout();
       }
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', 'INBOX');
+      final row = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.path.equals(before)))
+          .getSingle();
+      expect(row.srvMailboxId, isNotNull, reason: 'Stalwart has OBJECTID');
+      final mail = (await emails.observeEmails('test', 'INBOX').first)
+          .singleWhere((e) => e.subject == 'm1315');
+      await emails.moveEmail(mail.id, before);
+
+      await renameElsewhere(before, after);
+      await r.mailboxes.syncMailboxes('test');
+
+      final moved = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.id.equals(row.id)))
+          .getSingle();
+      expect((moved.path, moved.srvMailboxId), (after, row.srvMailboxId));
+      await expectMoveFollows(r, after, messages: 1);
+      await emails.syncEmails('test', after);
+      expect(
+        (await emails.observeEmails('test', after).first).map((e) => e.id),
+        [mail.id],
+      );
     } finally {
       await drop();
     }

@@ -1175,7 +1175,8 @@ class MailboxStateWriter {
   /// when it agrees; on a contradiction the first read is recorded and a
   /// later one drops it (App Log `op.contradicted`). A new row gets
   /// [displayPath]; the caller rebuilds the display paths after the
-  /// listing ([rebuildDisplayPaths]).
+  /// listing ([rebuildDisplayPaths]). [mailboxId]: the server's id of
+  /// the folder (IMAP `MAILBOXID`, #1315), stored when given.
   Future<void> writeServer({
     required String accountId,
     required String path,
@@ -1187,6 +1188,7 @@ class MailboxStateWriter {
     required int unreadSeq,
     required int readSeq,
     String? displayPath,
+    String? mailboxId,
   }) =>
       _db.transaction(() async {
         final row = await rowByPath(accountId, path) ??
@@ -1208,6 +1210,7 @@ class MailboxStateWriter {
                   role: Value(role),
                   displayPath: Value(displayPath ?? path),
                   parentId: Value(parentId),
+                  srvMailboxId: Value(mailboxId),
                 ),
               );
           return;
@@ -1219,6 +1222,8 @@ class MailboxStateWriter {
             unreadSeq: Value(unreadSeq),
             totalCount: Value(totalCount),
             role: Value(role),
+            srvMailboxId:
+                mailboxId == null ? const Value.absent() : Value(mailboxId),
           ),
         );
         // The name and the parent: only when no later read or ack wrote

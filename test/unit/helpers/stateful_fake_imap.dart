@@ -1,6 +1,7 @@
 import 'dart:collection';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
 
 import '../fake_imap.dart'
     show FakeImapClient, StaleAnswerHook, StoreAndMove, fakeMailbox;
@@ -43,10 +44,14 @@ class FakeServerMessage {
 
 /// One folder on a [StatefulFakeImapServer], messages keyed by UID.
 class FakeServerFolder {
-  FakeServerFolder(this.path, this.uidValidity);
+  FakeServerFolder(this.path, this.uidValidity, {this.mailboxId});
 
   final String path;
   final int uidValidity;
+
+  /// The folder's RFC 8474 `MAILBOXID`, which a rename keeps; STATUS gives
+  /// it when the server advertises OBJECTID. Null: none.
+  final String? mailboxId;
   int uidNext = 1;
   int highestModSeq = 1;
   final SplayTreeMap<int, FakeServerMessage> messages = SplayTreeMap();
@@ -76,7 +81,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
   }) {
     for (final MapEntry(key: path, value: validity)
         in uidValidityByFolder.entries) {
-      folders[path] = FakeServerFolder(path, validity);
+      folders[path] = FakeServerFolder(path, validity, mailboxId: _newId());
     }
   }
 
@@ -121,6 +126,13 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// How many LISTs app connections sent.
   int listCount = 0;
 
+  /// How many `STATUS … (MAILBOXID)` app connections sent.
+  int mailboxIdStatusCount = 0;
+
+  /// When set, `STATUS … (MAILBOXID)` is refused with `BAD` although the
+  /// server advertises OBJECTID.
+  bool refusesMailboxIdStatus = false;
+
   /// When set, `UID SEARCH ALL` lists no message although the folders have
   /// some (a server whose index lags, or a glitch).
   bool searchAllEmpty = false;
@@ -129,17 +141,26 @@ class StatefulFakeImapServer with StaleAnswerHook {
   void deleteFolder(String path) => folders.remove(path);
 
   /// Another client creates (or this test sets up) folder [path].
-  FakeServerFolder addFolder(String path) =>
-      folders[path] = FakeServerFolder(path, nextUidValidity++);
+  FakeServerFolder addFolder(String path) => folders[path] =
+      FakeServerFolder(path, nextUidValidity++, mailboxId: _newId());
+
+  int _mailboxIds = 0;
+  String _newId() => 'F${++_mailboxIds}';
 
   /// Another client renames folder [from] to [to], with its subfolders
-  /// (`/` is the hierarchy separator; messages, UIDs and UIDVALIDITY kept).
-  void renameFolder(String from, String to) {
+  /// (`/` is the hierarchy separator; messages, UIDs and the MAILBOXID
+  /// kept). The UIDVALIDITY is kept too, unless [newUidValidity]: then each
+  /// renamed folder gets a fresh one, as Stalwart does.
+  void renameFolder(String from, String to, {bool newUidValidity = false}) {
     for (final path in folders.keys.toList()) {
       if (path != from && !path.startsWith('$from/')) continue;
       final old = folders.remove(path)!;
       final newPath = '$to${path.substring(from.length)}';
-      final renamed = FakeServerFolder(newPath, old.uidValidity)
+      final renamed = FakeServerFolder(
+        newPath,
+        newUidValidity ? nextUidValidity++ : old.uidValidity,
+        mailboxId: old.mailboxId,
+      )
         ..uidNext = old.uidNext
         ..highestModSeq = old.highestModSeq;
       renamed.messages.addAll(old.messages);
@@ -232,7 +253,8 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// that an old UID names another mail now).
   void renumberFolder(String path, int uidValidity, {bool reverse = false}) {
     final old = folders[path]!;
-    final renumbered = folders[path] = FakeServerFolder(path, uidValidity);
+    final renumbered = folders[path] =
+        FakeServerFolder(path, uidValidity, mailboxId: old.mailboxId);
     final messages = old.messages.values.toList();
     for (final m in reverse ? messages.reversed : messages) {
       final message = FakeServerMessage(
@@ -395,6 +417,26 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       ..messagesExists = folder.messages.length
       ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length
       ..uidValidity = folder.uidValidity;
+  }
+
+  /// `STATUS` of [box] with its `MAILBOXID`, as
+  /// `statusWithMailboxIdFromServer` would answer; only asked when the
+  /// server advertises OBJECTID.
+  Future<ImapFolderStatus> statusWithMailboxId(
+    imap.Mailbox box,
+    List<imap.StatusFlags> flags,
+  ) async {
+    server.mailboxIdStatusCount++;
+    if (!server.objectIds || server.refusesMailboxIdStatus) {
+      throw _no('BAD Unknown STATUS item MAILBOXID');
+    }
+    final status = await statusMailbox(box, flags);
+    return (
+      messages: status.messagesExists,
+      unseen: status.messagesUnseen,
+      uidValidity: status.uidValidity,
+      mailboxId: server.folders[box.encodedPath]?.mailboxId,
+    );
   }
 
   @override

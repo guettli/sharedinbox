@@ -61,6 +61,9 @@ class StatefulImapRig {
       db,
       accounts,
       imapConnect: (_, __, ___) async => server.connect(),
+      // Asked only when the server advertises OBJECTID.
+      statusWithMailboxId: (client, box, flags) =>
+          (client as StatefulFakeImapClient).statusWithMailboxId(box, flags),
       appLogger: appLogger,
       now: () => rig.now,
     );

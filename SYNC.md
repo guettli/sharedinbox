@@ -1236,24 +1236,35 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     so a move into a parent the server does not list (deleted elsewhere, an
     Undo's old parent) is refused, and a move waits while its parent's own
     rename or move may have reached the server.
-  - *A folder another client renamed or moved (IMAP).* IMAP has no folder ids,
-    so a rename elsewhere lists as a folder gone plus a new one. Before the
-    prune, a vanished folder without a queued delete (that one is never
-    followed: its delete counts as done) is taken for renamed to a new folder
-    that shares its leaf (a move) or its parent (a rename) with it, when the
+  - *A folder another client renamed or moved (IMAP).* A rename elsewhere
+    lists as a folder gone plus a new one. On a server that gives folder ids
+    (RFC 8474 `OBJECTID`, e.g. Stalwart), each listing's `STATUS` asks for
+    the folder's `MAILBOXID` too (a raw command, `mailbox_id_status.dart`:
+    enough_mail cannot ask or parse it) and stores it on the row
+    (`mailboxes.srv_mailbox_id`, schema v79, written by the mailbox state
+    writer). Before the prune, a vanished folder without a queued delete
+    (that one is never followed: its delete counts as done) whose id is
+    stored is taken for renamed to the new folder with the same id, wherever
+    it went and whatever it holds (#1315): an empty folder under a new
+    UIDVALIDITY, a rename and a move at once, two candidates with the same
+    mail. A new folder whose id differs is never taken for it by its
+    contents. Without ids (no `OBJECTID`, or a folder no listing read the id
+    of yet), a vanished folder is taken for renamed to a new folder that
+    shares its leaf (a move) or its parent (a rename) with it, when the
     match is unique both ways and the new folder either has the UIDVALIDITY
     of its sync checkpoint (STATUS; RFC 3501 servers that keep it across
-    RENAME) and holds its cached Message-IDs, or, as Stalwart gives a renamed
-    folder a new UIDVALIDITY, holds every Message-ID cached for it (up to 50,
-    `UID SEARCH HEADER Message-ID`) with exactly as many messages as are
-    cached. `serverPathChanged` then moves the row
-    (its id stays), its subfolders, its mail and the queued changes naming it
-    (App Log warn `mailbox.renamed_elsewhere`, saying which rule matched).
-    Otherwise (an empty or never-synced folder under a new UIDVALIDITY, two
-    candidates, a rename and a move at once) the queued changes fail visibly
-    as "folder removed on the server". JMAP renames keep the id and need none
-    of this. RFC 8474 `MAILBOXID` would identify the folder directly, but
-    enough_mail neither asks for nor parses it, so it is not used (phase 6b).
+    RENAME) and holds its cached Message-IDs, or, for servers that give a
+    renamed folder a new UIDVALIDITY, holds every Message-ID cached for it
+    (up to 50, `UID SEARCH HEADER Message-ID`) with exactly as many messages
+    as are cached. `serverPathChanged` then moves the row (its id stays),
+    its subfolders, its mail, its sync checkpoint and the queued changes
+    naming it (App Log warn `mailbox.renamed_elsewhere`, saying which rule
+    matched: `MAILBOXID`, `UIDVALIDITY` or `Message-ID`). A new UIDVALIDITY
+    is then a UIDVALIDITY change of the folder: its cached mail is re-matched
+    by Message-ID (#1314). Otherwise (without ids: an empty or never-synced
+    folder under a new UIDVALIDITY, two candidates, a rename and a move at
+    once) the queued changes fail visibly as "folder removed on the server".
+    JMAP renames keep the id and need none of this.
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder
     queues its `create_mailbox` (role `snoozed`) and waits for it, as on JMAP;
     the snooze and unsnooze flush no longer `CREATE` folders on the side (an
