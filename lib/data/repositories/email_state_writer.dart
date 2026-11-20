@@ -73,6 +73,18 @@ class EmailStateWriter {
   /// for its mail's server id, before [expireParked] gives up on them.
   static const parkedExpiry = Duration(days: 7);
 
+  /// The longest a row gone from its IMAP folder waits for another folder's
+  /// sync to adopt it (a move by another client whose source synced first,
+  /// [KeywordRead.markGone] with `awaitForeignMove`), when not every other
+  /// folder of the account synced since ([expireForeignMoveWaits]): a folder
+  /// whose sync fails for good must not keep it forever.
+  static const foreignMoveMaxWait = Duration(hours: 24);
+
+  /// `sync_states` key prefix (then the folder's path) of the read sequence
+  /// the last successful sync of a folder started at, for
+  /// [expireForeignMoveWaits].
+  static const folderSyncedPrefix = 'FolderSynced:';
+
   /// The next value of the read sequence (SYNC-REDESIGN.md §4.1). Take it
   /// right before sending a server read, and at an ack.
   Future<int> nextReadSeq() async {
@@ -875,9 +887,14 @@ class EmailStateWriter {
   /// goes too: the op stays on the Pending Changes screen. Returns the ids
   /// and folders (as shown before they were hidden: always `''`) of the
   /// rows deleted.
+  ///
+  /// A row that waits for a foreign move's destination
+  /// (`foreign_move_wait_seq`, [KeywordRead.markGone] with
+  /// `awaitForeignMove`) stays until [expireForeignMoveWaits] ends the wait.
   Future<List<String>> cleanUpGone(String accountId) async {
     final rows = await _db.customWriteReturning(
       'DELETE FROM emails WHERE account_id = ?1 AND srv_gone = 1 '
+      'AND foreign_move_wait_seq IS NULL '
       'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
       'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql)) '
       'RETURNING id',
@@ -887,6 +904,59 @@ class EmailStateWriter {
     );
     return [for (final r in rows) r.read<String>('id')];
   }
+
+  /// Ends the waits of the rows of [accountId] gone from their IMAP folder
+  /// that wait for a foreign move's destination
+  /// ([KeywordRead.markGone] with `awaitForeignMove`), once no other folder
+  /// can still adopt them: every other folder that can (not the source, not
+  /// All Mail or Drafts, not created offline or being deleted) had a
+  /// successful sync that started after the enumeration that found the row
+  /// gone (its [folderSyncedPrefix] marker holds a later read sequence), or
+  /// [foreignMoveMaxWait] passed. Returns those rows, as read before; the
+  /// caller applies the clean-up rule ([cleanUpGone]), which deletes them
+  /// unless a change of the user's keeps one.
+  Future<List<Email>> expireForeignMoveWaits(String accountId) =>
+      _db.transaction(() async {
+        final due = await _db.customSelect(
+          'SELECT e.id FROM emails e WHERE e.account_id = ?1 '
+          'AND e.srv_gone = 1 AND e.foreign_move_wait_seq IS NOT NULL '
+          'AND (e.foreign_move_wait_since IS NULL '
+          'OR e.foreign_move_wait_since <= ?2 '
+          'OR NOT EXISTS (SELECT 1 FROM mailboxes m '
+          'WHERE m.account_id = e.account_id AND m.is_local = 0 '
+          'AND m.local_hidden = 0 '
+          "AND COALESCE(m.role, '') NOT IN ('all', 'drafts') "
+          'AND m.path IS NOT e.srv_mailbox_path '
+          'AND NOT EXISTS (SELECT 1 FROM sync_states s '
+          'WHERE s.account_id = m.account_id '
+          "AND s.resource_type = '$folderSyncedPrefix' || m.path "
+          'AND CAST(s.state AS INTEGER) > e.foreign_move_wait_seq)))',
+          variables: [
+            Variable.withString(accountId),
+            Variable<DateTime>(_now().subtract(foreignMoveMaxWait)),
+          ],
+          readsFrom: {_db.emails, _db.mailboxes, _db.syncStates},
+        ).get();
+        if (due.isEmpty) return const <Email>[];
+        final ids = [for (final r in due) r.read<String>('id')];
+        final rows = <Email>[];
+        for (var i = 0; i < ids.length; i += 500) {
+          final chunk = ids.sublist(i, min(i + 500, ids.length));
+          rows.addAll(
+            await (_db.select(_db.emails)..where((t) => t.id.isIn(chunk)))
+                .get(),
+          );
+          await _db.customUpdate(
+            'UPDATE emails SET foreign_move_wait_seq = NULL, '
+            'foreign_move_wait_since = NULL WHERE srv_gone = 1 '
+            'AND id IN (${List.filled(chunk.length, '?').join(', ')})',
+            variables: [for (final id in chunk) Variable.withString(id)],
+            updates: {_db.emails},
+            updateKind: UpdateKind.update,
+          );
+        }
+        return rows;
+      });
 
   /// The rows that break the overlays' invariants (SYNC-REDESIGN.md §2):
   /// an effective column that is not `COALESCE(local, srv)` (for
@@ -1766,20 +1836,38 @@ class EmailStateWriter {
   }
 
   /// Marks [emailIds] gone on the server as a read (or ack) at [seq] says,
-  /// each only if no read that started later wrote its location. Returns
-  /// the ids marked.
-  Future<Set<String>> _markGoneAt(int seq, List<String> emailIds) async {
+  /// each only if no read that started later wrote its location. With
+  /// [awaitForeignMove] each waits for a foreign move's destination
+  /// (`foreign_move_wait_seq` [seq], since now; a row already waiting keeps
+  /// its wait), else no row waits. Returns the ids marked.
+  Future<Set<String>> _markGoneAt(
+    int seq,
+    List<String> emailIds, {
+    bool awaitForeignMove = false,
+  }) async {
+    // A `SET` expression sees the row's old values: a row already waiting
+    // (gone, with a wait) keeps when its wait began.
+    const waiting = 'srv_gone = 1 AND foreign_move_wait_seq IS NOT NULL';
+    final wait = awaitForeignMove
+        ? 'foreign_move_wait_seq = CASE WHEN $waiting '
+            'THEN foreign_move_wait_seq ELSE ?1 END, '
+            'foreign_move_wait_since = CASE WHEN $waiting '
+            'THEN foreign_move_wait_since ELSE ?2 END, '
+        : 'foreign_move_wait_seq = NULL, foreign_move_wait_since = NULL, ';
+    final now = _now();
     final marked = <String>{};
     for (var i = 0; i < emailIds.length; i += 500) {
       final chunk = emailIds.sublist(i, min(i + 500, emailIds.length));
       final rows = await _db.customWriteReturning(
-        'UPDATE emails SET srv_gone = 1, srv_location_seq = ?1, '
+        'UPDATE emails SET $wait'
+        'srv_gone = 1, srv_location_seq = ?1, '
         'mailbox_path = ${_shownPathSql(gone: '1')} '
         'WHERE srv_location_seq <= ?1 '
         'AND id IN (${List.filled(chunk.length, '?').join(', ')}) '
         'RETURNING id',
         variables: [
           Variable.withInt(seq),
+          if (awaitForeignMove) Variable<DateTime>(now),
           for (final id in chunk) Variable.withString(id),
         ],
         updates: {_db.emails},
@@ -2154,9 +2242,22 @@ class KeywordRead {
   /// settle. The row itself stays while it has an op
   /// ([EmailStateWriter.cleanUpGone] deletes it once it has none). Returns
   /// the ids marked.
-  Future<Set<String>> markGone(Iterable<String> emailIds) =>
+  ///
+  /// [awaitForeignMove]: the rows vanished from the IMAP folder this read
+  /// enumerated, and may have been moved by another client to a folder not
+  /// synced since: they also stay, hidden, until another folder's sync
+  /// adopts one (its mail arrives there, matched by Message-ID) or
+  /// [EmailStateWriter.expireForeignMoveWaits] ends the wait (#1313).
+  Future<Set<String>> markGone(
+    Iterable<String> emailIds, {
+    bool awaitForeignMove = false,
+  }) =>
       _writer._db.transaction(() async {
-        final marked = await _writer._markGoneAt(seq, emailIds.toList());
+        final marked = await _writer._markGoneAt(
+          seq,
+          emailIds.toList(),
+          awaitForeignMove: awaitForeignMove,
+        );
         for (final id in marked) {
           if (await _hasAcked(id)) await _writer._settleAcked(this, id);
         }

@@ -154,6 +154,22 @@ void useRigInboxArchive(
 Future<List<Email>> rigRowsOf(String messageId) =>
     (db.select(db.emails)..where((t) => t.messageId.equals(messageId))).get();
 
+/// Caches [text] as the body of row [emailId] in the rig's database.
+Future<void> rigAddBody(String emailId, String text) =>
+    db.into(db.emailBodies).insert(
+          EmailBodiesCompanion.insert(
+            emailId: emailId,
+            textBody: Value(text),
+          ),
+        );
+
+/// The cached text body of row [emailId], or null.
+Future<String?> rigBodyOf(String emailId) async => (await (db.select(
+      db.emailBodies,
+    )..where((t) => t.emailId.equals(emailId)))
+            .getSingleOrNull())
+        ?.textBody;
+
 /// The queued changes of the rig's database.
 Future<List<PendingChangeRow>> rigOps() => db.select(db.pendingChanges).get();
 

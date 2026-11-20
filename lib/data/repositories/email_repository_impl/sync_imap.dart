@@ -1229,6 +1229,27 @@ extension _SyncImap on EmailRepositoryImpl {
     }
   }
 
+  /// Of [emailIds], the rows with a move, snooze, unsnooze or delete of the
+  /// user's that is queued, being sent, acked or parked.
+  Future<Set<String>> _rowsWithPlacementChange(List<String> emailIds) async {
+    final found = <String>{};
+    for (var i = 0; i < emailIds.length; i += 500) {
+      final chunk = emailIds.sublist(i, math.min(i + 500, emailIds.length));
+      final rows = await (_db.selectOnly(_db.pendingChanges)
+            ..addColumns([_db.pendingChanges.resourceId])
+            ..where(
+              _db.pendingChanges.resourceId.isIn(chunk) &
+                  _db.pendingChanges.changeType.isIn(_placementChangeTypes) &
+                  _db.pendingChanges.state.isIn(
+                    const [..._liveStates, _ackedState, _parkedState],
+                  ),
+            ))
+          .get();
+      found.addAll(rows.map((r) => r.read(_db.pendingChanges.resourceId)!));
+    }
+    return found;
+  }
+
   /// Whether [accountId] has any row that may wait for its server copy
   /// ([_Counterparts._matchArrival]): a local virtual row (#545, #918), a
   /// row gone from its source (an acked move waiting for its destination
@@ -1506,7 +1527,41 @@ extension _SyncImap on EmailRepositoryImpl {
       if (!shown.contains(row.id)) continue;
       await _rethreadRow(row.id);
     }
-    final marked = await read.markGone([for (final row in gone) row.id]);
+    // A mail that vanished from here may have been moved by another client
+    // to a folder not synced since (the source synced first, #1313): its
+    // row waits, hidden, for that folder's sync to adopt it by Message-ID
+    // ([_RowIdentity._adoptForeignMove]); [_Sync._expireForeignMoveWaits]
+    // ends the wait. Not a row without a UID or stamped with another
+    // UIDVALIDITY than the folder's (a stale duplicate), without a
+    // Message-ID (nothing to match it by), or whose absence the user's own
+    // move or delete explains (its change settles it, as before); nor one
+    // of All Mail (Gmail: its mail vanishes when it is deleted) or Drafts
+    // (an edited draft comes back with the same Message-ID and another
+    // text).
+    final role = await _mailboxRole(accountId, mailboxPath);
+    final mayWait = role != 'all' && role != 'drafts';
+    final ownPlacement = mayWait && gone.isNotEmpty
+        ? await _rowsWithPlacementChange([for (final row in gone) row.id])
+        : const <String>{};
+    final waiting = {
+      if (mayWait)
+        for (final row in gone)
+          if (row.srvUid != null &&
+              (validity == null || row.srvUidValidity == validity) &&
+              !unlocatedSwept.contains(row) &&
+              !ownPlacement.contains(row.id) &&
+              normaliseMessageId(row.messageId) != null)
+            row.id,
+    };
+    final plain = [
+      for (final row in gone)
+        if (!waiting.contains(row.id)) row.id,
+    ];
+    final marked = {
+      if (plain.isNotEmpty) ...await read.markGone(plain),
+      if (waiting.isNotEmpty)
+        ...await read.markGone(waiting, awaitForeignMove: true),
+    };
     await _settleGoneRows(accountId, gone, marked);
     final unlocatedMarked = [
       for (final row in unlocatedSwept)

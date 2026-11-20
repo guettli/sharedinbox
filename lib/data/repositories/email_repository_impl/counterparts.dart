@@ -148,8 +148,10 @@ extension _Counterparts on EmailRepositoryImpl {
   ///   elsewhere). Its parked changes become pending ([_unparkOps]);
   /// - for an [isNew] row only: a row gone from its source whose acked move
   ///   into [arrivalMailboxPath] never learnt the new UID (§4.5, the appear
-  ///   side of carry-over), and a JMAP row of [arrivalMailboxPath] whose
-  ///   server id was never recorded.
+  ///   side of carry-over), a row gone from its IMAP folder that waits for
+  ///   a foreign move's destination ([_RowIdentity._adoptForeignMove],
+  ///   #1313), and a JMAP row of [arrivalMailboxPath] whose server id was
+  ///   never recorded.
   /// No-op without a unique match, so it is safe for every synced message
   /// and safe to replay.
   Future<void> _matchArrival(
@@ -185,6 +187,14 @@ extension _Counterparts on EmailRepositoryImpl {
     );
     if (awaiting != null) {
       await _matchInPlace(awaiting, realEmailId, kind: 'moved');
+      return;
+    }
+    if (await _adoptForeignMove(
+      accountId,
+      arrivalMailboxPath,
+      realEmailId,
+      mid,
+    )) {
       return;
     }
     final idless = await _idlessJmapRowFor(

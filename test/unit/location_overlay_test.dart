@@ -232,6 +232,10 @@ void main() {
     server.expungeElsewhere('a@test');
 
     await sync('INBOX');
+    // Hidden at once; kept until every other folder synced since, in case
+    // another client moved it there (#1313).
+    expect((await rowOfA()).mailboxPath, '');
+    await sync('Archive');
 
     expect(await rowsOfA(), isEmpty);
     expect(await db.select(db.threads).get(), hasLength(1));

@@ -62,6 +62,12 @@ void main() {
           ..where((t) => t.emailId.equals(a.id)))
         .getSingleOrNull();
     expect(body?.textBody, 'cached body');
+    expect(
+      (await rowsOf('b@test')).map((e) => e.mailboxPath),
+      [''],
+      reason: 'swept: hidden, waiting for a foreign move (#1313)',
+    );
+    await emails.syncEmails(_account.id, 'Archive');
     expect(await rowsOf('b@test'), isEmpty, reason: 'swept');
     expect(await rowsOf('c@test'), hasLength(1));
     final line = swept().single;
@@ -116,7 +122,14 @@ void main() {
     await emails.clearMailboxForResync(_account.id, 'INBOX');
     await emails.syncEmails(_account.id, 'INBOX');
 
-    expect(await rowsOf('b@test'), isEmpty);
+    // Swept: hidden (it waits for a foreign move's destination, #1313).
+    expect(
+      [
+        for (final e in await rowsOf('b@test'))
+          if (e.mailboxPath.isNotEmpty) e,
+      ],
+      isEmpty,
+    );
     expect(
       await rowsOf('filler@test'),
       hasLength(1),

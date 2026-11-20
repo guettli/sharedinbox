@@ -561,6 +561,97 @@ void main() {
     }
   });
 
+  // A foreign move whose source this device syncs first (#1313): the row
+  // gone from INBOX waits, hidden, and the destination's sync adopts it by
+  // Message-ID; it keeps its id and cached body.
+  test('a mail another session moved keeps its row when INBOX syncs first',
+      () async {
+    final folder = 'Foreign-${DateTime.now().millisecondsSinceEpoch}';
+    final setup = await connectImap(env: env, user: user);
+    try {
+      await setup.createMailbox(folder);
+    } finally {
+      await setup.logout();
+    }
+    await appendToInbox('foreign-move', body: 'body of the moved mail');
+
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    for (final (path, role) in [('INBOX', 'inbox'), (folder, null)]) {
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'test:$path',
+              accountId: 'test',
+              path: path,
+              name: path,
+              srvName: Value(path),
+              role: Value(role),
+            ),
+          );
+    }
+    try {
+      await r.emails.syncEmails('test', 'INBOX');
+      await r.emails.syncEmails('test', folder);
+      final row = (await r.emails.observeEmails('test', 'INBOX').first).single;
+      expect(
+        (await r.emails.getEmailBody(row.id)).textBody,
+        contains('body of the moved mail'),
+      );
+
+      // Another IMAP session moves it.
+      final other = await connectImap(env: env, user: user);
+      try {
+        await other.selectMailboxByPath('INBOX');
+        final search = await other.uidSearchMessages(
+          searchCriteria: 'SUBJECT "foreign-move"',
+        );
+        await other.uidMove(
+          MessageSequence.fromIds(
+            search.matchingSequence!.toList(),
+            isUid: true,
+          ),
+          targetMailboxPath: folder,
+        );
+      } finally {
+        await other.logout();
+      }
+
+      await r.emails.syncEmails('test', 'INBOX');
+      expect(await r.emails.observeEmails('test', 'INBOX').first, isEmpty);
+      final waiting = await (r.db.select(r.db.emails)
+            ..where((t) => t.id.equals(row.id)))
+          .getSingle();
+      expect((waiting.srvGone, waiting.mailboxPath), (true, ''));
+      expect(waiting.foreignMoveWaitSeq, isNotNull);
+
+      await r.emails.syncEmails('test', folder);
+
+      final moved = (await r.emails.observeEmails('test', folder).first).single;
+      expect(moved.id, row.id);
+      final rows = await r.db.select(r.db.emails).get();
+      expect(rows, hasLength(1));
+      expect(rows.single.srvMailboxPath, folder);
+      final body = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(row.id)))
+          .getSingleOrNull();
+      expect(body?.textBody, contains('body of the moved mail'));
+      expect(
+        logs.inserts.where((l) => l['event'] == 'email.foreign_move_adopted'),
+        hasLength(1),
+      );
+    } finally {
+      final cleanup = await connectImap(env: env, user: user);
+      try {
+        await cleanup.deleteMailbox(
+          (await cleanup.listMailboxes()).firstWhere((m) => m.path == folder),
+        );
+      } finally {
+        await cleanup.logout();
+      }
+    }
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 
