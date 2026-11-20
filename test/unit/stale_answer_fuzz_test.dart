@@ -823,7 +823,7 @@ class _FuzzRun {
     final r = _rnd.nextDouble();
     _trace.add('step $i');
     if (r < 0.35) return _userAction();
-    if (r < 0.45) return _otherClient();
+    if (r < 0.45) return _otherClient(betweenCommands: true);
     if (r < 0.5) return _flush();
     if (r < 0.55) return _sync(_pick(_folders));
     return _cycle();
@@ -1004,15 +1004,36 @@ class _FuzzRun {
       ];
 
   /// Another client changes the server (or new mail arrives).
-  Future<void> _otherClient() async {
+  /// [betweenCommands]: no app connection is waiting for an answer (a step
+  /// of its own, not a held-back answer).
+  Future<void> _otherClient({bool betweenCommands = false}) async {
     final all = [
       for (final folder in _server.folders.values)
         for (final message in folder.messages.values)
           (folder: folder.path, message: message),
     ];
     final r = _rnd.nextDouble();
-    if (all.isEmpty || r >= 0.95) {
+    if (all.isEmpty || r >= 0.97 || (r >= 0.95 && !betweenCommands)) {
       _deliver('INBOX');
+      return;
+    }
+    if (r >= 0.95) {
+      // The server renumbers a folder (UIDVALIDITY change, #1314): the
+      // same mails under new UIDs, so the cached rows and the queued
+      // changes all name old UIDs. Nothing the user asked for changes.
+      // Only between commands: a server does not change the UIDVALIDITY
+      // of a folder a session has selected (RFC 3501 §2.3.1.1), and the
+      // fake would apply that session's old UIDs to the new numbering.
+      final folder = _pick(_folders);
+      final reverse = _rnd.nextBool();
+      _server.renumberFolder(
+        folder,
+        _server.folders[folder]!.uidValidity + 1000,
+        reverse: reverse,
+      );
+      _trace.add(
+        '  other client: renumber $folder${reverse ? ' (reversed)' : ''}',
+      );
       return;
     }
     final (:folder, :message) = _pick(all);

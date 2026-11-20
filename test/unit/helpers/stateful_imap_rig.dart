@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:drift/drift.dart';
+import 'package:flutter_test/flutter_test.dart' show setUp, setUpAll, tearDown;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
@@ -123,6 +124,35 @@ Future<RecordingAppLogRepository> openRigInboxArchive() => openRigWithMailA(
       uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
       folders: [('INBOX', 'inbox'), ('Archive', 'archive')],
     );
+
+/// [openRigInboxArchive], then the mails [inbox] (Message-ID → flags)
+/// delivered to INBOX after `a@test`, and INBOX synced again.
+Future<RecordingAppLogRepository> openRigInboxArchiveWith(
+  Map<String, List<String>> inbox,
+) async {
+  final logs = await openRigInboxArchive();
+  for (final MapEntry(key: messageId, value: flags) in inbox.entries) {
+    server.deliver('INBOX', messageId, flags: flags);
+  }
+  await emails.syncEmails(statefulRigAccount.id, 'INBOX');
+  return logs;
+}
+
+/// Registers the suite's setup: each test opens the rig with
+/// [openRigInboxArchiveWith] ([inbox]), hands its App Log recorder to
+/// [onLogs], and closes the database afterwards.
+void useRigInboxArchive(
+  Map<String, List<String>> inbox,
+  void Function(RecordingAppLogRepository logs) onLogs,
+) {
+  setUpAll(configureSqliteForTests);
+  setUp(() async => onLogs(await openRigInboxArchiveWith(inbox)));
+  tearDown(() => db.close());
+}
+
+/// The rows of the mail [messageId] in the rig's database.
+Future<List<Email>> rigRowsOf(String messageId) =>
+    (db.select(db.emails)..where((t) => t.messageId.equals(messageId))).get();
 
 /// The queued changes of the rig's database.
 Future<List<PendingChangeRow>> rigOps() => db.select(db.pendingChanges).get();

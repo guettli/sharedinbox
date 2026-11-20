@@ -12,7 +12,6 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/keyword_fold.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
-import 'db_test_helper.dart';
 import 'helpers/stateful_fake_imap.dart';
 import 'helpers/stateful_imap_rig.dart';
 import 'recording_app_log_repository.dart';
@@ -20,18 +19,10 @@ import 'recording_app_log_repository.dart';
 const _account = statefulRigAccount;
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
   late RecordingAppLogRepository logs;
-  setUp(() async {
-    logs = await openRigInboxArchive();
-    server.deliver('INBOX', 'b@test');
-    await emails.syncEmails(_account.id, 'INBOX');
-  });
-  tearDown(() => db.close());
+  useRigInboxArchive({'b@test': []}, (l) => logs = l);
 
-  Future<List<Email>> rowsOf(String messageId) =>
-      (db.select(db.emails)..where((t) => t.messageId.equals(messageId))).get();
+  const rowsOf = rigRowsOf;
   Future<void> expectConsistent() async => expect(await rigProblems(), isEmpty);
   List<Map<String, Object?>> swept() => [
         for (final r in logs.inserts)
@@ -226,6 +217,12 @@ void main() {
       expect(rows.single.srvUidValidity, 99);
     }
     expect(await rowsOf('b@test'), isEmpty, reason: 'gone with the reset');
+    // a@test is found again by its Message-ID (#1314): same row, own body.
+    expect((await rowOfA()).id, a.id);
+    final aBody = await (db.select(db.emailBodies)
+          ..where((t) => t.emailId.equals(a.id)))
+        .getSingleOrNull();
+    expect(aBody?.textBody, 'cached body');
     final x = (await rowsOf('x@test')).single;
     final xBody = await (db.select(db.emailBodies)
           ..where((t) => t.emailId.equals(x.id)))
@@ -238,6 +235,7 @@ void main() {
       'without a known previous UIDVALIDITY, rows stamped with another one '
       'and an unstamped row holding another mail are not taken over', () async {
     final a = await rowOfA();
+    final bBefore = (await rowsOf('b@test')).single;
     await cacheBodyOf(a.id);
     // a@test's row recorded without a UIDVALIDITY (as before v70), and no
     // checkpoint to tell that the folder was renumbered.
@@ -261,9 +259,12 @@ void main() {
         .getSingleOrNull();
     expect(xBody, isNull);
     expect(await rowsOf('a@test'), isEmpty, reason: 'a stale duplicate');
-    // Its row stamped 11 went; the one stored now is stamped 99.
-    expect(await rowsOf('b@test'), hasLength(1));
-    expect((await rowsOf('b@test')).single.srvUidValidity, 99);
+    // Its row stamped 11 lost that UID and is found again by its
+    // Message-ID (#1314), now stamped 99.
+    final b = (await rowsOf('b@test')).single;
+    expect(b.id, bBefore.id);
+    expect(b.srvUidValidity, 99);
+    expect(b.srvUid, 2);
     await expectConsistent();
   });
 

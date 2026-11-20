@@ -184,7 +184,10 @@ extension _RowIdentity on EmailRepositoryImpl {
         payload[payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src'] =
             mailboxPath;
       } else if (payload['uid'] == newUid &&
-          payload[_uidAfterMoveKey] == null) {
+          payload[_uidAfterMoveKey] == null &&
+          (uidValidity == null || payload['uidValidity'] == uidValidity)) {
+        // Already there (a UIDVALIDITY change may give the mail its old
+        // UID under the new one: then only the stamp is rewritten).
         continue;
       } else if (addressed != mailboxPath) {
         // Queued behind a later move that is not answered yet: it stays

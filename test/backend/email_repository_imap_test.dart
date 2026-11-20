@@ -467,6 +467,100 @@ void main() {
     expect(body?.textBody, contains('kept body'));
   });
 
+  // A UIDVALIDITY change (#1314, SYNC-REDESIGN.md §6): the folder deleted
+  // and made again with the same mails gets a new UIDVALIDITY on Stalwart;
+  // the cached rows are found again by Message-ID and keep id and body.
+  test('a folder made again with the same mails keeps its rows (UIDVALIDITY)',
+      () async {
+    final folder = 'Renumbered-${DateTime.now().millisecondsSinceEpoch}';
+    Future<void> append(ImapClient client, List<MimeMessage> messages) async {
+      for (final message in messages) {
+        await client.appendMessage(message, targetMailboxPath: folder);
+      }
+    }
+
+    MimeMessage build(String subject) => (MessageBuilder()
+          ..from = [MailAddress(user.email, user.email)]
+          ..to = [MailAddress(user.email, user.email)]
+          ..subject = subject
+          ..text = 'body of $subject')
+        .buildMimeMessage();
+    final keepA = build('renumber-a');
+    final keepB = build('renumber-b');
+    final lost = build('renumber-lost');
+
+    final setup = await connectImap(env: env, user: user);
+    final int oldValidity;
+    try {
+      await setup.createMailbox(folder);
+      await append(setup, [keepA, keepB, lost]);
+      oldValidity = (await setup.selectMailboxByPath(folder)).uidValidity!;
+    } finally {
+      await setup.logout();
+    }
+
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    try {
+      await r.emails.syncEmails('test', folder);
+      final before = await r.emails.observeEmails('test', folder).first;
+      expect(before, hasLength(3));
+      final a = before.singleWhere((e) => e.subject == 'renumber-a');
+      final b = before.singleWhere((e) => e.subject == 'renumber-b');
+      expect(
+        (await r.emails.getEmailBody(a.id)).textBody,
+        contains('body of renumber-a'),
+      );
+
+      // Deleted and made again: the same mails (B first, so UIDs swap),
+      // without the lost one.
+      final other = await connectImap(env: env, user: user);
+      final int newValidity;
+      try {
+        await other.deleteMailbox(
+          (await other.listMailboxes()).firstWhere((m) => m.path == folder),
+        );
+        await other.createMailbox(folder);
+        await append(other, [keepB, keepA]);
+        newValidity = (await other.selectMailboxByPath(folder)).uidValidity!;
+      } finally {
+        await other.logout();
+      }
+      expect(newValidity, isNot(oldValidity));
+
+      await r.emails.syncEmails('test', folder);
+
+      final after = await r.emails.observeEmails('test', folder).first;
+      expect(after, hasLength(2));
+      expect(after.singleWhere((e) => e.subject == 'renumber-a').id, a.id);
+      expect(after.singleWhere((e) => e.subject == 'renumber-b').id, b.id);
+      final rows = await (r.db.select(r.db.emails)
+            ..where((t) => t.srvMailboxPath.equals(folder)))
+          .get();
+      expect(rows.map((e) => e.srvUidValidity).toSet(), {newValidity});
+      final body = await (r.db.select(r.db.emailBodies)
+            ..where((t) => t.emailId.equals(a.id)))
+          .getSingleOrNull();
+      expect(body?.textBody, contains('body of renumber-a'));
+      final line = logs.inserts
+          .singleWhere((l) => l['event'] == 'sync.uidvalidity_changed');
+      final data =
+          jsonDecode(line['dataJson']! as String) as Map<String, Object?>;
+      expect(data['rematched'], 2);
+      expect(data['removed'], 1);
+    } finally {
+      final cleanup = await connectImap(env: env, user: user);
+      try {
+        await cleanup.deleteMailbox(
+          (await cleanup.listMailboxes()).firstWhere((m) => m.path == folder),
+        );
+      } finally {
+        await cleanup.logout();
+      }
+    }
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 

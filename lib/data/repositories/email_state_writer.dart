@@ -1460,24 +1460,19 @@ class EmailStateWriter {
     return count;
   }
 
-  /// Folder [mailboxPath] of [accountId] is gone on the server (deleted, or
-  /// its UIDVALIDITY changed): its rows are marked gone ([KeywordRead.markGone]
-  /// with a fresh read sequence) and lose their UID, and the rows without a
-  /// pending, in-flight, stuck or acked op left are deleted
-  /// ([cleanUpGone]). A row the user still has a change queued for stays,
-  /// hidden or shown where that change puts it, until the change settles.
-  /// Returns the ids of the rows that stay ([kept]) and how many rows were
-  /// deleted ([removed]); the caller logs both.
-  ///
-  /// With [exceptUidValidity], only the rows stamped with another
-  /// UIDVALIDITY than that one: their UIDs name other mails now, whatever
-  /// the checkpoint says (a force resync's full fetch, which may not know
-  /// the folder's previous UIDVALIDITY).
+  /// Folder [mailboxPath] of [accountId] is gone on the server (deleted):
+  /// its rows are marked gone ([KeywordRead.markGone] with a fresh read
+  /// sequence) and lose their UID, and the rows without a pending,
+  /// in-flight, stuck or acked op left are deleted ([cleanUpGone]). A row
+  /// the user still has a change queued for stays, hidden or shown where
+  /// that change puts it, until the change settles. Returns the ids of the
+  /// rows that stay ([kept]) and how many rows were deleted ([removed]);
+  /// the caller logs both. A UIDVALIDITY change does not come here: its
+  /// rows are re-matched by Message-ID ([releaseFolderForRematch]).
   Future<({Set<String> kept, int removed})> markFolderGone(
     String accountId,
-    String mailboxPath, {
-    int? exceptUidValidity,
-  }) =>
+    String mailboxPath,
+  ) =>
       // One transaction: a flush relocating one of these rows meanwhile
       // (another isolate) must not have its new UID cleared.
       _db.transaction(() async {
@@ -1485,13 +1480,10 @@ class EmailStateWriter {
         final ids = [
           for (final r in await _db.customSelect(
             'SELECT id FROM emails WHERE account_id = ?1 '
-            'AND srv_mailbox_path = ?2 AND is_local = 0'
-            '${exceptUidValidity == null ? '' : ' AND srv_uid_validity IS NOT NULL AND srv_uid_validity <> ?3'}',
+            'AND srv_mailbox_path = ?2 AND is_local = 0',
             variables: [
               Variable.withString(accountId),
               Variable.withString(mailboxPath),
-              if (exceptUidValidity != null)
-                Variable.withInt(exceptUidValidity),
             ],
           ).get())
             r.read<String>('id'),
@@ -1520,6 +1512,47 @@ class EmailStateWriter {
             if (!deleted.contains(id)) id,
         };
         return (kept: kept, removed: marked.length - kept.length);
+      });
+
+  /// The UIDs of folder [mailboxPath] of [accountId] name other mails now
+  /// (its UIDVALIDITY changed, SYNC-REDESIGN.md §6): its rows forget their
+  /// UID and UIDVALIDITY, stamped with a fresh read sequence, and stay
+  /// otherwise as they are (shown, with body, attachments and queued
+  /// changes). The full fetch that follows gives each one the new UID of
+  /// its mail when the Message-ID matches uniquely
+  /// ([KeywordRead.adoptImapLocation]); its sweep marks the others gone,
+  /// and the clean-up rule deletes them. A row without a UID is found by
+  /// no location lookup, so it cannot take another mail's headers over its
+  /// body by a stale UID (B1).
+  ///
+  /// With [exceptUidValidity], only the rows stamped with another
+  /// UIDVALIDITY than that one: their UIDs name other mails now, whatever
+  /// the checkpoint says (a force resync's full fetch, which may not know
+  /// the folder's previous UIDVALIDITY). Returns the ids it released.
+  Future<Set<String>> releaseFolderForRematch(
+    String accountId,
+    String mailboxPath, {
+    int? exceptUidValidity,
+  }) =>
+      _db.transaction(() async {
+        final seq = await nextReadSeq();
+        final rows = await _db.customWriteReturning(
+          'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL, '
+          'srv_location_seq = MAX(srv_location_seq, ?3) '
+          'WHERE account_id = ?1 AND srv_mailbox_path = ?2 AND is_local = 0 '
+          'AND srv_uid IS NOT NULL'
+          '${exceptUidValidity == null ? '' : ' AND srv_uid_validity IS NOT NULL AND srv_uid_validity <> ?4'}'
+          ' RETURNING id',
+          variables: [
+            Variable.withString(accountId),
+            Variable.withString(mailboxPath),
+            Variable.withInt(seq),
+            if (exceptUidValidity != null) Variable.withInt(exceptUidValidity),
+          ],
+          updates: {_db.emails},
+          updateKind: UpdateKind.update,
+        );
+        return {for (final r in rows) r.read<String>('id')};
       });
 
   // ── Other columns ──────────────────────────────────────────────────────
@@ -2013,6 +2046,40 @@ class KeywordRead {
         }
         return written;
       });
+
+  /// The re-match after a UIDVALIDITY change (SYNC-REDESIGN.md §6): this
+  /// read, the full fetch of [mailboxPath], found the mail of row [emailId]
+  /// at [uid] under [uidValidity], by a unique Message-ID match. The row
+  /// takes that location and keeps its id, body, attachments and local
+  /// state. Written only while the row is still a released row of that
+  /// folder (no UID, not virtual;
+  /// [EmailStateWriter.releaseFolderForRematch]) and no read that started
+  /// later wrote its location. The caller then writes the headers, folder
+  /// and flags as for any row the fetch found, and points the row's queued
+  /// changes at [uid]. Returns whether it was written.
+  Future<bool> adoptImapLocation(
+    String emailId, {
+    required String mailboxPath,
+    required int uid,
+    required int? uidValidity,
+  }) async =>
+      await _writer._db.customUpdate(
+        'UPDATE emails SET uid = ?1, srv_uid = ?1, srv_uid_validity = ?2, '
+        'srv_gone = 0, srv_location_seq = ?3, '
+        'mailbox_path = ${_shownPathSql(gone: '0')} '
+        'WHERE id = ?4 AND srv_mailbox_path = ?5 AND srv_uid IS NULL '
+        'AND is_local = 0 AND srv_location_seq <= ?3',
+        variables: [
+          Variable.withInt(uid),
+          Variable<int>(uidValidity),
+          Variable.withInt(seq),
+          Variable.withString(emailId),
+          Variable.withString(mailboxPath),
+        ],
+        updates: {_writer._db.emails},
+        updateKind: UpdateKind.update,
+      ) >
+      0;
 
   /// An enumeration of a folder (IMAP `UID SEARCH ALL`, JMAP `Email/query`)
   /// listed rows [emailIds], whose server folder it is: they are still

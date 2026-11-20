@@ -551,7 +551,7 @@ the same statement and never rewrites the whole row.
 - **Force resync: mark and sweep** (#1236, phase 6a). A force resync of the account or
   of one folder deletes no row up front. It forgets the sync checkpoints (an IMAP one
   keeps its UIDVALIDITY with a "full fetch" mark, so a UIDVALIDITY the server changed
-  meanwhile still marks the folder's rows gone; on JMAP each folder gets a full sync
+  meanwhile is still seen and re-matched, see below; on JMAP each folder gets a full sync
   due, and the account resync forgets the `Mailbox` state), so the next sync of each
   folder is a complete refetch: every cached row it finds is written again through the
   gate and keeps its id, body and attachments. A row counts as found only under the
@@ -568,6 +568,27 @@ the same statement and never rewrites the whole row.
   All Mail sweeps it. App Log warn `sync.resync_swept` lists what a sweep removed. A
   refetch that fails part-way removes nothing. The v77 upgrade deletes the bodies and
   attachment rows that resyncs before 6a left without a mail.
+- **UIDVALIDITY change: re-match by Message-ID** (#1314, SYNC-REDESIGN.md §6). When
+  an IMAP folder's UIDVALIDITY changed (seen at SELECT against the checkpoint, also
+  after a force resync; without a known previous one, for the rows stamped with
+  another UIDVALIDITY), its rows forget their UID and UIDVALIDITY
+  (`releaseFolderForRematch`, stamped with a fresh read sequence) and otherwise stay
+  as they are: shown, with body, downloaded attachments and queued changes. The full
+  fetch that follows gives a mail without a row at its new location the row of the
+  folder without a UID that has its Message-ID, when exactly one such row and exactly
+  one mail of the folder have it. That row takes the new UID and UIDVALIDITY through
+  the read gate (`KeywordRead.adoptImapLocation`: only while no later read or move
+  answer wrote its location, `srv_location_seq`) and keeps its id; its queued IMAP
+  changes are pointed at the new UID and stamped with the new UIDVALIDITY, so none
+  acts on a stale UID (one flushed before the re-match finds its mail by Message-ID,
+  `_currentImapUid`). A row without a Message-ID, or with one another row or server
+  mail of the folder shares, is not matched: the sweep at the end of the full fetch
+  marks it gone, the clean-up rule deletes it (unless the user has a change of it),
+  and the mail comes back as a new row. A row without a UID is found by no location
+  lookup, so it never takes another mail's headers over its body. A fetch that fails
+  part-way removes nothing; the next sync sees the change again and re-matches. App
+  Log warn `sync.uidvalidity_changed` gives the counts re-matched and removed, and the
+  rows kept for a change.
 - **App Log of what sync removes** (audited in phase 6b): an *unexpected* removal or
   rewrite of local data by sync logs a warn line: data the user may miss, or that the
   server never reported deleted. A mail the server reports deleted in the ordinary
@@ -575,8 +596,9 @@ the same statement and never rewrites the whole row.
   one by one; a mail kept for a change of the user's still is
   (`email.server_gone_with_changes`). Added in 6b: `mailbox.removed_gone` (a folder
   gone on the server, with its cached mail; also when the paired account of the same
-  mailbox deleted it), `sync.uidvalidity_changed` also when no mail is kept (the
-  cached rows of a renumbered folder are removed and come back as new rows),
+  mailbox deleted it), `sync.uidvalidity_changed` also when no mail is kept (since
+  #1314: how many cached rows of a renumbered folder were re-matched by Message-ID
+  and how many were removed, their mail coming back as new rows),
   `sync.reconcile_pruned` (the periodic JMAP check removing mail no change reported
   deleted), `draft.server_gone` and `draft.folder_changed`; info `body_cache.evicted`
   and `mailbox.listing_skipped_arriving`. Added in #1312: `mailbox.listing_untrusted`
