@@ -1098,6 +1098,10 @@ class _FuzzRun {
     // destination copy resolves (SYNC-REDESIGN.md §4.5), and stuck changes
     // are due.
     _now = _now.add(EmailStateWriter.awaitAppearWindow);
+    // A row gone from its folder that waits for a foreign move's
+    // destination (#1313) ends its wait: this app lists no folders, so
+    // only by the cap. Its held changes are sent then.
+    _now = _now.add(EmailStateWriter.foreignMoveMaxWait);
     String? last;
     var stable = 0;
     for (var i = 0; i < 15 && stable < 2; i++) {

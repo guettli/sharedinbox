@@ -67,6 +67,7 @@ void main() {
       [''],
       reason: 'swept: hidden, waiting for a foreign move (#1313)',
     );
+    await rigListFolders();
     await emails.syncEmails(_account.id, 'Archive');
     expect(await rowsOf('b@test'), isEmpty, reason: 'swept');
     expect(await rowsOf('c@test'), hasLength(1));

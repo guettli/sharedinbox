@@ -248,8 +248,9 @@ void main() {
 
     await syncInbox();
     expect(await shownRowsOfA(), isEmpty);
-    // It waits for a foreign move's destination until every other folder
-    // synced since.
+    // It waits for a foreign move's destination until a listing and every
+    // other folder synced since.
+    await rigListFolders();
     await emails.syncEmails(_account.id, 'Archive');
     await emails.syncEmails(_account.id, 'Spam');
 

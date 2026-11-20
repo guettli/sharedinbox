@@ -22,9 +22,6 @@ extension _Sync on EmailRepositoryImpl {
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final started = _now();
-    // Before every read of this sync: a foreign move's source found gone
-    // by an enumeration before it is one this sync could adopt.
-    final startSeq = await _state.nextReadSeq();
     // One sync run: a change one of its reads contradicts is given up only
     // on a read of a later run (SYNC.md §6a).
     final result = await _state.inSyncRun(() async {
@@ -35,13 +32,7 @@ extension _Sync on EmailRepositoryImpl {
           return _syncEmailsJmap(account, password, mailboxPath);
       }
     });
-    await _afterFolderSync(
-      accountId,
-      mailboxPath,
-      started,
-      imapStartSeq:
-          account.type == account_model.AccountType.imap ? startSeq : null,
-    );
+    await _afterFolderSync(accountId, mailboxPath, started);
     // Sampled, at most every half hour per account (SYNC.md §6a). Awaited:
     // it is bounded (a few ms when due, one row read otherwise), and a
     // background isolate may end as soon as the sync returns.
@@ -63,24 +54,14 @@ extension _Sync on EmailRepositoryImpl {
   /// sync: a week offline must not drop a note whose copy the next sync
   /// stores.
   ///
-  /// On IMAP ([imapStartSeq]: the read sequence taken before the sync's
-  /// first read) the folder is recorded as synced since then, and the rows
-  /// gone from another folder that waited for a foreign move's destination
-  /// end their wait once no folder is left that could still adopt them
-  /// ([_expireForeignMoveWaits]).
+  /// The rows gone from an IMAP folder that waited for a foreign move's
+  /// destination end their wait once no folder is left that could still
+  /// adopt them ([_expireForeignMoveWaits]).
   Future<void> _afterFolderSync(
     String accountId,
     String mailboxPath,
-    DateTime started, {
-    int? imapStartSeq,
-  }) async {
-    if (imapStartSeq != null) {
-      await _saveSyncState(
-        accountId,
-        '${EmailStateWriter.folderSyncedPrefix}$mailboxPath',
-        '$imapStartSeq',
-      );
-    }
+    DateTime started,
+  ) async {
     await _expireForeignMoveWaits(accountId);
     final ended = {
       ...await _state.endAwaitedMoves(accountId, mailboxPath, started),
@@ -106,7 +87,17 @@ extension _Sync on EmailRepositoryImpl {
   Future<void> _expireForeignMoveWaits(String accountId) async {
     final expired = await _state.expireForeignMoveWaits(accountId);
     if (expired.isEmpty) return;
-    final ids = [for (final row in expired) row.id];
+    final ids = [for (final e in expired) e.row.id];
+    // Gmail: archiving elsewhere leaves the mail in All Mail only, which
+    // is not synced; such an expiry is the normal case there.
+    final allMail = await (_db.selectOnly(_db.mailboxes)
+          ..addColumns([_db.mailboxes.id])
+          ..where(
+            _db.mailboxes.accountId.equals(accountId) &
+                _db.mailboxes.role.equals('all'),
+          )
+          ..limit(1))
+        .getSingleOrNull();
     final withBody = {
       for (final b in await (_db.selectOnly(_db.emailBodies)
             ..addColumns([_db.emailBodies.emailId])
@@ -121,36 +112,47 @@ extension _Sync on EmailRepositoryImpl {
       files[f.emailId] = (files[f.emailId] ?? 0) + 1;
     }
     final deleted = (await _state.cleanUpGone(accountId)).toSet();
-    for (final row in expired) {
+    for (final (:row, :capped) in expired) {
       if (!deleted.contains(row.id)) continue;
       _logForeignMoveWaitExpired(
         row,
         body: withBody.contains(row.id),
         attachments: files[row.id] ?? 0,
+        capped: capped,
+        allMail: allMail != null,
       );
     }
   }
 
   /// App Log line for [row], deleted when its wait for a foreign move's
-  /// destination ended; warn when its cached [body] or [attachments] went
-  /// with it.
+  /// destination ended ([capped]: after
+  /// [EmailStateWriter.foreignMoveMaxWait], else every other folder synced
+  /// since); warn when its cached [body] or [attachments] went with it,
+  /// unless the account has an All Mail folder ([allMail], Gmail), where
+  /// a mail archived elsewhere ends like this.
   void _logForeignMoveWaitExpired(
     Email row, {
     required bool body,
     required int attachments,
+    required bool capped,
+    required bool allMail,
   }) {
     final lost = [
       if (body) 'body',
       if (attachments > 0) '$attachments downloaded attachment(s)',
     ];
     final from = row.srvMailboxPath ?? '?';
+    final why = capped
+        ? 'it waited ${EmailStateWriter.foreignMoveMaxWait.inHours} hours'
+        : 'every other folder synced since';
     final message = 'Removed "${row.subject ?? '(no subject)'}", gone from '
-        '$from on the server: no other folder received it within the wait'
+        '$from on the server: no other folder received it ($why)'
+        '${allMail ? '; it may only be in All Mail (archived)' : ''}'
         '${lost.isEmpty ? '' : ' (its cached ${lost.join(' and ')} went '
             'with it)'}';
     unawaited(
       _appLogger?.log(
-        level: lost.isEmpty ? AppLogLevel.info : AppLogLevel.warn,
+        level: lost.isEmpty || allMail ? AppLogLevel.info : AppLogLevel.warn,
         event: 'email.foreign_move_wait_expired',
         message: message,
         accountId: row.accountId,
@@ -161,6 +163,7 @@ extension _Sync on EmailRepositoryImpl {
           'from': from,
           'body': body,
           'attachments': attachments,
+          'reason': capped ? 'max_wait' : 'folders_synced',
         },
       ),
     );

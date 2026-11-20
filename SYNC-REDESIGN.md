@@ -1872,29 +1872,36 @@ State as of phase 6b (checked with `gh issue view`):
 
 What remains after phase 6, with where it is handled today:
 
-- **A foreign move whose source folder is synced first** (another client
-  moved the mail; this device syncs the source before the destination) is
-  carried over since #1313: the source's absence rule keeps a vanished IMAP
-  row with a Message-ID and a UID, hidden, as waiting
-  (`foreign_move_wait_seq` / `_since`, kept by the clean-up rule), and the
-  sync of another folder that stores a new mail with that Message-ID
-  adopts it in place (`_adoptForeignMove` → `_carryOverMovedRow`) when
-  exactly one row waits with it. The wait ends once every other folder that
-  could adopt it synced after the enumeration that found it gone (by read
-  sequence, `FolderSynced:<path>`), or after 24 hours; then the clean-up
-  rule deletes it (`email.foreign_move_wait_expired`). Left open: no
-  adoption without a unique match (two rows waiting with the Message-ID,
-  two arrivals in one folder), across the Sent boundary, into All Mail or
-  Drafts, or when the server ids or sizes differ; a row without a
-  Message-ID is deleted at once as before; a device offline for longer
-  than 24 hours gives up the wait, and the mail comes back as a new row. A
-  mail with a reused Message-ID and the same size that arrives in another
-  folder while the deleted one waits (a re-sent copy) is taken for the
-  moved one. On JMAP a move keeps the Email id; left there: the periodic
-  prune of a folder that runs between another client's move and the
-  destination's `Email/changes` still deletes the row (a narrow window).
-  The other order (destination first) is carried over
-  (`_carryOverMovedRow`).
+- **A foreign move without a move-stable id, in either order** is
+  carried over since #1313 (SYNC.md §3). Destination first: the source's
+  reconcile matches the vanished row to the only live row outside the
+  source with its Message-ID that a read stored after the source's
+  previous enumeration (`FolderSearched:<path>`). Source first: the
+  vanished IMAP row with a Message-ID and a UID waits, hidden
+  (`foreign_move_wait_seq`, a fresh read sequence taken after the
+  enumeration's answer, and `_since`; the clean-up rule keeps it, and the
+  flush holds its other queued changes), and the sync of another folder
+  that stores a new mail with that Message-ID adopts it in place
+  (`_adoptForeignMove` → `_carryOverMovedRow`) when exactly one row waits
+  with it. The wait ends once a folder listing (`FolderListed`) and every
+  other folder that could adopt it (`FolderSynced:<path>`, written only by
+  a sync that searched and fetched) started after it, or after 24 hours;
+  then the clean-up rule deletes it (`email.foreign_move_wait_expired`).
+  Left open: no match without a unique pair (two rows waiting with the
+  Message-ID, two arrivals in one folder), across the Sent boundary, into
+  All Mail or Drafts, when the server ids or sizes differ, or when only
+  the Message-ID agrees (`email.foreign_move_not_adopted`); a row without
+  a Message-ID is deleted at once as before; an adoption refused by the
+  transaction's re-check is not retried; a device offline for longer than
+  24 hours gives up the wait, and the mail comes back as a new row. A mail
+  with a reused Message-ID, the same size, Date and Subject that arrives
+  in another folder while the deleted one waits (a re-sent copy) is taken
+  for the moved one; destination first, a live row placed by a read after
+  the source's last enumeration is taken for the moved mail even if it was
+  an older copy whose location a read rewrote then. On JMAP a move keeps
+  the Email id; left there: the periodic prune of a folder that runs
+  between another client's move and the destination's `Email/changes`
+  still deletes the row (a narrow window).
 - **A folder renamed or moved on another IMAP client** is followed only
   when its UIDVALIDITY survives the RENAME and its cached Message-IDs are
   found, or, on servers that give it a new UIDVALIDITY (Stalwart), when it

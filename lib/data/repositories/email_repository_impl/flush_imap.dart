@@ -125,7 +125,18 @@ extension _FlushImap on EmailRepositoryImpl {
                       : t.resourceType.equals(mailboxResourceType).not()) &
                   (t.state.equals(_pendingState) |
                       (t.state.equals(_stuckState) &
-                          t.leaseUntil.isSmallerOrEqualValue(now))),
+                          t.leaseUntil.isSmallerOrEqualValue(now))) &
+                  // Held while its mail waits for a foreign move's
+                  // destination (#1313): sent to the vanished UID, a
+                  // STORE would answer OK and do nothing. The adoption
+                  // points it at the new UID; the end of the wait lets it
+                  // fail visibly.
+                  CustomExpression<bool>(
+                    'NOT EXISTS (SELECT 1 FROM emails w '
+                    'WHERE w.id = ${t.aliasedName}.resource_id '
+                    'AND w.srv_gone = 1 '
+                    'AND w.foreign_move_wait_seq IS NOT NULL)',
+                  ),
             )
             // Flush in enqueue order. The autoincrement id gives that
             // exactly; `createdAt` can tie for changes queued together (a

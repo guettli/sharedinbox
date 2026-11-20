@@ -154,6 +154,11 @@ void useRigInboxArchive(
 Future<List<Email>> rigRowsOf(String messageId) =>
     (db.select(db.emails)..where((t) => t.messageId.equals(messageId))).get();
 
+/// Lists the rig account's folders (IMAP `LIST`, through the mailbox
+/// repository), as every sync cycle does first.
+Future<void> rigListFolders() =>
+    rig.mailboxes.syncMailboxes(statefulRigAccount.id);
+
 /// Caches [text] as the body of row [emailId] in the rig's database.
 Future<void> rigAddBody(String emailId, String text) =>
     db.into(db.emailBodies).insert(

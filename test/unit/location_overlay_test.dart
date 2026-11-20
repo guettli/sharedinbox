@@ -235,6 +235,7 @@ void main() {
     // Hidden at once; kept until every other folder synced since, in case
     // another client moved it there (#1313).
     expect((await rowOfA()).mailboxPath, '');
+    await rigListFolders();
     await sync('Archive');
 
     expect(await rowsOfA(), isEmpty);

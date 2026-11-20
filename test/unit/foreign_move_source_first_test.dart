@@ -3,11 +3,14 @@
 // Message-ID its row waits, hidden, until another folder's sync stores the
 // mail: that sync adopts it, and the row keeps its id, body, attachments and
 // references. When no folder receives it (a delete elsewhere), the wait ends
-// once every other folder synced since, or after
+// once a folder listing and every other folder synced since, or after
 // EmailStateWriter.foreignMoveMaxWait, and the clean-up rule removes it.
+// The other order (destination first) without EMAILID is matched by
+// Message-ID when the source's sync finds the mail gone.
 
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -57,6 +60,32 @@ void main() {
 
   Iterable<AppLogEntry> logsOf(String event) =>
       logs.rows.where((l) => l.event == event);
+
+  /// INBOX (where a@test vanished), a listing and the other folders
+  /// synced: the wait ends, the row is removed; the expiry's App Log line.
+  Future<AppLogEntry> syncUntilExpired() async {
+    await sync('INBOX');
+    await rigListFolders();
+    await sync('Archive');
+    await sync('Spam');
+    expect(await rowsOfA(), isEmpty);
+    return logsOf('email.foreign_move_wait_expired').single;
+  }
+
+  Future<Email> rowOfA2(String id) async =>
+      (await rowsOfA()).singleWhere((e) => e.id == id);
+
+  Map<String, dynamic> dataOf(AppLogEntry entry) =>
+      jsonDecode(entry.dataJson!) as Map<String, dynamic>;
+
+  Future<void> setRow(String id, EmailsCompanion values) =>
+      (db.update(db.emails)..where((t) => t.id.equals(id))).write(values);
+
+  Future<String?> syncState(String key) async => (await (db.select(
+        db.syncStates,
+      )..where((t) => t.resourceType.equals(key)))
+              .getSingleOrNull())
+          ?.state;
 
   group('source synced first', () {
     setUp(open);
@@ -125,9 +154,19 @@ void main() {
     test('a waiting row shows nowhere', () async {
       final id = (await rowOfA()).id;
       await addBody(id, 'cached body');
+      // A queued read change: the unread delta must not count the row.
+      await emails.setFlag(id, seen: true);
       server.moveElsewhere('a@test', 'Archive');
 
       await sync('INBOX');
+      await rigListFolders();
+      final counts = {
+        for (final m in await rig.mailboxes.observeMailboxes(_account.id).first)
+          m.path: m.unreadCount,
+      };
+      // The server's counts (a@test is unread in Archive there) and no
+      // delta from the hidden row.
+      expect(counts, {'INBOX': 0, 'Archive': 2, 'Spam': 0});
 
       expect(await emails.getEmail(id), isNull);
       expect(await emails.observeEmails(_account.id, 'INBOX').first, isEmpty);
@@ -142,13 +181,6 @@ void main() {
       );
       // Prefetch, notifications and counts skip a row shown nowhere.
       expect((await rowOfA()).mailboxPath, '');
-      final unread = await db
-          .customSelect(
-            'SELECT COUNT(*) AS n FROM emails '
-            "WHERE mailbox_path <> '' AND is_seen = 0",
-          )
-          .getSingle();
-      expect(unread.read<int>('n'), 1); // the filler in Archive
     });
 
     test('a restart between the two syncs still adopts the row', () async {
@@ -186,6 +218,11 @@ void main() {
       // Kept for the change and waiting, hidden: no move shows it.
       var e = await rowOfA();
       expect((e.srvGone, e.foreignMoveWaitSeq != null), (true, true));
+      // A flush now holds the change: sent to the vanished UID, the STORE
+      // would answer OK and do nothing.
+      await emails.flushPendingChanges(_account.id, 'pw');
+      expect(server.find('a@test')!.message.flagged, isFalse);
+      expect((await rigOps()).single.state, 'pending');
 
       await sync('Archive');
 
@@ -213,6 +250,8 @@ void main() {
       server.moveElsewhere('a@test', 'Archive');
 
       await sync('INBOX');
+      // Its own move explains the absence: no wait, the ops path settles it.
+      expect((await rowOfA()).foreignMoveWaitSeq, isNull);
       await sync('Archive');
 
       // The user's move shows the row in Spam; the copy in Archive is a row
@@ -266,6 +305,7 @@ void main() {
 
       await sync('INBOX');
       expect((await rowOfA()).foreignMoveWaitSeq, isNotNull);
+      await rigListFolders();
       // Archive synced since, Spam not yet: Spam may still get it.
       await sync('Archive');
       expect(await rowsOfA(), hasLength(1));
@@ -281,21 +321,52 @@ void main() {
       expect(expired.level, AppLogLevel.warn);
       final data = jsonDecode(expired.dataJson!) as Map<String, dynamic>;
       expect(
-        (data['removedEmailId'], data['from'], data['body']),
-        (id, 'INBOX', true),
+        (data['removedEmailId'], data['from'], data['body'], data['reason']),
+        (id, 'INBOX', true, 'folders_synced'),
       );
       expect(logsOf('email.foreign_move_adopted'), isEmpty);
+    });
+
+    test('not before a folder listing that started after the mark', () async {
+      server.expungeElsewhere('a@test');
+      await rigListFolders();
+
+      await sync('INBOX');
+      await sync('Archive');
+      await sync('Spam');
+      expect(await rowsOfA(), hasLength(1), reason: 'no listing since');
+
+      await rigListFolders();
+      await sync('Archive');
+      expect(await rowsOfA(), isEmpty);
+    });
+
+    test('a move into a folder made meanwhile waits for its sync', () async {
+      final id = (await rowOfA()).id;
+      server
+        ..addFolder('New')
+        ..moveElsewhere('a@test', 'New');
+
+      await sync('INBOX');
+      await sync('Archive');
+      await sync('Spam');
+      expect((await rowOfA()).srvGone, isTrue, reason: 'New is not listed');
+      await rigListFolders();
+      await sync('Archive');
+      await sync('Spam');
+      expect((await rowOfA()).srvGone, isTrue, reason: 'New not synced yet');
+
+      await sync('New');
+
+      final e = await rowOfA();
+      expect((e.id, e.mailboxPath, e.srvGone), (id, 'New', false));
     });
 
     test('without a cached body the expiry is logged as info', () async {
       server.expungeElsewhere('a@test');
 
-      await sync('INBOX');
-      await sync('Archive');
-      await sync('Spam');
+      final expired = await syncUntilExpired();
 
-      expect(await rowsOfA(), isEmpty);
-      final expired = logsOf('email.foreign_move_wait_expired').single;
       expect(expired.level, AppLogLevel.info);
     });
 
@@ -313,13 +384,78 @@ void main() {
       await sync('INBOX');
 
       expect(await rowsOfA(), isEmpty);
-      expect(logsOf('email.foreign_move_wait_expired'), hasLength(1));
+      final expired = logsOf('email.foreign_move_wait_expired').single;
+      expect(dataOf(expired)['reason'], 'max_wait');
+    });
+
+    test('a wait that ended is not started again', () async {
+      final id = (await rowOfA()).id;
+      // Kept after its wait for this change.
+      await emails.setFlag(id, flagged: true);
+      server.expungeElsewhere('a@test');
+      await sync('INBOX');
+      await rigListFolders();
+      await sync('Archive');
+      await sync('Spam');
+      var e = await rowOfA();
+      expect((e.srvGone, e.foreignMoveWaitSeq), (true, null));
+
+      await sync('INBOX');
+
+      e = await rowOfA();
+      expect(e.foreignMoveWaitSeq, isNull);
+    });
+
+    test('a sync that started before the mark does not end the wait', () async {
+      // Another isolate's Archive and Spam syncs started after INBOX's
+      // search was sent, and searched before the move: their markers hold
+      // later sequences than that search.
+      final writer = EmailStateWriter(db);
+      final id = (await rowOfA()).id;
+      final search = await writer.beginRead(_account.id);
+      server.expungeElsewhere('a@test');
+      final otherStart = await writer.nextReadSeq();
+      for (final key in [
+        '${EmailStateWriter.folderSyncedPrefix}Archive',
+        '${EmailStateWriter.folderSyncedPrefix}Spam',
+        EmailStateWriter.folderListedKey,
+      ]) {
+        await db.into(db.syncStates).insertOnConflictUpdate(
+              SyncStatesCompanion.insert(
+                accountId: _account.id,
+                resourceType: key,
+                state: '$otherStart',
+                syncedAt: now,
+              ),
+            );
+      }
+
+      await search.markGone([id], awaitForeignMove: true);
+
+      expect((await rowOfA()).foreignMoveWaitSeq, greaterThan(otherStart));
+      expect(await writer.expireForeignMoveWaits(_account.id), isEmpty);
+    });
+
+    test('a sync that fetched nothing does not count as synced', () async {
+      const key = '${EmailStateWriter.folderSyncedPrefix}Archive';
+      final before = await syncState(key);
+      expect(before, isNotNull);
+      // A UIDVALIDITY change whose re-match is deferred: SEARCH ALL
+      // answers nothing while SELECT counts mail.
+      server
+        ..renumberFolder('Archive', 99)
+        ..searchAllEmpty = true;
+
+      await sync('Archive');
+
+      expect(await syncState(key), before);
     });
 
     test('a mail that arrives after the wait ended gets a new row', () async {
       final id = (await rowOfA()).id;
       server.expungeElsewhere('a@test');
       await sync('INBOX');
+      await rigListFolders();
       await sync('Archive');
       await sync('Spam');
       expect(await rowsOfA(), isEmpty);
@@ -341,6 +477,9 @@ void main() {
       // A second copy of a@test in Spam; both vanish.
       server.deliver('Spam', 'a@test');
       await sync('Spam');
+      // INBOX lists its copy again after the Spam copy was stored: two
+      // copies, not a move.
+      await sync('INBOX');
       final ids = (await rowsOfA()).map((e) => e.id).toSet();
       expect(ids, hasLength(2));
       server.moveElsewhere('a@test', 'Archive'); // the INBOX copy
@@ -433,9 +572,21 @@ void main() {
       expect(logsOf('email.foreign_move_adopted'), isEmpty);
       expect(rows.map((e) => e.id), contains(id));
       // All Mail is no folder the wait waits for.
+      await rigListFolders();
       await sync('Archive');
       await sync('Spam');
       expect((await rowsOfA()).map((e) => e.id), isNot(contains(id)));
+    });
+
+    test('archived elsewhere (only in All Mail): the expiry is info', () async {
+      final id = (await rowOfA()).id;
+      await addBody(id, 'cached body');
+      server.moveElsewhere('a@test', '[Gmail]/All Mail');
+
+      final expired = await syncUntilExpired();
+
+      expect(expired.level, AppLogLevel.info);
+      expect(dataOf(expired)['body'], isTrue);
     });
 
     test('a mail gone from All Mail does not wait', () async {
@@ -449,6 +600,154 @@ void main() {
             ..where((t) => t.messageId.equals('b@test')))
           .get();
       expect(rows, isEmpty);
+    });
+  });
+
+  group('destination synced first, no EMAILID', () {
+    setUp(open);
+
+    test('the source sync matches the new row by Message-ID', () async {
+      final id = (await rowOfA()).id;
+      await addBody(id, 'cached body');
+      server.moveElsewhere('a@test', 'Archive');
+
+      await sync('Archive');
+      expect(await rowsOfA(), hasLength(2), reason: 'a new row in Archive');
+      await sync('INBOX');
+
+      final e = await rowOfA();
+      expect((e.id, e.mailboxPath, e.srvGone), (id, 'Archive', false));
+      expect(
+        (e.srvMailboxPath, e.srvUid, e.srvUidValidity),
+        ('Archive', 2, 22),
+      );
+      expect(await bodyOf(id), 'cached body');
+      final adopted = logsOf('email.foreign_move_adopted').single;
+      expect(dataOf(adopted)['order'], 'destination_first');
+      expect(await rigProblems(), isEmpty);
+    });
+
+    test('a copy stored before the source last listed the mail is no match',
+        () async {
+      final id = (await rowOfA()).id;
+      // A second copy of a@test in Archive, seen while INBOX still had its
+      // own; then the INBOX copy is deleted elsewhere.
+      server.deliver('Archive', 'a@test');
+      await sync('Archive');
+      await sync('INBOX');
+      final copyId =
+          (await rowsOfA()).singleWhere((e) => e.mailboxPath == 'Archive').id;
+      server.folders['INBOX']!.messages.clear();
+
+      await sync('INBOX');
+
+      final rows = {for (final e in await rowsOfA()) e.id: e.mailboxPath};
+      expect(rows, {id: '', copyId: 'Archive'});
+      expect(logsOf('email.foreign_move_adopted'), isEmpty);
+    });
+  });
+
+  group('no adoption when the pair cannot be the same mail', () {
+    Iterable<String> notAdopted() => [
+          for (final l in logsOf('email.foreign_move_not_adopted'))
+            dataOf(l)['reason'] as String,
+        ];
+
+    test('another EMAILID', () async {
+      await open(objectIds: true);
+      final id = (await rowOfA()).id;
+      server
+        ..expungeElsewhere('a@test')
+        ..deliver('Archive', 'a@test', emailId: 'E-other');
+
+      await sync('INBOX');
+      await sync('Archive');
+
+      final shown =
+          (await rowsOfA()).singleWhere((e) => e.mailboxPath == 'Archive');
+      expect(shown.id, isNot(id));
+      expect(notAdopted(), ['another server email id']);
+    });
+
+    test('another size', () async {
+      await open();
+      final id = (await rowOfA()).id;
+      server.moveElsewhere('a@test', 'Archive');
+      await sync('INBOX');
+      await setRow(id, const EmailsCompanion(sizeBytes: Value(99)));
+
+      await sync('Archive');
+
+      expect((await rowOfA2(id)).srvGone, isTrue);
+      expect(notAdopted(), ['another size']);
+    });
+
+    test('only the Message-ID agrees (a legacy row)', () async {
+      await open();
+      final id = (await rowOfA()).id;
+      server.moveElsewhere('a@test', 'Archive');
+      await sync('INBOX');
+      await setRow(
+        id,
+        const EmailsCompanion(sizeBytes: Value(null), sentAt: Value(null)),
+      );
+
+      await sync('Archive');
+
+      expect((await rowOfA2(id)).srvGone, isTrue);
+      expect(notAdopted().single, startsWith('only the Message-ID agrees'));
+    });
+
+    test('a mail that left Sent', () async {
+      await open(extra: [('Sent', 'sent')]);
+      server.deliver('Sent', 's@test');
+      await sync('Sent');
+      final id = (await rigRowsOf('s@test')).single.id;
+      server.moveElsewhere('s@test', 'Archive');
+
+      await sync('Sent');
+      expect((await rigRowsOf('s@test')).single.foreignMoveWaitSeq, isNotNull);
+      await sync('Archive');
+
+      final shown = (await rigRowsOf('s@test'))
+          .singleWhere((e) => e.mailboxPath == 'Archive');
+      expect(shown.id, isNot(id));
+      expect(notAdopted(), ['across the Sent folder']);
+    });
+
+    test('a mail gone from Drafts does not wait', () async {
+      await open(extra: [('Drafts', 'drafts')]);
+      server.deliver('Drafts', 'd@test');
+      await sync('Drafts');
+      server.expungeElsewhere('d@test');
+
+      await sync('Drafts');
+
+      expect(await rigRowsOf('d@test'), isEmpty);
+    });
+
+    test('a row that changed before the carry-over is not retried', () async {
+      await open();
+      final id = (await rowOfA()).id;
+      server.moveElsewhere('a@test', 'Archive');
+      await sync('INBOX');
+      // A move of the waiting row appears (another isolate queued it).
+      await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: _account.id,
+              resourceType: 'Email',
+              resourceId: id,
+              changeType: 'move',
+              payload: '{}',
+              createdAt: now,
+            ),
+          );
+
+      await sync('Archive');
+
+      expect((await rowOfA2(id)).srvGone, isTrue);
+      expect(notAdopted().single, startsWith('the row changed meanwhile'));
+      expect(logsOf('email.foreign_move_adopted'), isEmpty);
     });
   });
 }
