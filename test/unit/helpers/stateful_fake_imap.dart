@@ -115,6 +115,10 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// How many LISTs app connections sent.
   int listCount = 0;
 
+  /// When set, `UID SEARCH ALL` lists no message although the folders have
+  /// some (a server whose index lags, or a glitch).
+  bool searchAllEmpty = false;
+
   /// Another client deletes folder [path] (with its messages).
   void deleteFolder(String path) => folders.remove(path);
 
@@ -446,7 +450,11 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   List<int> _search(String criteria) {
     final messages = _folder.messages;
-    if (criteria == 'ALL') return messages.keys.toList();
+    if (criteria == 'ALL') {
+      // A server whose index lags, or a glitch: nothing listed.
+      if (server.searchAllEmpty) return const [];
+      return messages.keys.toList();
+    }
     if (criteria == 'DELETED') {
       return [
         for (final m in messages.values)
@@ -489,18 +497,36 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) async {
     final items = fetchContentDefinition ?? '';
     final since = changedSinceModSequence;
-    final full = items.contains('ENVELOPE');
+    final headers = items.contains('ENVELOPE');
+    // The whole message (a body, attachment or raw-source fetch).
+    final body = items.contains('BODY.PEEK[]') || items.contains('BODY[]');
+    final full = headers || body;
     final messages = [
       for (final m in _named(sequence))
         if (since == null || m.modSeq > since)
           full ? _fullMessage(m) : _flagsMessage(m, withSize: items),
     ];
-    final what = full ? 'headers' : items;
+    final what = headers
+        ? 'headers'
+        : body
+            ? 'body'
+            : items;
     return _answer(
       'FETCH $what${since == null ? '' : ' CHANGEDSINCE'}',
       imap.FetchImapResult(messages, null),
     );
   }
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) =>
+      uidFetchMessages(
+        imap.MessageSequence.fromId(messageUid, isUid: true),
+        fetchContentDefinition,
+      );
 
   imap.MimeMessage _flagsMessage(
     FakeServerMessage m, {

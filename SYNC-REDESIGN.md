@@ -376,8 +376,19 @@ matched, it is marked `srv_gone` by the complete enumeration's sweep and
 deleted by the clean-up rule, and the mail comes back as a new row. Ops on
 a `srv_gone` row are satisfied (delete intent) or failed (anything else),
 never dropped silently. A released row has no UID, so no location lookup
-can find it and give it another mail's headers (the B1 rule of 6a). App
-Log `sync.uidvalidity_changed` counts the rows re-matched and removed.
+can find it and give it another mail's headers (the B1 rule of 6a), and no
+body, attachment or raw-source fetch uses its old one: those find the mail
+by a unique Message-ID in the session's SELECT, or wait for the sync. A row
+stamped with the server's current UIDVALIDITY is not released (a second
+isolate's sync). The checkpoint keeps the old UIDVALIDITY while released
+rows are left unmatched and unswept (a skipped sweep), and the incremental
+reconcile sweeps rows without a UID once every listed mail has its own
+row. A location learnt meanwhile is stamped with the UIDVALIDITY it was
+learnt under (`COPYUID`, the SELECT of the search). App Log
+`sync.uidvalidity_changed` counts the rows re-matched and removed;
+`sync.uidvalidity_refetch_failed`, `sync.uidvalidity_rematch_deferred`,
+`sync.unlocated_swept` and `email.body.not_located` cover the window
+(SYNC.md §6a).
 
 **Force resync** (#1236) uses the same mechanism for the whole account:
 mark, refetch, then remove only rows proven gone. It never clears first
@@ -1881,7 +1892,11 @@ What remains after phase 6, with where it is handled today:
   Message-ID, or whose Message-ID another mail of the folder (or another
   cached row of it) shares, is not matched; its row is removed and the mail
   comes back as a new row, without its body or local references. Logged
-  (`sync.uidvalidity_changed` with the counts re-matched and removed).
+  (`sync.uidvalidity_changed` with the counts re-matched and removed). Until
+  the re-match, opening such a row shows only its cached body ("available
+  after the next sync"). A row whose location another mail took (no UID)
+  is now swept by the incremental reconcile once every listed mail has its
+  own row; before, it stayed for good.
 - **Two isolates write the same database** (the foreground app and the
   WorkManager / background sync isolate). Correctness lives in the DB
   (ops, stamps, the read sequence, claim tokens), but SQLite allows one

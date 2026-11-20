@@ -75,6 +75,19 @@ String? _jmapBodyValueOfType(
   return (bodyValues[partId] as Map<String, dynamic>?)?['value'] as String?;
 }
 
+/// [_Bodies._imapUidToFetch] could not tell which UID holds a row's mail:
+/// its recorded one is unknown or from an older UIDVALIDITY, and [matches]
+/// (not exactly one) mails of the folder have its Message-ID.
+class _MailNotLocated implements Exception {
+  _MailNotLocated(this.reason, this.matches);
+
+  final String reason;
+  final int matches;
+
+  @override
+  String toString() => 'Mail not located: $reason ($matches matches)';
+}
+
 extension _Bodies on EmailRepositoryImpl {
   /// [prefetch] marks a background prefetch (the opportunistic next-message
   /// load on open, or the [BodyCacheService] cache warmer) so its App Log
@@ -156,16 +169,19 @@ extension _Bodies on EmailRepositoryImpl {
       (client) async {
         // Where the server has it, not where it is shown: behind a queued
         // move the row already shows the destination.
-        await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
-        final fetch = await client.uidFetchMessage(
-          emailRow.imapServerUid,
-          '(BODY.PEEK[])',
-        );
+        final selected =
+            await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
+        final int fetchUid;
+        try {
+          fetchUid = await _imapUidToFetch(client, emailRow, selected);
+        } on _MailNotLocated catch (e) {
+          return _bodyNotLocated(emailRow, cached, e);
+        }
+        final fetch = await client.uidFetchMessage(fetchUid, '(BODY.PEEK[])');
         final msg = fetch.messages.firstOrNull;
         if (msg == null) {
           throw StateError(
-            'IMAP server returned no message for UID '
-            '${emailRow.imapServerUid}.',
+            'IMAP server returned no message for UID $fetchUid.',
           );
         }
 
@@ -177,11 +193,12 @@ extension _Bodies on EmailRepositoryImpl {
         // (mailboxPath, uid) pair now points at an unrelated message — the fetch
         // above would silently return it. Never trust a body whose Message-ID
         // contradicts the row's; try to re-resolve the real UID instead.
+        // A fetched mail without a Message-ID is not this row's either when
+        // the row has one.
         final expectedMessageId = normaliseMessageId(emailRow.messageId);
         final fetchedMessageId =
             normaliseMessageId(msg.getHeaderValue('Message-ID'));
         if (expectedMessageId != null &&
-            fetchedMessageId != null &&
             expectedMessageId != fetchedMessageId) {
           // The pooled client is held until this future completes, so the
           // re-resolve search below still runs on an open connection.
@@ -192,6 +209,8 @@ extension _Bodies on EmailRepositoryImpl {
             cached: cached,
             expectedMessageId: expectedMessageId,
             fetchedMessageId: fetchedMessageId,
+            fetchedUid: fetchUid,
+            uidValidity: selected.uidValidity,
           );
         }
         // Decoding a malformed MIME message can make enough_mail throw — e.g. a
@@ -421,6 +440,127 @@ extension _Bodies on EmailRepositoryImpl {
   Future<void> _logoutQuietly(imap.ImapClient client) =>
       closeImapClient(client);
 
+  /// The UID to fetch [row]'s mail by in its server folder, which this
+  /// session just selected ([selected]). Its recorded UID only while it is
+  /// known under the UIDVALIDITY the SELECT reported (the row's stamp, else
+  /// the checkpoint's). Without one (released by a UIDVALIDITY change until
+  /// the sync re-matches it, SYNC-REDESIGN.md §6), or under another
+  /// UIDVALIDITY, the old UID may name another mail: the mail is found by
+  /// a unique Message-ID match in the folder instead, never by the row's
+  /// `uid`. Throws [_MailNotLocated] when that is not possible (no
+  /// Message-ID, no match or several).
+  Future<int> _imapUidToFetch(
+    imap.ImapClient client,
+    Email row,
+    imap.Mailbox selected,
+  ) async {
+    final path = row.imapServerPath;
+    final live = selected.uidValidity;
+    final uid = row.srvUid;
+    if (uid != null) {
+      final known =
+          row.srvUidValidity ?? await _knownUidValidity(row.accountId, path);
+      if (known == null || live == null || live == 0 || known == live) {
+        return uid;
+      }
+    }
+    final uids = await _searchUidsByMessageId(
+      client,
+      path,
+      normaliseMessageId(row.messageId),
+      throwOnFailure: true,
+      select: false,
+    );
+    if (uids.length == 1) return uids.single;
+    throw _MailNotLocated(
+      uid == null
+          ? 'its server UID is not known since $path was renumbered'
+          : 'its UID is from before $path was renumbered',
+      uids.length,
+    );
+  }
+
+  /// What [getEmailBody] answers for a mail [_imapUidToFetch] could not
+  /// locate: the row's own cached body, if any, with a load error; nothing
+  /// is fetched or cached. App Log info `email.body.not_located`.
+  model.EmailBody _bodyNotLocated(
+    Email row,
+    EmailBody? cached,
+    _MailNotLocated why,
+  ) {
+    unawaited(
+      _appLogger?.info(
+        'email.body.not_located',
+        'Did not fetch the body of "${row.subject ?? '(no subject)'}": '
+            '${why.reason}, and ${why.matches == 0 ? 'no mail' : '${why.matches} mails'} '
+            'of the folder match its Message-ID. It is available after the '
+            'next sync.',
+        accountId: row.accountId,
+        mailboxPath: row.mailboxPath,
+        emailId: row.id,
+      ),
+    );
+    const loadError =
+        'This message is being synced again. It is available after the '
+        'next sync.';
+    if (cached != null) {
+      return _bodyRowToModel(cached).copyWith(loadError: loadError);
+    }
+    return model.EmailBody(
+      emailId: row.id,
+      attachments: const [],
+      loadError: loadError,
+    );
+  }
+
+  /// The mail [selected] in the folder this session selected for [row],
+  /// fetched with [items] at the UID [_imapUidToFetch] resolves, and checked
+  /// to be [row]'s by its Message-ID (a fetched mail without one is not the
+  /// mail of a row with one). For an attachment download and the raw
+  /// source, which have no cache to fall back on: a mail that cannot be
+  /// located, or another mail, is a [StateError].
+  Future<imap.MimeMessage> _fetchOwnImapMessage(
+    imap.ImapClient client,
+    Email row,
+    imap.Mailbox selected,
+    String items,
+  ) async {
+    final int uid;
+    try {
+      uid = await _imapUidToFetch(client, row, selected);
+    } on _MailNotLocated catch (e) {
+      throw StateError(
+        'This message is being synced again (${e.reason}); try again '
+        'after the next sync.',
+      );
+    }
+    final fetch = await client.uidFetchMessage(uid, items);
+    final msg = fetch.messages.firstOrNull;
+    if (msg == null) {
+      throw StateError('IMAP server returned no message for UID $uid.');
+    }
+    final expected = normaliseMessageId(row.messageId);
+    final fetched = normaliseMessageId(msg.getHeaderValue('Message-ID'));
+    if (expected != null && expected != fetched) {
+      unawaited(
+        _appLogger?.error(
+          'email.body.identity_mismatch',
+          'Did not use the mail at UID $uid in ${row.imapServerPath}: its '
+              'Message-ID (${fetched ?? 'none'}) is not this message\'s '
+              '($expected). It will be found again on the next sync.',
+          accountId: row.accountId,
+          mailboxPath: row.mailboxPath,
+          emailId: row.id,
+        ),
+      );
+      throw StateError(
+        'This message is no longer at UID $uid; try again after the next '
+        'sync.',
+      );
+    }
+    return msg;
+  }
+
   /// Handles the case where a body fetch returned a message whose Message-ID
   /// contradicts the local row's (#616): the row's (mailboxPath, uid) no longer
   /// identifies the intended message. Tries to re-resolve the true UID by
@@ -434,21 +574,32 @@ extension _Bodies on EmailRepositoryImpl {
     required Email emailRow,
     required EmailBody? cached,
     required String expectedMessageId,
-    required String fetchedMessageId,
+    required String? fetchedMessageId,
+    required int fetchedUid,
+    required int? uidValidity,
   }) async {
     final serverPath = emailRow.imapServerPath;
     final healSeq = await _state.nextReadSeq();
-    final resolvedUid = await _searchUidByMessageId(
-      client,
-      serverPath,
-      emailRow.messageId,
-    );
-    if (resolvedUid != null && resolvedUid != emailRow.imapServerUid) {
+    // Only a unique match, and only for a row whose location is recorded:
+    // a row without a UID (released by a UIDVALIDITY change) gets its new
+    // one from the sync's re-match (SYNC-REDESIGN.md §6).
+    final matches = emailRow.srvUid == null
+        ? const <int>[]
+        : await _searchUidsByMessageId(
+            client,
+            serverPath,
+            emailRow.messageId,
+          );
+    final resolvedUid = matches.length == 1 ? matches.single : null;
+    if (resolvedUid != null && resolvedUid != fetchedUid) {
       await _relocateEmailRow(
         id: emailId,
         newUid: resolvedUid,
         newMailboxPath: serverPath,
         seq: healSeq,
+        // The UIDVALIDITY this session's SELECT reported, under which the
+        // UID was found; the checkpoint's may be from before a change.
+        uidValidity: uidValidity,
         // Behind a queued move the row keeps showing the mail where the
         // user put it; only its server location is corrected.
       );
@@ -466,8 +617,9 @@ extension _Bodies on EmailRepositoryImpl {
       _appLogger?.error(
         'email.body.identity_mismatch',
         'Skipped caching a body whose Message-ID did not match this message '
-            '(expected $expectedMessageId, server returned $fetchedMessageId '
-            'for UID ${emailRow.imapServerUid} in $serverPath). The message '
+            '(expected $expectedMessageId, server returned '
+            '${fetchedMessageId ?? 'none'} for UID $fetchedUid in '
+            '$serverPath). The message '
             'is not at that UID; the correct copy will be re-fetched on sync.',
         accountId: emailRow.accountId,
         mailboxPath: emailRow.mailboxPath,
@@ -769,22 +921,20 @@ extension _Bodies on EmailRepositoryImpl {
       password,
     );
     try {
-      await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
+      final selected =
+          await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
       // Fetch the full message so enough_mail has MIME headers (including
       // Content-Transfer-Encoding) and getPart() can decode the part correctly.
       // A partial BODY.PEEK[n] fetch omits those headers, causing
       // decodeContentBinary() to return raw base64 instead of decoded bytes.
-      final fetch = await client.uidFetchMessage(
-        emailRow.imapServerUid,
+      // Checked to be this row's mail: another mail's part must not be
+      // saved as this row's attachment.
+      final msg = await _fetchOwnImapMessage(
+        client,
+        emailRow,
+        selected,
         'BODY.PEEK[]',
       );
-      final msg = fetch.messages.firstOrNull;
-      if (msg == null) {
-        throw StateError(
-          'IMAP server returned no message for UID '
-          '${emailRow.imapServerUid}.',
-        );
-      }
       // Resolve the specific MIME part. Never fall back to `msg` itself: if the
       // stored fetchPartId no longer resolves, decoding the whole multipart
       // message and presenting its raw bytes as the attachment yields garbage
@@ -898,18 +1048,14 @@ extension _Bodies on EmailRepositoryImpl {
       password,
     );
     try {
-      await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
-      final fetch = await client.uidFetchMessage(
-        emailRow.imapServerUid,
+      final selected =
+          await client.selectUnicodeMailboxByPath(emailRow.imapServerPath);
+      final msg = await _fetchOwnImapMessage(
+        client,
+        emailRow,
+        selected,
         'BODY.PEEK[]',
       );
-      final msg = fetch.messages.firstOrNull;
-      if (msg == null) {
-        throw StateError(
-          'IMAP server returned no message for UID '
-          '${emailRow.imapServerUid}.',
-        );
-      }
       return msg.renderMessage();
     } finally {
       await closeImapClient(client);

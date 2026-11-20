@@ -1525,23 +1525,35 @@ class EmailStateWriter {
   /// no location lookup, so it cannot take another mail's headers over its
   /// body by a stale UID (B1).
   ///
-  /// With [exceptUidValidity], only the rows stamped with another
-  /// UIDVALIDITY than that one: their UIDs name other mails now, whatever
-  /// the checkpoint says (a force resync's full fetch, which may not know
-  /// the folder's previous UIDVALIDITY). Returns the ids it released.
+  /// A row stamped with [exceptUidValidity] (the server's current one) is
+  /// never released: another sync of the folder (the other isolate) that
+  /// saw the change first already matched or stored it under that one.
+  /// [unstamped]: also the rows recorded without a UIDVALIDITY (the
+  /// previous one is known to differ: the checkpoint's). Without it, only
+  /// the rows stamped with another UIDVALIDITY: their UIDs name other mails
+  /// now, whatever the checkpoint says (a force resync's full fetch, which
+  /// may not know the folder's previous UIDVALIDITY). Without
+  /// [exceptUidValidity] (a server that reports none), every row with a
+  /// UID. Returns the ids it released.
   Future<Set<String>> releaseFolderForRematch(
     String accountId,
     String mailboxPath, {
     int? exceptUidValidity,
+    bool unstamped = false,
   }) =>
       _db.transaction(() async {
         final seq = await nextReadSeq();
+        final validityRule = exceptUidValidity == null
+            ? ''
+            : unstamped
+                ? ' AND (srv_uid_validity IS NULL OR srv_uid_validity <> ?4)'
+                : ' AND srv_uid_validity IS NOT NULL '
+                    'AND srv_uid_validity <> ?4';
         final rows = await _db.customWriteReturning(
           'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL, '
           'srv_location_seq = MAX(srv_location_seq, ?3) '
           'WHERE account_id = ?1 AND srv_mailbox_path = ?2 AND is_local = 0 '
-          'AND srv_uid IS NOT NULL'
-          '${exceptUidValidity == null ? '' : ' AND srv_uid_validity IS NOT NULL AND srv_uid_validity <> ?4'}'
+          'AND srv_uid IS NOT NULL$validityRule'
           ' RETURNING id',
           variables: [
             Variable.withString(accountId),

@@ -3849,6 +3849,7 @@ void main() {
               accountId: 'acc-1',
               mailboxPath: 'INBOX',
               uid: 5,
+              srvUid: const Value(5),
               receivedAt: DateTime(2024),
             ),
           );
@@ -3882,6 +3883,7 @@ void main() {
               accountId: 'acc-1',
               mailboxPath: 'INBOX',
               uid: 5,
+              srvUid: const Value(5),
               receivedAt: DateTime(2024),
             ),
           );
@@ -11098,6 +11100,7 @@ void main() {
                 accountId: 'acc-1',
                 mailboxPath: 'INBOX',
                 uid: uid,
+                srvUid: Value(uid),
                 receivedAt: DateTime(2024),
               ),
             );
@@ -11459,6 +11462,7 @@ void main() {
                 accountId: 'acc-1',
                 mailboxPath: 'INBOX',
                 uid: 1,
+                srvUid: const Value(1),
                 receivedAt: DateTime(2024),
               ),
             );

@@ -585,10 +585,35 @@ the same statement and never rewrites the whole row.
   mail of the folder shares, is not matched: the sweep at the end of the full fetch
   marks it gone, the clean-up rule deletes it (unless the user has a change of it),
   and the mail comes back as a new row. A row without a UID is found by no location
-  lookup, so it never takes another mail's headers over its body. A fetch that fails
-  part-way removes nothing; the next sync sees the change again and re-matches. App
-  Log warn `sync.uidvalidity_changed` gives the counts re-matched and removed, and the
-  rows kept for a change.
+  lookup, so it never takes another mail's headers over its body. A row stamped with
+  the server's current UIDVALIDITY is never released: another sync of the folder (the
+  other isolate) that saw the change first already matched or stored it. App Log warn
+  `sync.uidvalidity_changed` gives the counts re-matched and removed (with the removed
+  rows, and how many had no Message-ID), and the rows kept for a change.
+  - **The window.** Until the re-match, a row's old UID may name another mail. A body
+    fetch (also the prefetch), an attachment download and the raw source never use a
+    row's `uid` when its `srv_uid` is not known, nor a `srv_uid` known under another
+    UIDVALIDITY than the one the session's SELECT reported (the row's stamp, else the
+    checkpoint's): the mail is found by a unique `UID SEARCH HEADER Message-ID` in that
+    SELECT instead, or not fetched ("available after the next sync"; App Log info
+    `email.body.not_located`). A fetched mail whose Message-ID is not the row's,
+    including one without a Message-ID for a row with one, is never cached, saved or
+    shown as the row's (`email.body.identity_mismatch`). A location learnt meanwhile
+    (a move's `COPYUID`, a Message-ID search, the body healing) is stamped with the
+    UIDVALIDITY it was learnt under, not the checkpoint's. A queued change finds its
+    mail by Message-ID at the flush (`_currentImapUid`). The late-FETCH guard
+    (`_pendingDeleteOrMoveUids`, #1269) knows a move or delete queued under the old
+    UIDVALIDITY by its Message-ID: a fetch answer that still lists that mail, as the
+    only one with that Message-ID, does not store it as a new row.
+  - **Nothing left behind.** A full fetch that fails after the release removes
+    nothing (App Log warn `sync.uidvalidity_refetch_failed`); the rows stay shown
+    without a UID and the next sync sees the change again. When the sweep is skipped
+    (an empty `UID SEARCH ALL` while SELECT counts mail), rows still without a UID
+    remain: the checkpoint then keeps its old UIDVALIDITY, so the next sync is a full
+    fetch again (`sync.uidvalidity_rematch_deferred`), never an incremental one that
+    would store each mail a second time. The incremental deletion reconcile sweeps the
+    rows of the folder without a UID once every mail the server lists has a row of
+    its own (`sync.unlocated_swept`).
 - **App Log of what sync removes** (audited in phase 6b): an *unexpected* removal or
   rewrite of local data by sync logs a warn line: data the user may miss, or that the
   server never reported deleted. A mail the server reports deleted in the ordinary
