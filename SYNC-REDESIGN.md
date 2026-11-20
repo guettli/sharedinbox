@@ -1924,15 +1924,25 @@ What remains after phase 6, with where it is handled today:
   is now swept by the incremental reconcile once every listed mail has its
   own row; before, it stayed for good.
 - **Two isolates write the same database** (the foreground app and the
-  WorkManager / background sync isolate). Correctness lives in the DB
-  (ops, stamps, the read sequence, claim tokens), but SQLite allows one
-  writer: `busy_timeout` is 5 s (`database.dart`), and a longer write
-  transaction in one isolate (a big fetch, a fold over many rows) can make
-  the other's write fail with `SQLITE_BUSY` after the timeout. A sync step
-  that fails that way is retried by the next cycle; what a user action
-  does then was not tested. Not measured on large accounts.
-  Drift change streams are per connection, so a background write
-  refreshes the foreground lists only at their next query.
+  WorkManager / background sync isolate), handled since #1317 (SYNC.md
+  §5a). Correctness lives in the DB (ops, stamps, the read sequence, claim
+  tokens); SQLite allows one writer. Measured before: `busy_timeout` (5 s)
+  is not honoured by the bundled SQLCipher build (no `HAVE_USLEEP`; a
+  single statement failed after about 60 ms), and drift's deferred `BEGIN`
+  made a transaction that read first fail at once while the other isolate
+  wrote, or with `SQLITE_BUSY_SNAPSHOT` after the other one committed; a
+  user action then crashed the app.
+  Now every transaction takes the write lock with its first statement and
+  is retried as a whole, with backoff, for up to 60 s (only a failure of
+  that statement, so its body runs once); a statement outside a
+  transaction is retried on its own. The IMAP fetch upsert, the flags
+  refresh, `writeAll`, `markAllAsRead` and `cleanUpGone` run in bounded
+  chunks. App Log `db.busy_retried` / `db.busy_failed`; a user action that
+  gives up shows "The change was not saved … try again". Left open: not
+  measured on a phone or a large account; Sieve runs, sweeps and
+  migrations are not chunked; read-only transactions also take
+  the write lock. Drift change streams are per connection, so a background
+  write refreshes the foreground lists only at their next query.
 - **IMAP `BAD` is classified by its text** (#1316, was: always
   transient). A tagged `BAD` to a change's command (a flag or path the
   server rejects) fails the change at once, listed with Retry / Discard

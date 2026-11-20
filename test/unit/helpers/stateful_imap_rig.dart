@@ -26,7 +26,8 @@ const statefulRigAccount = Account(
 
 /// An [EmailRepositoryImpl] on a fresh database, talking to [server] as
 /// [statefulRigAccount], with a mailbox row for each folder (path, role)
-/// and INBOX synced once. Its clock is [now], which a test may move.
+/// and INBOX synced once. Its clock is [now], which a test may move. The
+/// database is in memory unless [open] gets one ([database]).
 class StatefulImapRig {
   StatefulImapRig._(this.server, this.db);
 
@@ -50,8 +51,9 @@ class StatefulImapRig {
     required List<(String, String)> folders,
     AppLogger? appLogger,
     OverlayConsistencySampler? consistencySampler,
+    AppDatabase? database,
   }) async {
-    final rig = StatefulImapRig._(server, openTestDatabase());
+    final rig = StatefulImapRig._(server, database ?? openTestDatabase());
     final db = rig.db;
     final accounts =
         rig.accounts = AccountRepositoryImpl(db, FakeSecureStorage());

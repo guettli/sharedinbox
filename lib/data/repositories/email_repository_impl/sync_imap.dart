@@ -9,6 +9,13 @@ const _imapFlagReconcileInterval = Duration(minutes: 15);
 
 const _imapSizeBackfillBatch = 500;
 
+/// Fetched mails per write transaction ([_SyncImap._fetchAndUpsertImapGuarded],
+/// [_SyncImap._refreshFlagsImap]). One transaction for a whole full fetch
+/// held SQLite's write lock for seconds, and the other isolate's writes
+/// (a user action in the app while WorkManager syncs) failed with
+/// SQLITE_BUSY (#1317).
+const _imapUpsertChunk = 100;
+
 /// Marks an IMAP checkpoint whose next sync must be a full fetch (a force
 /// resync): it keeps the folder's UIDVALIDITY, so a change is still seen.
 const _forceFullKey = 'forceFull';
@@ -361,31 +368,39 @@ extension _SyncImap on EmailRepositoryImpl {
       'FLAGS',
       changedSinceModSequence: sinceModSeq,
     );
-    // One transaction: CHANGEDSINCE can return thousands of messages after
-    // a long time offline.
+    // A transaction per [_imapUpsertChunk] messages: CHANGEDSINCE can
+    // return thousands of messages after a long time offline, and one
+    // transaction for all held the write lock for seconds (#1317). Each
+    // message is looked up and written in the same one; the gate orders
+    // every row against [read] on its own.
     final affectedThreads = <(String, String)>{};
-    await _db.transaction(() async {
-      final uidValidity = await _knownUidValidity(account.id, mailboxPath);
-      final rows = <String, Email>{};
-      final byRow = <String, ServerKeywords>{};
-      for (final msg in result.messages) {
-        final uid = msg.uid;
-        if (uid == null) continue;
-        final row = await _rowAtImapLocation(
-          account.id,
-          mailboxPath,
-          uid,
-          uidValidity: uidValidity,
-        );
-        if (row == null) continue;
-        rows[row.id] = row;
-        byRow[row.id] = ServerKeywords.imap(msg.flags);
-      }
-      for (final id in await read.writeAll(byRow)) {
-        final row = rows[id]!;
-        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-      }
-    });
+    final messages = result.messages;
+    for (var i = 0; i < messages.length; i += _imapUpsertChunk) {
+      final chunk =
+          messages.sublist(i, math.min(i + _imapUpsertChunk, messages.length));
+      await _db.transaction(() async {
+        final uidValidity = await _knownUidValidity(account.id, mailboxPath);
+        final rows = <String, Email>{};
+        final byRow = <String, ServerKeywords>{};
+        for (final msg in chunk) {
+          final uid = msg.uid;
+          if (uid == null) continue;
+          final row = await _rowAtImapLocation(
+            account.id,
+            mailboxPath,
+            uid,
+            uidValidity: uidValidity,
+          );
+          if (row == null) continue;
+          rows[row.id] = row;
+          byRow[row.id] = ServerKeywords.imap(msg.flags);
+        }
+        for (final id in await read.writeAll(byRow)) {
+          final row = rows[id]!;
+          affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
+        }
+      });
+    }
     // The message list reads unread/starred state from the thread row, so
     // a mail read, unread, starred or unstarred on another device kept its
     // old look here although its own row was already up to date.
@@ -664,177 +679,191 @@ extension _SyncImap on EmailRepositoryImpl {
     final newlyStored = <(String, String?, int?)>[];
     final validity =
         uidValidity == null || uidValidity == 0 ? null : uidValidity;
-    await _db.transaction(() async {
-      final candidates = rematched == null
-          ? const <String, Email>{}
-          : await _rematchCandidates(account.id, mailboxPath, onServer);
-      for (final msg in fetch.messages) {
-        final envelope = msg.envelope;
-        if (envelope == null) {
-          log(
-            'IMAP: skipping message with no envelope (uid=${msg.uid}, mailbox=$mailboxPath)',
-          );
-          continue;
-        }
-        final uid = msg.uid;
-        if (uid == null) {
-          log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
-          continue;
-        }
-        // The row the server's message already has, found by where the
-        // server has it, never by the shown folder: behind a queued move
-        // that is already the destination (SYNC-REDESIGN.md §8 phase 2).
-        // Without one, the message gets a new row with a new id.
-        final msgId = normaliseMessageId(envelope.messageId);
-        final atLocation = await _rowAtImapLocation(
-          account.id,
-          mailboxPath,
-          uid,
-          uidValidity: uidValidity,
-        );
-        // A row recorded without a UIDVALIDITY matches this UID under any
-        // one; when it holds another mail (its Message-ID differs), the UID
-        // was reused: it is not this mail's row, and must not take its
-        // headers over its own body and attachments. The deletion
-        // reconcile marks it gone once a stamped row holds the UID.
-        final storedMsgId = normaliseMessageId(atLocation?.messageId);
-        final reused = atLocation != null &&
-            atLocation.srvUidValidity == null &&
-            uidValidity != null &&
-            uidValidity != 0 &&
-            msgId != null &&
-            storedMsgId != null &&
-            storedMsgId != msgId;
-        // No row at this location: after a UIDVALIDITY change, the row the
-        // mail had under the old one, matched by its Message-ID (unique on
-        // both sides), takes it and keeps its id, body and attachments.
-        final known = (reused ? null : atLocation) ??
-            await _adoptRematch(
-              read,
-              candidates[msgId],
-              mailboxPath: mailboxPath,
-              uid: uid,
-              uidValidity: validity,
-              rematched: rematched,
+    // A transaction per [_imapUpsertChunk] messages, not one for the whole
+    // fetch (#1317). Each message's row is found and written in one; a
+    // write of the other isolate between two chunks is ordered against
+    // [read] by the gate, as one made during the FETCH. The re-match
+    // candidates are read again per chunk: a row adopted in an earlier
+    // chunk has its UID and is none any more.
+    final fetched = fetch.messages;
+    for (var start = 0; start < fetched.length; start += _imapUpsertChunk) {
+      final chunk = fetched.sublist(
+        start,
+        math.min(start + _imapUpsertChunk, fetched.length),
+      );
+      await _db.transaction(() async {
+        final candidates = rematched == null
+            ? const <String, Email>{}
+            : await _rematchCandidates(account.id, mailboxPath, onServer);
+        for (final msg in chunk) {
+          final envelope = msg.envelope;
+          if (envelope == null) {
+            log(
+              'IMAP: skipping message with no envelope (uid=${msg.uid}, mailbox=$mailboxPath)',
             );
-        // Don't bring back, as a new row, a mail the user moved or deleted
-        // from here: its row has left this location (a move's answer
-        // relocated it), but the change is still queued, being sent or
-        // acked. `UID lastUid+1:*` can even return a UID smaller than
-        // `lastUid+1` because RFC 3501 §6.4.4 reverses `n:*` to `*:n` when
-        // `n` exceeds the largest UID. A row still recorded here keeps its
-        // pending change folded over what is written below.
-        if (known == null && pendingByUid.containsKey(uid)) {
-          log(
-            'IMAP: skipping insert for uid=$uid in $mailboxPath '
-            '(${pendingByUid[uid]!.state} ${pendingByUid[uid]!.changeType})',
-          );
-          continue;
-        }
-        // The same when the UID cannot tell: a change queued under an
-        // older UIDVALIDITY of this folder (its UID names another mail now),
-        // or a row of this Message-ID placed elsewhere after this FETCH
-        // started (a move sent from where the user saw the mail). The
-        // answer lists a mail that a search sent after it no longer finds
-        // at this UID: the answer predates the move or delete. A copy still
-        // there (a second one that arrived, a change not applied yet) is
-        // found by the search and gets its row.
-        final nowUids = msgId == null ? null : nowUidsByMessageId[msgId];
-        if (known == null && nowUids != null && !nowUids.contains(uid)) {
-          log(
-            'IMAP: skipping insert for uid=$uid in $mailboxPath (the '
-            'folder no longer has its Message-ID there: an answer from '
-            'before a move or delete of it)',
-          );
-          continue;
-        }
-        bytes += msg.size ?? 0;
-        final emailId = known?.id ?? _newId(account.id);
-        final serverEmailId = serverEmailIdByUid[uid];
-        final inReplyTo = normaliseMessageId(envelope.inReplyTo);
-        final refs = normaliseReferences(msg.getHeaderValue('References'));
-        final listUnsubscribe = msg.getHeaderValue('List-Unsubscribe')?.trim();
-        // Re-decode Subject from the raw header enough_mail stashed on the
-        // message during envelope parsing (#418). `envelope.subject` uses
-        // MailCodec.decodeHeader, which leaves stray spaces around ü/ö/ä
-        // when adjacent encoded-words differ in charset case or are folded
-        // with a tab.
-        final subject =
-            decodeMailHeader(msg.getHeaderValue('Subject')) ?? envelope.subject;
-        final threadId = _computeThreadId(
-              messageId: msgId,
-              inReplyTo: inReplyTo,
-              references: refs,
-              subject: subject,
-              date: envelope.date,
-            ) ??
-            emailId;
-        affectedThreads.add(threadId);
-
-        final keywords = ServerKeywords.imap(msg.flags);
-
-        final isNew = known == null;
-        final headers = ServerRowHeaders(
-          uid: uid,
-          subject: subject,
-          sentAt: envelope.date,
-          // The server's arrival time, like JMAP `receivedAt`. Never
-          // the local fetch time when the server knows better: mail
-          // without a Date header used to be re-dated to "now" on every
-          // re-fetch, so a resync or reinstall moved it to the top.
-          receivedAt: parseImapDateTime(msg.internalDate) ??
-              envelope.date ??
-              DateTime.now(),
-          fromJson: _encodeAddresses(envelope.from),
-          toJson: _encodeAddresses(envelope.to),
-          ccJson: _encodeAddresses(envelope.cc),
-          replyToJson: _encodeAddresses(envelope.replyTo),
-          bccJson: _encodeAddresses(envelope.bcc),
-          sizeBytes: msg.size,
-          preview: previewFromSnippet(msg, previewSnippetByUid[uid]),
-          // enough_mail counts parts with Content-Disposition: attachment;
-          // JMAP's hasAttachment (below) is server-defined, so the two
-          // protocols may disagree on e.g. inline images.
-          hasAttachment: msg.hasAttachments(),
-          threadId: threadId,
-          messageId: msgId,
-          inReplyTo: inReplyTo,
-          references: refs,
-          listUnsubscribeHeader: listUnsubscribe,
-          // A previously captured id stays when this fetch could not read
-          // one (null is not written).
-          serverEmailId: serverEmailId,
-          srvUid: uid,
-          srvUidValidity: validity,
-        );
-        // The read/star/snooze state and the folder only through the
-        // server-write gate: with the row's other server facts for a new
-        // row, else on their own (a whole-row write would also overwrite the
-        // user's pending values, and a moved mail would jump back).
-        if (isNew) {
-          await _state.insertServerRow(
-            headers,
-            id: emailId,
-            accountId: account.id,
-            mailboxPath: mailboxPath,
-            keywords: keywords,
-            seq: read.seq,
-          );
-        } else {
-          await _state.writeServerHeaders(emailId, headers);
-          // The mail is here: a row marked gone by an older read shows again.
-          final moved = await read.writeLocation(emailId, mailboxPath);
-          if (moved != null && moved.changed) {
-            hiddenOrMovedThreads
-              ..add((moved.before, known.threadId ?? emailId))
-              ..add((moved.after, threadId));
+            continue;
           }
-          await read.write(emailId, keywords);
+          final uid = msg.uid;
+          if (uid == null) {
+            log('IMAP: skipping message with no uid (mailbox=$mailboxPath)');
+            continue;
+          }
+          // The row the server's message already has, found by where the
+          // server has it, never by the shown folder: behind a queued move
+          // that is already the destination (SYNC-REDESIGN.md §8 phase 2).
+          // Without one, the message gets a new row with a new id.
+          final msgId = normaliseMessageId(envelope.messageId);
+          final atLocation = await _rowAtImapLocation(
+            account.id,
+            mailboxPath,
+            uid,
+            uidValidity: uidValidity,
+          );
+          // A row recorded without a UIDVALIDITY matches this UID under any
+          // one; when it holds another mail (its Message-ID differs), the UID
+          // was reused: it is not this mail's row, and must not take its
+          // headers over its own body and attachments. The deletion
+          // reconcile marks it gone once a stamped row holds the UID.
+          final storedMsgId = normaliseMessageId(atLocation?.messageId);
+          final reused = atLocation != null &&
+              atLocation.srvUidValidity == null &&
+              uidValidity != null &&
+              uidValidity != 0 &&
+              msgId != null &&
+              storedMsgId != null &&
+              storedMsgId != msgId;
+          // No row at this location: after a UIDVALIDITY change, the row the
+          // mail had under the old one, matched by its Message-ID (unique on
+          // both sides), takes it and keeps its id, body and attachments.
+          final known = (reused ? null : atLocation) ??
+              await _adoptRematch(
+                read,
+                candidates[msgId],
+                mailboxPath: mailboxPath,
+                uid: uid,
+                uidValidity: validity,
+                rematched: rematched,
+              );
+          // Don't bring back, as a new row, a mail the user moved or deleted
+          // from here: its row has left this location (a move's answer
+          // relocated it), but the change is still queued, being sent or
+          // acked. `UID lastUid+1:*` can even return a UID smaller than
+          // `lastUid+1` because RFC 3501 §6.4.4 reverses `n:*` to `*:n` when
+          // `n` exceeds the largest UID. A row still recorded here keeps its
+          // pending change folded over what is written below.
+          if (known == null && pendingByUid.containsKey(uid)) {
+            log(
+              'IMAP: skipping insert for uid=$uid in $mailboxPath '
+              '(${pendingByUid[uid]!.state} ${pendingByUid[uid]!.changeType})',
+            );
+            continue;
+          }
+          // The same when the UID cannot tell: a change queued under an
+          // older UIDVALIDITY of this folder (its UID names another mail now),
+          // or a row of this Message-ID placed elsewhere after this FETCH
+          // started (a move sent from where the user saw the mail). The
+          // answer lists a mail that a search sent after it no longer finds
+          // at this UID: the answer predates the move or delete. A copy still
+          // there (a second one that arrived, a change not applied yet) is
+          // found by the search and gets its row.
+          final nowUids = msgId == null ? null : nowUidsByMessageId[msgId];
+          if (known == null && nowUids != null && !nowUids.contains(uid)) {
+            log(
+              'IMAP: skipping insert for uid=$uid in $mailboxPath (the '
+              'folder no longer has its Message-ID there: an answer from '
+              'before a move or delete of it)',
+            );
+            continue;
+          }
+          bytes += msg.size ?? 0;
+          final emailId = known?.id ?? _newId(account.id);
+          final serverEmailId = serverEmailIdByUid[uid];
+          final inReplyTo = normaliseMessageId(envelope.inReplyTo);
+          final refs = normaliseReferences(msg.getHeaderValue('References'));
+          final listUnsubscribe =
+              msg.getHeaderValue('List-Unsubscribe')?.trim();
+          // Re-decode Subject from the raw header enough_mail stashed on the
+          // message during envelope parsing (#418). `envelope.subject` uses
+          // MailCodec.decodeHeader, which leaves stray spaces around ü/ö/ä
+          // when adjacent encoded-words differ in charset case or are folded
+          // with a tab.
+          final subject = decodeMailHeader(msg.getHeaderValue('Subject')) ??
+              envelope.subject;
+          final threadId = _computeThreadId(
+                messageId: msgId,
+                inReplyTo: inReplyTo,
+                references: refs,
+                subject: subject,
+                date: envelope.date,
+              ) ??
+              emailId;
+          affectedThreads.add(threadId);
+
+          final keywords = ServerKeywords.imap(msg.flags);
+
+          final isNew = known == null;
+          final headers = ServerRowHeaders(
+            uid: uid,
+            subject: subject,
+            sentAt: envelope.date,
+            // The server's arrival time, like JMAP `receivedAt`. Never
+            // the local fetch time when the server knows better: mail
+            // without a Date header used to be re-dated to "now" on every
+            // re-fetch, so a resync or reinstall moved it to the top.
+            receivedAt: parseImapDateTime(msg.internalDate) ??
+                envelope.date ??
+                DateTime.now(),
+            fromJson: _encodeAddresses(envelope.from),
+            toJson: _encodeAddresses(envelope.to),
+            ccJson: _encodeAddresses(envelope.cc),
+            replyToJson: _encodeAddresses(envelope.replyTo),
+            bccJson: _encodeAddresses(envelope.bcc),
+            sizeBytes: msg.size,
+            preview: previewFromSnippet(msg, previewSnippetByUid[uid]),
+            // enough_mail counts parts with Content-Disposition: attachment;
+            // JMAP's hasAttachment (below) is server-defined, so the two
+            // protocols may disagree on e.g. inline images.
+            hasAttachment: msg.hasAttachments(),
+            threadId: threadId,
+            messageId: msgId,
+            inReplyTo: inReplyTo,
+            references: refs,
+            listUnsubscribeHeader: listUnsubscribe,
+            // A previously captured id stays when this fetch could not read
+            // one (null is not written).
+            serverEmailId: serverEmailId,
+            srvUid: uid,
+            srvUidValidity: validity,
+          );
+          // The read/star/snooze state and the folder only through the
+          // server-write gate: with the row's other server facts for a new
+          // row, else on their own (a whole-row write would also overwrite the
+          // user's pending values, and a moved mail would jump back).
+          if (isNew) {
+            await _state.insertServerRow(
+              headers,
+              id: emailId,
+              accountId: account.id,
+              mailboxPath: mailboxPath,
+              keywords: keywords,
+              seq: read.seq,
+            );
+          } else {
+            await _state.writeServerHeaders(emailId, headers);
+            // The mail is here: a row marked gone by an older read shows again.
+            final moved = await read.writeLocation(emailId, mailboxPath);
+            if (moved != null && moved.changed) {
+              hiddenOrMovedThreads
+                ..add((moved.before, known.threadId ?? emailId))
+                ..add((moved.after, threadId));
+            }
+            await read.write(emailId, keywords);
+          }
+          if (msgId != null) dissolveCandidates.add((emailId, msgId, isNew));
+          if (isNew) newlyStored.add((emailId, subject, msg.size));
         }
-        if (msgId != null) dissolveCandidates.add((emailId, msgId, isNew));
-        if (isNew) newlyStored.add((emailId, subject, msg.size));
-      }
-    });
+      });
+    }
     // Outside the transaction: the app log writes through the same database.
     for (final (emailId, subject, size) in newlyStored) {
       _logEmailFetched(

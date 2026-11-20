@@ -3,6 +3,9 @@ part of '../email_repository_impl.dart';
 // User actions: flags, mark all read, move, delete, snooze, wake up and
 // restore. Each applies the optimistic local value and queues a change.
 
+/// Mails per transaction of [_UserActions._markAllAsRead] (#1317).
+const _markAllAsReadChunk = 200;
+
 /// Zone key under which [EmailRepositoryImpl.deleteEmails] publishes its
 /// [_BulkScope].
 final _bulkScopeKey = Object();
@@ -220,36 +223,45 @@ extension _UserActions on EmailRepositoryImpl {
         .get();
     if (unread.isEmpty) return;
 
-    await _db.transaction(() async {
-      final queued = <String>[];
-      for (final row in unread) {
-        final payload = account.type == account_model.AccountType.jmap
-            ? {'seen': true}
-            : {'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': true};
-        if (await _enqueueChange(
-          accountId,
-          row.id,
-          'flag_seen',
-          jsonEncode(payload),
-          fold: false,
-        )) {
-          queued.add(row.id);
+    // One transaction per chunk of mails, not one for the whole folder: a
+    // folder with thousands of unread mails held SQLite's write lock for
+    // seconds, and the background isolate's writes failed with SQLITE_BUSY
+    // (#1317). Each mail's change and its fold land together.
+    for (var i = 0; i < unread.length; i += _markAllAsReadChunk) {
+      final chunk =
+          unread.sublist(i, math.min(i + _markAllAsReadChunk, unread.length));
+      await _db.transaction(() async {
+        final queued = <String>[];
+        for (final row in chunk) {
+          final payload = account.type == account_model.AccountType.jmap
+              ? {'seen': true}
+              : {'uid': row.uid, 'mailboxPath': row.mailboxPath, 'seen': true};
+          if (await _enqueueChange(
+            accountId,
+            row.id,
+            'flag_seen',
+            jsonEncode(payload),
+            fold: false,
+          )) {
+            queued.add(row.id);
+          }
         }
-      }
 
-      // The fold of all of them at once: each just got `seen: true` as its
-      // newest read change (one without a server copy stored it as its own).
-      await _state.foldSeenBulk(queued);
+        // The fold of all of them at once: each just got `seen: true` as
+        // its newest read change (one without a server copy stored it as
+        // its own).
+        await _state.foldSeenBulk(queued);
+      });
+    }
 
-      // Update all threads in this mailbox to reflect no unread.
-      await (_db.update(_db.threads)
-            ..where(
-              (t) =>
-                  t.accountId.equals(accountId) &
-                  t.mailboxPath.equals(mailboxPath),
-            ))
-          .write(const ThreadsCompanion(hasUnread: Value(false)));
-    });
+    // Update all threads in this mailbox to reflect no unread.
+    await (_db.update(_db.threads)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath),
+          ))
+        .write(const ThreadsCompanion(hasUnread: Value(false)));
 
     // Log per message (outside the transaction) so each affected mail shows the
     // read change in its own "Show Logs" view (#562).

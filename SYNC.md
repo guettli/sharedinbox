@@ -450,6 +450,77 @@ The last error message is written to `sync_log` and surfaced in the UI via
 
 ---
 
+## 5a. Two writers: SQLITE_BUSY
+
+The app and the WorkManager isolate (`background_sync.dart`) open the same SQLite file;
+SQLite lets one connection write at a time (WAL, `PRAGMA busy_timeout = 5000`,
+`database.dart`). The app's connection runs on drift's own isolate
+(`NativeDatabase.createInBackground`), so a write that waits does not freeze the UI
+thread; the app's other queries wait behind a transaction that waits.
+
+Measured on a file database with the production pragmas, another isolate holding the
+write lock (`test/unit/sqlite_busy_test.dart`, #1317; Linux, the bundled SQLCipher
+3.53.3), before the fix:
+
+| Write on the other connection | Lock held | Result |
+|---|---|---|
+| a single statement (autocommit) | 7 s | SQLITE_BUSY after about 60 ms |
+| a transaction that reads, then writes (most of ours) | 1.5 s | SQLITE_BUSY at once (0 ms) |
+| a transaction that read before the other one committed | — | SQLITE_BUSY_SNAPSHOT at its first write (0 ms), with no lock held then |
+
+`busy_timeout` does not help in any of them. The bundled SQLCipher build has no
+`HAVE_USLEEP` (`PRAGMA compile_options`), and its busy handler gives up after about
+50 ms whatever the timeout (also with `PRAGMA busy_timeout = 3000` alone). And drift
+starts a transaction with a deferred `BEGIN`: SQLite takes the write lock only at the
+first write and, when the transaction read first, does not call the busy handler at
+all. So any write of the app failed while the background sync wrote, and a user action
+(a star, a move) ended in an uncaught `SqliteException`: the crash screen.
+
+What the database does now (`AppDatabase.transaction`, `lib/data/db/busy_retry.dart`):
+
+- **The lock first.** Every outermost transaction starts with a write that matches
+  nothing (`DELETE FROM sync_states WHERE 0`), which takes the write lock. A busy
+  failure can then only come from that first statement, before the body ran; the
+  stale-snapshot case cannot happen. Read-only transactions take the lock too.
+- **Retry as a whole.** When the lock is busy, the transaction is rolled back and
+  started again, with backoff (50 ms doubling to 500 ms), for up to 60 s. Only a
+  failure of the first statement is retried, so the body (its DB writes and any side
+  effect outside the DB, like the outbox's attachment copies) runs exactly once. A busy
+  error inside the body (not expected once the lock is held) is not retried. A batch
+  outside a transaction runs in one. A single statement outside a transaction is retried
+  on its own (`BusyRetryInterceptor`): it is atomic. Between attempts the app's other
+  queries run. Measured after the fix: a transaction or statement held up by a 7 s lock
+  lands 7.3–7.4 s after it started (within one backoff of the lock's release); one that
+  reads first under a 1.5 s lock, after 1.7 s; five user actions at once (star and read,
+  move, delete, snooze, send) all land within 7.5 s.
+- **Bounded writers.** The long transactions are split into chunks, each correct on
+  its own: the IMAP fetch upsert and the CONDSTORE flags refresh (100 mails per
+  transaction, the re-match candidates read again per chunk), `KeywordRead.writeAll`
+  (200 rows), `markAllAsRead` (200 mails, each with its fold) and the clean-up rule
+  (`cleanUpGone`, 500 rows per statement, the rule checked per row). Every row is gated
+  on its own (read sequence, stamps), so a write of the other isolate between two chunks
+  is ordered like one made while the FETCH was on its way.
+- **`busy_timeout` stays 5 s.** Raising it changes nothing with this build; with a build
+  that honours it, each attempt would block the app's drift isolate (all its queries)
+  for that long, where the retry loop frees it between attempts.
+
+App Log: warn `db.busy_retried` when a write had to be retried (or a transaction waited
+2 s or more for the lock), with `waitedMs` and `attempts`; error `db.busy_failed` when
+it gave up (the line itself is retried until the lock is free). A write that gives up
+throws `DatabaseBusyException` (`lib/core/storage/database_busy.dart`), nothing of it
+stored; uncaught (a user action from a button), the app shows its message ("The change
+was not saved: the mail database stayed busy … Please try again.") in a SnackBar instead
+of the crash screen (`main.dart`). A sync step that gives up is retried by the next
+cycle as before.
+
+Known gaps: not measured on a phone or on a 50k-row account; the chunk sizes are
+estimates. A writer not listed above (a Sieve run over a large folder, the sweeps, the
+migrations) can still hold the lock longer; the other side then retries for up to 60 s.
+Drift change streams are per connection, so a background write refreshes the app's
+lists only at their next query.
+
+---
+
 ## 6. Pending-change queue
 
 `pending_changes` is a protocol-agnostic table that stores every outbound mutation before it

@@ -897,19 +897,34 @@ class EmailStateWriter {
   /// A row that waits for a foreign move's destination
   /// (`foreign_move_wait_seq`, [KeywordRead.markGone] with
   /// `awaitForeignMove`) stays until [expireForeignMoveWaits] ends the wait.
+  ///
+  /// Deletes [cleanUpChunk] rows per statement: a delete of thousands of
+  /// rows (their bodies, attachments and search index cascade) held
+  /// SQLite's write lock for seconds (#1317). The rule is checked per row
+  /// when it is deleted, so a change queued between two chunks keeps its
+  /// row.
   Future<List<String>> cleanUpGone(String accountId) async {
-    final rows = await _db.customWriteReturning(
-      'DELETE FROM emails WHERE account_id = ?1 AND srv_gone = 1 '
-      'AND foreign_move_wait_seq IS NULL '
-      'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
-      'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql)) '
-      'RETURNING id',
-      variables: [Variable.withString(accountId)],
-      updates: {_db.emails},
-      updateKind: UpdateKind.delete,
-    );
-    return [for (final r in rows) r.read<String>('id')];
+    final gone = 'account_id = ?1 AND srv_gone = 1 '
+        'AND foreign_move_wait_seq IS NULL '
+        'AND NOT EXISTS (SELECT 1 FROM pending_changes p '
+        'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql))';
+    final deleted = <String>[];
+    while (true) {
+      final rows = await _db.customWriteReturning(
+        'DELETE FROM emails WHERE $gone AND id IN '
+        '(SELECT id FROM emails WHERE $gone LIMIT $cleanUpChunk) '
+        'RETURNING id',
+        variables: [Variable.withString(accountId)],
+        updates: {_db.emails},
+        updateKind: UpdateKind.delete,
+      );
+      deleted.addAll([for (final r in rows) r.read<String>('id')]);
+      if (rows.length < cleanUpChunk) return deleted;
+    }
   }
+
+  /// Rows per statement of [cleanUpGone].
+  static const cleanUpChunk = 500;
 
   /// Ends the waits of the rows of [accountId] gone from their IMAP folder
   /// that wait for a foreign move's destination
@@ -1774,7 +1789,31 @@ class EmailStateWriter {
   /// statement per group of equal values (`UPDATE … RETURNING id`, so a row
   /// whose values changed meanwhile is not stamped over them); every other
   /// row goes through [_write]. Returns the rows whose shown value changed.
+  ///
+  /// One transaction per [writeAllChunk] rows, not one for all: a whole
+  /// folder's FLAGS (thousands of rows) held SQLite's write lock for
+  /// seconds, and the other isolate's writes failed with SQLITE_BUSY
+  /// (#1317). Each row is gated on its own, so a write between two chunks
+  /// is ordered against [read] as one during the FETCH would be.
   Future<Set<String>> _writeAll(
+    KeywordRead read,
+    Map<String, ServerKeywords> byRow,
+  ) async {
+    final entries = byRow.entries.toList();
+    final changed = <String>{};
+    for (var i = 0; i < entries.length; i += writeAllChunk) {
+      final end = min(i + writeAllChunk, entries.length);
+      changed.addAll(
+        await _writeAllChunk(read, Map.fromEntries(entries.sublist(i, end))),
+      );
+    }
+    return changed;
+  }
+
+  /// Rows per transaction of [KeywordRead.writeAll].
+  static const writeAllChunk = 200;
+
+  Future<Set<String>> _writeAllChunk(
     KeywordRead read,
     Map<String, ServerKeywords> byRow,
   ) =>

@@ -10,6 +10,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/crash_logger.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
+import 'package:sharedinbox/core/storage/database_busy.dart';
 import 'package:sharedinbox/core/storage/db_encryption.dart';
 import 'package:sharedinbox/core/storage/db_open_result.dart';
 import 'package:sharedinbox/core/sync/background_sync.dart';
@@ -77,6 +78,17 @@ void main({List<Override> overrides = const []}) {
           );
           if (_isWidgetTreeError(details)) return;
           if (transient) return;
+          // A user action that gave up on a busy database (the background
+          // sync held the write lock past the retry budget, #1317): nothing
+          // was saved, and the app keeps running. Say so instead of the
+          // crash screen.
+          final exception = details.exception;
+          if (exception is DatabaseBusyException) {
+            appScaffoldMessengerKey.currentState?.showSnackBar(
+              SnackBar(content: Text(exception.message)),
+            );
+            return;
+          }
           crashScreen.install(
             () => runApp(
               CrashScreen(
@@ -170,6 +182,10 @@ Future<void> _bootApp(List<Override> overrides) async {
 /// framework already substitutes the failing widget via `ErrorWidget.builder`
 /// for these, so we suppress the global runApp(CrashScreen) to let any
 /// in-tree [ErrorBoundary] keep the rest of the screen alive.
+/// The app's root messenger, for messages raised outside a widget (an
+/// uncaught [DatabaseBusyException]).
+final appScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
 bool _isWidgetTreeError(FlutterErrorDetails details) {
   final lib = details.library;
   return lib == 'widgets library' || lib == 'rendering library';
@@ -286,6 +302,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
+      scaffoldMessengerKey: appScaffoldMessengerKey,
       title: 'sharedinbox.de',
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),
