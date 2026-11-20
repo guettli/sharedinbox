@@ -5,11 +5,12 @@ part of '../email_repository_impl.dart';
 // duplicate rows.
 
 /// Where to ask the IMAP server for a row's message: its recorded server
-/// location, which behind a queued move differs from the folder it is shown
-/// in. Rows without one (none recorded yet) fall back to the shown values.
+/// folder, which behind a queued move differs from the folder it is shown
+/// in (a row without one falls back to the shown folder). There is no such
+/// fallback for the UID: a row without `srv_uid` is found by Message-ID
+/// ([_Bodies._imapUidToFetch]), since its `uid` may name another mail now.
 extension on Email {
   String get imapServerPath => srvMailboxPath ?? mailboxPath;
-  int get imapServerUid => srvUid ?? uid;
 }
 
 /// The condition of [_RowIdentity._rowAtImapLocation].
@@ -43,12 +44,20 @@ extension _RowIdentity on EmailRepositoryImpl {
   /// changes, logs, threads and Undo history stay attached as they are.
   /// Shared by [_FlushImap._relocateEmailAfterImapMove] and the body-fetch identity
   /// guard.
+  ///
+  /// [uidValidity] is the UIDVALIDITY under which [newUid] was learnt (the
+  /// `COPYUID` answer's, or the SELECT's of the session that searched):
+  /// the checkpoint's may be from before a change of it the folder's sync
+  /// has not seen yet, and stamping that one would hide the row from the
+  /// sync's location lookup, which then stores the mail twice. Null: not
+  /// known, the checkpoint's.
   Future<void> _relocateEmailRow({
     required String id,
     required int newUid,
     required String newMailboxPath,
     bool mergeDuplicate = false,
     int? seq,
+    int? uidValidity,
   }) async {
     var displaced = const <Email>[];
     Email? merged;
@@ -56,13 +65,16 @@ extension _RowIdentity on EmailRepositoryImpl {
       final row = await (_db.select(_db.emails)..where((t) => t.id.equals(id)))
           .getSingleOrNull();
       if (row == null) return;
+      final newUidValidity = uidValidity == null || uidValidity == 0
+          ? await _knownUidValidity(row.accountId, newMailboxPath)
+          : uidValidity;
       // Compared with what is recorded, so a row whose location was
       // released (or never recorded) gets it recorded.
-      if (row.srvUid == newUid && row.srvMailboxPath == newMailboxPath) {
+      if (row.srvUid == newUid &&
+          row.srvMailboxPath == newMailboxPath &&
+          (newUidValidity == null || row.srvUidValidity == newUidValidity)) {
         return;
       }
-      final newUidValidity =
-          await _knownUidValidity(row.accountId, newMailboxPath);
       // Sync already fetched the mail at its new place (its MOVE's answer
       // came after the destination's sync, or another client moved it there
       // first): that row is a second row of the same mail. Drop it and keep
@@ -120,6 +132,7 @@ extension _RowIdentity on EmailRepositoryImpl {
         mailboxPath: newMailboxPath,
         newUid: newUid,
         oldUid: row.uid,
+        uidValidity: newUidValidity,
       );
       // latest_uid follows the latest email's UID, the thread list's
       // same-second tiebreaker.
@@ -184,7 +197,10 @@ extension _RowIdentity on EmailRepositoryImpl {
         payload[payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src'] =
             mailboxPath;
       } else if (payload['uid'] == newUid &&
-          payload[_uidAfterMoveKey] == null) {
+          payload[_uidAfterMoveKey] == null &&
+          (uidValidity == null || payload['uidValidity'] == uidValidity)) {
+        // Already there (a UIDVALIDITY change may give the mail its old
+        // UID under the new one: then only the stamp is rewritten).
         continue;
       } else if (addressed != mailboxPath) {
         // Queued behind a later move that is not answered yet: it stays

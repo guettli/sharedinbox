@@ -213,26 +213,71 @@ void main() {
   });
 
   group('MessageProbeImpl IMAP', () {
+    /// Probes UID 42 of INBOX on [client], recorded under [uidValidity].
+    Future<ProbeResult> probeOn(
+      _ProbeImapClient client, {
+      int? uidValidity,
+    }) =>
+        MessageProbeImpl(
+          imapConnect: (Account _, String __, String ___) async => client,
+        ).fetch(
+          account: const Account(
+            id: 'acc-1',
+            displayName: 'Alice',
+            email: 'alice@example.com',
+            imapHost: 'imap.example.com',
+            smtpHost: 'smtp.example.com',
+          ),
+          password: 'pw',
+          mailboxPath: 'INBOX',
+          uid: 42,
+          uidValidity: uidValidity,
+        );
+
     test('reports receivedAt from INTERNALDATE, like the sync', () async {
-      final probe = MessageProbeImpl(
-        imapConnect: (Account _, String __, String ___) async =>
-            _ProbeImapClient(),
-      );
-      final result = await probe.fetch(
-        account: const Account(
-          id: 'acc-1',
-          displayName: 'Alice',
-          email: 'alice@example.com',
-          imapHost: 'imap.example.com',
-          smtpHost: 'smtp.example.com',
-        ),
-        password: 'pw',
-        mailboxPath: 'INBOX',
-        uid: 42,
-      );
+      final result = await probeOn(_ProbeImapClient());
       expect(result.error, isNull);
       expect(result.snapshot!.sentAt, DateTime.utc(2024, 6, 15, 12));
       expect(result.snapshot!.receivedAt, DateTime.utc(2024, 6, 16, 8));
     });
+
+    test(
+        'fetches nothing by a UID recorded under another UIDVALIDITY '
+        '(#1314)', () async {
+      final client = _RenumberedProbeImapClient();
+      final result = await probeOn(client, uidValidity: 1);
+      expect(result.snapshot, isNull);
+      expect(result.error, contains('Not located'));
+      expect(client.fetches, 0);
+    });
   });
+}
+
+/// The folder was renumbered: SELECT reports UIDVALIDITY 2.
+class _RenumberedProbeImapClient extends _ProbeImapClient {
+  int fetches = 0;
+
+  @override
+  Future<imap.Mailbox> selectMailboxByPath(
+    String path, {
+    bool enableCondStore = false,
+    imap.QResyncParameters? qresync,
+  }) async =>
+      imap.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: [],
+        pathSeparator: '/',
+        uidValidity: 2,
+      );
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) {
+    fetches++;
+    return super.uidFetchMessage(messageUid, fetchContentDefinition);
+  }
 }

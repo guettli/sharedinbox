@@ -347,13 +347,24 @@ Future<ProbeResult> fetchRemoteMessageSnapshot(
   final account = await accountRepo.getAccount(messageRef.accountId);
   if (account == null) return const ProbeResult.error('Account not found');
   final password = await accountRepo.getPassword(account.id);
+  final srvUid = email.srvUid;
+  // No server location recorded: the row's `uid` may name another mail
+  // (its folder was renumbered and the sync has not matched it yet,
+  // SYNC-REDESIGN.md §6), so nothing is fetched by it.
+  if (email.srvJmapId == null && srvUid == null) {
+    return const ProbeResult.error(
+      'Not located: the server UID of this message is not known (its '
+      'folder was renumbered). Available after the next sync.',
+    );
+  }
   final probe = ref.read(messageProbeProvider);
   return probe.fetch(
     account: account,
     password: password,
     mailboxPath: email.srvMailboxPath ?? messageRef.mailboxPath,
-    uid: email.srvUid ?? email.uid,
+    uid: srvUid ?? email.uid,
     jmapId: email.srvJmapId,
+    uidValidity: email.srvUidValidity,
   );
 }
 

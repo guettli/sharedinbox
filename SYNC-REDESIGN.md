@@ -360,11 +360,37 @@ carries over to a new location on a **vanish + appear pair**
 (`_movedDestinationId`, 2140) or a move ack, and only when the match is
 unique. No match, or more than one, means a new row.
 
-**UIDVALIDITY reset** sets the folder's rows' `srv_location_seq` to 0 and
-`srv_uid` to NULL, then re-matches by Message-ID during the refetch (unique
-matches only). Rows not matched after a complete enumeration become
-`srv_gone`. Ops on a `srv_gone` row are satisfied (delete intent) or failed
-(anything else), never dropped silently.
+**UIDVALIDITY reset** (built in #1314) clears the folder's rows' `srv_uid`
+and `srv_uid_validity`, stamped with a fresh read sequence
+(`releaseFolderForRematch`); the rows stay shown, with body, attachments
+and queued changes. The refetch (the folder's full fetch) re-matches each
+mail without a row at its new location by Message-ID: unique matches only,
+i.e. exactly one released row of the folder and exactly one server mail
+with that Message-ID. The matched row takes the new UID and UIDVALIDITY
+through the read gate (`KeywordRead.adoptImapLocation`, written only while
+no later read wrote the row's location) and keeps its id; its queued IMAP
+payloads are pointed at the new UID and stamped with the new UIDVALIDITY
+(`_rewritePendingChangeUids`). A row without a Message-ID, or with one
+shared by another row or server mail, is not matched: like every row not
+matched, it is marked `srv_gone` by the complete enumeration's sweep and
+deleted by the clean-up rule, and the mail comes back as a new row. Ops on
+a `srv_gone` row are satisfied (delete intent) or failed (anything else),
+never dropped silently. A released row has no UID, so no location lookup
+can find it and give it another mail's headers (the B1 rule of 6a), and no
+body, attachment or raw-source fetch uses its old one: those find the mail
+by a unique Message-ID in the session's SELECT, or wait for the sync. A row
+stamped with the server's current UIDVALIDITY is not released (a second
+isolate's sync). The checkpoint keeps the old UIDVALIDITY while released
+rows are left unmatched and unswept (a skipped sweep), and the incremental
+reconcile sweeps rows without a UID once every listed mail has its own
+row. A location learnt meanwhile is stamped with the UIDVALIDITY it was
+learnt under (`COPYUID`, the SELECT of the search). App Log
+`sync.uidvalidity_changed` counts the rows re-matched and removed;
+`sync.uidvalidity_refetch_failed`, `sync.uidvalidity_rematch_deferred`
+(after 24 hours and three tries `sync.uidvalidity_rematch_given_up`: the
+unmatched rows are swept), `sync.unlocated_swept` and
+`email.body.not_located` cover the window
+(SYNC.md §6a).
 
 **Force resync** (#1236) uses the same mechanism for the whole account:
 mark, refetch, then remove only rows proven gone. It never clears first
@@ -967,7 +993,8 @@ As implemented, phase 4 is two PRs:
      it shown in the destination). An IMAP move answered without COPYUID
      for a row hidden by its queued delete takes the destination UID only
      from a unique Message-ID match, as for a row that is gone. The UIDVALIDITY
-     reset logs the rows it keeps (`sync.uidvalidity_changed`), and so does
+     reset logs the rows it keeps (`sync.uidvalidity_changed`; since #1314
+     the reset re-matches the rows by Message-ID instead, §6), and so does
      `removeLocalMailbox` (`email.server_gone_with_changes`);
      `markFolderGone` runs in one transaction and clears the UID only of the
      rows it marked that are still recorded in that folder. A failed move
@@ -1606,7 +1633,8 @@ As implemented, phase 6 is two PRs, both done:
      present only under the folder's current UIDVALIDITY; an unstamped row
      only while no row stamped with the current one holds its UID. The full
      fetch first marks gone the rows stamped with another UIDVALIDITY than
-     the server's (`markFolderGone(exceptUidValidity:)`), for when the
+     the server's (`markFolderGone(exceptUidValidity:)`; since #1314 they are
+     released for the re-match instead, §6), for when the
      previous one is unknown. And the fetch no longer adopts an unstamped
      row at a UID whose mail has another Message-ID: the UID was reused, so
      the mail gets its own row, and the old one (with its body, attachments
@@ -1860,11 +1888,17 @@ What remains after phase 6, with where it is handled today:
   ("folder removed on the server") and its mail is fetched again under the
   new path as new rows. RFC 8474 `MAILBOXID` would close this; enough_mail
   does not support it (6b).
-- **A UIDVALIDITY change drops the folder's cached rows** (bodies,
-  downloaded attachments, references) and refetches them as new rows;
-  only rows with a queued change are kept. §6's re-match by Message-ID was
-  not built. Logged (`sync.uidvalidity_changed`, since 6b also without a
-  kept row).
+- **A UIDVALIDITY change re-matches by Message-ID** (#1314, §6): a cached
+  row whose mail the renumbered folder still has keeps its id, body,
+  downloaded attachments and queued changes. Left open: a mail without a
+  Message-ID, or whose Message-ID another mail of the folder (or another
+  cached row of it) shares, is not matched; its row is removed and the mail
+  comes back as a new row, without its body or local references. Logged
+  (`sync.uidvalidity_changed` with the counts re-matched and removed). Until
+  the re-match, opening such a row shows only its cached body ("available
+  after the next sync"). A row whose location another mail took (no UID)
+  is now swept by the incremental reconcile once every listed mail has its
+  own row; before, it stayed for good.
 - **Two isolates write the same database** (the foreground app and the
   WorkManager / background sync isolate). Correctness lives in the DB
   (ops, stamps, the read sequence, claim tokens), but SQLite allows one

@@ -26,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/email_ids.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 
@@ -642,6 +643,7 @@ void _knownBugs() {
 Future<({AppDatabase db, EmailRepositoryImpl emails})> _openApp(
   StatefulFakeImapServer server, {
   DateTime Function() now = DateTime.now,
+  EmailIdGenerator newId = newEmailId,
 }) async {
   final db = openTestDatabase();
   final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
@@ -654,6 +656,7 @@ Future<({AppDatabase db, EmailRepositoryImpl emails})> _openApp(
     fetchObjectIds: (_, __, ___) async => const {},
     fetchPreviewSnippets: (_, __, ___) async => const {},
     now: now,
+    newId: newId,
   );
   await accounts.addAccount(_account, 'pw');
   for (final path in _folders) {
@@ -720,11 +723,24 @@ class _Intent {
 }
 
 class _FuzzRun {
-  _FuzzRun(this.seed, this.steps) : _rnd = Random(seed);
+  _FuzzRun(this.seed, this.steps)
+      : _rnd = Random(seed),
+        _renumberRnd = Random(seed ^ 0x5eed1314);
 
   final int seed;
   final int steps;
   final Random _rnd;
+
+  /// Draws the UIDVALIDITY changes ([_otherClient]) apart from [_rnd], so
+  /// a seed without one runs as it did before they were added.
+  final Random _renumberRnd;
+
+  /// Row ids in insertion order, from a counter: with random ones the rows
+  /// the user acts on ([_localRows] is ordered by id) differed from run to
+  /// run of the same seed.
+  int _nextRowId = 1;
+  String _newRowId(String accountId) =>
+      '$accountId:~${(_nextRowId++).toRadixString(16).padLeft(32, '0')}';
   final _trace = <String>[];
   final _intents = <String, _Intent>{};
 
@@ -804,7 +820,7 @@ class _FuzzRun {
       'refused=${_refused ?? 'none'}; server: ${_serverDump()}',
     );
 
-    final app = await _openApp(_server, now: () => _now);
+    final app = await _openApp(_server, now: () => _now, newId: _newRowId);
     _db = app.db;
     _emails = app.emails;
     _server.beforeAnswer = _onAnswer;
@@ -823,7 +839,7 @@ class _FuzzRun {
     final r = _rnd.nextDouble();
     _trace.add('step $i');
     if (r < 0.35) return _userAction();
-    if (r < 0.45) return _otherClient();
+    if (r < 0.45) return _otherClient(betweenCommands: true);
     if (r < 0.5) return _flush();
     if (r < 0.55) return _sync(_pick(_folders));
     return _cycle();
@@ -938,9 +954,11 @@ class _FuzzRun {
     final r = _rnd.nextDouble();
     final what = '${row.id} ($messageId)';
     final onServer = _server.find(messageId);
+    // The row records where the server has the mail now.
     final current = onServer != null &&
-        row.id ==
-            '${_account.id}:${onServer.folder.path}:${onServer.message.uid}';
+        row.srvMailboxPath == onServer.folder.path &&
+        row.srvUid == onServer.message.uid &&
+        row.srvUidValidity == onServer.folder.uidValidity;
     if (intent.conflicted &&
         current &&
         rows.where((r) => r.messageId == messageId).length == 1 &&
@@ -1004,12 +1022,33 @@ class _FuzzRun {
       ];
 
   /// Another client changes the server (or new mail arrives).
-  Future<void> _otherClient() async {
+  /// [betweenCommands]: no app connection is waiting for an answer (a step
+  /// of its own, not a held-back answer).
+  Future<void> _otherClient({bool betweenCommands = false}) async {
     final all = [
       for (final folder in _server.folders.values)
         for (final message in folder.messages.values)
           (folder: folder.path, message: message),
     ];
+    if (betweenCommands && _renumberRnd.nextDouble() < 0.1) {
+      // The server renumbers a folder (UIDVALIDITY change, #1314): the
+      // same mails under new UIDs, so the cached rows and the queued
+      // changes all name old UIDs. Nothing the user asked for changes.
+      // Only between commands: a server does not change the UIDVALIDITY
+      // of a folder a session has selected (RFC 3501 §2.3.1.1), and the
+      // fake would apply that session's old UIDs to the new numbering.
+      final folder = _folders[_renumberRnd.nextInt(_folders.length)];
+      final reverse = _renumberRnd.nextBool();
+      _server.renumberFolder(
+        folder,
+        _server.folders[folder]!.uidValidity + 1000,
+        reverse: reverse,
+      );
+      _trace.add(
+        '  other client: renumber $folder${reverse ? ' (reversed)' : ''}',
+      );
+      return;
+    }
     final r = _rnd.nextDouble();
     if (all.isEmpty || r >= 0.95) {
       _deliver('INBOX');

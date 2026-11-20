@@ -1234,8 +1234,11 @@ extension _FlushImap on EmailRepositoryImpl {
         throwOnFailure: true,
       );
       if (destUid == null) return false;
+      int? destValidity;
       try {
-        await client.selectUnicodeMailboxByPath(destMailboxPath);
+        destValidity =
+            (await client.selectUnicodeMailboxByPath(destMailboxPath))
+                .uidValidity;
         await beforeMove
             ?.call(imap.MessageSequence.fromId(destUid, isUid: true));
       } catch (e) {
@@ -1263,6 +1266,7 @@ extension _FlushImap on EmailRepositoryImpl {
         newUid: destUid,
         mergeDuplicate: sourceEmpty,
         seq: searchSeq,
+        uidValidity: destValidity,
       );
       // Possibly moved there by another client, after read/star changes of
       // ours went to the UID it had left: the flags it has there are not
@@ -1360,11 +1364,15 @@ extension _FlushImap on EmailRepositoryImpl {
       return true;
     }
 
+    // The UIDVALIDITY the new UID was learnt under: COPYUID names it, a
+    // search's SELECT reports it.
+    int? newUidValidity = copyUid == null ? null : _copyUidValidity(moveResult);
     final newUid = copyUid ??
         await _searchUidByMessageId(
           client,
           destMailboxPath,
           row.messageId,
+          onSelected: (validity) => newUidValidity = validity,
         );
     if (newUid == null) {
       log(
@@ -1380,6 +1388,7 @@ extension _FlushImap on EmailRepositoryImpl {
       destMailboxPath: destMailboxPath,
       newUid: newUid,
       seq: seq,
+      uidValidity: newUidValidity,
     );
     return true;
   }
@@ -1393,6 +1402,7 @@ extension _FlushImap on EmailRepositoryImpl {
     required int newUid,
     bool mergeDuplicate = true,
     int? seq,
+    int? uidValidity,
   }) async {
     final row = await (_db.select(_db.emails)..where((t) => t.id.equals(id)))
         .getSingleOrNull();
@@ -1410,6 +1420,7 @@ extension _FlushImap on EmailRepositoryImpl {
       newMailboxPath: destMailboxPath,
       mergeDuplicate: mergeDuplicate,
       seq: seq,
+      uidValidity: uidValidity,
     );
 
     // Rebuild thread aggregates in both mailboxes from the now-updated emails.
@@ -1489,6 +1500,17 @@ extension _FlushImap on EmailRepositoryImpl {
   /// Extracts the destination UID for [sourceUid] from a MOVE/COPY result's
   /// `COPYUID` response code (RFC 4315). Returns null when the server did not
   /// advertise UIDPLUS or the response code is malformed.
+  /// The destination's UIDVALIDITY a MOVE/COPY result's `COPYUID` names;
+  /// null without one.
+  int? _copyUidValidity(imap.GenericImapResult result) {
+    try {
+      final validity = result.responseCodeCopyUid?.uidValidity;
+      return validity == null || validity == 0 ? null : validity;
+    } catch (_) {
+      return null;
+    }
+  }
+
   int? _resolveCopyUid(imap.GenericImapResult result, int sourceUid) {
     final code = result.responseCodeCopyUid;
     if (code == null) return null;
@@ -1520,6 +1542,7 @@ extension _FlushImap on EmailRepositoryImpl {
     String? messageId, {
     bool throwOnFailure = false,
     bool select = true,
+    void Function(int? uidValidity)? onSelected,
   }) async {
     final uids = await _searchUidsByMessageId(
       client,
@@ -1527,6 +1550,7 @@ extension _FlushImap on EmailRepositoryImpl {
       messageId,
       throwOnFailure: throwOnFailure,
       select: select,
+      onSelected: onSelected,
     );
     if (uids.isEmpty) return null;
     return uids.reduce((a, b) => a > b ? a : b);
@@ -1534,17 +1558,22 @@ extension _FlushImap on EmailRepositoryImpl {
 
   /// Every UID in [mailboxPath] whose Message-ID header is [messageId]; empty
   /// when none matches, or when the search fails and [throwOnFailure] is
-  /// false.
+  /// false. [onSelected] gets the UIDVALIDITY the [select] reported, under
+  /// which the UIDs found are valid.
   Future<List<int>> _searchUidsByMessageId(
     imap.ImapClient client,
     String mailboxPath,
     String? messageId, {
     bool throwOnFailure = false,
     bool select = true,
+    void Function(int? uidValidity)? onSelected,
   }) async {
     if (messageId == null || messageId.isEmpty) return const [];
     try {
-      if (select) await client.selectUnicodeMailboxByPath(mailboxPath);
+      if (select) {
+        final selected = await client.selectUnicodeMailboxByPath(mailboxPath);
+        onSelected?.call(selected.uidValidity);
+      }
       for (final criteria in messageIdSearchCriteria(messageId)) {
         final result = await client.uidSearchMessages(searchCriteria: criteria);
         final uids = result.matchingSequence?.toList() ?? const <int>[];

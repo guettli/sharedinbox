@@ -5,6 +5,10 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import '../fake_imap.dart'
     show FakeImapClient, StaleAnswerHook, StoreAndMove, fakeMailbox;
 
+/// A message delivered with a Message-ID starting with this has no
+/// Message-ID header: the id only names it in the test.
+const noMessageIdPrefix = 'no-message-id:';
+
 /// One message on a [StatefulFakeImapServer].
 class FakeServerMessage {
   FakeServerMessage({
@@ -13,8 +17,14 @@ class FakeServerMessage {
     required this.modSeq,
     Iterable<String> flags = const [],
     String? emailId,
+    this.messageIdHeader,
   })  : flags = {...flags},
         emailId = emailId ?? 'E-$messageId';
+
+  /// The raw `Message-ID` header of the message body, when it differs from
+  /// the envelope's `<messageId>` (a relay's comment after it, a different
+  /// folding); empty: the body has no such header. Null: `<messageId>`.
+  final String? messageIdHeader;
 
   int uid;
   int modSeq;
@@ -111,6 +121,10 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// How many LISTs app connections sent.
   int listCount = 0;
 
+  /// When set, `UID SEARCH ALL` lists no message although the folders have
+  /// some (a server whose index lags, or a glitch).
+  bool searchAllEmpty = false;
+
   /// Another client deletes folder [path] (with its messages).
   void deleteFolder(String path) => folders.remove(path);
 
@@ -176,6 +190,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
     String messageId, {
     Iterable<String> flags = const [],
     String? emailId,
+    String? messageIdHeader,
   }) {
     final folder = folders[path]!;
     final message = FakeServerMessage(
@@ -184,6 +199,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
       modSeq: _bump(folder),
       flags: flags,
       emailId: emailId,
+      messageIdHeader: messageIdHeader,
     );
     folder.messages[message.uid] = message;
     return message;
@@ -207,6 +223,28 @@ class StatefulFakeImapServer with StaleAnswerHook {
     final found = find(messageId)!;
     found.folder.messages.remove(found.message.uid);
     _bump(found.folder);
+  }
+
+  /// The server renumbers folder [path] (a UIDVALIDITY change: e.g. the
+  /// folder was deleted and made again with the same mail): it gets
+  /// [uidValidity], and its messages, with their Message-IDs, flags and
+  /// EMAILIDs, get new UIDs from 1, in reverse order when [reverse] (so
+  /// that an old UID names another mail now).
+  void renumberFolder(String path, int uidValidity, {bool reverse = false}) {
+    final old = folders[path]!;
+    final renumbered = folders[path] = FakeServerFolder(path, uidValidity);
+    final messages = old.messages.values.toList();
+    for (final m in reverse ? messages.reversed : messages) {
+      final message = FakeServerMessage(
+        uid: renumbered.uidNext++,
+        messageId: m.messageId,
+        modSeq: _bump(renumbered),
+        flags: m.flags,
+        emailId: m.emailId,
+        messageIdHeader: m.messageIdHeader,
+      );
+      renumbered.messages[message.uid] = message;
+    }
   }
 
   int _bump(FakeServerFolder folder) => folder.highestModSeq = ++_modSeq;
@@ -421,7 +459,11 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
 
   List<int> _search(String criteria) {
     final messages = _folder.messages;
-    if (criteria == 'ALL') return messages.keys.toList();
+    if (criteria == 'ALL') {
+      // A server whose index lags, or a glitch: nothing listed.
+      if (server.searchAllEmpty) return const [];
+      return messages.keys.toList();
+    }
     if (criteria == 'DELETED') {
       return [
         for (final m in messages.values)
@@ -464,18 +506,36 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   }) async {
     final items = fetchContentDefinition ?? '';
     final since = changedSinceModSequence;
-    final full = items.contains('ENVELOPE');
+    final headers = items.contains('ENVELOPE');
+    // The whole message (a body, attachment or raw-source fetch).
+    final body = items.contains('BODY.PEEK[]') || items.contains('BODY[]');
+    final full = headers || body;
     final messages = [
       for (final m in _named(sequence))
         if (since == null || m.modSeq > since)
           full ? _fullMessage(m) : _flagsMessage(m, withSize: items),
     ];
-    final what = full ? 'headers' : items;
+    final what = headers
+        ? 'headers'
+        : body
+            ? 'body'
+            : items;
     return _answer(
       'FETCH $what${since == null ? '' : ' CHANGEDSINCE'}',
       imap.FetchImapResult(messages, null),
     );
   }
+
+  @override
+  Future<imap.FetchImapResult> uidFetchMessage(
+    int messageUid,
+    String fetchContentDefinition, {
+    Duration? responseTimeout,
+  }) =>
+      uidFetchMessages(
+        imap.MessageSequence.fromId(messageUid, isUid: true),
+        fetchContentDefinition,
+      );
 
   imap.MimeMessage _flagsMessage(
     FakeServerMessage m, {
@@ -486,24 +546,30 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
         ..flags = m.flags.toList()
         ..size = withSize.contains('RFC822.SIZE') ? 100 : null;
 
-  imap.MimeMessage _fullMessage(FakeServerMessage m) =>
-      imap.MimeMessage.parseFromText(
-        'Message-ID: <${m.messageId}>\r\n'
-        'Subject: Mail ${m.messageId}\r\n'
-        'Content-Type: text/plain; charset=UTF-8\r\n'
-        '\r\n'
-        'Body of ${m.messageId}\r\n',
-      )
-        ..uid = m.uid
-        ..flags = m.flags.toList()
-        ..size = 100
-        ..envelope = imap.Envelope(
-          date: DateTime.utc(2026, 1, 1, 12),
-          subject: 'Mail ${m.messageId}',
-          from: const [imap.MailAddress(null, 'bob@example.com')],
-          to: const [imap.MailAddress(null, 'alice@example.com')],
-          messageId: '<${m.messageId}>',
-        );
+  /// A message whose [FakeServerMessage.messageId] starts with
+  /// [noMessageIdPrefix] has no Message-ID header (the id only names it in
+  /// the test).
+  imap.MimeMessage _fullMessage(FakeServerMessage m) {
+    final hasId = !m.messageId.startsWith(noMessageIdPrefix);
+    final header = m.messageIdHeader ?? (hasId ? '<${m.messageId}>' : '');
+    return imap.MimeMessage.parseFromText(
+      '${header.isEmpty ? '' : 'Message-ID: $header\r\n'}'
+      'Subject: Mail ${m.messageId}\r\n'
+      'Content-Type: text/plain; charset=UTF-8\r\n'
+      '\r\n'
+      'Body of ${m.messageId}\r\n',
+    )
+      ..uid = m.uid
+      ..flags = m.flags.toList()
+      ..size = 100
+      ..envelope = imap.Envelope(
+        date: DateTime.utc(2026, 1, 1, 12),
+        subject: 'Mail ${m.messageId}',
+        from: const [imap.MailAddress(null, 'bob@example.com')],
+        to: const [imap.MailAddress(null, 'alice@example.com')],
+        messageId: hasId ? '<${m.messageId}>' : null,
+      );
+  }
 
   @override
   Future<imap.StoreImapResult> fakeStore(
