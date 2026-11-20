@@ -19,12 +19,11 @@ class DatabaseBusyException implements Exception {
   /// How many times the write was tried.
   final int attempts;
 
-  /// The last SQLITE_BUSY / SQLITE_LOCKED error.
+  /// The last SQLITE_BUSY error.
   final Object cause;
 
-  String get message => 'The change was not saved: the mail database stayed '
-      'busy (a background sync was writing) for ${waited.inSeconds} s. '
-      'Please try again.';
+  String get message => 'The change was not saved: the mail database was '
+      'busy (a background sync was writing). Please try again.';
 
   @override
   String toString() =>

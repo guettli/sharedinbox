@@ -1935,13 +1935,16 @@ What remains after phase 6, with where it is handled today:
   Now every transaction takes the write lock with its first statement and
   is retried as a whole, with backoff, for up to 60 s (only a failure of
   that statement, so its body runs once); a statement outside a
-  transaction is retried on its own. The IMAP fetch upsert, the flags
-  refresh, `writeAll`, `markAllAsRead` and `cleanUpGone` run in bounded
-  chunks. App Log `db.busy_retried` / `db.busy_failed`; a user action that
-  gives up shows "The change was not saved … try again". Left open: not
-  measured on a phone or a large account; Sieve runs, sweeps and
-  migrations are not chunked; read-only transactions also take
-  the write lock. Drift change streams are per connection, so a background
+  transaction is retried on its own, a migration's `BEGIN IMMEDIATE` too.
+  The IMAP fetch upsert, the flags refresh, `writeAll`, `markAllAsRead` and
+  `cleanUpGone` run in bounded chunks; the upsert re-reads the queued
+  changes in each chunk so a mail moved meanwhile is not stored again, and
+  each chunk's threads, log lines and arrival matching follow its commit.
+  App Log `db.busy_retried` / `db.busy_failed`; a user action that gives up
+  shows "The change was not saved … try again" in the shell's bottom bar.
+  Left open: not measured on a phone or a large account; Sieve runs, the
+  sweeps and the migration steps are not chunked; read-only transactions
+  also take the write lock. Drift change streams are per connection, so a background
   write refreshes the foreground lists only at their next query.
 - **IMAP `BAD` is classified by its text** (#1316, was: always
   transient). A tagged `BAD` to a change's command (a flag or path the

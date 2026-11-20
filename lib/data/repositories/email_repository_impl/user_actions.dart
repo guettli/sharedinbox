@@ -226,7 +226,9 @@ extension _UserActions on EmailRepositoryImpl {
     // One transaction per chunk of mails, not one for the whole folder: a
     // folder with thousands of unread mails held SQLite's write lock for
     // seconds, and the background isolate's writes failed with SQLITE_BUSY
-    // (#1317). Each mail's change and its fold land together.
+    // (#1317). Each mail's change, its fold and its thread land together,
+    // and its log line is written once they did: a later chunk that fails
+    // leaves the earlier ones complete.
     for (var i = 0; i < unread.length; i += _markAllAsReadChunk) {
       final chunk =
           unread.sublist(i, math.min(i + _markAllAsReadChunk, unread.length));
@@ -251,35 +253,46 @@ extension _UserActions on EmailRepositoryImpl {
         // its newest read change (one without a server copy stored it as
         // its own).
         await _state.foldSeenBulk(queued);
+
+        // The chunk's threads in this mailbox show no unread once none of
+        // their mails here is (one in a later chunk still is).
+        final threadIds = {for (final row in chunk) row.threadId ?? row.id};
+        await _db.customUpdate(
+          'UPDATE threads SET has_unread = 0 WHERE account_id = ?1 '
+          'AND mailbox_path = ?2 '
+          'AND id IN (${List.filled(threadIds.length, '?').join(', ')}) '
+          'AND NOT EXISTS (SELECT 1 FROM emails e '
+          'WHERE e.account_id = threads.account_id '
+          'AND e.mailbox_path = threads.mailbox_path '
+          'AND COALESCE(e.thread_id, e.id) = threads.id AND e.is_seen = 0)',
+          variables: [
+            Variable.withString(accountId),
+            Variable.withString(mailboxPath),
+            for (final id in threadIds) Variable.withString(id),
+          ],
+          updates: {_db.threads},
+          updateKind: UpdateKind.update,
+        );
       });
-    }
 
-    // Update all threads in this mailbox to reflect no unread.
-    await (_db.update(_db.threads)
-          ..where(
-            (t) =>
-                t.accountId.equals(accountId) &
-                t.mailboxPath.equals(mailboxPath),
-          ))
-        .write(const ThreadsCompanion(hasUnread: Value(false)));
-
-    // Log per message (outside the transaction) so each affected mail shows the
-    // read change in its own "Show Logs" view (#562).
-    for (final row in unread) {
-      unawaited(
-        _appLogger?.info(
-          'email.mark_read',
-          'Marked "${row.subject ?? '(no subject)'}" read',
-          emailId: row.id,
-          accountId: accountId,
-          mailboxPath: mailboxPath,
-          data: {
-            'seen': true,
-            'bulk': true,
-            'protocol': account.type.name,
-          },
-        ),
-      );
+      // Log per message (outside the transaction) so each affected mail
+      // shows the read change in its own "Show Logs" view (#562).
+      for (final row in chunk) {
+        unawaited(
+          _appLogger?.info(
+            'email.mark_read',
+            'Marked "${row.subject ?? '(no subject)'}" read',
+            emailId: row.id,
+            accountId: accountId,
+            mailboxPath: mailboxPath,
+            data: {
+              'seen': true,
+              'bulk': true,
+              'protocol': account.type.name,
+            },
+          ),
+        );
+      }
     }
   }
 

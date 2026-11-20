@@ -16,29 +16,25 @@ import 'package:sqlite3/sqlite3.dart' show SqliteException;
 //    ([BusyRetryInterceptor]), is tried again with backoff ([retryOnBusy])
 //    while the other connection holds the lock, up to [BusyRetryPolicy.budget].
 
-/// SQLite primary result codes SQLITE_BUSY and SQLITE_LOCKED.
+/// SQLite primary result code SQLITE_BUSY. Not SQLITE_LOCKED (6): without
+/// shared cache that is a conflict within one connection, which waiting
+/// never clears.
 const _sqliteBusy = 5;
-const _sqliteLocked = 6;
 
 final _sqliteCode = RegExp(r'SqliteException\((\d+)\)');
 
 /// True when [error] is SQLite refusing a statement because another
 /// connection holds a lock (SQLITE_BUSY, also BUSY_SNAPSHOT and
-/// BUSY_RECOVERY, or SQLITE_LOCKED). Matches the text too, so it also holds
-/// for the copy a background-isolate connection rethrows
-/// (`DriftRemoteException`).
+/// BUSY_RECOVERY). Matches the text too, so it also holds for the copy a
+/// background-isolate connection rethrows (`DriftRemoteException`).
 bool isSqliteBusy(Object error) {
   if (error is DatabaseBusyException) return false;
-  if (error is SqliteException) return _isBusyCode(error.resultCode);
+  if (error is SqliteException) return error.resultCode == _sqliteBusy;
   final text = error.toString();
   final code = _sqliteCode.firstMatch(text);
-  if (code != null) return _isBusyCode(int.parse(code.group(1)!) & 0xFF);
-  return text.contains('database is locked') ||
-      text.contains('database table is locked');
+  if (code != null) return (int.parse(code.group(1)!) & 0xFF) == _sqliteBusy;
+  return text.contains('database is locked');
 }
-
-bool _isBusyCode(int primary) =>
-    primary == _sqliteBusy || primary == _sqliteLocked;
 
 /// How long a write keeps trying while the database is busy. busy_timeout
 /// (5 s, database.dart) is set, but the bundled SQLCipher build (no

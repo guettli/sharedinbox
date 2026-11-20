@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:sharedinbox/core/storage/database_busy.dart';
+
 /// Returns a human-readable file size string (B / KB / MB / GB).
 String fmtSize(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -13,6 +15,7 @@ String fmtSize(int bytes) {
 /// The human part of an error for a snackbar: no `Exception:` /
 /// `Invalid argument(s)` wrapper in front of the text.
 String userErrorMessage(Object e) {
+  if (e is DatabaseBusyException) return e.message;
   if (e is ArgumentError) {
     final message = e.message;
     return message == null ? e.toString() : '$message';

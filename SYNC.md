@@ -464,7 +464,7 @@ write lock (`test/unit/sqlite_busy_test.dart`, #1317; Linux, the bundled SQLCiph
 
 | Write on the other connection | Lock held | Result |
 |---|---|---|
-| a single statement (autocommit) | 7 s | SQLITE_BUSY after about 60 ms |
+| a single statement (autocommit) | 1 s | SQLITE_BUSY after about 60 ms |
 | a transaction that reads, then writes (most of ours) | 1.5 s | SQLITE_BUSY at once (0 ms) |
 | a transaction that read before the other one committed | — | SQLITE_BUSY_SNAPSHOT at its first write (0 ms), with no lock held then |
 
@@ -489,35 +489,62 @@ What the database does now (`AppDatabase.transaction`, `lib/data/db/busy_retry.d
   error inside the body (not expected once the lock is held) is not retried. A batch
   outside a transaction runs in one. A single statement outside a transaction is retried
   on its own (`BusyRetryInterceptor`): it is atomic. Between attempts the app's other
-  queries run. Measured after the fix: a transaction or statement held up by a 7 s lock
-  lands 7.3–7.4 s after it started (within one backoff of the lock's release); one that
-  reads first under a 1.5 s lock, after 1.7 s; five user actions at once (star and read,
-  move, delete, snooze, send) all land within 7.5 s.
-- **Bounded writers.** The long transactions are split into chunks, each correct on
-  its own: the IMAP fetch upsert and the CONDSTORE flags refresh (100 mails per
-  transaction, the re-match candidates read again per chunk), `KeywordRead.writeAll`
-  (200 rows), `markAllAsRead` (200 mails, each with its fold) and the clean-up rule
-  (`cleanUpGone`, 500 rows per statement, the rule checked per row). Every row is gated
-  on its own (read sequence, stamps), so a write of the other isolate between two chunks
-  is ordered like one made while the FETCH was on its way.
+  queries run. Measured after the fix: a transaction held up by a 7 s lock lands after
+  7.3 s, a statement under a 1 s lock after 1.0 s (within one backoff of the lock's
+  release); one that reads first under a 1.5 s lock, after 1.6 s; five user actions at
+  once (star and read, move, delete, snooze, send) under a 1 s lock all land within
+  1.4 s.
+- **Bounded writers.** The long transactions are split into chunks, one transaction
+  each: the IMAP fetch upsert and the CONDSTORE flags refresh (100 mails),
+  `KeywordRead.writeAll` (200 rows, also the IMAP and JMAP flag reconciles),
+  `markAllAsRead` (200 mails, each with its fold and its thread) and the clean-up rule
+  (`cleanUpGone`, 500 rows per statement, the rule checked per row; `markFolderGone`
+  runs it after its marking committed). What one transaction gave for free is kept per
+  chunk:
+  - *Ordering.* The gate orders a row's overlay columns against the read (read
+    sequence, stamps), so a write of the other isolate between two chunks is ordered
+    like one made while the FETCH was on its way.
+  - *No resurrection.* The gate does not cover inserts. The fetch upsert reads the
+    changes queued, sent or acked for the folder again in each chunk's transaction
+    (`_pendingDeleteOrMoveUids`), so a mail the other isolate moved or deleted during
+    the upsert is not stored again as a new row; and before each chunk it searches the
+    folder by Message-ID for its mails placed elsewhere since the read. A placement
+    that turns up only inside the transaction, without that search, ends the fetch
+    (`_FetchAnswerOutdated`): its checkpoint stays and the next sync fetches again (one
+    transaction failed with SQLITE_BUSY_SNAPSHOT there before). The re-match candidates
+    after a UIDVALIDITY change are read once; `rematched` and the gated adoption keep a
+    row from being adopted twice.
+  - *Follow-up per chunk.* Each chunk's thread refresh, App Log lines (`email.fetched`,
+    `email.mark_read`) and arrival matching (`_matchArrival`) run right after it
+    committed, so a later chunk that fails leaves the earlier ones complete: the next
+    CHANGEDSINCE does not report their mails again, and the next fetch finds their rows
+    known.
+- **Migrations.** Drift runs them past the interceptor; `_upgradeAtomically` retries its
+  `BEGIN IMMEDIATE` (on the first open after an update it failed after about 50 ms while
+  the other isolate wrote).
+- **Only SQLITE_BUSY.** SQLITE_LOCKED is not retried: without shared cache it is a
+  conflict within one connection, which waiting does not clear.
 - **`busy_timeout` stays 5 s.** Raising it changes nothing with this build; with a build
   that honours it, each attempt would block the app's drift isolate (all its queries)
   for that long, where the retry loop frees it between attempts.
 
 App Log: warn `db.busy_retried` when a write had to be retried (or a transaction waited
 2 s or more for the lock), with `waitedMs` and `attempts`; error `db.busy_failed` when
-it gave up (the line itself is retried until the lock is free). A write that gives up
-throws `DatabaseBusyException` (`lib/core/storage/database_busy.dart`), nothing of it
-stored; uncaught (a user action from a button), the app shows its message ("The change
-was not saved: the mail database stayed busy … Please try again.") in a SnackBar instead
-of the crash screen (`main.dart`). A sync step that gives up is retried by the next
+it gave up (the line is written outside any transaction and retried until the lock is
+free). A write that gives up throws `DatabaseBusyException`
+(`lib/core/storage/database_busy.dart`), nothing of it stored; `userErrorMessage` turns
+it into its message ("The change was not saved: the mail database was busy (a background
+sync was writing). Please try again."). Uncaught (a user action from a button),
+`main.dart` shows that message in the shell's bottom bar (`showShellMessage`,
+`undo_shell.dart`; a Scaffold SnackBar is dropped during a route transition on Android,
+#255) instead of the crash screen. A sync step that gives up is retried by the next
 cycle as before.
 
 Known gaps: not measured on a phone or on a 50k-row account; the chunk sizes are
-estimates. A writer not listed above (a Sieve run over a large folder, the sweeps, the
-migrations) can still hold the lock longer; the other side then retries for up to 60 s.
-Drift change streams are per connection, so a background write refreshes the app's
-lists only at their next query.
+estimates. A Sieve run over a large folder and the sweeps are not chunked, nor are the
+migration steps themselves; the other side then retries for up to 60 s. Drift change
+streams are per connection, so a background write refreshes the app's lists only at
+their next query.
 
 ---
 

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:sharedinbox/core/storage/database_busy.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:test/test.dart';
 
@@ -133,6 +134,16 @@ void main() {
       expect(userErrorMessage(ArgumentError.value('x', 'n', 'bad')), 'bad');
       expect(userErrorMessage(StateError('s')), 'Bad state: s');
       expect(userErrorMessage(ArgumentError()), 'Invalid argument(s)');
+    });
+
+    test('a busy database gives its message, not the SQLite error', () {
+      final e = DatabaseBusyException(
+        waited: const Duration(seconds: 60),
+        attempts: 90,
+        cause: 'SqliteException(5): database is locked',
+      );
+      expect(userErrorMessage(e), e.message);
+      expect(userErrorMessage(e), isNot(contains('Sqlite')));
     });
   });
 }

@@ -16,6 +16,23 @@ const _imapSizeBackfillBatch = 500;
 /// SQLITE_BUSY (#1317).
 const _imapUpsertChunk = 100;
 
+/// A chunk of an IMAP fetch upsert found a mail of the answer placed
+/// elsewhere (or a change of it queued) after the answer was fixed, with no
+/// search telling whether the folder still has it: storing it could bring
+/// a moved mail back as a new row, skipping it could lose it. The fetch
+/// ends; its checkpoint stays, and the next sync fetches the rest again
+/// (#1317). Before the chunks, the single transaction failed with
+/// SQLITE_BUSY_SNAPSHOT in this case.
+class _FetchAnswerOutdated implements Exception {
+  _FetchAnswerOutdated(this.mailboxPath);
+
+  final String mailboxPath;
+
+  @override
+  String toString() => 'The FETCH answer for $mailboxPath is outdated: a '
+      'mail of it was moved meanwhile; it is fetched again by the next sync';
+}
+
 /// Marks an IMAP checkpoint whose next sync must be a full fetch (a force
 /// resync): it keeps the folder's UIDVALIDITY, so a change is still seen.
 const _forceFullKey = 'forceFull';
@@ -372,13 +389,16 @@ extension _SyncImap on EmailRepositoryImpl {
     // return thousands of messages after a long time offline, and one
     // transaction for all held the write lock for seconds (#1317). Each
     // message is looked up and written in the same one; the gate orders
-    // every row against [read] on its own.
-    final affectedThreads = <(String, String)>{};
+    // every row against [read] on its own. The message list reads
+    // unread/starred state from the thread row, so each chunk's threads are
+    // refreshed right after it committed: a later chunk that fails must not
+    // leave them stale, as the next CHANGEDSINCE does not report those
+    // mails again.
     final messages = result.messages;
     for (var i = 0; i < messages.length; i += _imapUpsertChunk) {
       final chunk =
           messages.sublist(i, math.min(i + _imapUpsertChunk, messages.length));
-      await _db.transaction(() async {
+      final changedRows = await _db.transaction(() async {
         final uidValidity = await _knownUidValidity(account.id, mailboxPath);
         final rows = <String, Email>{};
         final byRow = <String, ServerKeywords>{};
@@ -395,17 +415,9 @@ extension _SyncImap on EmailRepositoryImpl {
           rows[row.id] = row;
           byRow[row.id] = ServerKeywords.imap(msg.flags);
         }
-        for (final id in await read.writeAll(byRow)) {
-          final row = rows[id]!;
-          affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-        }
+        return [for (final id in await read.writeAll(byRow)) rows[id]!];
       });
-    }
-    // The message list reads unread/starred state from the thread row, so
-    // a mail read, unread, starred or unstarred on another device kept its
-    // old look here although its own row was already up to date.
-    for (final (shownIn, tid) in affectedThreads) {
-      await _updateThread(account.id, shownIn, tid);
+      await _updateThreadsOfRows(changedRows);
     }
   }
 
@@ -439,8 +451,6 @@ extension _SyncImap on EmailRepositoryImpl {
     }
 
     final byUid = <int, ServerKeywords>{};
-    // (shown folder, thread id) of each corrected row.
-    final affectedThreads = <(String, String)>{};
     var corrected = 0;
     final read = await _state.beginRead(accountId);
     final fetch = await client.uidFetchMessages(
@@ -472,18 +482,14 @@ extension _SyncImap on EmailRepositoryImpl {
       for (final row in localRows)
         if (byUid.containsKey(row.srvUid)) row.id: row,
     };
-    final changed = await read.writeAll({
-      for (final row in rowsById.values) row.id: byUid[row.srvUid]!,
-    });
-    for (final id in changed) {
-      final row = rowsById[id]!;
-      affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-      corrected++;
-    }
-
-    for (final (shownIn, tid) in affectedThreads) {
-      await _updateThread(accountId, shownIn, tid);
-    }
+    // Each chunk's threads right after it committed (#1317).
+    await read.writeAll(
+      {for (final row in rowsById.values) row.id: byUid[row.srvUid]!},
+      onCommitted: (changed) async {
+        corrected += changed.length;
+        await _updateThreadsOfRows([for (final id in changed) rowsById[id]!]);
+      },
+    );
     await _backfillImapSizes(
       client,
       [
@@ -617,31 +623,44 @@ extension _SyncImap on EmailRepositoryImpl {
     // A change that failed meanwhile (e.g. a refused delete) no longer
     // hides the mail: the server's copy is shown again, as below for a
     // change made during the FETCH.
-    final failedNow = await (_db.select(_db.pendingChanges)
-          ..where(
-            (t) =>
-                t.accountId.equals(account.id) &
-                t.state.equals(_failedState) &
-                t.changeType.isIn(_placementChangeTypes),
-          ))
-        .get();
-    final failedIds = {for (final c in failedNow) c.id};
-    final pendingAfterFetch = await _pendingDeleteOrMoveUids(
-      account.id,
-      mailboxPath,
-      uidValidity: uidValidity,
-    );
-    final pendingByUid = {
-      for (final MapEntry(:key, :value) in pendingBeforeFetch.byUid.entries)
-        if (!failedIds.contains(value.id)) key: value,
-      ...pendingAfterFetch.byUid,
-    };
-    final pendingByStaleMessageId = {
-      for (final MapEntry(:key, :value)
-          in pendingBeforeFetch.byStaleMessageId.entries)
-        if (!failedIds.contains(value.id)) key: value,
-      ...pendingAfterFetch.byStaleMessageId,
-    };
+    Future<Set<int>> failedPlacementIds() async => {
+          for (final c in await (_db.select(_db.pendingChanges)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(account.id) &
+                      t.state.equals(_failedState) &
+                      t.changeType.isIn(_placementChangeTypes),
+                ))
+              .get())
+            c.id,
+        };
+    var pendingByUid = pendingBeforeFetch.byUid;
+    var pendingByStaleMessageId = pendingBeforeFetch.byStaleMessageId;
+    // Adds the changes queued, being sent or acked now to the ones seen
+    // before (an applied one stays acked until a later read confirms it),
+    // and drops those that failed meanwhile. Run again in each chunk's
+    // transaction (#1317): a move the other isolate queued or sent while
+    // the upsert ran must keep its mail from coming back as a new row.
+    Future<void> refreshPending() async {
+      final failedIds = await failedPlacementIds();
+      final now = await _pendingDeleteOrMoveUids(
+        account.id,
+        mailboxPath,
+        uidValidity: uidValidity,
+      );
+      pendingByUid = {
+        for (final MapEntry(:key, :value) in pendingByUid.entries)
+          if (!failedIds.contains(value.id)) key: value,
+        ...now.byUid,
+      };
+      pendingByStaleMessageId = {
+        for (final MapEntry(:key, :value) in pendingByStaleMessageId.entries)
+          if (!failedIds.contains(value.id)) key: value,
+        ...now.byStaleMessageId,
+      };
+    }
+
+    await refreshPending();
     // How many of the fetched mails have each Message-ID.
     final onServer = <String, int>{};
     for (final msg in fetch.messages) {
@@ -656,45 +675,78 @@ extension _SyncImap on EmailRepositoryImpl {
     // on its way). For those, the UIDs the folder has them under now, by a
     // search sent after the answer arrived (null: the search failed,
     // nothing is skipped).
-    final placedSince = await _messageIdsPlacedSince(
-      account.id,
-      onServer.keys.toList(),
-      read.seq,
-    );
     final nowUidsByMessageId = <String, Set<int>>{};
-    for (final mid in {...pendingByStaleMessageId.keys, ...placedSince}) {
-      if (!onServer.containsKey(mid)) continue;
-      final uids = await _uidsNowByMessageId(client, mailboxPath, mid);
-      if (uids != null) nowUidsByMessageId[mid] = uids;
+    // Message-IDs searched for already (also when the search failed).
+    final searched = <String>{};
+    // Message-IDs among [messageIds] that need the search: a stale change
+    // or a placement since [read] names them. DB only.
+    Future<Set<String>> needSearch(Iterable<String> messageIds) async {
+      final mids = {
+        for (final mid in messageIds)
+          if (onServer.containsKey(mid)) mid,
+      };
+      return {
+        for (final mid in pendingByStaleMessageId.keys)
+          if (mids.contains(mid)) mid,
+        ...await _messageIdsPlacedSince(account.id, mids.toList(), read.seq),
+      };
     }
+
+    Future<void> search(Iterable<String> messageIds) async {
+      for (final mid in await needSearch(messageIds)) {
+        if (!searched.add(mid)) continue;
+        final uids = await _uidsNowByMessageId(client, mailboxPath, mid);
+        if (uids != null) nowUidsByMessageId[mid] = uids;
+      }
+    }
+
+    await search(onServer.keys);
     var bytes = 0;
-    final affectedThreads = <String>{};
-    // (folder shown before, thread id) of existing rows whose folder changed.
-    final hiddenOrMovedThreads = <(String, String)>{};
-    // (emailId, messageId, isNew) of each row written: matched afterwards
-    // with a row waiting for its server copy ([_Counterparts._matchArrival]).
-    final dissolveCandidates = <(String, String?, bool)>[];
-    // (emailId, subject, size) of each row stored for the first time — logged
-    // after the transaction so "Show Logs" starts with the fetch (#920).
-    final newlyStored = <(String, String?, int?)>[];
     final validity =
         uidValidity == null || uidValidity == 0 ? null : uidValidity;
     // A transaction per [_imapUpsertChunk] messages, not one for the whole
-    // fetch (#1317). Each message's row is found and written in one; a
-    // write of the other isolate between two chunks is ordered against
-    // [read] by the gate, as one made during the FETCH. The re-match
-    // candidates are read again per chunk: a row adopted in an earlier
-    // chunk has its UID and is none any more.
+    // fetch (#1317). Each message's row is found and written in one. The
+    // gate orders the overlay columns of a row against [read]; what keeps a
+    // mail moved or deleted meanwhile from coming back as a new row (the
+    // queued changes, the rows placed since [read]) is read again in each
+    // chunk's transaction. A Message-ID that turns up there without the
+    // search below ends the fetch ([_FetchAnswerOutdated]): the checkpoint
+    // stays, and the next sync fetches again. Each chunk's logging, threads
+    // and arrival matching run right after it committed. The re-match
+    // candidates are read once: [rematched] and the gated adoption keep a
+    // row from being adopted twice.
+    final candidates = rematched == null
+        ? const <String, Email>{}
+        : await _rematchCandidates(account.id, mailboxPath, onServer);
     final fetched = fetch.messages;
     for (var start = 0; start < fetched.length; start += _imapUpsertChunk) {
       final chunk = fetched.sublist(
         start,
         math.min(start + _imapUpsertChunk, fetched.length),
       );
+      final chunkMids = [
+        for (final msg in chunk)
+          if (normaliseMessageId(msg.envelope?.messageId) case final mid?) mid,
+      ];
+      // The network search outside the transaction; the check inside.
+      await refreshPending();
+      await search(chunkMids);
+      final affectedThreads = <String>{};
+      // (folder shown before, thread id) of existing rows whose folder
+      // changed.
+      final hiddenOrMovedThreads = <(String, String)>{};
+      // (emailId, messageId, isNew) of each row written: matched afterwards
+      // with a row waiting for its server copy
+      // ([_Counterparts._matchArrival]).
+      final dissolveCandidates = <(String, String?, bool)>[];
+      // (emailId, subject, size) of each row stored for the first time —
+      // logged after the transaction so "Show Logs" starts with the fetch
+      // (#920).
+      final newlyStored = <(String, String?, int?)>[];
       await _db.transaction(() async {
-        final candidates = rematched == null
-            ? const <String, Email>{}
-            : await _rematchCandidates(account.id, mailboxPath, onServer);
+        await refreshPending();
+        final unsearched = (await needSearch(chunkMids)).difference(searched);
+        if (unsearched.isNotEmpty) throw _FetchAnswerOutdated(mailboxPath);
         for (final msg in chunk) {
           final envelope = msg.envelope;
           if (envelope == null) {
@@ -863,33 +915,34 @@ extension _SyncImap on EmailRepositoryImpl {
           if (isNew) newlyStored.add((emailId, subject, msg.size));
         }
       });
-    }
-    // Outside the transaction: the app log writes through the same database.
-    for (final (emailId, subject, size) in newlyStored) {
-      _logEmailFetched(
-        emailId: emailId,
-        accountId: account.id,
-        mailboxPath: mailboxPath,
-        protocol: 'imap',
-        subject: subject,
-        bytes: size,
-      );
-    }
-    for (final tid in affectedThreads) {
-      await _updateThread(account.id, mailboxPath, tid);
-    }
-    for (final (shownIn, tid) in hiddenOrMovedThreads) {
-      await _updateThread(account.id, shownIn, tid);
-    }
-    if (dissolveCandidates.isNotEmpty && await _hasWaitingRows(account.id)) {
-      for (final (emailId, msgId, isNew) in dissolveCandidates) {
-        await _matchArrival(
-          account.id,
-          mailboxPath,
-          emailId,
-          msgId,
-          isNew: isNew,
+      // Outside the transaction: the app log writes through the same
+      // database.
+      for (final (emailId, subject, size) in newlyStored) {
+        _logEmailFetched(
+          emailId: emailId,
+          accountId: account.id,
+          mailboxPath: mailboxPath,
+          protocol: 'imap',
+          subject: subject,
+          bytes: size,
         );
+      }
+      for (final tid in affectedThreads) {
+        await _updateThread(account.id, mailboxPath, tid);
+      }
+      for (final (shownIn, tid) in hiddenOrMovedThreads) {
+        await _updateThread(account.id, shownIn, tid);
+      }
+      if (dissolveCandidates.isNotEmpty && await _hasWaitingRows(account.id)) {
+        for (final (emailId, msgId, isNew) in dissolveCandidates) {
+          await _matchArrival(
+            account.id,
+            mailboxPath,
+            emailId,
+            msgId,
+            isNew: isNew,
+          );
+        }
       }
     }
     return bytes;

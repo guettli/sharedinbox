@@ -906,28 +906,33 @@ class AppDatabase extends _$AppDatabase {
         : 'A database ${o.what} waited $ms ms (${o.attempts} attempts) for '
             'the write lock, held by another connection (background sync)';
     log('db: $message${o.error == null ? '' : ': ${o.error}'}');
-    unawaited(() async {
-      try {
-        await into(appLogs).insert(
-          AppLogsCompanion.insert(
-            createdAt: DateTime.now(),
-            level: o.failed ? 'error' : 'warn',
-            event: o.failed ? 'db.busy_failed' : 'db.busy_retried',
-            message: message,
-            dataJson: Value(
-              jsonEncode({
-                'what': o.what,
-                'attempts': o.attempts,
-                'waitedMs': ms,
-                if (o.error != null) 'error': o.error.toString(),
-              }),
-            ),
+    // In the root zone: called from a transaction's body (a long lock
+    // wait), the insert would join that transaction and be lost on its
+    // rollback; from here it waits for it and lands on its own.
+    Zone.root.run(() => unawaited(_writeBusyLog(o, message)));
+  }
+
+  Future<void> _writeBusyLog(BusyOutcome o, String message) async {
+    try {
+      await into(appLogs).insert(
+        AppLogsCompanion.insert(
+          createdAt: DateTime.now(),
+          level: o.failed ? 'error' : 'warn',
+          event: o.failed ? 'db.busy_failed' : 'db.busy_retried',
+          message: message,
+          dataJson: Value(
+            jsonEncode({
+              'what': o.what,
+              'attempts': o.attempts,
+              'waitedMs': o.waited.inMilliseconds,
+              if (o.error != null) 'error': o.error.toString(),
+            }),
           ),
-        );
-      } catch (_) {
-        // Best effort: the lock may still be busy.
-      }
-    }());
+        ),
+      );
+    } catch (_) {
+      // Best effort: the lock may still be busy.
+    }
   }
 
   @override
@@ -1454,8 +1459,18 @@ class AppDatabase extends _$AppDatabase {
   /// name: has_attachment"). BEGIN IMMEDIATE also makes a WorkManager isolate
   /// that opens the database at the same time wait for this upgrade; it then
   /// sees the new version and skips the steps.
+  ///
+  /// Drift runs migrations on its opening executor, past the busy
+  /// interceptor, so `BEGIN IMMEDIATE` is retried here: on the first open
+  /// after an update it failed after about 50 ms while the other isolate
+  /// wrote (#1317).
   Future<void> _upgradeAtomically(Migrator m, int from, int to) async {
-    await customStatement('BEGIN IMMEDIATE');
+    await retryOnBusy(
+      () => customStatement('BEGIN IMMEDIATE'),
+      what: 'migration',
+      policy: busyRetryPolicy,
+      report: _reportBusy,
+    );
     try {
       final current = (await customSelect('PRAGMA user_version').getSingle())
           .read<int>('user_version');

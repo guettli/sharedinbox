@@ -31,8 +31,12 @@ import 'helpers/stateful_imap_rig.dart';
 
 const _busyTimeout = Duration(seconds: 5);
 
-/// Longer than busy_timeout: a write waiting for it fails once.
+/// Longer than busy_timeout: what a build that honours it would fail.
+/// Only one test needs it; the others hold the lock for [_hold].
 const _longHold = Duration(seconds: 7);
+
+/// Long enough for writes to meet the held lock (they fail after ~50 ms).
+const _hold = Duration(seconds: 1);
 
 const _write = "UPDATE accounts SET display_name = 'x' WHERE id = 'acc-1'";
 
@@ -158,10 +162,15 @@ void main() {
       maxBackoff: Duration(milliseconds: 4),
     );
 
-    test('recognises SQLITE_BUSY and SQLITE_LOCKED, also rethrown as text', () {
+    test('recognises SQLITE_BUSY, also rethrown as text', () {
       expect(isSqliteBusy(busy()), isTrue);
       expect(isSqliteBusy(busy(517)), isTrue, reason: 'BUSY_SNAPSHOT');
-      expect(isSqliteBusy(busy(6)), isTrue, reason: 'LOCKED');
+      expect(
+        isSqliteBusy(busy(6)),
+        isFalse,
+        reason: 'LOCKED: a conflict within the connection, waiting does not '
+            'clear it',
+      );
       expect(
         isSqliteBusy(
           Exception('DriftRemoteException: SqliteException(261): while '
@@ -292,16 +301,17 @@ void main() {
     test(
         'a write outside a transaction fails while the lock is held; '
         'busy_timeout does not make it wait for the lock', () async {
-      final holder = await _LockHolder.start(path, _longHold);
+      final holder = await _LockHolder.start(path, _hold);
       final (took, code) = await _rawWrite(path, [_write]);
-      _measured('autocommit write, lock held 7 s', took, code);
+      _measured('autocommit write, lock held 1 s', took, code);
       await holder.released;
 
       expect(code! & 0xFF, 5, reason: 'SQLITE_BUSY');
-      // Measured: about 60 ms, not the 5 s busy_timeout. The bundled
-      // SQLCipher build lacks HAVE_USLEEP (PRAGMA compile_options), and its
-      // busy handler gives up almost at once.
-      expect(took, lessThan(_longHold));
+      // Measured: about 60 ms, although the lock was free after 1 s and
+      // busy_timeout is 5 s. The bundled SQLCipher build lacks HAVE_USLEEP
+      // (PRAGMA compile_options), and its busy handler gives up almost at
+      // once.
+      expect(took, lessThan(_hold));
     });
 
     test(
@@ -415,10 +425,10 @@ void main() {
     });
 
     test('a write outside a transaction is retried and lands', () async {
-      final holder = await _LockHolder.start(path, _longHold);
+      final holder = await _LockHolder.start(path, _hold);
       final watch = Stopwatch()..start();
       await app.customStatement(_insert);
-      _measured('autocommit write, lock held 7 s', watch.elapsed);
+      _measured('autocommit write, lock held 1 s', watch.elapsed);
       await holder.released;
 
       expect(await app.select(app.searchHistoryEntries).get(), hasLength(1));
@@ -430,7 +440,8 @@ void main() {
         'DatabaseBusyException and an App Log error', () async {
       app.busyRetryPolicy = const BusyRetryPolicy(budget: Duration(seconds: 1));
       var runs = 0;
-      final holder = await _LockHolder.start(path, _longHold);
+      final holder =
+          await _LockHolder.start(path, const Duration(milliseconds: 2500));
       final watch = Stopwatch()..start();
       await expectLater(
         app.transaction(() async => runs++),
@@ -478,7 +489,7 @@ void main() {
       final d = await row('d@test');
       final until = DateTime.now().add(const Duration(days: 1));
 
-      final holder = await _LockHolder.start(rigPath, _longHold);
+      final holder = await _LockHolder.start(rigPath, _hold);
       final watch = Stopwatch()..start();
       await Future.wait([
         rig.emails.setFlag(a.id, seen: true, flagged: true),
@@ -496,7 +507,7 @@ void main() {
           ),
         ),
       ]);
-      _measured('five user actions, lock held 7 s', watch.elapsed);
+      _measured('five user actions, lock held 1 s', watch.elapsed);
       await holder.released;
 
       expect((await row('a@test')).isSeen, isTrue);

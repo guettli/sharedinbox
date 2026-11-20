@@ -26,6 +26,23 @@ import 'package:sharedinbox/ui/theme/spacing.dart';
 ///    the action icon, and an inline **Undo** button. Persists for 5 s and
 ///    survives every route transition because it's not a SnackBar. Carries
 ///    the human-readable confirmation the strip omits.
+/// A message for the shell's bottom bar raised outside the widget tree, e.g.
+/// a user action that gave up on a busy database (`main.dart`, #1317). A new
+/// object per message, so the same text shown twice notifies twice.
+class ShellMessage {
+  ShellMessage(this.text);
+
+  final String text;
+}
+
+/// The shell shows each [ShellMessage] put here in its bottom bar (no
+/// Undo), like an action's feedback: unlike a Scaffold SnackBar it
+/// survives route transitions (see [UndoShell]).
+final shellMessages = ValueNotifier<ShellMessage?>(null);
+
+/// Shows [text] in the shell's bottom bar.
+void showShellMessage(String text) => shellMessages.value = ShellMessage(text);
+
 class UndoShell extends ConsumerStatefulWidget {
   const UndoShell({super.key, required this.child});
 
@@ -41,14 +58,42 @@ class _UndoShellState extends ConsumerState<UndoShell> {
 
   _FeedbackDisplay? _flash;
   _FeedbackDisplay? _snack;
+
+  /// Whether [_snack] is an action's feedback (with Undo), not a
+  /// [ShellMessage].
+  bool _snackUndoable = true;
   Timer? _flashTimer;
   Timer? _snackTimer;
 
   @override
+  void initState() {
+    super.initState();
+    shellMessages.addListener(_onShellMessage);
+  }
+
+  @override
   void dispose() {
+    shellMessages.removeListener(_onShellMessage);
     _flashTimer?.cancel();
     _snackTimer?.cancel();
     super.dispose();
+  }
+
+  void _onShellMessage() {
+    final message = shellMessages.value;
+    if (message == null || !mounted) return;
+    final scheme = Theme.of(context).colorScheme;
+    _showSnack(
+      _FeedbackDisplay(
+        label: message.text,
+        icon: Icons.error_outline,
+        background: scheme.errorContainer,
+        foreground: scheme.onErrorContainer,
+        undoColor: scheme.onErrorContainer,
+        pattern: _Pattern.solid,
+      ),
+      undoable: false,
+    );
   }
 
   @override
@@ -86,7 +131,7 @@ class _UndoShellState extends ConsumerState<UndoShell> {
             bottom: MediaQuery.of(context).padding.bottom + AppSpacing.lg,
             child: _BottomActionOverlay(
               display: _snack!,
-              onUndo: _handleUndo,
+              onUndo: _snackUndoable ? _handleUndo : null,
               onDismiss: _dismissSnack,
             ),
           ),
@@ -108,9 +153,12 @@ class _UndoShellState extends ConsumerState<UndoShell> {
     });
   }
 
-  void _showSnack(_FeedbackDisplay display) {
+  void _showSnack(_FeedbackDisplay display, {bool undoable = true}) {
     _snackTimer?.cancel();
-    setState(() => _snack = display);
+    setState(() {
+      _snack = display;
+      _snackUndoable = undoable;
+    });
     _snackTimer = Timer(_snackDisplayDuration, () {
       if (mounted) setState(() => _snack = null);
     });
@@ -184,7 +232,9 @@ class _BottomActionOverlay extends StatelessWidget {
   });
 
   final _FeedbackDisplay display;
-  final VoidCallback onUndo;
+
+  /// Null: no Undo button (a [ShellMessage]).
+  final VoidCallback? onUndo;
   final VoidCallback onDismiss;
 
   @override
@@ -229,17 +279,18 @@ class _BottomActionOverlay extends StatelessWidget {
                         ),
                       ),
                     ),
-                    TextButton(
-                      onPressed: onUndo,
-                      style: TextButton.styleFrom(
-                        foregroundColor: display.undoColor,
-                        textStyle: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.5,
+                    if (onUndo != null)
+                      TextButton(
+                        onPressed: onUndo,
+                        style: TextButton.styleFrom(
+                          foregroundColor: display.undoColor,
+                          textStyle: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.5,
+                          ),
                         ),
+                        child: const Text('UNDO'),
                       ),
-                      child: const Text('UNDO'),
-                    ),
                   ],
                 ),
               ),

@@ -1037,8 +1037,6 @@ extension _SyncJmap on EmailRepositoryImpl {
     ];
     if (toCheck.isEmpty) return;
 
-    // (shown folder, thread id) of each corrected row.
-    final affectedThreads = <(String, String)>{};
     final sizeById = <String, int>{};
     var corrected = 0;
     for (var offset = 0; offset < toCheck.length; offset += _jmapPageSize) {
@@ -1074,16 +1072,18 @@ extension _SyncJmap on EmailRepositoryImpl {
         byRow[row.id] =
             ServerKeywords.jmap(m['keywords'] as Map<String, dynamic>?);
       }
-      for (final id in await read.writeAll(byRow)) {
-        final row = rows[id]!;
-        affectedThreads.add((row.mailboxPath, row.threadId ?? row.id));
-        corrected++;
-      }
+      // Each chunk's threads right after it committed: a later chunk that
+      // fails must not leave them stale, as the next read finds those rows
+      // unchanged (#1317).
+      await read.writeAll(
+        byRow,
+        onCommitted: (changed) async {
+          corrected += changed.length;
+          await _updateThreadsOfRows([for (final id in changed) rows[id]!]);
+        },
+      );
     }
 
-    for (final (shownIn, tid) in affectedThreads) {
-      await _updateThread(accountId, shownIn, tid);
-    }
     await _backfillSizes(sizeById);
     if (corrected > 0) {
       log(

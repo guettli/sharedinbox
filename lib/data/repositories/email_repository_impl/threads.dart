@@ -212,6 +212,18 @@ extension _Threads on EmailRepositoryImpl {
   /// from the diagnostics screen). It only ever removes rows with **zero**
   /// backing emails, so it stays consistent with the `emails` table and is a
   /// no-op on a healthy folder. Returns the number of rows removed.
+  /// Refreshes the thread aggregates of [rows] (as read before their state
+  /// changed: the folder they showed in), once per (folder, thread).
+  Future<void> _updateThreadsOfRows(Iterable<Email> rows) async {
+    final threads = <(String, String, String)>{
+      for (final row in rows)
+        (row.accountId, row.mailboxPath, row.threadId ?? row.id),
+    };
+    for (final (accountId, shownIn, tid) in threads) {
+      await _updateThread(accountId, shownIn, tid);
+    }
+  }
+
   Future<int> _sweepOrphanThreads(String accountId, String mailboxPath) async {
     final emails = await (_db.select(_db.emails)
           ..where(

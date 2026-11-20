@@ -1575,50 +1575,57 @@ class EmailStateWriter {
   /// rows that stay ([kept]) and how many rows were deleted ([removed]);
   /// the caller logs both. A UIDVALIDITY change does not come here: its
   /// rows are re-matched by Message-ID ([releaseFolderForRematch]).
+  ///
+  /// The clean-up runs after the marking committed, in its own chunks
+  /// (#1317): the rule is checked per row, so a row that got a change in
+  /// between stays.
   Future<({Set<String> kept, int removed})> markFolderGone(
     String accountId,
     String mailboxPath,
-  ) =>
-      // One transaction: a flush relocating one of these rows meanwhile
-      // (another isolate) must not have its new UID cleared.
-      _db.transaction(() async {
-        final read = await beginRead(accountId);
-        final ids = [
-          for (final r in await _db.customSelect(
-            'SELECT id FROM emails WHERE account_id = ?1 '
-            'AND srv_mailbox_path = ?2 AND is_local = 0',
-            variables: [
-              Variable.withString(accountId),
-              Variable.withString(mailboxPath),
-            ],
-          ).get())
-            r.read<String>('id'),
-        ];
-        if (ids.isEmpty) return (kept: <String>{}, removed: 0);
-        // Only the rows this marked (no later read placed them elsewhere),
-        // and only while they are still recorded in this folder.
-        final marked = (await read.markGone(ids)).toList();
-        for (var i = 0; i < marked.length; i += 500) {
-          final chunk = marked.sublist(i, min(i + 500, marked.length));
-          await _db.customUpdate(
-            'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL '
-            'WHERE srv_mailbox_path = ?1 AND srv_gone = 1 '
-            'AND id IN (${List.filled(chunk.length, '?').join(', ')})',
-            variables: [
-              Variable.withString(mailboxPath),
-              for (final id in chunk) Variable.withString(id),
-            ],
-            updates: {_db.emails},
-            updateKind: UpdateKind.update,
-          );
-        }
-        final deleted = (await cleanUpGone(accountId)).toSet();
-        final kept = {
-          for (final id in marked)
-            if (!deleted.contains(id)) id,
-        };
-        return (kept: kept, removed: marked.length - kept.length);
-      });
+  ) async {
+    // One transaction: a flush relocating one of these rows meanwhile
+    // (another isolate) must not have its new UID cleared.
+    final marked = await _db.transaction(() async {
+      final read = await beginRead(accountId);
+      final ids = [
+        for (final r in await _db.customSelect(
+          'SELECT id FROM emails WHERE account_id = ?1 '
+          'AND srv_mailbox_path = ?2 AND is_local = 0',
+          variables: [
+            Variable.withString(accountId),
+            Variable.withString(mailboxPath),
+          ],
+        ).get())
+          r.read<String>('id'),
+      ];
+      if (ids.isEmpty) return const <String>[];
+      // Only the rows this marked (no later read placed them elsewhere),
+      // and only while they are still recorded in this folder.
+      final marked = (await read.markGone(ids)).toList();
+      for (var i = 0; i < marked.length; i += 500) {
+        final chunk = marked.sublist(i, min(i + 500, marked.length));
+        await _db.customUpdate(
+          'UPDATE emails SET srv_uid = NULL, srv_uid_validity = NULL '
+          'WHERE srv_mailbox_path = ?1 AND srv_gone = 1 '
+          'AND id IN (${List.filled(chunk.length, '?').join(', ')})',
+          variables: [
+            Variable.withString(mailboxPath),
+            for (final id in chunk) Variable.withString(id),
+          ],
+          updates: {_db.emails},
+          updateKind: UpdateKind.update,
+        );
+      }
+      return marked;
+    });
+    if (marked.isEmpty) return (kept: <String>{}, removed: 0);
+    final deleted = (await cleanUpGone(accountId)).toSet();
+    final kept = {
+      for (final id in marked)
+        if (!deleted.contains(id)) id,
+    };
+    return (kept: kept, removed: marked.length - kept.length);
+  }
 
   /// The UIDs of folder [mailboxPath] of [accountId] name other mails now
   /// (its UIDVALIDITY changed, SYNC-REDESIGN.md §6): its rows forget their
@@ -1795,17 +1802,22 @@ class EmailStateWriter {
   /// seconds, and the other isolate's writes failed with SQLITE_BUSY
   /// (#1317). Each row is gated on its own, so a write between two chunks
   /// is ordered against [read] as one during the FETCH would be.
+  /// [onCommitted] hears of each chunk's changed rows right after it
+  /// committed (the caller's thread refresh): a later chunk that fails
+  /// leaves the earlier ones written, and a next read sees them unchanged.
   Future<Set<String>> _writeAll(
     KeywordRead read,
-    Map<String, ServerKeywords> byRow,
-  ) async {
+    Map<String, ServerKeywords> byRow, {
+    Future<void> Function(Set<String> changed)? onCommitted,
+  }) async {
     final entries = byRow.entries.toList();
     final changed = <String>{};
     for (var i = 0; i < entries.length; i += writeAllChunk) {
       final end = min(i + writeAllChunk, entries.length);
-      changed.addAll(
-        await _writeAllChunk(read, Map.fromEntries(entries.sublist(i, end))),
-      );
+      final chunk =
+          await _writeAllChunk(read, Map.fromEntries(entries.sublist(i, end)));
+      changed.addAll(chunk);
+      if (onCommitted != null && chunk.isNotEmpty) await onCommitted(chunk);
     }
     return changed;
   }
@@ -2212,8 +2224,16 @@ class KeywordRead {
 
   /// [write] for many rows at once (a whole folder's FLAGS): unchanged rows
   /// are only stamped, in bulk. Returns the rows whose shown value changed.
-  Future<Set<String>> writeAll(Map<String, ServerKeywords> byRow) =>
-      _writer._writeAll(this, byRow);
+  ///
+  /// Written in chunks of [EmailStateWriter.writeAllChunk] rows, one
+  /// transaction each; [onCommitted] gets each chunk's changed rows once it
+  /// committed, so the caller refreshes what landed even when a later chunk
+  /// fails.
+  Future<Set<String>> writeAll(
+    Map<String, ServerKeywords> byRow, {
+    Future<void> Function(Set<String> changed)? onCommitted,
+  }) =>
+      _writer._writeAll(this, byRow, onCommitted: onCommitted);
 
   /// The location gate for one row: the server has row [emailId]'s mail in
   /// [mailboxPath] (and so still has it). Written unless a read that started
