@@ -277,6 +277,53 @@ void main() {
     expect(await rigProblems(), isEmpty);
   });
 
+  test(
+      'a second copy of a moved mail that arrives later is stored, though '
+      'the move was queued under the old UIDVALIDITY', () async {
+    final a = await rowOf('a@test');
+    server.renumberFolder('INBOX', 99, reverse: true);
+    await emails.moveEmail(a.id, 'Archive');
+    await emails.flushPendingChanges(account.id, 'pw');
+    // The move is applied, not yet confirmed by a read of Archive (acked).
+    expect(
+      (await rigOps()).map((op) => (op.changeType, op.state)),
+      contains(('move', 'acked')),
+    );
+    await emails.syncEmails(account.id, 'INBOX');
+
+    // A second copy (a self CC, a list duplicate) arrives in INBOX: the
+    // incremental fetch lists it alone.
+    server.deliver('INBOX', 'a@test');
+    await emails.syncEmails(account.id, 'INBOX');
+
+    final rows = await rigRowsOf('a@test');
+    expect(rows, hasLength(2));
+    expect(
+      rows.map((r) => r.srvMailboxPath).toSet(),
+      {'Archive', 'INBOX'},
+    );
+    expect(rows.firstWhere((r) => r.srvMailboxPath == 'Archive').id, a.id);
+  });
+
+  group('N1: a fetched header that does not read like the envelope', () {
+    for (final (what, header) in [
+      ('with a comment after it', '<odd@test> (added by a relay)'),
+      ('missing', ''),
+    ]) {
+      test('$what: the body opens, the search confirms the mail', () async {
+        server.deliver('INBOX', 'odd@test', messageIdHeader: header);
+        await emails.syncEmails(account.id, 'INBOX');
+        final odd = await rowOf('odd@test');
+
+        final body = await emails.getEmailBody(odd.id);
+
+        expect(body.loadError, isNull);
+        expect(body.textBody, contains('Body of odd@test'));
+        expect((await rowOf('odd@test')).srvUid, odd.srvUid);
+      });
+    }
+  });
+
   group('S1: a renumbered folder the server does not enumerate', () {
     test(
         'keeps its rows and the old checkpoint until it does, then '
@@ -291,7 +338,11 @@ void main() {
         expect(await inboxRows(), hasLength(4));
         expect(await checkpointValidity('INBOX'), 11);
       }
-      expect(events(), contains('sync.uidvalidity_rematch_deferred'));
+      expect(
+        events().where((e) => e == 'sync.uidvalidity_rematch_deferred'),
+        hasLength(1),
+        reason: 'once per folder and UIDVALIDITY',
+      );
 
       server.searchAllEmpty = false;
       await emails.syncEmails(account.id, 'INBOX');
@@ -300,6 +351,33 @@ void main() {
       expect((await rowOf('a@test')).id, a.id);
       expect(await checkpointValidity('INBOX'), 99);
       expect(await rigProblems(), isEmpty);
+    });
+
+    test(
+        'gives up after a day and three tries: the unmatched rows are '
+        'removed and the new checkpoint saved', () async {
+      server
+        ..renumberFolder('INBOX', 99, reverse: true)
+        ..searchAllEmpty = true;
+
+      for (var i = 0; i < 3; i++) {
+        await emails.syncEmails(account.id, 'INBOX');
+        expect(await inboxRows(), hasLength(4), reason: 'try ${i + 1}');
+      }
+      expect(await checkpointValidity('INBOX'), 11, reason: 'not a day yet');
+
+      now = now.add(const Duration(hours: 25));
+      await emails.syncEmails(account.id, 'INBOX');
+
+      expect(await inboxRows(), isEmpty);
+      expect(await checkpointValidity('INBOX'), 99);
+      expect(events(), contains('sync.uidvalidity_rematch_given_up'));
+      expect(await rigProblems(), isEmpty);
+
+      // The server lists its mail again: it comes back as new rows.
+      server.searchAllEmpty = false;
+      await emails.syncEmails(account.id, 'INBOX');
+      expect(await inboxRows(), hasLength(4));
     });
 
     test(

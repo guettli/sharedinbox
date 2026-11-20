@@ -386,8 +386,10 @@ reconcile sweeps rows without a UID once every listed mail has its own
 row. A location learnt meanwhile is stamped with the UIDVALIDITY it was
 learnt under (`COPYUID`, the SELECT of the search). App Log
 `sync.uidvalidity_changed` counts the rows re-matched and removed;
-`sync.uidvalidity_refetch_failed`, `sync.uidvalidity_rematch_deferred`,
-`sync.unlocated_swept` and `email.body.not_located` cover the window
+`sync.uidvalidity_refetch_failed`, `sync.uidvalidity_rematch_deferred`
+(after 24 hours and three tries `sync.uidvalidity_rematch_given_up`: the
+unmatched rows are swept), `sync.unlocated_swept` and
+`email.body.not_located` cover the window
 (SYNC.md §6a).
 
 **Force resync** (#1236) uses the same mechanism for the whole account:

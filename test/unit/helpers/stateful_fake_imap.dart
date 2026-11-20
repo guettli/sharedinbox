@@ -17,8 +17,14 @@ class FakeServerMessage {
     required this.modSeq,
     Iterable<String> flags = const [],
     String? emailId,
+    this.messageIdHeader,
   })  : flags = {...flags},
         emailId = emailId ?? 'E-$messageId';
+
+  /// The raw `Message-ID` header of the message body, when it differs from
+  /// the envelope's `<messageId>` (a relay's comment after it, a different
+  /// folding); empty: the body has no such header. Null: `<messageId>`.
+  final String? messageIdHeader;
 
   int uid;
   int modSeq;
@@ -184,6 +190,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
     String messageId, {
     Iterable<String> flags = const [],
     String? emailId,
+    String? messageIdHeader,
   }) {
     final folder = folders[path]!;
     final message = FakeServerMessage(
@@ -192,6 +199,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
       modSeq: _bump(folder),
       flags: flags,
       emailId: emailId,
+      messageIdHeader: messageIdHeader,
     );
     folder.messages[message.uid] = message;
     return message;
@@ -233,6 +241,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
         modSeq: _bump(renumbered),
         flags: m.flags,
         emailId: m.emailId,
+        messageIdHeader: m.messageIdHeader,
       );
       renumbered.messages[message.uid] = message;
     }
@@ -542,8 +551,9 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
   /// the test).
   imap.MimeMessage _fullMessage(FakeServerMessage m) {
     final hasId = !m.messageId.startsWith(noMessageIdPrefix);
+    final header = m.messageIdHeader ?? (hasId ? '<${m.messageId}>' : '');
     return imap.MimeMessage.parseFromText(
-      '${hasId ? 'Message-ID: <${m.messageId}>\r\n' : ''}'
+      '${header.isEmpty ? '' : 'Message-ID: $header\r\n'}'
       'Subject: Mail ${m.messageId}\r\n'
       'Content-Type: text/plain; charset=UTF-8\r\n'
       '\r\n'

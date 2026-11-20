@@ -109,13 +109,16 @@ class ProbeResult {
 abstract class MessageProbe {
   /// [mailboxPath] and [uid] (IMAP) or [jmapId] (JMAP) say where the server
   /// has the message: its recorded server location, not the folder it is
-  /// shown in.
+  /// shown in. [uidValidity] is the UIDVALIDITY [uid] was recorded under:
+  /// when the folder's SELECT reports another one, [uid] may name another
+  /// mail, and nothing is fetched.
   Future<ProbeResult> fetch({
     required Account account,
     required String password,
     required String mailboxPath,
     required int uid,
     String? jmapId,
+    int? uidValidity,
   });
 }
 
@@ -136,6 +139,7 @@ class MessageProbeImpl implements MessageProbe {
     required String mailboxPath,
     required int uid,
     String? jmapId,
+    int? uidValidity,
   }) async {
     try {
       switch (account.type) {
@@ -145,6 +149,7 @@ class MessageProbeImpl implements MessageProbe {
             password: password,
             mailboxPath: mailboxPath,
             uid: uid,
+            uidValidity: uidValidity,
           );
         case AccountType.jmap:
           if (jmapId == null) {
@@ -171,12 +176,24 @@ class MessageProbeImpl implements MessageProbe {
     required String password,
     required String mailboxPath,
     required int uid,
+    int? uidValidity,
   }) async {
     final username =
         account.username.isNotEmpty ? account.username : account.email;
     final client = await _imapConnect(account, username, password);
     try {
-      await client.selectUnicodeMailboxByPath(mailboxPath);
+      final selected = await client.selectUnicodeMailboxByPath(mailboxPath);
+      final live = selected.uidValidity;
+      if (uidValidity != null &&
+          live != null &&
+          live != 0 &&
+          live != uidValidity) {
+        return ProbeResult.error(
+          'Not located: UID $uid is from before $mailboxPath was renumbered '
+          '(UIDVALIDITY $uidValidity, now $live); it may name another '
+          'message. Available after the next sync.',
+        );
+      }
       final result = await client.uidFetchMessage(
         uid,
         '(UID FLAGS INTERNALDATE ENVELOPE BODYSTRUCTURE RFC822.SIZE '

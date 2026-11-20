@@ -13,6 +13,12 @@ const _imapSizeBackfillBatch = 500;
 /// resync): it keeps the folder's UIDVALIDITY, so a change is still seen.
 const _forceFullKey = 'forceFull';
 
+/// How long, and for at least how many full fetches, the re-match after a
+/// UIDVALIDITY change waits for a folder the server does not enumerate
+/// ([_SyncImap._deferRematch]).
+const _rematchDeferLimit = Duration(hours: 24);
+const _rematchDeferAttempts = 3;
+
 extension _SyncImap on EmailRepositoryImpl {
   Future<model.ImapMailboxState?> _lastImapMailboxState(
     String accountId,
@@ -206,24 +212,15 @@ extension _SyncImap on EmailRepositoryImpl {
         // sync is a full fetch again: an incremental one would store every
         // mail as a new row next to them.
         final unlocated = await _unlocatedRowIds(account.id, mailboxPath);
-        if (unlocated.isNotEmpty) {
-          unawaited(
-            _appLogger?.warn(
-              'sync.uidvalidity_rematch_deferred',
-              '${unlocated.length} cached mail(s) of $mailboxPath have no '
-                  'server UID and the folder could not be enumerated (the '
-                  'server listed ${allUids.length} mail(s) of '
-                  '${selectedMailbox.messagesExists}): they are kept as they '
-                  'are and matched again at the next sync',
-              accountId: account.id,
-              mailboxPath: mailboxPath,
-              data: {
-                'emailIds': unlocated.take(100).toList(),
-                'listed': allUids.length,
-                'exists': selectedMailbox.messagesExists,
-              },
-            ),
-          );
+        if (unlocated.isNotEmpty &&
+            await _deferRematch(
+              account.id,
+              mailboxPath,
+              uidValidity: uidValidity,
+              unlocated: unlocated,
+              listed: allUids.length,
+              exists: selectedMailbox.messagesExists,
+            )) {
           await _sweepOrphanThreads(account.id, mailboxPath);
           return model.SyncEmailsResult(
             fetched: allUids.length,
@@ -231,6 +228,7 @@ extension _SyncImap on EmailRepositoryImpl {
             bytesTransferred: bytes,
           );
         }
+        await _clearSyncState(account.id, _rematchDeferredKey(mailboxPath));
         final maxUid = allUids.isEmpty ? 0 : allUids.reduce(math.max);
         await saveCheckpoint(maxUid);
         // Record that we've just fetched every flag so the periodic reconcile
@@ -626,6 +624,24 @@ extension _SyncImap on EmailRepositoryImpl {
       if (mid == null || msg.uid == null) continue;
       onServer[mid] = (onServer[mid] ?? 0) + 1;
     }
+    // Mails this answer lists that may have left the folder since it was
+    // fixed: one of a change queued under an older UIDVALIDITY, or one
+    // whose row a later read or a move's answer placed (its location stamp
+    // is newer than this FETCH; e.g. a flush moved it while the answer was
+    // on its way). For those, the UIDs the folder has them under now, by a
+    // search sent after the answer arrived (null: the search failed,
+    // nothing is skipped).
+    final placedSince = await _messageIdsPlacedSince(
+      account.id,
+      onServer.keys.toList(),
+      read.seq,
+    );
+    final nowUidsByMessageId = <String, Set<int>>{};
+    for (final mid in {...pendingByStaleMessageId.keys, ...placedSince}) {
+      if (!onServer.containsKey(mid)) continue;
+      final uids = await _uidsNowByMessageId(client, mailboxPath, mid);
+      if (uids != null) nowUidsByMessageId[mid] = uids;
+    }
     var bytes = 0;
     final affectedThreads = <String>{};
     // (folder shown before, thread id) of existing rows whose folder changed.
@@ -705,19 +721,20 @@ extension _SyncImap on EmailRepositoryImpl {
           );
           continue;
         }
-        // The same for a change queued under an older UIDVALIDITY of this
-        // folder: its UID names another mail now, so its mail is known by
-        // its Message-ID only. When the server lists exactly one mail with
-        // it here, that is the mail the change moved or deleted (an answer
-        // from before the change reached the server); two would include a
-        // second copy, which gets its row.
-        final staleChange =
-            msgId == null ? null : pendingByStaleMessageId[msgId];
-        if (known == null && staleChange != null && onServer[msgId] == 1) {
+        // The same when the UID cannot tell: a change queued under an
+        // older UIDVALIDITY of this folder (its UID names another mail now),
+        // or a row of this Message-ID placed elsewhere after this FETCH
+        // started (a move sent from where the user saw the mail). The
+        // answer lists a mail that a search sent after it no longer finds
+        // at this UID: the answer predates the move or delete. A copy still
+        // there (a second one that arrived, a change not applied yet) is
+        // found by the search and gets its row.
+        final nowUids = msgId == null ? null : nowUidsByMessageId[msgId];
+        if (known == null && nowUids != null && !nowUids.contains(uid)) {
           log(
-            'IMAP: skipping insert for uid=$uid in $mailboxPath '
-            '(${staleChange.state} ${staleChange.changeType} of its '
-            'Message-ID, queued under an older UIDVALIDITY)',
+            'IMAP: skipping insert for uid=$uid in $mailboxPath (the '
+            'folder no longer has its Message-ID there: an answer from '
+            'before a move or delete of it)',
           );
           continue;
         }
@@ -839,6 +856,54 @@ extension _SyncImap on EmailRepositoryImpl {
     return bytes;
   }
 
+  /// Of [messageIds], those a row of [accountId] has whose location a read
+  /// or an ack later than [seq] wrote.
+  Future<Set<String>> _messageIdsPlacedSince(
+    String accountId,
+    List<String> messageIds,
+    int seq,
+  ) async {
+    final placed = <String>{};
+    for (var i = 0; i < messageIds.length; i += 500) {
+      final chunk = messageIds.sublist(i, math.min(i + 500, messageIds.length));
+      final rows = await (_db.selectOnly(_db.emails)
+            ..addColumns([_db.emails.messageId])
+            ..where(
+              _db.emails.accountId.equals(accountId) &
+                  _db.emails.messageId.isIn(chunk) &
+                  _db.emails.srvLocationSeq.isBiggerThanValue(seq),
+            ))
+          .get();
+      for (final row in rows) {
+        final mid = normaliseMessageId(row.read(_db.emails.messageId));
+        if (mid != null) placed.add(mid);
+      }
+    }
+    return placed;
+  }
+
+  /// The UIDs the selected folder [mailboxPath] has mails with Message-ID
+  /// [messageId] under, by `UID SEARCH HEADER Message-ID` now; null when
+  /// the search failed (a lost connection is rethrown).
+  Future<Set<int>?> _uidsNowByMessageId(
+    imap.ImapClient client,
+    String mailboxPath,
+    String messageId,
+  ) async {
+    try {
+      for (final criteria in messageIdSearchCriteria(messageId)) {
+        final result = await client.uidSearchMessages(searchCriteria: criteria);
+        final uids = result.matchingSequence?.toList() ?? const <int>[];
+        if (uids.isNotEmpty) return uids.toSet();
+      }
+      return const {};
+    } catch (e) {
+      if (isImapConnectionLost(e)) rethrow;
+      log('IMAP: Message-ID search for $messageId in $mailboxPath failed: $e');
+      return null;
+    }
+  }
+
   /// The rows of [mailboxPath] the full fetch may re-match by Message-ID
   /// (SYNC-REDESIGN.md §6), by normalised Message-ID: rows of the folder
   /// without a UID (released by a UIDVALIDITY change,
@@ -909,6 +974,110 @@ extension _SyncImap on EmailRepositoryImpl {
     );
     rematched.add(candidate.id);
     return candidate;
+  }
+
+  /// The sync state recording that the re-match of [mailboxPath] waits
+  /// ([_deferRematch]). Not an `IMAP:` key: those are folder checkpoints
+  /// to a force resync.
+  static String _rematchDeferredKey(String mailboxPath) =>
+      'RematchDeferred:IMAP:$mailboxPath';
+
+  /// After the full fetch of [mailboxPath] left the rows [unlocated]
+  /// without a UID (its sweep was skipped: the server [listed] no mail
+  /// although SELECT counts [exists]). Returns true while the re-match
+  /// waits: the caller keeps the old checkpoint, so the next sync is a
+  /// full fetch again, never an incremental one that would store every mail
+  /// next to them. App Log warn `sync.uidvalidity_rematch_deferred` once
+  /// per folder and UIDVALIDITY ([uidValidity]), with a marker in
+  /// `sync_states`.
+  ///
+  /// It waits at most [_rematchDeferLimit] and [_rematchDeferAttempts]
+  /// full fetches: then the rows are marked gone and deleted under the
+  /// clean-up rule (a row with a change of the user's stays until that
+  /// settles), App Log warn `sync.uidvalidity_rematch_given_up`, and false
+  /// is returned, so the checkpoint is saved and the folder syncs as usual
+  /// (any mail the server lists later comes back as a new row).
+  Future<bool> _deferRematch(
+    String accountId,
+    String mailboxPath, {
+    required int uidValidity,
+    required List<String> unlocated,
+    required int listed,
+    required int? exists,
+  }) async {
+    final key = _rematchDeferredKey(mailboxPath);
+    final raw = await _loadSyncState(accountId, key);
+    Map<String, dynamic>? marker;
+    if (raw != null) {
+      try {
+        marker = jsonDecode(raw) as Map<String, dynamic>;
+      } catch (_) {
+        marker = null;
+      }
+    }
+    final now = _now();
+    final same = marker != null && marker['rematchUidValidity'] == uidValidity;
+    final since =
+        same ? DateTime.tryParse(marker['since'] as String? ?? '') ?? now : now;
+    final attempts = (same ? marker['attempts'] as int? ?? 0 : 0) + 1;
+    if (attempts < _rematchDeferAttempts ||
+        now.difference(since) < _rematchDeferLimit) {
+      await _saveSyncState(
+        accountId,
+        key,
+        jsonEncode({
+          'rematchUidValidity': uidValidity,
+          'since': since.toIso8601String(),
+          'attempts': attempts,
+        }),
+      );
+      if (!same) {
+        unawaited(
+          _appLogger?.warn(
+            'sync.uidvalidity_rematch_deferred',
+            '${unlocated.length} cached mail(s) of $mailboxPath have no '
+                'server UID and the folder could not be enumerated (the '
+                'server listed $listed mail(s) of ${exists ?? '?'}): they '
+                'are kept as they are and matched again at the next sync',
+            accountId: accountId,
+            mailboxPath: mailboxPath,
+            data: {
+              'emailIds': unlocated.take(100).toList(),
+              'listed': listed,
+              'exists': exists,
+              'uidValidity': uidValidity,
+            },
+          ),
+        );
+      }
+      return true;
+    }
+    final rows = await (_db.select(_db.emails)
+          ..where((t) => t.id.isIn(unlocated) & t.srvUid.isNull()))
+        .get();
+    final read = await _state.beginRead(accountId);
+    final marked = await read.markGone([for (final row in rows) row.id]);
+    await _settleGoneRows(accountId, rows, marked);
+    await _clearSyncState(accountId, key);
+    unawaited(
+      _appLogger?.warn(
+        'sync.uidvalidity_rematch_given_up',
+        'The server renumbered $mailboxPath and has not listed its mail for '
+            '$attempts syncs since ${since.toIso8601String()}: '
+            '${marked.length} cached mail(s) that could not be matched are '
+            'removed (a mail with a queued change stays until the change '
+            'is applied or fails); mail the server lists later comes back '
+            'as new',
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        data: {
+          'emailIds': marked.take(100).toList(),
+          'attempts': attempts,
+          'since': since.toIso8601String(),
+        },
+      ),
+    );
+    return false;
   }
 
   /// The rows of [mailboxPath] the server has (not gone, not virtual) whose
@@ -1122,8 +1291,13 @@ extension _SyncImap on EmailRepositoryImpl {
         if (payload[_uidAfterMoveKey] == true) continue;
         final stamped = payload['uidValidity'];
         if (uidValidity != null && stamped is int && stamped != uidValidity) {
+          // Only one being sent or applied: a pending one's row is still
+          // here, re-matched by the full fetch.
           final mid = normaliseMessageId(payload['messageId'] as String?);
-          if (mid != null) byStaleMessageId[mid] = r;
+          if (mid != null &&
+              (r.state == _inflightState || r.state == _ackedState)) {
+            byStaleMessageId[mid] = r;
+          }
           continue;
         }
         final uid = payload['uid'];

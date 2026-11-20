@@ -202,7 +202,7 @@ extension _Bodies on EmailRepositoryImpl {
             expectedMessageId != fetchedMessageId) {
           // The pooled client is held until this future completes, so the
           // re-resolve search below still runs on an open connection.
-          return _healMismatchedImapBody(
+          final healed = await _healMismatchedImapBody(
             client: client,
             emailId: emailId,
             emailRow: emailRow,
@@ -212,6 +212,10 @@ extension _Bodies on EmailRepositoryImpl {
             fetchedUid: fetchUid,
             uidValidity: selected.uidValidity,
           );
+          // Null: the server's Message-ID search names the UID fetched, so
+          // it is this mail after all (its header was missing or written
+          // in a form that does not normalise to the envelope's).
+          if (healed != null) return healed;
         }
         // Decoding a malformed MIME message can make enough_mail throw — e.g. a
         // `RangeError (end)` on an off-by-a-few-bytes part boundary (#579), the
@@ -513,6 +517,23 @@ extension _Bodies on EmailRepositoryImpl {
     );
   }
 
+  /// Whether the server's search for [row]'s Message-ID in its folder
+  /// names exactly [uid]: then the mail fetched at [uid] is [row]'s, even
+  /// when its parsed header is missing or does not normalise to the
+  /// Message-ID the envelope gave at sync time.
+  Future<bool> _sameMailBySearch(
+    imap.ImapClient client,
+    Email row,
+    int uid,
+  ) async {
+    final uids = await _searchUidsByMessageId(
+      client,
+      row.imapServerPath,
+      row.messageId,
+    );
+    return uids.length == 1 && uids.single == uid;
+  }
+
   /// The mail [selected] in the folder this session selected for [row],
   /// fetched with [items] at the UID [_imapUidToFetch] resolves, and checked
   /// to be [row]'s by its Message-ID (a fetched mail without one is not the
@@ -541,7 +562,9 @@ extension _Bodies on EmailRepositoryImpl {
     }
     final expected = normaliseMessageId(row.messageId);
     final fetched = normaliseMessageId(msg.getHeaderValue('Message-ID'));
-    if (expected != null && expected != fetched) {
+    if (expected != null &&
+        expected != fetched &&
+        !await _sameMailBySearch(client, row, uid)) {
       unawaited(
         _appLogger?.error(
           'email.body.identity_mismatch',
@@ -568,7 +591,7 @@ extension _Bodies on EmailRepositoryImpl {
   /// and re-fetches under the corrected server location. When the message
   /// can't be found the stale (mailbox, uid) identity is invalid — we never cache the wrong body and
   /// return whatever we can without corrupting the cache.
-  Future<model.EmailBody> _healMismatchedImapBody({
+  Future<model.EmailBody?> _healMismatchedImapBody({
     required imap.ImapClient client,
     required String emailId,
     required Email emailRow,
@@ -580,18 +603,16 @@ extension _Bodies on EmailRepositoryImpl {
   }) async {
     final serverPath = emailRow.imapServerPath;
     final healSeq = await _state.nextReadSeq();
-    // Only a unique match, and only for a row whose location is recorded:
-    // a row without a UID (released by a UIDVALIDITY change) gets its new
-    // one from the sync's re-match (SYNC-REDESIGN.md §6).
-    final matches = emailRow.srvUid == null
-        ? const <int>[]
-        : await _searchUidsByMessageId(
-            client,
-            serverPath,
-            emailRow.messageId,
-          );
+    // Only a unique match. The server's own search for this row's
+    // Message-ID naming the very UID fetched means the fetched mail is this
+    // row's ([_Bodies._sameMailBySearch]). A row without a UID (released by
+    // a UIDVALIDITY change) is not relocated here: it gets its new UID from
+    // the sync's re-match (SYNC-REDESIGN.md §6).
+    final matches =
+        await _searchUidsByMessageId(client, serverPath, emailRow.messageId);
     final resolvedUid = matches.length == 1 ? matches.single : null;
-    if (resolvedUid != null && resolvedUid != fetchedUid) {
+    if (resolvedUid == fetchedUid) return null;
+    if (resolvedUid != null && emailRow.srvUid != null) {
       await _relocateEmailRow(
         id: emailId,
         newUid: resolvedUid,

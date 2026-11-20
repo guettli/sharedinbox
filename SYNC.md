@@ -602,16 +602,27 @@ the same statement and never rewrites the whole row.
     (a move's `COPYUID`, a Message-ID search, the body healing) is stamped with the
     UIDVALIDITY it was learnt under, not the checkpoint's. A queued change finds its
     mail by Message-ID at the flush (`_currentImapUid`). The late-FETCH guard
-    (`_pendingDeleteOrMoveUids`, #1269) knows a move or delete queued under the old
-    UIDVALIDITY by its Message-ID: a fetch answer that still lists that mail, as the
-    only one with that Message-ID, does not store it as a new row.
+    (`_pendingDeleteOrMoveUids`, #1269) cannot tell such a mail by its UID. It is
+    known by its Message-ID instead: of a move or delete queued under the old
+    UIDVALIDITY (being sent or applied), or of a row whose location a read or move
+    answer wrote after the FETCH started (a move sent from where the user saw the
+    mail). A fetch answer that still lists that mail does not store it as a new row
+    when a `UID SEARCH HEADER Message-ID` sent after the answer no longer finds it at
+    that UID. A copy still
+    there (a second one that arrived later) is found by the search and stored. A body
+    whose parsed `Message-ID` header is missing, or reads otherwise than the
+    envelope's, is the row's when that search names exactly the UID fetched.
   - **Nothing left behind.** A full fetch that fails after the release removes
     nothing (App Log warn `sync.uidvalidity_refetch_failed`); the rows stay shown
     without a UID and the next sync sees the change again. When the sweep is skipped
     (an empty `UID SEARCH ALL` while SELECT counts mail), rows still without a UID
     remain: the checkpoint then keeps its old UIDVALIDITY, so the next sync is a full
-    fetch again (`sync.uidvalidity_rematch_deferred`), never an incremental one that
-    would store each mail a second time. The incremental deletion reconcile sweeps the
+    fetch again, never an incremental one that would store each mail a second time
+    (`sync.uidvalidity_rematch_deferred`, once per folder and UIDVALIDITY, with a
+    marker `RematchDeferred:IMAP:<path>` in `sync_states`). After 24 hours and at
+    least three such fetches the re-match gives up: the unmatched rows are marked gone
+    and deleted under the clean-up rule (`sync.uidvalidity_rematch_given_up`), the new
+    checkpoint is saved, and mail the server lists later comes back as new rows. The incremental deletion reconcile sweeps the
     rows of the folder without a UID once every mail the server lists has a row of
     its own (`sync.unlocated_swept`).
 - **App Log of what sync removes** (audited in phase 6b): an *unexpected* removal or
