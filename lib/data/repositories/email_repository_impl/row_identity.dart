@@ -387,10 +387,16 @@ extension _RowIdentity on EmailRepositoryImpl {
   /// UIDVALIDITY change of its folder, its UID may name another mail: no
   /// carry-over, the row is deleted as gone. Returns the dropped copy for
   /// the App Log when the row carried over.
+  ///
+  /// [adopting]: [row] waits, gone, for a foreign move's destination and
+  /// [copy] just arrived there ([_adoptForeignMove]): nothing happens unless
+  /// both still are what they were (in another isolate a sync may have
+  /// adopted or revived [row], or the copy was matched meanwhile).
   Future<({bool kept, Email? dropped})> _carryOverMovedRow({
     required Email row,
     required Email copy,
     required String vanishedFrom,
+    bool adopting = false,
   }) async {
     const gone = (kept: false, dropped: null);
     const later = (kept: true, dropped: null);
@@ -403,6 +409,16 @@ extension _RowIdentity on EmailRepositoryImpl {
           .getSingleOrNull();
       if (current == null) return later;
       if (dup == null) return gone;
+      if (adopting &&
+          (!current.srvGone ||
+              current.foreignMoveWaitSeq == null ||
+              dup.srvGone ||
+              dup.isLocal ||
+              normaliseMessageId(dup.messageId) !=
+                  normaliseMessageId(current.messageId) ||
+              !await _stillUniqueAdoption(current, dup))) {
+        return later;
+      }
       final newPath = dup.srvMailboxPath;
       final newUid = dup.srvUid;
       if (newPath == null || newUid == null) return gone;
@@ -413,12 +429,19 @@ extension _RowIdentity on EmailRepositoryImpl {
           copyChanges.any((c) => c.state == _inflightState)) {
         return later;
       }
-      final known = await _knownUidValidity(dup.accountId, newPath);
       final newUidValidity = dup.srvUidValidity;
+      // An adopted copy was just stored under the UIDVALIDITY its SELECT
+      // reported; the checkpoint may still hold the one before a change.
+      final known =
+          adopting ? null : await _knownUidValidity(dup.accountId, newPath);
       if (known != null && newUidValidity != null && known != newUidValidity) {
         return gone;
       }
       await _mergeDuplicateRow(dropId: dup.id, keepId: current.id);
+      // Read and star changes acked where the mail no longer was did
+      // nothing; folded on, they would show forever (takeOverRow
+      // re-folds).
+      await _state.dropAckedFlagsAt(current.id, vanishedFrom);
       // The copy's server facts, the read/star/snooze state with the read
       // stamp it was read under included. The changes of both rows (the
       // copy's now point here) fold over it: a flag the user changed on
@@ -439,6 +462,225 @@ extension _RowIdentity on EmailRepositoryImpl {
       }
       return (kept: true, dropped: dup);
     });
+  }
+
+  /// Sync just stored row [arrivedId], a new mail with Message-ID [mid] in
+  /// [arrivalFolder] of IMAP account [accountId]. When exactly one row of
+  /// the account waits, gone from its folder, for a foreign move's
+  /// destination ([KeywordRead.markGone] with `awaitForeignMove`) and it
+  /// has that Message-ID, it is the moved mail (#1313: another client moved
+  /// it, and this device synced the source first): it carries over in
+  /// place ([_carryOverMovedRow]) and keeps its id, body, attachments and
+  /// references; the arrived row is merged into it. Never a live row: a
+  /// second copy the server still has elsewhere (a self-sent mail's Sent
+  /// and Inbox copies, a Gmail label) is not gone. Not when the pair cannot
+  /// be the same mail ([_foreignMoveMismatch]). Logged (App Log warn
+  /// `email.foreign_move_adopted`). Returns whether it was adopted.
+  Future<bool> _adoptForeignMove(
+    String accountId,
+    String arrivalFolder,
+    String arrivedId,
+    String mid,
+  ) async {
+    final waiting = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.srvGone.equals(true) &
+                t.foreignMoveWaitSeq.isNotNull() &
+                t.isLocal.equals(false) &
+                t.id.equals(arrivedId).not() &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(2))
+        .get();
+    if (waiting.isEmpty) return false;
+    if (waiting.length > 1) {
+      for (final row in waiting) {
+        _logForeignMoveNotAdopted(
+          row,
+          arrivalFolder,
+          'more than one row waits with this Message-ID',
+        );
+      }
+      return false;
+    }
+    final row = waiting.single;
+    final from = row.srvMailboxPath;
+    final arrived = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(arrivedId)))
+        .getSingleOrNull();
+    if (from == null || arrived == null) return false;
+    final mismatch = await _foreignMoveMismatch(row, arrived, arrivalFolder);
+    if (mismatch != null) {
+      _logForeignMoveNotAdopted(row, arrivalFolder, mismatch);
+      return false;
+    }
+    final carried = await _carryOverMovedRow(
+      row: row,
+      copy: arrived,
+      vanishedFrom: from,
+      adopting: true,
+    );
+    final dropped = carried.dropped;
+    if (dropped == null) {
+      // Not retried: the arrival is stored now, and the wait ends as usual.
+      _logForeignMoveNotAdopted(
+        row,
+        arrivalFolder,
+        carried.kept
+            ? 'the row changed meanwhile, has a move or delete of its own '
+                'queued, or a change of the new row is being sent'
+            : 'the new row is gone already',
+      );
+      return false;
+    }
+    _logForeignMoveAdopted(row, dropped, from: from, to: arrivalFolder);
+    return true;
+  }
+
+  /// Inside [_carryOverMovedRow]'s transaction: [current] is still the only
+  /// row of its account waiting with its Message-ID, and [dup]'s folder has
+  /// no other live row with it.
+  Future<bool> _stillUniqueAdoption(Email current, Email dup) async {
+    final mid = normaliseMessageId(current.messageId);
+    if (mid == null) return false;
+    Expression<bool> sameMid($EmailsTable t) =>
+        t.accountId.equals(current.accountId) &
+        t.isLocal.equals(false) &
+        (t.messageId.equals(mid) | t.messageId.equals('<$mid>'));
+    final waiting = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                sameMid(t) &
+                t.srvGone.equals(true) &
+                t.foreignMoveWaitSeq.isNotNull(),
+          )
+          ..limit(2))
+        .get();
+    if (waiting.length != 1) return false;
+    final others = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                sameMid(t) &
+                t.srvGone.equals(false) &
+                t.srvMailboxPath.equalsNullable(dup.srvMailboxPath) &
+                t.id.equals(dup.id).not(),
+          )
+          ..limit(1))
+        .get();
+    return others.isEmpty;
+  }
+
+  /// App Log line for [row], gone from its folder, carried over in place to
+  /// [dropped], the row sync stored for its mail in [to] (another client
+  /// moved it from [from]); [destinationFirst]: [to] was synced first.
+  void _logForeignMoveAdopted(
+    Email row,
+    Email dropped, {
+    required String from,
+    required String to,
+    bool destinationFirst = false,
+  }) {
+    unawaited(
+      _appLogger?.warn(
+        'email.foreign_move_adopted',
+        '"${row.subject ?? '(no subject)'}" left $from and arrived in $to '
+            '(moved by another client): its row follows it there with its '
+            'cached body and attachments, and the row sync had stored '
+            'there was merged into it.',
+        accountId: row.accountId,
+        mailboxPath: to,
+        emailId: row.id,
+        data: {
+          'droppedEmailId': dropped.id,
+          'from': from,
+          'to': to,
+          'order': destinationFirst ? 'destination_first' : 'source_first',
+        },
+      ),
+    );
+  }
+
+  /// App Log info line: [row], gone from its folder, was not carried over
+  /// to the mail with its Message-ID in [to], because of [reason].
+  void _logForeignMoveNotAdopted(Email row, String to, String reason) {
+    unawaited(
+      _appLogger?.info(
+        'email.foreign_move_not_adopted',
+        '"${row.subject ?? '(no subject)'}", gone from '
+            '${row.srvMailboxPath}, was not matched with the mail with its '
+            'Message-ID in $to: $reason',
+        accountId: row.accountId,
+        mailboxPath: to,
+        emailId: row.id,
+        data: {'from': row.srvMailboxPath, 'to': to, 'reason': reason},
+      ),
+    );
+  }
+
+  /// Why [arrived], just stored in [arrivalFolder], cannot be the mail of
+  /// [waiting], a row gone from its folder with the same Message-ID; null
+  /// when it can. Not into All Mail (Gmail: every mail is there; a later
+  /// sync of it is not where a mail went) or Drafts (an edited draft comes
+  /// back with the same Message-ID and another text); not across the Sent
+  /// boundary (a self-sent mail's Sent copy is another copy, like the role
+  /// pairing of virtual rows, SYNC-REDESIGN.md §6); not when the arrival
+  /// folder holds another live row of the Message-ID (which one moved is
+  /// unknown); not when both carry a move-stable server id (EMAILID,
+  /// X-GM-MSGID) or a size and they differ: a move keeps both.
+  Future<String?> _foreignMoveMismatch(
+    Email waiting,
+    Email arrived,
+    String arrivalFolder,
+  ) async {
+    final accountId = waiting.accountId;
+    final arrivalRole = await _mailboxRole(accountId, arrivalFolder);
+    if (arrivalRole == 'all' || arrivalRole == 'drafts') {
+      return 'arrived in a folder of role $arrivalRole';
+    }
+    final sourceRole = waiting.srvMailboxPath == null
+        ? null
+        : await _mailboxRole(accountId, waiting.srvMailboxPath!);
+    if ((arrivalRole == 'sent') != (sourceRole == 'sent')) {
+      return 'across the Sent folder';
+    }
+    final mid = normaliseMessageId(waiting.messageId);
+    final others = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.srvMailboxPath.equals(arrivalFolder) &
+                t.srvGone.equals(false) &
+                t.isLocal.equals(false) &
+                t.id.equals(arrived.id).not() &
+                (t.messageId.equals(mid ?? '') | t.messageId.equals('<$mid>')),
+          )
+          ..limit(1))
+        .get();
+    if (others.isNotEmpty) return 'another copy is in $arrivalFolder';
+    final a = waiting.serverEmailId;
+    final b = arrived.serverEmailId;
+    if (a != null && a.isNotEmpty && b != null && b.isNotEmpty && a != b) {
+      return 'another server email id';
+    }
+    final sizeA = waiting.sizeBytes;
+    final sizeB = arrived.sizeBytes;
+    if (sizeA != null && sizeB != null && sizeA != sizeB) {
+      return 'another size';
+    }
+    // A Message-ID alone is not enough (a legacy row without size or
+    // server id): the size, the server id, or the Date and Subject agree.
+    final sameId = a != null && a.isNotEmpty && a == b;
+    final sameSize = sizeA != null && sizeA == sizeB;
+    final sameHeaders = waiting.sentAt != null &&
+        waiting.sentAt == arrived.sentAt &&
+        waiting.subject == arrived.subject;
+    if (!sameId && !sameSize && !sameHeaders) {
+      return 'only the Message-ID agrees (no size, server id, or Date and '
+          'Subject to confirm it)';
+    }
+    return null;
   }
 
   /// The changes queued (pending, inflight or stuck) for row [id].

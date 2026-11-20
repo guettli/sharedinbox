@@ -329,6 +329,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
       }
       await _writer.rebuildDisplayPaths(account.id);
       await _afterListing(account.id, listSeq, trusted: trusted);
+      // Every folder of this listing is stored now: a mail gone from one
+      // folder that waits for a foreign move's destination does not stop
+      // waiting before the folders listed after it synced
+      // ([EmailStateWriter.expireForeignMoveWaits], #1313).
+      await _saveSyncState(
+        account.id,
+        EmailStateWriter.folderListedKey,
+        '$listSeq',
+      );
       return mailboxes.length;
     } finally {
       await closeImapClient(client);

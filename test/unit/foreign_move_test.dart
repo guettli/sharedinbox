@@ -48,19 +48,15 @@ void main() {
 
   Future<void> syncInbox() => emails.syncEmails(_account.id, 'INBOX');
 
-  Future<void> addBody(String emailId, String text) =>
-      db.into(db.emailBodies).insert(
-            EmailBodiesCompanion.insert(
-              emailId: emailId,
-              textBody: Value(text),
-            ),
-          );
+  /// The rows of a@test that show somewhere: a row gone from INBOX waits,
+  /// hidden, for a foreign move's destination (#1313).
+  Future<List<Email>> shownRowsOfA() async => [
+        for (final e in await rowsOfA())
+          if (e.mailboxPath.isNotEmpty) e,
+      ];
 
-  Future<String?> bodyOf(String emailId) async => (await (db.select(
-        db.emailBodies,
-      )..where((t) => t.emailId.equals(emailId)))
-              .getSingleOrNull())
-          ?.textBody;
+  const addBody = rigAddBody;
+  const bodyOf = rigBodyOf;
 
   test('a mail another client moved keeps its row, id and references',
       () async {
@@ -238,7 +234,7 @@ void main() {
 
     await syncInbox();
 
-    final ids = (await rowsOfA()).map((e) => e.id).toSet();
+    final ids = (await shownRowsOfA()).map((e) => e.id).toSet();
     expect(ids, {copyId, 'acc-1:other'});
     expect(ids, isNot(contains(id)));
     expect(
@@ -251,6 +247,12 @@ void main() {
     server.expungeElsewhere('a@test');
 
     await syncInbox();
+    expect(await shownRowsOfA(), isEmpty);
+    // It waits for a foreign move's destination until a listing and every
+    // other folder synced since.
+    await rigListFolders();
+    await emails.syncEmails(_account.id, 'Archive');
+    await emails.syncEmails(_account.id, 'Spam');
 
     expect(await rowsOfA(), isEmpty);
     expect(
@@ -281,8 +283,8 @@ void main() {
 
     await syncInbox();
 
-    expect((await rowsOfA()).map((e) => e.id), [copyId]);
-    expect((await rowsOfA()).map((e) => e.id), isNot(contains(id)));
+    expect((await shownRowsOfA()).map((e) => e.id), [copyId]);
+    expect((await shownRowsOfA()).map((e) => e.id), isNot(contains(id)));
     expect(noMerge(), isTrue);
   });
 
@@ -338,7 +340,7 @@ void main() {
 
       await syncInbox();
 
-      final rows = await rowsOfA();
+      final rows = await shownRowsOfA();
       expect(rows.map((e) => e.mailboxPath).toSet(), {'Spam', 'Archive'});
       expect(rows.map((e) => e.id), isNot(contains(id)));
       expect(noMerge(), isTrue);
@@ -423,7 +425,7 @@ void main() {
 
     await syncInbox();
 
-    expect((await rowsOfA()).map((e) => e.id), ['acc-2:x']);
+    expect((await shownRowsOfA()).map((e) => e.id), ['acc-2:x']);
     expect(noMerge(), isTrue);
   });
 

@@ -46,6 +46,10 @@ extension _SyncImap on EmailRepositoryImpl {
     String password,
     String mailboxPath,
   ) async {
+    // Before every read of this sync: a mail found gone from another folder
+    // (and waiting for a foreign move's destination) after this, this sync
+    // may not have searched for ([_markFolderSynced]).
+    final startSeq = await _state.nextReadSeq();
     // Read before this run's reads: a contradiction one of them finds makes
     // the reconcile due for the *next* run (see
     // [_maybeReconcileImapFlagsMailbox]).
@@ -239,6 +243,11 @@ extension _SyncImap on EmailRepositoryImpl {
           DateTime.now().toIso8601String(),
         );
         await _sweepOrphanThreads(account.id, mailboxPath);
+        // Not after an empty `UID SEARCH ALL` while SELECT counts mail: then
+        // nothing was fetched.
+        if (allUids.isNotEmpty || selectedMailbox.messagesExists == 0) {
+          await _markFolderSynced(account.id, mailboxPath, startSeq);
+        }
         return model.SyncEmailsResult(
           fetched: allUids.length,
           skipped: 0,
@@ -323,6 +332,7 @@ extension _SyncImap on EmailRepositoryImpl {
         final maxUid = newUids.fold(lastUid, math.max);
         await saveCheckpoint(maxUid);
         await _sweepOrphanThreads(account.id, mailboxPath);
+        await _markFolderSynced(account.id, mailboxPath, startSeq);
         return model.SyncEmailsResult(
           fetched: newUids.length,
           skipped: serverUids.length - newUids.length,
@@ -1229,6 +1239,88 @@ extension _SyncImap on EmailRepositoryImpl {
     }
   }
 
+  /// `sync_states` key of the read sequence of [mailboxPath]'s last
+  /// enumeration that the deletion reconcile applied (`UID SEARCH ALL`).
+  static String _folderSearchedKey(String mailboxPath) =>
+      'FolderSearched:$mailboxPath';
+
+  /// The row the destination's sync stored for the mail of [row], which
+  /// just vanished from [from], when the server gives no move-stable id
+  /// (#1313, destination synced first): the only live server row of the
+  /// account outside [from] with [row]'s Message-ID, stored or placed by a
+  /// read after [searchedBefore] (the enumeration of [from] that still
+  /// listed [row]: before then a copy elsewhere was a second copy), and
+  /// that can be the same mail ([_RowIdentity._foreignMoveMismatch]). Null
+  /// otherwise, or when [searchedBefore] is unknown.
+  Future<Email?> _movedCopyByMessageId(
+    Email row,
+    String from,
+    int? searchedBefore,
+  ) async {
+    final mid = normaliseMessageId(row.messageId);
+    if (searchedBefore == null || mid == null) return null;
+    final copies = await (_db.select(_db.emails)
+          ..where(
+            (t) =>
+                t.accountId.equals(row.accountId) &
+                t.srvGone.equals(false) &
+                t.isLocal.equals(false) &
+                t.srvMailboxPath.equals(from).not() &
+                t.id.equals(row.id).not() &
+                (t.messageId.equals(mid) | t.messageId.equals('<$mid>')),
+          )
+          ..limit(2))
+        .get();
+    if (copies.length != 1) return null;
+    final copy = copies.single;
+    final path = copy.srvMailboxPath;
+    if (path == null || copy.srvUid == null) return null;
+    if (copy.srvLocationSeq <= searchedBefore) return null;
+    final mismatch = await _foreignMoveMismatch(row, copy, path);
+    if (mismatch != null) {
+      _logForeignMoveNotAdopted(row, path, mismatch);
+      return null;
+    }
+    return copy;
+  }
+
+  /// Records that a sync of [mailboxPath] that started at read sequence
+  /// [startSeq] searched the folder for new mail and fetched it
+  /// ([EmailStateWriter.folderSyncedPrefix]): a row gone from another
+  /// folder before then whose mail it did not store was not moved here
+  /// (#1313).
+  Future<void> _markFolderSynced(
+    String accountId,
+    String mailboxPath,
+    int startSeq,
+  ) =>
+      _saveSyncState(
+        accountId,
+        '${EmailStateWriter.folderSyncedPrefix}$mailboxPath',
+        '$startSeq',
+      );
+
+  /// Of [emailIds], the rows with a move, snooze, unsnooze or delete of the
+  /// user's that is queued, being sent, acked or parked.
+  Future<Set<String>> _rowsWithPlacementChange(List<String> emailIds) async {
+    final found = <String>{};
+    for (var i = 0; i < emailIds.length; i += 500) {
+      final chunk = emailIds.sublist(i, math.min(i + 500, emailIds.length));
+      final rows = await (_db.selectOnly(_db.pendingChanges)
+            ..addColumns([_db.pendingChanges.resourceId])
+            ..where(
+              _db.pendingChanges.resourceId.isIn(chunk) &
+                  _db.pendingChanges.changeType.isIn(_placementChangeTypes) &
+                  _db.pendingChanges.state.isIn(
+                    const [..._liveStates, _ackedState, _parkedState],
+                  ),
+            ))
+          .get();
+      found.addAll(rows.map((r) => r.read(_db.pendingChanges.resourceId)!));
+    }
+    return found;
+  }
+
   /// Whether [accountId] has any row that may wait for its server copy
   /// ([_Counterparts._matchArrival]): a local virtual row (#545, #918), a
   /// row gone from its source (an acked move waiting for its destination
@@ -1447,6 +1539,36 @@ extension _SyncImap on EmailRepositoryImpl {
       return stamp == validity;
     }
 
+    // Whether a vanished row may wait for (or be matched by Message-ID to)
+    // a foreign move's destination: not a row without a UID or stamped
+    // with another UIDVALIDITY than the folder's (a stale duplicate),
+    // without a Message-ID (nothing to match it by), or whose absence the
+    // user's own move or delete explains (its change settles it, as
+    // before); nor one of All Mail (Gmail: its mail vanishes when it is
+    // deleted) or Drafts (an edited draft comes back with the same
+    // Message-ID and another text).
+    final role = await _mailboxRole(accountId, mailboxPath);
+    final absent = [
+      for (final row in localRows)
+        if (!isPresent(row)) row.id,
+    ];
+    final ownPlacement = role != 'all' && role != 'drafts' && absent.isNotEmpty
+        ? await _rowsWithPlacementChange(absent)
+        : const <String>{};
+    bool mayWait(Email row) =>
+        role != 'all' &&
+        role != 'drafts' &&
+        row.srvUid != null &&
+        (validity == null || row.srvUidValidity == validity) &&
+        !ownPlacement.contains(row.id) &&
+        normaliseMessageId(row.messageId) != null;
+    // The read of this folder's previous complete enumeration: a row it
+    // found here, and a copy stored elsewhere by a later read, are the
+    // same mail moved by another client while this folder was not synced.
+    final searchedBefore = int.tryParse(
+      await _loadSyncState(accountId, _folderSearchedKey(mailboxPath)) ?? '',
+    );
+
     final present = <Email>[];
     final gone = <Email>[];
     for (final row in localRows) {
@@ -1473,6 +1595,30 @@ extension _SyncImap on EmailRepositoryImpl {
           await _updateThread(accountId, mailboxPath, row.threadId ?? row.id);
         }
         if (carried.kept) continue;
+      }
+      // Without a move-stable id: the destination synced first and stored
+      // the mail as a new row, which a unique Message-ID match finds
+      // (#1313). The vanished row keeps its id, body and attachments.
+      final byMessageId = copy == null && mayWait(row)
+          ? await _movedCopyByMessageId(row, mailboxPath, searchedBefore)
+          : null;
+      if (byMessageId != null) {
+        final carried = await _carryOverMovedRow(
+          row: row,
+          copy: byMessageId,
+          vanishedFrom: mailboxPath,
+        );
+        if (carried.dropped case final dropped?) {
+          _logForeignMoveAdopted(
+            row,
+            dropped,
+            from: mailboxPath,
+            to: dropped.srvMailboxPath ?? dropped.mailboxPath,
+            destinationFirst: true,
+          );
+          await _updateThread(accountId, mailboxPath, row.threadId ?? row.id);
+          continue;
+        }
       }
       gone.add(row);
     }
@@ -1506,8 +1652,30 @@ extension _SyncImap on EmailRepositoryImpl {
       if (!shown.contains(row.id)) continue;
       await _rethreadRow(row.id);
     }
-    final marked = await read.markGone([for (final row in gone) row.id]);
+    // A mail that vanished from here may have been moved by another client
+    // to a folder not synced since (the source synced first, #1313): its
+    // row waits, hidden, for that folder's sync to adopt it by Message-ID
+    // ([_RowIdentity._adoptForeignMove]); [_Sync._expireForeignMoveWaits]
+    // ends the wait ([mayWait] above says which rows).
+    final waiting = {
+      for (final row in gone)
+        if (!unlocatedSwept.contains(row) && mayWait(row)) row.id,
+    };
+    final plain = [
+      for (final row in gone)
+        if (!waiting.contains(row.id)) row.id,
+    ];
+    final marked = {
+      if (plain.isNotEmpty) ...await read.markGone(plain),
+      if (waiting.isNotEmpty)
+        ...await read.markGone(waiting, awaitForeignMove: true),
+    };
     await _settleGoneRows(accountId, gone, marked);
+    await _saveSyncState(
+      accountId,
+      _folderSearchedKey(mailboxPath),
+      '${read.seq}',
+    );
     final unlocatedMarked = [
       for (final row in unlocatedSwept)
         if (marked.contains(row.id)) row,

@@ -1287,6 +1287,7 @@ As implemented, phase 4 is two PRs:
        gap): carrying it over needs the vanished row to wait without a
        change of the user's, which the clean-up rule does not allow;
        phase 6's mark-and-sweep (§6 "Force resync") is the place.
+       Done since #1313 with a wait of its own (§10).
      - An IMAP move answered without COPYUID whose mail has no
        Message-ID (and no move-stable id) cannot be matched in its
        destination, so it still ends as a new row there. With a
@@ -1717,7 +1718,8 @@ As implemented, phase 6 is two PRs, both done:
      planned: a foreign move whose source folder is synced before the
      destination still ends as a new row (2c, 4b): carrying it over needs
      the vanished row to wait without a change of the user's, which is not
-     what the resync's sweep does.
+     what the resync's sweep does. Done since #1313: such a row waits in
+     the database for another folder's sync to adopt it (§10).
 
 2. **6b (done, no schema change):** the rest of the phase 6 brief.
    - **Watched email queries and `local_hidden`.** `_visible` (the
@@ -1870,14 +1872,36 @@ State as of phase 6b (checked with `gh issue view`):
 
 What remains after phase 6, with where it is handled today:
 
-- **A foreign move whose source folder is synced first** (another client
-  moved the mail; this device syncs the source before the destination):
-  the source's absence rule deletes the row, and the destination's sync
-  stores a new one with a new id, without the body or local references
-  (2c, 4b). Carrying it over needs the vanished row to wait without a
-  change of the user's, which the clean-up rule does not allow. Out of
-  scope for the redesign; documented only. The other order (destination
-  first) is carried over (`_carryOverMovedRow`).
+- **A foreign move without a move-stable id, in either order** is
+  carried over since #1313 (SYNC.md §3). Destination first: the source's
+  reconcile matches the vanished row to the only live row outside the
+  source with its Message-ID that a read stored after the source's
+  previous enumeration (`FolderSearched:<path>`). Source first: the
+  vanished IMAP row with a Message-ID and a UID waits, hidden
+  (`foreign_move_wait_seq`, a fresh read sequence taken after the
+  enumeration's answer, and `_since`; the clean-up rule keeps it, and the
+  flush holds its other queued changes), and the sync of another folder
+  that stores a new mail with that Message-ID adopts it in place
+  (`_adoptForeignMove` → `_carryOverMovedRow`) when exactly one row waits
+  with it. The wait ends once a folder listing (`FolderListed`) and every
+  other folder that could adopt it (`FolderSynced:<path>`, written only by
+  a sync that searched and fetched) started after it, or after 24 hours;
+  then the clean-up rule deletes it (`email.foreign_move_wait_expired`).
+  Left open: no match without a unique pair (two rows waiting with the
+  Message-ID, two arrivals in one folder), across the Sent boundary, into
+  All Mail or Drafts, when the server ids or sizes differ, or when only
+  the Message-ID agrees (`email.foreign_move_not_adopted`); a row without
+  a Message-ID is deleted at once as before; an adoption refused by the
+  transaction's re-check is not retried; a device offline for longer than
+  24 hours gives up the wait, and the mail comes back as a new row. A mail
+  with a reused Message-ID, the same size, Date and Subject that arrives
+  in another folder while the deleted one waits (a re-sent copy) is taken
+  for the moved one; destination first, a live row placed by a read after
+  the source's last enumeration is taken for the moved mail even if it was
+  an older copy whose location a read rewrote then. On JMAP a move keeps
+  the Email id; left there: the periodic prune of a folder that runs
+  between another client's move and the destination's `Email/changes`
+  still deletes the row (a narrow window).
 - **A folder renamed or moved on another IMAP client** is followed only
   when its UIDVALIDITY survives the RENAME and its cached Message-IDs are
   found, or, on servers that give it a new UIDVALIDITY (Stalwart), when it

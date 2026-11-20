@@ -220,16 +220,96 @@ the one the user knows (an open detail view, Undo, notifications and drafts refe
 id), while the other was stored by a recent sync. A change queued on the vanished row before
 the move follows the mail to its new UID, stamped with the UIDVALIDITY that UID was learned
 under, and the row keeps showing its queued flag until the change is sent (a newer change
-of the same flag on the other row wins). With no such row, or more than one (e.g. a Gmail
+of the same flag on the other row wins). A read or star change the server acked at the
+old location is dropped then: sent to a UID the mail had left, the `STORE` answered OK and
+changed nothing, so the row shows the server's flags. With no such row, or more than one (e.g. a Gmail
 mail still under two other labels), the vanished row is marked gone (and deleted once
 no change of it is left); so it is when the other row's location was recorded under an
 older UIDVALIDITY of its folder (its UID may name another mail). The carry-over waits for
 a later sync when the user moved the vanished row meanwhile or a change of the other row
-is being sent right now. When the source folder is synced before the destination, the
-row is marked gone and the destination's sync stores a new row: the carry-over needs
-the vanished row to wait for its copy without a change of the user's to keep it, which
-the clean-up rule does not allow (still open after phase 6: the force resync's
-mark-and-sweep, §6a, is a different mechanism).
+is being sent right now.
+
+**Foreign move without a move-stable id** (#1313). Without `EMAILID`/`X-GM-MSGID`, or
+before the other row exists, the match is by Message-ID, in both sync orders. The sync
+loops go through the folders sorted by path, so either order happens.
+
+*Destination synced first.* The destination's sync stored the mail as a new row. When
+the source's deletion reconcile finds the mail gone, it looks for the only live server row
+of the account outside the source with that Message-ID (`_movedCopyByMessageId`). That row
+must have been stored or placed by a read after the source's previous enumeration, which
+still listed the vanished row (`sync_states` `FolderSearched:<path>`, the read sequence of
+the last `UID SEARCH ALL` the reconcile applied); a row stored before then is a second copy.
+It must also pass the checks below. Then the vanished row carries over to it like above
+(`_carryOverMovedRow`: it keeps its id, body and attachments; App Log warn
+`email.foreign_move_adopted`, `order: destination_first`).
+
+*Source synced first.* No other row exists yet. The vanished row then waits, hidden like
+any gone row, for another folder's sync to store its mail (`markGone(awaitForeignMove:
+true)`). `foreign_move_wait_seq` is a fresh read sequence taken once the enumeration's
+answer is in, so a sync of another folder that started before the answer cannot end the
+wait. `foreign_move_wait_since` is the time. Both are in the database, so the wait
+survives a restart and works across isolates. The clean-up rule keeps a waiting row. When
+the sync of another folder of the account stores a new mail with that Message-ID, and
+exactly one row of the account waits with it, the row is adopted (`_adoptForeignMove` →
+`_carryOverMovedRow`, which checks the uniqueness again in its transaction). It keeps its
+id, body, downloaded attachments and references, takes the new row's UID, UIDVALIDITY and
+read stamps (`takeOverRow`), its queued changes follow the mail, and the new row is merged
+into it (App Log warn `email.foreign_move_adopted`, `order: source_first`). An adoption
+that the transaction's re-check refuses is not tried again; the arrival keeps its row and
+the wait ends as usual.
+
+Neither order matches, and the new mail keeps its own row (App Log info
+`email.foreign_move_not_adopted` with the reason), when:
+- more than one row waits with that Message-ID, or the arrival folder has another live
+  row with it (which copy moved is unknown);
+- the arrival is in All Mail (role `all`, Gmail) or Drafts, or crosses the Sent boundary
+  (a Sent arrival only adopts a row that left a Sent folder, and the other way round: a
+  self-sent mail's Sent and Inbox copies are two mails);
+- both rows have a move-stable server id (`EMAILID`, `X-GM-MSGID`) or a size and they
+  differ (a move keeps both);
+- only the Message-ID agrees: one more signal is needed, the size, the server id, or the
+  Date and Subject (a legacy row without a size);
+- the waiting row changed meanwhile, or a change of the new row is being sent (as for the
+  carry-over above).
+
+Only a row gone from its folder is matched, never a live one: a second copy the server
+still has (the Sent copy of a self-sent mail, another Gmail label) is not gone. Rows that
+do not wait, as before: no Message-ID, no UID or one stamped with another UIDVALIDITY
+than the folder's (a stale duplicate, a row released by a UIDVALIDITY change), a row
+whose absence the user's own queued, sent or acked move, snooze or delete explains (its
+change settles it through the ops path), a row of All Mail (its mail vanishes when
+deleted) or Drafts (an edited draft comes back with the same Message-ID and another text),
+and every other absence (a removed folder, a JMAP `notFound`/`destroyed`/prune, a failed
+move). A row already gone (kept for a change after its wait ended) does not start a new
+wait when its folder is synced again.
+
+A waiting row with a queued change that is no move or delete (a star, mark as read) keeps
+it, and the flush holds that change while the row waits: sent to the vanished UID, a
+`UID STORE` would answer OK and do nothing. On adoption the change follows the mail to its
+new UID and is sent there. When the wait ends without adoption it is sent and fails
+visibly ("message gone").
+
+The wait rule: the wait ends when either of these holds:
+- a folder listing (IMAP `LIST`, `sync_states` `FolderListed`) started after the wait
+  began, so a folder made for the mail meanwhile is known; and every other folder of the
+  account that could adopt the row (not its source, not All Mail or Drafts, not created
+  offline or being deleted) had a successful sync that started after the wait began. A
+  sync counts only when it searched the folder and fetched its new mail
+  (`FolderSynced:<path>`, the read sequence the sync started at; not written by a sync
+  that returned early, e.g. a deferred UIDVALIDITY re-match). Read sequences, not
+  clocks, decide "after".
+- `EmailStateWriter.foreignMoveMaxWait` (24 hours) passed, for a folder that never syncs.
+
+The check runs after every successful folder sync (`_expireForeignMoveWaits`). The row is
+then deleted under the clean-up rule (kept while the user has a change of it) and logged as
+`email.foreign_move_wait_expired` with the reason (`folders_synced` or `max_wait`). That
+line is a warn when the row's cached body or downloaded attachments go with it, else info.
+It is always info on an account with an All Mail folder: on Gmail, archiving elsewhere
+leaves the mail in All Mail only, which is not synced. A sync cycle lists the folders and
+then syncs every folder, so a mail deleted elsewhere is removed within one cycle. A device
+offline for longer than the cap gives up on the adoption (the mail then comes back as a new
+row, as before #1313). JMAP needs none of this: a move keeps the Email id, so the
+destination's `Email/changes` finds the row by its server id.
 
 A shared move-stable id is taken as "the same mail". That holds for RFC 8474 `EMAILID` and
 Gmail's `X-GM-MSGID`; servers that derive it from a content GUID (Dovecot keeps the GUID on
@@ -543,7 +623,9 @@ the same statement and never rewrites the whole row.
   thread is refreshed in the folder it showed in before.
 - **Clean-up rule.** A row that is `srv_gone` and has no pending, in-flight, stuck or
   acked change is deleted (`cleanUpGone`, after every absence write and at the start of
-  every flush); its body and attachments go with it. A row with such a change stays until
+  every flush); its body and attachments go with it. A row that waits for a foreign
+  move's destination (`foreign_move_wait_seq`, §3 "Foreign move without a move-stable id")
+  stays until its wait ends. A row with such a change stays until
   the change settles: sync never deletes a row the user has a change for (#1239), and
   logs it (warn `email.server_gone_with_changes`; not when the only change is the
   user's own delete for good). A `failed` change stays listed without its row

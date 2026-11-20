@@ -241,6 +241,17 @@ class Emails extends Table {
   // writes it (SYNC-REDESIGN.md §4.2–§4.3).
   IntColumn get srvLocationSeq => integer().withDefault(const Constant(0))();
 
+  // Added in schema v78: a row [srvGone] by the absence rule of its IMAP
+  // folder that waits for another folder's sync to store its mail, so a
+  // move by another client carries the row over (#1313, SYNC.md §6a,
+  // "Foreign move, source synced first"). [foreignMoveWaitSeq] is the read
+  // sequence of the enumeration that found it gone (a folder whose sync
+  // started after it was searched after it), [foreignMoveWaitSince] when
+  // that was (the wait's cap). Both null: not waiting. They mean something
+  // only while [srvGone]; written by `EmailStateWriter`'s `markGone`.
+  IntColumn get foreignMoveWaitSeq => integer().nullable()();
+  DateTimeColumn get foreignMoveWaitSince => dateTime().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -2096,6 +2107,15 @@ class AppDatabase extends _$AppDatabase {
         await customStatement(
           'DELETE FROM $table WHERE email_id NOT IN (SELECT id FROM emails)',
         );
+      }
+    }
+    if (from < 78 && await _tableExists(this, 'emails')) {
+      // A vanished row waits for a foreign move's destination (#1313).
+      for (final column in [
+        emails.foreignMoveWaitSeq,
+        emails.foreignMoveWaitSince,
+      ]) {
+        await _addColumnIfMissing(m, emails, column);
       }
     }
   }
