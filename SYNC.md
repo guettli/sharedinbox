@@ -459,8 +459,12 @@ The rule mirrors the classic JWZ algorithm, in order:
    bounds the time window so a subject that gets reused a year later
    starts a new thread instead of resurrecting an old one.
 5. **Emailless singleton** — if every input is missing (no headers, no
-   subject) the caller uses the row id so the message still has a stable,
-   unique thread id.
+   subject, or a subject without a `Date:`) the caller uses the row id so the
+   message still has a stable, unique thread id. Such a thread id names the
+   row, not the mail: a row that takes another row's place (the foreign-move
+   carry-over, a match in place) keeps its own id as its thread id instead of
+   the merged copy's, which is what a later fetch of the mail derives for it
+   too (#1328).
 
 The helper lives at `EmailRepositoryImpl._computeThreadId` (exposed via
 `computeThreadIdForTest` for the unit tests in
@@ -468,6 +472,23 @@ The helper lives at `EmailRepositoryImpl._computeThreadId` (exposed via
 (`_fetchAndUpsertImap`) calls it inside the same DB transaction that upserts
 the email row, then calls `_updateThread` once per affected thread key —
 mirroring the JMAP path.
+
+The list screen shows thread rows only. After every folder sync,
+`_sweepOrphanThreads` deletes the folder's thread rows that no email row shown
+there backs, and refreshes the thread of every row shown there that its own
+thread row (key `threadId ?? id`) does not list, re-checked in the transaction
+that refreshes it (App Log warn `thread.list_repaired`; a move that writes the
+row and refreshes its thread in two steps can still be caught in between, which
+costs only a needless log line): such a mail counted in the
+folder and was found by search, but was missing from the list (#1328: a
+carried-over row took the merged copy's thread id while its thread kept the
+old one, and the sweep then dropped that thread). The carry-over refreshes the
+threads of the folder the row showed in before, of the merged copy, and of the
+folder it shows in now (behind a queued move, that move's destination).
+A thread refresh (`refreshThreadAggregate`) reads the folder's thread through
+the `emails_thread_id` index (account, folder, thread id), which every install
+has since schema v80 (before, only databases upgraded across v18 had it), and
+a row without a thread id by a separate primary-key lookup.
 
 ---
 

@@ -1783,9 +1783,21 @@ class EmailStateWriter {
   /// everything [copy] recorded except its id, the read/star/snooze state
   /// and the location with the stamps they were read under included, and
   /// the fold of [keepId]'s ops (the copy's point here by now) goes over it.
+  ///
+  /// A thread id that is the copy's own row id (a mail with no Message-ID,
+  /// References, In-Reply-To nor a dated Subject: its thread is just itself)
+  /// becomes [keepId]: it names the row, not the mail, and a later fetch of
+  /// the mail derives [keepId] for it too. Taken over as is, the thread key
+  /// pointed at a deleted row, and the list's thread of the kept row was
+  /// swept as an orphan (#1328).
   Future<void> takeOverRow(String keepId, Email copy) async {
-    await (_db.update(_db.emails)..where((t) => t.id.equals(keepId)))
-        .write(copy.toCompanion(false).copyWith(id: const Value.absent()));
+    final ownThread = copy.threadId == null || copy.threadId == copy.id;
+    await (_db.update(_db.emails)..where((t) => t.id.equals(keepId))).write(
+      copy.toCompanion(false).copyWith(
+            id: const Value.absent(),
+            threadId: ownThread ? Value(keepId) : Value(copy.threadId),
+          ),
+    );
     await refold(keepId);
   }
 

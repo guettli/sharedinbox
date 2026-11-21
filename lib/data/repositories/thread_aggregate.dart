@@ -17,16 +17,16 @@ Future<void> refreshThreadAggregate(
   String threadId,
 ) async {
   if (mailboxPath.isEmpty) return;
-  final threadEmails = await (db.select(db.emails)
+  // Same key as `latestDate` below, so an undated message sorts by its
+  // arrival time rather than first (SQLite orders NULL lowest). Same-second
+  // mail by UID, so `latest` is the newest arrival.
+  final indexed = await (db.select(db.emails)
         ..where(
           (t) =>
               t.accountId.equals(accountId) &
               t.mailboxPath.equals(mailboxPath) &
               t.threadId.equals(threadId),
         )
-        // Same key as `latestDate` below, so an undated message sorts by
-        // its arrival time rather than first (SQLite orders NULL lowest).
-        // Same-second mail by UID, so `latest` is the newest arrival.
         ..orderBy([
           (t) => OrderingTerm.asc(coalesce([t.sentAt, t.receivedAt])),
           (t) => OrderingTerm.asc(t.receivedAt),
@@ -34,6 +34,21 @@ Future<void> refreshThreadAggregate(
           (t) => OrderingTerm.asc(t.id),
         ]))
       .get();
+  // The key is `threadId ?? id`, as every caller derives it: a row without
+  // a thread id is the thread [threadId] when that is its id. A second
+  // query (a primary-key lookup), so the one above keeps using the
+  // `emails_thread_id` index; an `OR` in it scanned the folder.
+  final idless = await (db.select(db.emails)
+        ..where(
+          (t) =>
+              t.id.equals(threadId) &
+              t.accountId.equals(accountId) &
+              t.mailboxPath.equals(mailboxPath) &
+              t.threadId.isNull(),
+        ))
+      .getSingleOrNull();
+  final threadEmails =
+      idless == null ? indexed : ([...indexed, idless]..sort(_threadOrder));
 
   if (threadEmails.isEmpty) {
     await (db.delete(db.threads)
@@ -82,4 +97,15 @@ Future<void> refreshThreadAggregate(
           ),
         ),
       );
+}
+
+/// The order of [refreshThreadAggregate]'s query, for a row added to it.
+int _threadOrder(Email a, Email b) {
+  final byDate = (a.sentAt ?? a.receivedAt).compareTo(b.sentAt ?? b.receivedAt);
+  if (byDate != 0) return byDate;
+  final byArrival = a.receivedAt.compareTo(b.receivedAt);
+  if (byArrival != 0) return byArrival;
+  final byUid = a.uid.compareTo(b.uid);
+  if (byUid != 0) return byUid;
+  return a.id.compareTo(b.id);
 }

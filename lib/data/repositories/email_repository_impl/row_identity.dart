@@ -498,10 +498,14 @@ extension _RowIdentity on EmailRepositoryImpl {
         // The UID was learned under the copy's UIDVALIDITY.
         uidValidity: newUidValidity,
       );
-      // The copy's thread in the new folder lists this row now.
-      for (final threadId in {dup.threadId ?? dup.id, dup.threadId ?? row.id}) {
-        await _updateThread(dup.accountId, dup.mailboxPath, threadId);
-      }
+      // The threads of the folder the row showed in before, of the copy,
+      // and of where the row shows now under the thread id it took over: a
+      // queued move shows it in that move's destination, not the copy's
+      // folder (#1328).
+      final now = await (_db.select(_db.emails)
+            ..where((t) => t.id.equals(current.id)))
+          .getSingleOrNull();
+      await _updateThreadsOfRows([current, dup, if (now != null) now]);
       return (kept: true, dropped: dup, retargeted: retargeted);
     });
   }

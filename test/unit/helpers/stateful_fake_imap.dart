@@ -20,6 +20,7 @@ class FakeServerMessage {
     Iterable<String> flags = const [],
     String? emailId,
     this.messageIdHeader,
+    this.dated = true,
   })  : flags = {...flags},
         emailId = emailId ?? 'E-$messageId';
 
@@ -27,6 +28,9 @@ class FakeServerMessage {
   /// the envelope's `<messageId>` (a relay's comment after it, a different
   /// folding); empty: the body has no such header. Null: `<messageId>`.
   final String? messageIdHeader;
+
+  /// Whether the message has a `Date` header (its envelope a date).
+  final bool dated;
 
   int uid;
   int modSeq;
@@ -235,6 +239,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
     Iterable<String> flags = const [],
     String? emailId,
     String? messageIdHeader,
+    bool dated = true,
   }) {
     final folder = folders[path]!;
     final message = FakeServerMessage(
@@ -244,6 +249,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
       flags: flags,
       emailId: emailId,
       messageIdHeader: messageIdHeader,
+      dated: dated,
     );
     folder.messages[message.uid] = message;
     return message;
@@ -287,6 +293,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
         flags: m.flags,
         emailId: m.emailId,
         messageIdHeader: m.messageIdHeader,
+        dated: m.dated,
       );
       renumbered.messages[message.uid] = message;
     }
@@ -635,7 +642,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       ..flags = m.flags.toList()
       ..size = 100
       ..envelope = imap.Envelope(
-        date: DateTime.utc(2026, 1, 1, 12),
+        date: m.dated ? DateTime.utc(2026, 1, 1, 12) : null,
         subject: 'Mail ${m.messageId}',
         from: const [imap.MailAddress(null, 'bob@example.com')],
         to: const [imap.MailAddress(null, 'alice@example.com')],

@@ -200,18 +200,6 @@ extension _Threads on EmailRepositoryImpl {
     }
   }
 
-  /// Deletes thread rows in [mailboxPath] that are backed by no email currently
-  /// in that folder — orphans left when a message is re-threaded on resync
-  /// (#418 / #500) or bulk-removed and [_updateThread] only rebuilt the
-  /// *current* threadId, leaving the previous row behind. `observeThreads`
-  /// renders every thread row for the folder, so these orphans surface as
-  /// phantom conversations backed by no local mail (#523).
-  ///
-  /// [_reconcileSourceThreads] does the same sweep but only for the interactive
-  /// move flows; this runs it over the whole folder at sync time (and on demand
-  /// from the diagnostics screen). It only ever removes rows with **zero**
-  /// backing emails, so it stays consistent with the `emails` table and is a
-  /// no-op on a healthy folder. Returns the number of rows removed.
   /// Refreshes the thread aggregates of [rows] (as read before their state
   /// changed: the folder they showed in), once per (folder, thread).
   Future<void> _updateThreadsOfRows(Iterable<Email> rows) async {
@@ -224,6 +212,20 @@ extension _Threads on EmailRepositoryImpl {
     }
   }
 
+  /// Deletes thread rows in [mailboxPath] that are backed by no email currently
+  /// in that folder — orphans left when a message is re-threaded on resync
+  /// (#418 / #500) or bulk-removed and [_updateThread] only rebuilt the
+  /// *current* threadId, leaving the previous row behind. `observeThreads`
+  /// renders every thread row for the folder, so these orphans surface as
+  /// phantom conversations backed by no local mail (#523).
+  ///
+  /// [_reconcileSourceThreads] does the same sweep but only for the interactive
+  /// move flows; this runs it over the whole folder at sync time (and on demand
+  /// from the diagnostics screen). It only ever removes rows with **zero**
+  /// backing emails, so it stays consistent with the `emails` table and is a
+  /// no-op on a healthy folder. Returns the number of rows removed.
+  ///
+  /// Then [_restoreUnlistedRows].
   Future<int> _sweepOrphanThreads(String accountId, String mailboxPath) async {
     final emails = await (_db.select(_db.emails)
           ..where(
@@ -253,6 +255,103 @@ extension _Threads on EmailRepositoryImpl {
         'thread row(s) (emails=${emails.length})',
       );
     }
+    await _restoreUnlistedRows(accountId, mailboxPath, emails);
     return removed;
   }
+
+  /// The other half of [_sweepOrphanThreads]: refreshes the thread of each
+  /// row of [mailboxPath] ([emails]) that its own thread row (key
+  /// `threadId ?? id`) does not list. The list screen shows thread rows
+  /// only, so such a mail counted in the folder and was found by search,
+  /// but was missing from the list until something refreshed its thread
+  /// (#1328: a carried-over row took the thread id of the copy merged into
+  /// it, and that copy's thread was swept as an orphan). A no-op on a
+  /// healthy folder; App Log warn `thread.list_repaired` for the rows it
+  /// brings back.
+  ///
+  /// The rows found are read again, with their threads, in the transaction
+  /// that refreshes them, so a row a write of this isolate fixed meanwhile
+  /// is not counted. A write that moves a row and refreshes its thread in
+  /// two steps (`_moveRow`, a fetch in the other isolate) can still be
+  /// caught between them: the refresh here is the one it was about to do,
+  /// and the only harm is a needless log line.
+  Future<void> _restoreUnlistedRows(
+    String accountId,
+    String mailboxPath,
+    List<Email> emails,
+  ) async {
+    if (emails.isEmpty) return;
+    final candidates = _unlisted(
+      emails,
+      await _threadEmailIdsJson(accountId, mailboxPath),
+    );
+    if (candidates.isEmpty) return;
+    final restored = await _db.transaction(() async {
+      final current = await (_db.select(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.mailboxPath.equals(mailboxPath) &
+                  t.id.isIn([for (final e in candidates) e.id]),
+            ))
+          .get();
+      final unlisted = _unlisted(
+        current,
+        await _threadEmailIdsJson(
+          accountId,
+          mailboxPath,
+          keys: {for (final e in current) e.threadId ?? e.id},
+        ),
+      );
+      await _updateThreadsOfRows(unlisted);
+      return unlisted;
+    });
+    if (restored.isEmpty) return;
+    unawaited(
+      _appLogger?.warn(
+        'thread.list_repaired',
+        '${restored.length} mail(s) of $mailboxPath were missing from its '
+            'list (their conversation entry was out of date) and show again',
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        data: {
+          'emailIds': [for (final e in restored.take(100)) e.id],
+          'subjects': [
+            for (final e in restored.take(20)) e.subject ?? '(no subject)',
+          ],
+        },
+      ),
+    );
+  }
+
+  /// The `email_ids_json` of the thread rows of [mailboxPath], by thread
+  /// id; only those of [keys] when given.
+  Future<Map<String, String>> _threadEmailIdsJson(
+    String accountId,
+    String mailboxPath, {
+    Set<String>? keys,
+  }) async {
+    final t = _db.threads;
+    final rows = await (_db.selectOnly(t)
+          ..addColumns([t.id, t.emailIdsJson])
+          ..where(
+            t.accountId.equals(accountId) &
+                t.mailboxPath.equals(mailboxPath) &
+                (keys == null ? const Constant(true) : t.id.isIn(keys)),
+          ))
+        .get();
+    return {
+      for (final r in rows) r.read(t.id)!: r.read(t.emailIdsJson)!,
+    };
+  }
+
+  /// Of [rows], those their own thread row ([emailIdsJson] by thread id)
+  /// does not list. Ids are opaque strings, matched quoted in the JSON
+  /// array without decoding it (as [_reconcileSourceThreads] does).
+  List<Email> _unlisted(List<Email> rows, Map<String, String> emailIdsJson) => [
+        for (final e in rows)
+          if (!(emailIdsJson[e.threadId ?? e.id]?.contains('"${e.id}"') ??
+              false))
+            e,
+      ];
 }
