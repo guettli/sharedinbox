@@ -588,6 +588,41 @@ void main() {
       expect(find.byIcon(Icons.close), findsOneWidget);
     });
 
+    testWidgets('bulk action buttons expose button semantics (#1334)', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final email = testEmail(subject: 'Select me');
+      await tester.pumpWidget(
+        buildApp(
+          initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails',
+          overrides: [
+            accountRepositoryProvider.overrideWithValue(
+              FakeAccountRepository([kTestAccount]),
+            ),
+            mailboxRepositoryProvider.overrideWithValue(
+              FakeMailboxRepository(),
+            ),
+            emailRepositoryProvider.overrideWithValue(
+              FakeEmailRepository(emails: [email]),
+            ),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Select me'));
+      await tester.pumpAndSettle();
+
+      for (final label in ['Archive', 'Delete', 'Mark as spam']) {
+        expect(
+          tester.getSemantics(find.byTooltip(label)),
+          isSemantics(isButton: true, hasTapAction: true, tooltip: label),
+          reason: label,
+        );
+      }
+      handle.dispose();
+    });
+
     testWidgets('icon-only toolbar buttons expose tooltips', (tester) async {
       final email = testEmail(subject: 'Select me');
       await tester.pumpWidget(

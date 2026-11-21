@@ -161,67 +161,71 @@ class _FolderTreePickerDialogState
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        InkWell(
-          onTap: node.displayPath == null
-              ? (hasChildren ? () => _toggle(node.key) : null)
-              : () => Navigator.pop(context, node.displayPath),
-          child: Padding(
-            padding: EdgeInsetsDirectional.only(
-              start: indent,
-              end: AppSpacing.md,
-              top: AppSpacing.sm,
-              bottom: AppSpacing.sm,
-            ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: AppIconSize.md,
-                  child: hasChildren
-                      ? IconButton(
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          iconSize: AppIconSize.md,
-                          icon: Icon(
-                            isExpanded
-                                ? Icons.expand_more
-                                : Icons.chevron_right,
-                          ),
-                          onPressed: () => _toggle(node.key),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                const SizedBox(width: AppSpacing.xs),
-                Icon(
-                  hasChildren
-                      ? (isExpanded ? Icons.folder_open : Icons.folder)
-                      : Icons.folder_outlined,
-                  size: AppIconSize.sm,
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Text(
-                    node.label,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: isSelected ? FontWeight.bold : null,
-                      color: node.displayPath == null
-                          ? Theme.of(context).colorScheme.onSurfaceVariant
-                          : null,
+        // Expose rows as buttons to screen readers (#1334).
+        Semantics(
+          button: true,
+          child: InkWell(
+            onTap: node.displayPath == null
+                ? (hasChildren ? () => _toggle(node.key) : null)
+                : () => Navigator.pop(context, node.displayPath),
+            child: Padding(
+              padding: EdgeInsetsDirectional.only(
+                start: indent,
+                end: AppSpacing.md,
+                top: AppSpacing.sm,
+                bottom: AppSpacing.sm,
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: AppIconSize.md,
+                    child: hasChildren
+                        ? IconButton(
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            iconSize: AppIconSize.md,
+                            icon: Icon(
+                              isExpanded
+                                  ? Icons.expand_more
+                                  : Icons.chevron_right,
+                            ),
+                            onPressed: () => _toggle(node.key),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  Icon(
+                    hasChildren
+                        ? (isExpanded ? Icons.folder_open : Icons.folder)
+                        : Icons.folder_outlined,
+                    size: AppIconSize.sm,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      node.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.bold : null,
+                        color: node.displayPath == null
+                            ? Theme.of(context).colorScheme.onSurfaceVariant
+                            : null,
+                      ),
                     ),
                   ),
-                ),
-                if (widget.onCreate != null && node.displayPath != null)
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    iconSize: AppIconSize.sm,
-                    tooltip: 'New subfolder…',
-                    icon: const Icon(Icons.create_new_folder_outlined),
-                    onPressed: _creating
-                        ? null
-                        : () => _promptCreate(parent: node.displayPath),
-                  ),
-              ],
+                  if (widget.onCreate != null && node.displayPath != null)
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      iconSize: AppIconSize.sm,
+                      tooltip: 'New subfolder…',
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                      onPressed: _creating
+                          ? null
+                          : () => _promptCreate(parent: node.displayPath),
+                    ),
+                ],
+              ),
             ),
           ),
         ),

@@ -93,6 +93,29 @@ void main() {
       expect(await result, isNull);
     });
 
+    testWidgets('folder rows expose button semantics (#1334)', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      late Future<String?> result;
+      await tester.pumpWidget(_harness(mailboxes, (f) => result = f));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      for (final label in ['INBOX', 'Sent']) {
+        expect(
+          tester.getSemantics(find.text(label)),
+          isSemantics(isButton: true, hasTapAction: true, label: label),
+          reason: label,
+        );
+      }
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(await result, isNull);
+      handle.dispose();
+    });
+
     testWidgets('expands a parent when its chevron is tapped', (tester) async {
       late Future<String?> result;
       await tester.pumpWidget(_harness(mailboxes, (f) => result = f));

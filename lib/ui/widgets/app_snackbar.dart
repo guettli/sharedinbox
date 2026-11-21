@@ -78,7 +78,11 @@ class AppMessenger {
         content: content ?? Text(message),
         action: action,
         duration: duration,
-        persist: persist,
+        // Flutter 3.47 keeps SnackBars with an action on screen until
+        // dismissed (persist defaults to true then). Our snacks are transient
+        // feedback, so they auto-dismiss after [duration] unless a caller
+        // explicitly asks to persist (#1332).
+        persist: persist ?? false,
         backgroundColor: backgroundColor,
       ),
     );

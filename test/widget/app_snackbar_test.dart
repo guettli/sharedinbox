@@ -100,4 +100,28 @@ void main() {
     expect(find.text('No scope here'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('snack with an action auto-dismisses after its duration (#1332)',
+      (
+    tester,
+  ) async {
+    final repo = RecordingAppLogRepository(defaultCreatedAt: DateTime(2024, 6));
+    await tester.pumpWidget(
+      _host(
+        repo,
+        (context) => context.showAppSnackBar(
+          'Folder moved',
+          action: SnackBarAction(label: 'Undo', onPressed: () {}),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    expect(find.text('Folder moved'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('Folder moved'), findsNothing);
+  });
 }
