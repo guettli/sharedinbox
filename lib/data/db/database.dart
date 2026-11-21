@@ -1296,6 +1296,7 @@ class AppDatabase extends _$AppDatabase {
           await _createSrvLocationIndexes();
           await _createPendingChangesResourceIndex();
           await _createLocationOverlaySchema();
+          await _createThreadIndex();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2271,7 +2272,20 @@ class AppDatabase extends _$AppDatabase {
       // The server's folder id, filled by the next folder listing (#1315).
       await _addColumnIfMissing(m, mailboxes, mailboxes.srvMailboxId);
     }
+    if (from < 80 && await _tableExists(this, 'emails')) {
+      // Only the v18 upgrade created it: installs since scanned the folder
+      // on every thread refresh (#1328).
+      await _createThreadIndex();
+    }
   }
+
+  /// Schema v80: the index of a folder's thread, which every thread refresh
+  /// (`refreshThreadAggregate`) reads. Created by the v18 upgrade only
+  /// before, so fresh installs had none.
+  Future<void> _createThreadIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS emails_thread_id ON emails '
+        '(account_id, mailbox_path, thread_id);',
+      );
 
   /// Schema v75: every cached mailbox came from the server, so its name is
   /// the server's (no mailbox op existed: folder actions were sent at
