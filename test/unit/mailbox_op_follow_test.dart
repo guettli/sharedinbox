@@ -28,6 +28,33 @@ void main() {
   // Stalwart gives it; the MAILBOXID stays).
   void acmeRenamedTo(String to) =>
       server.renameFolder('Clients/Acme', to, newUidValidity: true);
+  // The folder DELETEs the app sent.
+  List<String> deletes() => [
+        for (final c in server.folderCommands)
+          if (c.startsWith('DELETE')) c,
+      ];
+
+  // A (with a mail in it, synced) and its empty subfolder A/Work, listed.
+  Future<void> workBelowA() async {
+    server
+      ..addFolder('A')
+      ..deliver('A', 'a1@test')
+      ..addFolder('A/Work');
+    await rigListFolders();
+    await emails.syncEmails(_acc.id, 'A');
+  }
+
+  // A/Work's delete failed visibly after its parent A was renamed to B,
+  // and nothing was deleted.
+  Future<void> expectCarriedDeleteFailed() async {
+    expect(deletes(), isEmpty);
+    expect(server.folders.keys, contains('B/Work'));
+    final op = await folderOp();
+    expect(op.state, 'failed');
+    expect(op.lastError, contains('moved to "B/Work" with its parent'));
+    expect(f.events(), contains('mailbox.delete_not_followed'));
+    expect(f.events(), isNot(contains('mailbox.delete_found_done')));
+  }
 
   // Clients/Acme (with [mail] in it, synced) below Clients, listed.
   Future<MailboxRow> acme({List<String> mail = const []}) async {
@@ -322,20 +349,102 @@ void main() {
       await rigListFolders();
       await rigCycle();
 
-      // Left open: that listing stored Clients/Acme2 as a second row with
-      // the folder's MAILBOXID, so the next one does not follow the old row
-      // onto it (no row is merged into another): the rename fails visibly,
-      // and nothing is sent to a wrong path.
-      expect(await folderById(folder.id), isNull);
-      final op = await folderOp();
-      expect(op.state, 'failed');
-      expect(op.lastError, 'folder removed on the server');
-      expect(f.events(), contains('pending_change.folder_removed'));
+      // #1341: that listing did not store Clients/Acme2 as a second row
+      // with the folder's MAILBOXID (which the next listing could not
+      // follow the old row onto): it left it to the next listing, which
+      // followed the folder there, and the rename went through.
+      expect(f.events(), contains('mailbox.listing_skipped_followable'));
+      final renamed = (await folderById(folder.id))!;
+      expect((renamed.path, renamed.name), ('Clients/AcmeCorp', 'AcmeCorp'));
+      // The flushes while it waited tried the old path (refused, uncharged);
+      // the last RENAME goes to where the folder is.
+      final renames =
+          server.folderCommands.where((c) => c.startsWith('RENAME')).toList();
+      expect(renames.last, 'RENAME Clients/Acme2->Clients/AcmeCorp');
       expect(
-        server.folderCommands.where((c) => c.startsWith('RENAME')),
-        everyElement(startsWith('RENAME Clients/Acme->')),
+        renames.take(renames.length - 1),
+        everyElement('RENAME Clients/Acme->Clients/AcmeCorp'),
       );
-      expect(server.folders.keys, contains('Clients/Acme2'));
+      expect(server.folders.keys, contains('Clients/AcmeCorp'));
+      expect(server.folders.keys, isNot(contains('Clients/Acme2')));
+      expect((await rigOps()).where((o) => o.state == 'failed'), isEmpty);
+      expect(f.events(), isNot(contains('pending_change.folder_removed')));
+      // One row per folder id.
+      final ids = [
+        for (final m in await db.select(db.mailboxes).get())
+          if (m.srvMailboxId case final id?) id,
+      ];
+      expect(ids.toSet(), hasLength(ids.length));
+      await expectRigConsistent();
+    });
+
+    test(
+        'a listing while the op is claimed stores no second row for the '
+        'folder: the new path waits for the next listing (#1341)', () async {
+      final folder = await acme();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
+      acmeRenamedTo('Clients/Acme2');
+      // The rename being sent (claimed) while another isolate lists.
+      await db.customStatement(
+        "UPDATE pending_changes SET state = 'inflight' "
+        "WHERE resource_type = 'Mailbox'",
+      );
+
+      await rigListFolders();
+
+      final paths = (await db.select(db.mailboxes).get()).map((m) => m.path);
+      expect(paths, isNot(contains('Clients/Acme2')));
+      expect((await folderById(folder.id))!.path, 'Clients/Acme');
+      expect(f.events(), contains('mailbox.listing_skipped_followable'));
+
+      // The op back in the queue (never sent): the next listing follows
+      // the folder onto the new path, the same row.
+      await db.customStatement(
+        "UPDATE pending_changes SET state = 'pending' "
+        "WHERE resource_type = 'Mailbox'",
+      );
+      final deferredSeq =
+          await MailboxStateWriter(db).trustedListingSeq(_acc.id);
+      await rigListFolders();
+      expect((await folderById(folder.id))!.path, 'Clients/Acme2');
+      expect(
+        (await db.select(db.mailboxes).get())
+            .where((m) => m.path == 'Clients/Acme2'),
+        hasLength(1),
+      );
+      // That listing deferred nothing and ends the waits again.
+      expect(
+        await MailboxStateWriter(db).trustedListingSeq(_acc.id),
+        greaterThan(deferredSeq ?? -1),
+      );
+    });
+
+    test(
+        'a rename sent before that waits for its retry does not hold back '
+        'the new path (#1341): only an op being sent does', () async {
+      await acme();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
+      acmeRenamedTo('Clients/Acme2');
+      await db.customStatement(
+        "UPDATE pending_changes SET state = 'stuck', attempts = 3 "
+        "WHERE resource_type = 'Mailbox'",
+      );
+
+      await rigListFolders();
+
+      expect(f.events(), isNot(contains('mailbox.listing_skipped_followable')));
+    });
+
+    test(
+        'the inbox listed in another case is never held back as a folder '
+        'being moved', () async {
+      server.renameFolder('INBOX', 'Inbox');
+
+      await rigListFolders();
+
+      expect(f.events(), isNot(contains('mailbox.listing_skipped_followable')));
+      final trusted = await MailboxStateWriter(db).trustedListingSeq(_acc.id);
+      expect(trusted, isNotNull);
     });
 
     test(
@@ -353,20 +462,233 @@ void main() {
       expect(f.events(), contains('pending_change.rejected'));
     });
 
-    test('a delete of a folder renamed elsewhere is unchanged: done', () async {
+    test(
+        'an offline delete of a folder another client renamed waits for the '
+        'listing, follows the folder by its MAILBOXID and deletes it there '
+        '(#1340; was counted as done, the folder came back)', () async {
       final folder = await acme();
       await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
       acmeRenamedTo('Clients/Acme2');
 
+      await rigFlush();
+
+      final waiting = await folderOp();
+      expect((waiting.state, waiting.attempts), ('pending', 0));
+      expect(f.events(), contains('mailbox.op_waits_for_listing'));
+      expect(f.kicks, contains(_acc.id));
+
+      await rigListFolders();
+      expect((await folderById(folder.id))!.path, 'Clients/Acme2');
+      expect(f.events(), contains('mailbox.delete_follows'));
+      // Still hidden: the delete is queued.
+      final shown = await rig.mailboxes.observeMailboxes(_acc.id).first;
+      expect(shown.map((m) => m.path), isNot(contains('Clients/Acme2')));
+
       await rigCycle();
 
+      expect(deletes(), ['DELETE Clients/Acme2']);
+      expect(server.folders.keys, isNot(contains('Clients/Acme2')));
+      expect(await folderById(folder.id), isNull);
+      expect((await rigOps()).where((o) => o.state == 'failed'), isEmpty);
+      final followed = f.logs.rows
+          .singleWhere((r) => r.event == 'pending_change.folder_followed');
+      expect(followed.dataJson, contains('"from":"Clients/Acme"'));
+      expect(followed.dataJson, contains('"path":"Clients/Acme2"'));
+      await expectRigConsistent();
+    });
+
+    test('a listing before the first flush takes the delete along too',
+        () async {
+      final folder = await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      acmeRenamedTo('Clients/Acme2');
+
+      await rigListFolders();
+      await rigFlush();
+
+      expect(deletes(), ['DELETE Clients/Acme2']);
+      expect(await folderById(folder.id), isNull);
+      expect(f.events(), contains('mailbox.delete_follows'));
+      expect(f.events(), contains('pending_change.folder_followed'));
+    });
+
+    test(
+        'a folder renamed elsewhere that got mail since is not deleted: the '
+        'delete fails visibly, naming the new path', () async {
+      final folder = await acme(mail: const ['c1@test']);
+      await rig.mailboxes
+          .deleteMailbox(_acc.id, 'Clients/Acme', removeEmails: true);
+      acmeRenamedTo('Clients/Acme2');
+      server.deliver('Clients/Acme2', 'new@test');
+
+      await rigCycle();
+      await rigCycle();
+
+      expect(deletes(), isEmpty);
+      expect(server.folders['Clients/Acme2']!.messages, hasLength(2));
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('renamed elsewhere to "Clients/Acme2"'));
+      expect(op.lastError, contains('1 more mail(s)'));
+      expect(f.events(), contains('pending_change.rejected'));
+      // The folder shows again, at its new path, with its row.
+      expect((await folderById(folder.id))!.path, 'Clients/Acme2');
+      final shown = await rig.mailboxes.observeMailboxes(_acc.id).first;
+      expect(shown.map((m) => m.path), contains('Clients/Acme2'));
+    });
+
+    test(
+        'a folder renamed elsewhere with a new folder made at its old name: '
+        'that one is never deleted; the delete follows the id', () async {
+      final folder = await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      acmeRenamedTo('Clients/Acme2');
+      server.addFolder('Clients/Acme');
+
+      await rigFlush();
+      expect(deletes(), isEmpty);
+      expect((await folderOp()).state, 'pending');
+
+      await rigListFolders();
+      await rigFlush();
+
+      expect(deletes(), ['DELETE Clients/Acme2']);
+      expect(server.folders.keys, contains('Clients/Acme'));
+      expect(await folderById(folder.id), isNull);
+      await rigListFolders();
       expect(
-        server.folderCommands.where((c) => c.startsWith('DELETE')),
+        (await folderAt('Clients/Acme')).srvMailboxId,
+        server.folders['Clients/Acme']!.mailboxId,
+      );
+      await expectRigConsistent();
+    });
+
+    test(
+        'a delete sent before without an answer is not sent to the folder '
+        'renamed elsewhere: its id says that try did not delete it, so it '
+        'fails visibly naming the new path (not counted as done)', () async {
+      await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      acmeRenamedTo('Clients/Acme2');
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 '
+        "WHERE resource_type = 'Mailbox'",
+      );
+
+      await rigFlush();
+      expect((await folderOp()).state, 'pending');
+      await rigListFolders();
+      await rigCycle();
+
+      expect(deletes(), isEmpty);
+      expect(server.folders.keys, contains('Clients/Acme2'));
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('renamed elsewhere to "Clients/Acme2"'));
+      expect(op.lastError, contains('earlier try'));
+      expect(f.events(), contains('mailbox.delete_not_followed'));
+      expect(f.events(), isNot(contains('mailbox.delete_found_done')));
+      expect(f.events(), isNot(contains('mailbox.delete_follows')));
+      final shown = await rig.mailboxes.observeMailboxes(_acc.id).first;
+      expect(shown.map((m) => m.path), contains('Clients/Acme2'));
+    });
+
+    test(
+        'a delete sent before whose DELETE went through waits one listing '
+        'and counts as done', () async {
+      final folder = await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      server.deleteFolder('Clients/Acme');
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 '
+        "WHERE resource_type = 'Mailbox'",
+      );
+
+      await rigCycle();
+
+      expect(await folderById(folder.id), isNull);
+      expect((await rigOps()).where((o) => o.state == 'failed'), isEmpty);
+      expect(f.events(), contains('mailbox.delete_found_done'));
+    });
+
+    test(
+        'a folder renamed elsewhere between the LIST and the DELETE: the '
+        'refused DELETE does not count as done; the delete follows the id',
+        () async {
+      final folder = await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      var renamed = false;
+      server.failBefore = (command) {
+        if (command != 'DELETE' || renamed) return null;
+        renamed = true;
+        acmeRenamedTo('Clients/Acme2');
+        return null;
+      };
+
+      await rigFlush();
+      server.failBefore = null;
+
+      expect(renamed, isTrue);
+      expect((await folderOp()).state, 'pending');
+      expect(f.events(), contains('mailbox.op_waits_for_listing'));
+      await rigListFolders();
+      await rigFlush();
+
+      expect(deletes(), ['DELETE Clients/Acme', 'DELETE Clients/Acme2']);
+      expect(server.folders.keys, isNot(contains('Clients/Acme2')));
+      expect(await folderById(folder.id), isNull);
+      await expectRigConsistent();
+    });
+
+    test(
+        'a deleted subfolder whose parent another client renamed follows by '
+        'its own id', () async {
+      await workBelowA();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'A/Work');
+      server.renameFolder('A', 'B', newUidValidity: true);
+
+      await rigCycle();
+      await rigFlush();
+
+      expect(deletes(), ['DELETE B/Work']);
+      expect(server.folders.keys, contains('B'));
+      expect(f.events(), contains('mailbox.delete_follows'));
+      await expectRigConsistent();
+    });
+
+    test(
+        'a deleted subfolder carried by its parent without an id of its own '
+        'is not deleted: the delete fails visibly', () async {
+      await workBelowA();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'A/Work');
+      await db.customStatement(
+        "UPDATE mailboxes SET srv_mailbox_id = NULL WHERE path = 'A/Work'",
+      );
+      server.renameFolder('A', 'B', newUidValidity: true);
+
+      await rigCycle();
+      await rigCycle();
+
+      await expectCarriedDeleteFailed();
+    });
+
+    test(
+        'a folder deleted elsewhere: the delete waits one listing, which '
+        'removes the folder, and counts as done', () async {
+      final folder = await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      server.deleteFolder('Clients/Acme');
+
+      await rigCycle();
+
+      expect(await folderById(folder.id), isNull);
+      expect(deletes(), isEmpty);
+      expect(
+        (await rigOps()).where((o) => o.state == 'failed'),
         isEmpty,
       );
-      expect(server.folders.keys, contains('Clients/Acme2'));
-      expect(await folderById(folder.id), isNull);
-      expect(f.events(), isNot(contains('mailbox.op_waits_for_listing')));
+      expect(f.events(), contains('mailbox.delete_found_done'));
+      await expectRigConsistent();
     });
   });
 
@@ -405,6 +727,63 @@ void main() {
       expect(f.events(), contains('pending_change.folder_removed'));
       await rigCycle();
       expect(server.folders.keys, isNot(contains('Clients/AcmeCorp')));
+    });
+
+    test(
+        'an offline delete of a folder renamed elsewhere, recognised by its '
+        'mail only: never followed, it fails visibly naming the new path '
+        '(#1340; was counted as done)', () async {
+      await acme(mail: const ['c1@test']);
+      await rig.mailboxes
+          .deleteMailbox(_acc.id, 'Clients/Acme', removeEmails: true);
+      acmeRenamedTo('Clients/Acme2');
+
+      await rigFlush();
+      expect((await folderOp()).state, 'pending');
+      await rigListFolders();
+
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('renamed elsewhere to "Clients/Acme2"'));
+      expect(op.payload, isNot(contains('goneAt')));
+      expect(f.events(), contains('mailbox.delete_not_followed'));
+      expect(f.events(), isNot(contains('mailbox.delete_found_done')));
+      await rigCycle();
+      expect(deletes(), isEmpty);
+      expect(server.folders.keys, contains('Clients/Acme2'));
+      // The folder shows at its new path; the user decides.
+      final shown = await rig.mailboxes.observeMailboxes(_acc.id).first;
+      expect(shown.map((m) => m.path), contains('Clients/Acme2'));
+    });
+
+    test(
+        'a deleted subfolder carried by its parent followed by its mail is '
+        'not deleted at the new path: the delete fails visibly', () async {
+      await workBelowA();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'A/Work');
+      server.renameFolder('A', 'B', newUidValidity: true);
+
+      await rigCycle();
+      expect(f.events(), contains('mailbox.renamed_elsewhere'));
+      await rigCycle();
+
+      await expectCarriedDeleteFailed();
+      expect(f.events(), isNot(contains('pending_change.folder_followed')));
+    });
+
+    test(
+        'an empty folder renamed elsewhere cannot be recognised: the delete '
+        'waits one listing and counts as done, logged', () async {
+      await acme();
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
+      acmeRenamedTo('Clients/Acme2');
+
+      await rigCycle();
+
+      expect(deletes(), isEmpty);
+      expect((await rigOps()).where((o) => o.state == 'failed'), isEmpty);
+      expect(f.events(), contains('mailbox.op_waits_for_listing'));
+      expect(f.events(), contains('mailbox.delete_found_done'));
     });
   });
 }

@@ -43,6 +43,7 @@ import 'package:sharedinbox/data/imap/header_mail_address.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/imap_expunge.dart';
+import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/message_id_search.dart';
 import 'package:sharedinbox/data/imap/object_id.dart';
@@ -111,6 +112,7 @@ class EmailRepositoryImpl implements EmailRepository {
     SmtpConnectFn smtpConnect = connectSmtp,
     GetCacheDirFn getCacheDir = getTemporaryDirectory,
     FetchObjectIdsFn fetchObjectIds = fetchObjectIdsFromServer,
+    StatusWithMailboxIdFn statusWithMailboxId = statusWithMailboxIdFromServer,
     FetchPreviewSnippetsFn fetchPreviewSnippets =
         fetchPreviewSnippetsFromServer,
     http.Client? httpClient,
@@ -127,6 +129,7 @@ class EmailRepositoryImpl implements EmailRepository {
         _smtpConnect = smtpConnect,
         _getCacheDir = getCacheDir,
         _fetchObjectIds = fetchObjectIds,
+        _statusWithMailboxId = statusWithMailboxId,
         _fetchPreviewSnippets = fetchPreviewSnippets,
         _httpClient = httpClient ?? http.Client(),
         _outbox = outbox ?? OutboxRepositoryImpl(db),
@@ -146,6 +149,11 @@ class EmailRepositoryImpl implements EmailRepository {
   final EmailIdGenerator _newId;
   final ImapConnectFn _imapConnect;
   final FetchObjectIdsFn _fetchObjectIds;
+
+  /// `STATUS` with the folder's `MAILBOXID` (RFC 8474): a folder delete
+  /// checks that the folder at the path is the one the user deleted
+  /// (#1340).
+  final StatusWithMailboxIdFn _statusWithMailboxId;
   final FetchPreviewSnippetsFn _fetchPreviewSnippets;
   final SmtpConnectFn _smtpConnect;
   final GetCacheDirFn _getCacheDir;

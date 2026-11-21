@@ -231,17 +231,25 @@ void main() {
       await expectConsistent();
     });
 
-    test('a folder with a queued delete is not followed, even by its id',
-        () async {
+    test(
+        'a folder with a queued delete is followed by its id only, and the '
+        'delete goes along (#1340)', () async {
       await workWith(const []);
+      final work = await folderAt('Work');
       await rig.mailboxes.deleteMailbox(_acc.id, 'Work');
       server.renameFolder('Work', 'Job', newUidValidity: true);
 
       await listFolders();
 
-      expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
-      expect(events(), contains('mailbox.delete_found_done'));
-      expect(server.folders.keys, contains('Job'));
+      expect((await folderById(work.id))!.path, 'Job');
+      expect(renamedBy(), ['MAILBOXID']);
+      expect(events(), contains('mailbox.delete_follows'));
+      expect(events(), isNot(contains('mailbox.delete_found_done')));
+
+      await flush();
+      expect(server.folderCommands, ['DELETE Job']);
+      expect(await folderById(work.id), isNull);
+      await expectConsistent();
     });
 
     test(
@@ -600,8 +608,8 @@ void main() {
     });
 
     test(
-        'a replaced folder with a delete queued: its delete counts as done, '
-        'the folder now at its path and the renamed one stay', () async {
+        'a replaced folder with a delete queued follows its id: the renamed '
+        'one is deleted, the folder now at its path stays (#1340)', () async {
       await workWith(const ['w@test']);
       final work = await folderAt('Work');
       await rig.mailboxes.deleteMailbox(_acc.id, 'Work', removeEmails: true);
@@ -613,13 +621,35 @@ void main() {
       await flush();
 
       expect(await folderById(work.id), isNull);
-      expect(events(), contains('mailbox.delete_found_done'));
-      expect(server.folderCommands, isEmpty);
-      expect(server.folders.keys, containsAll(['Work', 'Job']));
-      // The new folder under the old name: stored once the delete settled.
+      expect(events(), contains('mailbox.delete_follows'));
+      expect(server.folderCommands, ['DELETE Job']);
+      expect(server.folders.keys, contains('Work'));
+      expect(server.folders.keys, isNot(contains('Job')));
+      // The new folder under the old name: a row of its own.
       await listFolders();
       final now = await folderAt('Work');
       expect(now.srvMailboxId, server.folders['Work']!.mailboxId);
+      await expectConsistent();
+    });
+
+    test(
+        'a replaced folder whose id is listed nowhere, with a delete queued: '
+        'the delete counts as done, the folder now at its path stays',
+        () async {
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      await rig.mailboxes.deleteMailbox(_acc.id, 'Work', removeEmails: true);
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Work');
+
+      await listFolders();
+      await flush();
+
+      expect(await folderById(work.id), isNull);
+      expect(events(), contains('mailbox.delete_found_done'));
+      expect(server.folderCommands, isEmpty);
+      expect(server.folders.keys, contains('Work'));
       await expectConsistent();
     });
 

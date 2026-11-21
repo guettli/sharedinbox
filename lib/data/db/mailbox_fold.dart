@@ -75,6 +75,17 @@ const mailboxOpFromPath = 'fromPath';
 /// or fails visibly.
 const mailboxOpGoneAt = 'goneAt';
 
+/// Key in a folder delete's [mailboxOpGoneAt] mark (#1340): `true` when a
+/// folder listing followed the folder to its new path by its MAILBOXID
+/// (the only follow a delete takes along). A mark without it whose path no
+/// longer is the folder's is dropped, never taken for a follow.
+const mailboxOpGoneAtById = 'byId';
+
+/// Payload key of a folder delete that followed its folder by its
+/// MAILBOXID to another path (#1340): the path it was deleted at, so a
+/// refusal (then and on a Retry) says the folder was renamed elsewhere.
+const mailboxOpFollowedFrom = 'followedFrom';
+
 /// The `path` prefix of a JMAP mailbox created offline, until the create's
 /// ack gives it the server's id. `~` is not in the JMAP id alphabet
 /// (RFC 8620 §1.2), so it cannot collide with a server id.

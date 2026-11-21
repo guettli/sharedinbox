@@ -89,6 +89,10 @@ typedef _RenameMatch = ({
   String? id,
 });
 
+/// Why a listing does not take a queued delete along to where it found
+/// the folder ([MailboxRepositoryImpl._failDeleteNotFollowed], #1340).
+enum _NotFollowed { contents, sentBefore, carried }
+
 /// A folder a listing that was not trusted left out: since when, and how
 /// many listings (that one included) have left it out since.
 typedef _Missing = ({DateTime since, int listings});
@@ -317,6 +321,25 @@ class MailboxRepositoryImpl implements MailboxRepository {
         for (final r in existingRows)
           if (r.srvMailboxId case final id?) id,
       };
+      // The ids of cached folders the follow left where they were because
+      // a rename or move of theirs is being sent right now (#1341), and
+      // that this listing does not have at their own path: such a folder
+      // is at the new folder with its id, and the next listing (the op
+      // settled) follows it there. Only an op being sent, so the wait ends
+      // with it (not a retry hours later); not the inbox, whose name a
+      // server may list in another case.
+      final idsAway = <String>{};
+      if (_idsUsable(client)) {
+        for (final r in existingRows) {
+          final id = r.srvMailboxId;
+          if (id == null || statusOf[r.path]?.status?.mailboxId == id) {
+            continue;
+          }
+          if (r.path.toUpperCase() == 'INBOX') continue;
+          if (await _writer.isBeingMoved(r.id)) idsAway.add(id);
+        }
+      }
+      var deferred = false;
       // The roles the server's flags or the folder names give: a folder
       // followed to another path keeps its old role only when no listed
       // folder has it that way (a renamed "Archive" next to a new one).
@@ -373,6 +396,29 @@ class MailboxRepositoryImpl implements MailboxRepository {
             ),
           );
         }
+        // A new folder with the id of a cached folder this listing did not
+        // follow (it may be moving, #1341) is that folder: not stored as a
+        // second row, which the next listing could not follow it onto (no
+        // row is merged into another); that listing follows it here.
+        final listedId = listed.status?.mailboxId;
+        if (listedId != null &&
+            idsAway.contains(listedId) &&
+            await _writer.rowByPath(account.id, path) == null) {
+          deferred = true;
+          unawaited(
+            _appLogger?.info(
+              'mailbox.listing_skipped_followable',
+              'Not storing "$path" from this listing yet: it has the folder '
+                  'id of a cached folder that was not followed here (a '
+                  'rename or move of it is being sent); the next listing '
+                  'follows that folder to it',
+              accountId: account.id,
+              mailboxPath: path,
+              data: {'mailboxId': listedId},
+            ),
+          );
+          continue;
+        }
         // A listing in doubt about folder ids stores no new folder: one of
         // them may be a cached folder whose id did not come (the next
         // listing follows it there instead of making a second row).
@@ -428,8 +474,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       );
       // Only a listing that could follow every folder ends the wait of a
       // change marked gone (#1339): one in doubt may have kept a folder it
-      // did not follow.
-      if (trusted && doubt == null && hold.isEmpty) {
+      // did not follow, and so may one that deferred a folder (#1341).
+      if (trusted && doubt == null && hold.isEmpty && !deferred) {
         await _saveSyncState(
           account.id,
           EmailStateWriter.folderListedTrustedKey,
@@ -914,8 +960,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
   /// IMAP folders another client renamed or moved (SYNC-REDESIGN.md §8,
   /// phase 5b; #1315): a rename elsewhere lists as a folder gone plus a new
   /// one. A cached folder the listing (its paths [allListed], started at
-  /// [readSeq]; each listed folder's STATUS in [statusOf]) no longer has,
-  /// and that has no delete queued, is taken for renamed to a new folder of
+  /// [readSeq]; each listed folder's STATUS in [statusOf]) no longer has
+  /// (one with a delete queued only by its MAILBOXID, and only when the
+  /// delete never reached the server, #1340: [_deleteFollows]; found by the
+  /// other rules, or after the delete was sent before, or moved along with
+  /// its parent, the delete fails visibly, [_failDeleteNotFollowed]),
+  /// is taken for renamed to a new folder of
   /// [listed] (the listed folders less the paths an own rename or move
   /// being sent puts a folder at), when that match is unique both ways (one
   /// new folder for it, no other folder matching that one), and
@@ -1053,30 +1103,56 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final matchesOf = <String, _RenameMatch>{};
     final removeFirst = <MailboxRow>[];
     for (final r in replaced) {
-      // Its delete counts as done, as for a vanished folder: the folder at
-      // its path is another one, never deleted for it.
-      if (await _hasQueuedDelete(r.id)) {
+      final id = r.srvMailboxId!;
+      final to = [
+        for (final MapEntry(key: path, value: other) in idTargets.entries)
+          if (other == id) path,
+      ];
+      // Its delete counts as done, as for a vanished folder, unless it
+      // follows the folder's id (#1340), or the id is listed elsewhere for
+      // a delete sent before (fails visibly, before the row goes): the
+      // folder at its path is another one, never deleted for it.
+      final delete = await _queuedDeleteOf(r.id);
+      if (delete != null && (to.isEmpty || !_deleteMayFollow(delete))) {
+        if (to.isNotEmpty) {
+          await _failDeleteNotFollowed(
+            accountId,
+            delete,
+            from: r.path,
+            to: to,
+            reason: _NotFollowed.sentBefore,
+          );
+        }
         if (idsComplete) removeFirst.add(r);
         continue;
       }
-      final id = r.srvMailboxId!;
-      matchesOf[r.path] = (
-        to: [
-          for (final MapEntry(key: path, value: other) in idTargets.entries)
-            if (other == id) path,
-        ],
-        how: 'MAILBOXID',
-        row: r,
-        id: id,
-      );
+      matchesOf[r.path] = (to: to, how: 'MAILBOXID', row: r, id: id);
     }
     for (final v in vanished) {
-      // A folder the user deleted (queued) is never followed: a wrong match
-      // would delete another folder. Its delete counts as done by the
-      // prune ([MailboxStateWriter.failOpsOfRemoved]).
-      if (await _hasQueuedDelete(v.id)) continue;
+      // A folder the user deleted (queued) is followed by its MAILBOXID
+      // only, and only by a delete that never reached the server (#1340).
+      // One sent before whose id is listed elsewhere did not delete it:
+      // it fails visibly; otherwise its delete counts as done by the prune
+      // ([MailboxStateWriter.failOpsOfRemoved]).
+      final delete = await _queuedDeleteOf(v.id);
       final from = v.path;
       final id = idOf(v);
+      if (delete != null && !_deleteMayFollow(delete)) {
+        final elsewhere = [
+          for (final MapEntry(key: path, value: other) in idTargets.entries)
+            if (id != null && other == id) path,
+        ];
+        if (elsewhere.isNotEmpty) {
+          await _failDeleteNotFollowed(
+            accountId,
+            delete,
+            from: from,
+            to: elsewhere,
+            reason: _NotFollowed.sentBefore,
+          );
+        }
+        continue;
+      }
       if (id != null) {
         final same = [
           for (final MapEntry(key: path, value: other) in idTargets.entries)
@@ -1088,6 +1164,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
           continue;
         }
       }
+      // A deleted folder that has an id goes by it alone: not found by it
+      // (or ids refused in this listing), it is not guessed by contents.
+      if (delete != null && v.srvMailboxId != null) continue;
       final candidates = [
         for (final MapEntry(key: path, value: status) in freshStatus.entries)
           if ((leafOf(from) == leafOf(path) ||
@@ -1138,6 +1217,24 @@ class MailboxRepositoryImpl implements MailboxRepository {
         id: null,
       );
     }
+    // A folder the user deleted that only its contents point to is never
+    // followed (a wrong guess would delete another folder): its delete
+    // fails visibly, naming where the folder may be now (#1340).
+    for (final from in [...matchesOf.keys]) {
+      final match = matchesOf[from]!;
+      if (match.how == 'MAILBOXID') continue;
+      final delete = await _queuedDeleteOf(match.row.id);
+      if (delete == null) continue;
+      matchesOf.remove(from);
+      if (match.to.isEmpty) continue;
+      await _failDeleteNotFollowed(
+        accountId,
+        delete,
+        from: from,
+        to: match.to,
+        reason: _NotFollowed.contents,
+      );
+    }
     // The unique matches, parents first: their subfolders move with them.
     final ordered = matchesOf.keys.toList()
       ..sort((a, b) => a.length.compareTo(b.length));
@@ -1170,6 +1267,8 @@ class MailboxRepositoryImpl implements MailboxRepository {
       await removeLocalMailbox(_db, accountId, r.path, appLogger: _appLogger);
     }
     final before = {for (final r in rows) r.id: r.path};
+    // The rows whose delete a follow by their own id took along.
+    final followedDeletes = <String>{};
     // A move onto a path a folder holds that is not moving waits for a
     // later listing ([MailboxStateWriter.serverPathsChanged]).
     final blocked = byIdMoves.isEmpty
@@ -1199,6 +1298,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
       } else if ((await _writer.rowById(row.id))?.path != target) {
         continue;
       }
+      if (how == 'MAILBOXID' &&
+          await _deleteFollows(accountId, row, from: from, to: target)) {
+        followedDeletes.add(row.id);
+      }
       if (carried(from, target)) continue;
       final recognisedBy = how == 'MAILBOXID'
           ? 'its server folder id (MAILBOXID $id), whatever its UIDVALIDITY '
@@ -1224,6 +1327,24 @@ class MailboxRepositoryImpl implements MailboxRepository {
     final after = await (_db.select(_db.mailboxes)
           ..where((t) => t.accountId.equals(accountId)))
         .get();
+    // A folder the user deleted that moved without its own id match (a
+    // subfolder its parent's follow took along): its delete is not taken
+    // along (#1340).
+    for (final r in after) {
+      final old = before[r.id];
+      if (old == null || old == r.path || followedDeletes.contains(r.id)) {
+        continue;
+      }
+      final delete = await _queuedDeleteOf(r.id);
+      if (delete == null) continue;
+      await _failDeleteNotFollowed(
+        accountId,
+        delete,
+        from: old,
+        to: [r.path],
+        reason: _NotFollowed.carried,
+      );
+    }
     // A replaced folder whose id is listed nowhere while ids are missing:
     // held (its id kept) until it has been so for [_pruneMinAge] and
     // [_pruneMinListings] listings, as the #1312 marks; then the new id is
@@ -1382,9 +1503,9 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
   }
 
-  /// Whether mailbox [mailboxId] has a delete queued, being sent or stuck.
-  Future<bool> _hasQueuedDelete(String mailboxId) async =>
-      (await (_db.select(_db.pendingChanges)
+  /// The delete of mailbox [mailboxId] queued, being sent or stuck, or null.
+  Future<PendingChangeRow?> _queuedDeleteOf(String mailboxId) =>
+      (_db.select(_db.pendingChanges)
             ..where(
               (t) =>
                   t.resourceType.equals(mailboxResourceType) &
@@ -1393,8 +1514,110 @@ class MailboxRepositoryImpl implements MailboxRepository {
                   t.state.isIn(const ['pending', 'inflight', 'stuck']),
             )
             ..limit(1))
-          .getSingleOrNull()) !=
-      null;
+          .getSingleOrNull();
+
+  /// Whether queued delete [op] may follow its folder to where a listing
+  /// finds it by its MAILBOXID (#1340): it never reached the server (not
+  /// being sent, not sent before without an answer). One that may have is
+  /// never sent to another path: the folder there may be one another
+  /// client made after our DELETE.
+  static bool _deleteMayFollow(PendingChangeRow op) =>
+      op.attempts == 0 && const ['pending', 'stuck'].contains(op.state);
+
+  /// The listing followed [row], a folder the user deleted, by its
+  /// MAILBOXID from [from] to [to] (#1340): its queued delete goes along
+  /// (keyed by the row id) and is sent there by the next flush, which
+  /// still refuses it if the folder got mail the delete was not confirmed
+  /// for. The delete's mark says the listing followed it by its id
+  /// ([mailboxOpGoneAtById]; marked gone at [from] unless a flush marked
+  /// it already): the flush follows a delete only so. App Log warn
+  /// `mailbox.delete_follows`. Returns whether [row] has such a delete.
+  Future<bool> _deleteFollows(
+    String accountId,
+    MailboxRow row, {
+    required String from,
+    required String to,
+  }) async {
+    final delete = await _queuedDeleteOf(row.id);
+    if (delete == null || !_deleteMayFollow(delete)) return false;
+    if (MailboxStateWriter.goneAtOf(delete) == null) {
+      await _writer.markGoneAt(delete.id, from);
+    }
+    await _writer.updateGoneAt(
+      delete.id,
+      (stored) => {...?stored, mailboxOpGoneAtById: true},
+    );
+    unawaited(
+      _appLogger?.warn(
+        'mailbox.delete_follows',
+        'The folder "$from", which you deleted, was renamed or moved to '
+            '"$to" by another client (recognised by its folder id): the '
+            'delete follows it there, unless it got mail since',
+        accountId: accountId,
+        mailboxPath: to,
+        data: {'changeId': delete.id, 'from': from, 'to': to},
+      ),
+    );
+    return true;
+  }
+
+  /// Queued delete [delete] of the folder [from] that the listing found
+  /// elsewhere, at one of [to], but does not follow (#1340), for [reason]:
+  /// - [_NotFollowed.contents]: by its UIDVALIDITY or mail only, without
+  ///   a folder id (a wrong guess would delete another folder);
+  /// - [_NotFollowed.sentBefore]: by its id, but the delete was sent
+  ///   before without an answer (folder ids are never reused, so that try
+  ///   did not delete it; a delete that may have reached the server is
+  ///   never sent to another path);
+  /// - [_NotFollowed.carried]: moved along with its parent folder, not by
+  ///   its own id.
+  /// Never counted as done either (the folder is, or may be, there): it
+  /// fails visibly, naming the paths, so the user can delete the folder
+  /// there or discard the delete. App Log warn
+  /// `mailbox.delete_not_followed`.
+  Future<void> _failDeleteNotFollowed(
+    String accountId,
+    PendingChangeRow delete, {
+    required String from,
+    required List<String> to,
+    required _NotFollowed reason,
+  }) async {
+    // Being sent: its flush settles it.
+    if (delete.state == 'inflight') return;
+    final stored = await _writer.updateGoneAt(delete.id, (_) => null);
+    if (stored == null) return;
+    final named = to.map((p) => '"$p"').join(' or ');
+    final why = switch (reason) {
+      _NotFollowed.contents =>
+        'the folder was renamed elsewhere to $named, it seems (by its mail; '
+            'the server gives no folder id to be sure)',
+      _NotFollowed.sentBefore =>
+        'the folder was renamed elsewhere to $named (its folder id says so), '
+            'and an earlier try of this delete did not delete it',
+      _NotFollowed.carried =>
+        'the folder was moved to $named with its parent folder by another '
+            'client, not recognised by a folder id of its own',
+    };
+    final text = '$why: not deleted there; delete it there again if it '
+        'should go';
+    if (await _writer.fail(stored, text, claimed: false) == null) return;
+    unawaited(
+      _appLogger?.warn(
+        'mailbox.delete_not_followed',
+        'The folder "$from", which you deleted, is not at that path on the '
+            'server: $why. The delete is not sent there: it is kept as '
+            'failed on the Pending Changes screen',
+        accountId: accountId,
+        mailboxPath: from,
+        data: {
+          'changeId': delete.id,
+          'from': from,
+          'to': to,
+          'reason': reason.name,
+        },
+      ),
+    );
+  }
 
   /// How many mails are cached for the server folder [path] of [accountId].
   Future<int> _cachedMessageCount(String accountId, String path) async =>

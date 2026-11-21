@@ -76,6 +76,8 @@ class StatefulImapRig {
       // Asked only when the server advertises OBJECTID.
       fetchObjectIds: (client, sequence, _) =>
           (client as StatefulFakeImapClient).emailIdsOf(sequence),
+      statusWithMailboxId: (client, box, flags) =>
+          (client as StatefulFakeImapClient).statusWithMailboxId(box, flags),
       fetchPreviewSnippets: (_, __, ___) async => const {},
       now: () => rig.now,
       appLogger: appLogger,

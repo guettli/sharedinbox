@@ -557,6 +557,49 @@ void main() {
     }
   });
 
+  // An email repository on [r]'s database that flushes with [logs].
+  EmailRepositoryImpl flushingRepo(
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      MailboxRepositoryImpl mailboxes,
+    }) r,
+    RecordingAppLogRepository logs,
+  ) =>
+      EmailRepositoryImpl(
+        r.db,
+        r.accounts,
+        imapConnect: testImapConnect,
+        appLogger: AppLogger(logs),
+      );
+
+  // Another client creates the empty folders [paths] (parents first); a
+  // listing stores them, and the row of the last one, with its MAILBOXID,
+  // is returned.
+  Future<MailboxRow> createListedWithId(
+    ({
+      AppDatabase db,
+      AccountRepositoryImpl accounts,
+      MailboxRepositoryImpl mailboxes,
+    }) r,
+    List<String> paths,
+  ) async {
+    final client = await connectImap(env: env, user: user);
+    try {
+      for (final path in paths) {
+        await client.createMailbox(path);
+      }
+    } finally {
+      await client.logout();
+    }
+    await r.mailboxes.syncMailboxes('test');
+    final row = await (r.db.select(r.db.mailboxes)
+          ..where((t) => t.path.equals(paths.last)))
+        .getSingle();
+    expect(row.srvMailboxId, isNotNull, reason: 'Stalwart has OBJECTID');
+    return row;
+  }
+
   // #1329: a rename queued offline of a folder another client renamed
   // meanwhile. The flush runs before the listing: the RENAME of the old
   // path is refused, so the op waits for the listing (not refused), which
@@ -573,27 +616,11 @@ void main() {
     const mine = '$parent/AcmeCorp';
     Future<void> drop() =>
         dropFolders(r, const {parent, 'Acme', 'Acme2', 'AcmeCorp'});
-    final flushing = EmailRepositoryImpl(
-      r.db,
-      r.accounts,
-      imapConnect: testImapConnect,
-      appLogger: AppLogger(logs),
-    );
+    final flushing = flushingRepo(r, logs);
 
     await drop();
     try {
-      final client = await connectImap(env: env, user: user);
-      try {
-        await client.createMailbox(parent);
-        await client.createMailbox(before);
-      } finally {
-        await client.logout();
-      }
-      await r.mailboxes.syncMailboxes('test');
-      final row = await (r.db.select(r.db.mailboxes)
-            ..where((t) => t.path.equals(before)))
-          .getSingle();
-      expect(row.srvMailboxId, isNotNull, reason: 'Stalwart has OBJECTID');
+      final row = await createListedWithId(r, const [parent, before]);
       await r.mailboxes.renameMailbox('test', before, 'AcmeCorp');
 
       await renameElsewhere(before, elsewhere);
@@ -625,6 +652,62 @@ void main() {
       final events = logs.rows.map((l) => l.event);
       expect(events, isNot(contains('pending_change.rejected')));
       expect(events, contains('mailbox.op_waits_for_listing'));
+      expect(events, contains('pending_change.folder_followed'));
+    } finally {
+      await drop();
+    }
+  });
+
+  // #1340: a delete queued offline of a folder another client renamed
+  // meanwhile. It used to count as done (the old path was gone) and the
+  // folder came back under its new name; now it waits for the listing,
+  // which follows the folder by its MAILBOXID, and the next flush deletes
+  // the folder there.
+  test(
+      'an offline delete of a folder another client renamed follows it by '
+      'its MAILBOXID and deletes it there', () async {
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    const before = 'D1340Work';
+    const after = 'D1340Work2';
+    Future<void> drop() => dropFolders(r, const {before, after});
+    final flushing = flushingRepo(r, logs);
+
+    await drop();
+    try {
+      await createListedWithId(r, const [before]);
+      await r.mailboxes.deleteMailbox('test', before);
+
+      await renameElsewhere(before, after);
+      await flushing.flushPendingChanges('test', user.password);
+
+      final waiting = await r.db.select(r.db.pendingChanges).getSingle();
+      expect((waiting.state, waiting.attempts), ('pending', 0));
+      await r.mailboxes.syncMailboxes('test');
+      await flushing.flushPendingChanges('test', user.password);
+      await r.mailboxes.syncMailboxes('test');
+
+      final check = await connectImap(env: env, user: user);
+      try {
+        final paths =
+            (await check.listMailboxes(recursive: true)).map((m) => m.path);
+        expect(paths, isNot(contains(after)));
+        expect(paths, isNot(contains(before)));
+      } finally {
+        await check.logout();
+      }
+      final rows = (await r.db.select(r.db.mailboxes).get()).map((m) => m.path);
+      expect(rows, isNot(contains(after)));
+      expect(
+        (await r.db.select(r.db.pendingChanges).get())
+            .where((c) => c.state == 'failed'),
+        isEmpty,
+      );
+      await pumpEventQueue();
+      final events = logs.rows.map((l) => l.event);
+      expect(events, contains('mailbox.op_waits_for_listing'));
+      expect(events, contains('mailbox.delete_follows'));
       expect(events, contains('pending_change.folder_followed'));
     } finally {
       await drop();
