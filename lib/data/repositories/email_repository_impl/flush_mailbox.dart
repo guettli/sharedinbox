@@ -304,9 +304,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
   /// the fallback rules). Returns true when the op waits for that listing
   /// (put back uncharged; the first time App Log info
   /// `mailbox.op_waits_for_listing`, and a kick so that the next cycle
-  /// sends it to where the listing found the folder); false once a listing
-  /// started after the first refusal finished without following it: the
-  /// caller fails the op visibly.
+  /// sends it to where the listing found the folder); false when the op
+  /// may have reached the server before, once a listing started after the
+  /// op was first put back finished without following the folder, or at
+  /// the cap ([MailboxStateWriter.waitForListing]): the caller fails the op
+  /// visibly.
   Future<bool> _waitForListing(
     account_model.Account account,
     PendingChangeRow row,
@@ -318,6 +320,9 @@ extension _FlushMailbox on EmailRepositoryImpl {
     if (!waits) return false;
     await _unclaimPendingChange(row);
     if (!first) return true;
+    // After the release: a listing that started while the op was claimed
+    // took it for moving and followed nothing, so it must not count.
+    await _mailboxState.markGoneAt(row.id, gone);
     unawaited(
       _appLogger?.info(
         'mailbox.op_waits_for_listing',

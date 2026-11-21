@@ -1359,8 +1359,11 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     `pending_change.folder_followed`). A listing that removes the folder
     fails it visibly ("folder removed on the server"); after one listing
     that neither followed nor removed it, the op is refused as before
-    ("the folder no longer exists on the server"). Mail changes naming the
-    marked folder wait with it. A queued delete of a folder renamed
+    ("the folder no longer exists on the server"), and so after 24 hours or
+    20 flushes while listings keep failing. An op sent before without an
+    answer is refused at once as before (sent to the followed path it
+    could undo another client's rename). Mail changes naming the marked
+    folder wait with it. A queued delete of a folder renamed
     elsewhere still counts as done (its path is gone). JMAP ops name the
     mailbox id and are unaffected.
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder

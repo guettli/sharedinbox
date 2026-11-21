@@ -1480,7 +1480,10 @@ void main() {
       expect(server.folders.keys, contains('Work'));
       final failed = (await db.select(db.pendingChanges).get())
           .singleWhere((o) => o.state == 'failed');
-      expect(failed.lastError, 'folder removed on the server');
+      expect(
+        failed.lastError,
+        'the destination folder "Box" was removed on the server',
+      );
     });
 
     test('Undo of a delete being sent says so and changes nothing', () async {

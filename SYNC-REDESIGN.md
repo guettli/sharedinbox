@@ -1984,8 +1984,10 @@ What remains after phase 6, with where it is handled today:
   is refused while the listing has the folder at neither end, or a move
   whose new parent (a cached folder) is not listed, waits instead:
   `MailboxStateWriter.waitForListing` marks the op (payload `goneAt`: the
-  path, and a read sequence taken then), puts it back uncharged (App Log
-  info `mailbox.op_waits_for_listing`) and kicks the sync loop, so the
+  path, and a read sequence taken right after the op was put back, so a
+  listing that started while the op was claimed, which takes it for
+  moving and follows nothing, does not count), puts it back uncharged
+  (App Log info `mailbox.op_waits_for_listing`) and kicks the sync loop, so the
   next cycle sends it right after this cycle's listing. That listing
   follows the folder (by MAILBOXID, or the UIDVALIDITY / Message-ID
   rules), and with it the folder's row, its ops (keyed by the row id) and
@@ -1998,10 +2000,17 @@ What remains after phase 6, with where it is handled today:
   another client deleted. One listing bounds the wait: when a listing that
   started after the mark finished (`FolderListed`) and the op still finds
   the same path gone (a listing not trusted kept the folder), it is
-  refused as before. A marked rename or move that was sent before without
-  an answer does not count as "may have reached the server" for the prune
-  and the follow (`_mayHaveMoved`): the refusal and the listing show it
-  did not. Mail changes naming the marked folder (or, IMAP, a subfolder)
+  refused as before; so it is after 24 hours or 20 flushes of waiting
+  while listings keep failing. The refusal and a removal by the listing
+  drop the mark, so a Retry waits for one listing again; a create or move
+  that fails because the folder it goes into was removed says which one
+  ("the destination folder "Box" was removed on the server"). Only an op
+  that never reached the server waits: one sent before without an answer
+  (`attempts` > 0) that finds its folder at neither path is refused at
+  once, as before. Our lost RENAME may have made the folder another
+  client then renamed again, and sending it to the followed path would
+  undo that rename; one whose folder is at its target already is settled
+  by the existing look before the retry. Mail changes naming the marked folder (or, IMAP, a subfolder)
   are held meanwhile (`pathsWaitingForListing`, with the other folder
   holds), so a move into it is not sent to the vanished path (it used to
   fail, `pending_change.dest_missing`); the follow names the new path in
@@ -2012,7 +2021,11 @@ What remains after phase 6, with where it is handled today:
   follows a folder), and the folder shows again under its new name; a mail
   change of a folder renamed elsewhere with no folder op queued is still
   sent before the listing, and its source folder's NONEXISTENT drops it as
-  done (`pending_change.skipped_gone`).
+  done (`pending_change.skipped_gone`). A listing that runs while the op
+  is claimed (another isolate) skips the folder (it may be moving) and
+  stores its new path as a second row with the same MAILBOXID; the next
+  listing does not follow the old row onto it (no row is merged), so the
+  op fails visibly as "folder removed on the server".
 - **A UIDVALIDITY change re-matches by Message-ID** (#1314, §6): a cached
   row whose mail the renumbered folder still has keeps its id, body,
   downloaded attachments and queued changes. Left open: a mail without a

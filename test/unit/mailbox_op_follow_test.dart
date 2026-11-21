@@ -226,6 +226,8 @@ void main() {
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, 'folder removed on the server');
+      // The mark goes with the failure: a Retry waits one listing again.
+      expect(op.payload, isNot(contains('goneAt')));
       expect(events(), contains('pending_change.folder_removed'));
       expect(events(), isNot(contains('pending_change.folder_followed')));
 
@@ -266,6 +268,107 @@ void main() {
       await emails.retryMutation(op.id);
       await flush();
       expect((await folderOp()).state, 'pending');
+    });
+
+    test(
+        'a rename that may have reached the server (answer lost) is not '
+        'sent to where another client renamed the folder since: refused '
+        'visibly', () async {
+      final folder = await acme();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
+      // Our RENAME reached the server but its answer was lost; then another
+      // client renamed the folder on to AcmeCorp2.
+      server.renameFolder(
+        'Clients/Acme',
+        'Clients/AcmeCorp2',
+        newUidValidity: true,
+      );
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 '
+        "WHERE resource_type = 'Mailbox'",
+      );
+
+      await cycle();
+      await cycle();
+
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('no longer exists on the server'));
+      expect(events(), contains('pending_change.rejected'));
+      expect(events(), isNot(contains('mailbox.op_waits_for_listing')));
+      // The other client's rename stays: no RENAME back to AcmeCorp.
+      expect(
+        server.folderCommands.where((c) => c.startsWith('RENAME')),
+        ['RENAME Clients/Acme->Clients/AcmeCorp'],
+      );
+      expect(server.folders.keys, contains('Clients/AcmeCorp2'));
+      expect((await folderById(folder.id))!.path, 'Clients/AcmeCorp2');
+    });
+
+    test(
+        'a listing that started while the rename was being sent does not '
+        'count: the op is not refused on it and waits for the next one',
+        () async {
+      final folder = await acme();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
+      acmeRenamedTo('Clients/Acme2');
+      var listed = false;
+      // The LIST the flush reads after the refused RENAME: the op is still
+      // claimed.
+      server.beforeAnswer = (command) async {
+        if (listed || !command.startsWith('LIST')) return;
+        if (!server.folderCommands.any((c) => c.startsWith('RENAME'))) return;
+        listed = true;
+        // Another isolate's listing while the op is claimed: it takes the
+        // op for moving and follows nothing.
+        await listFolders();
+      };
+
+      await flush();
+      server.beforeAnswer = null;
+
+      expect(listed, isTrue);
+      expect((await folderOp()).state, 'pending');
+      await flush();
+      expect((await folderOp()).state, 'pending');
+      expect(events(), isNot(contains('pending_change.rejected')));
+      await listFolders();
+      await cycle();
+
+      // Left open: that listing stored Clients/Acme2 as a second row with
+      // the folder's MAILBOXID, so the next one does not follow the old row
+      // onto it (no row is merged into another): the rename fails visibly,
+      // and nothing is sent to a wrong path.
+      expect(await folderById(folder.id), isNull);
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, 'folder removed on the server');
+      expect(events(), contains('pending_change.folder_removed'));
+      expect(
+        server.folderCommands.where((c) => c.startsWith('RENAME')),
+        everyElement(startsWith('RENAME Clients/Acme->')),
+      );
+      expect(server.folders.keys, contains('Clients/Acme2'));
+    });
+
+    test(
+        'while folder listings keep failing the op waits at most 24 hours, '
+        'then is refused visibly', () async {
+      await acme();
+      await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
+      acmeRenamedTo('Clients/Acme2');
+
+      await flush();
+      now = now.add(const Duration(hours: 23));
+      await flush();
+      expect((await folderOp()).state, 'pending');
+      now = now.add(const Duration(hours: 2));
+      await flush();
+
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('no longer exists on the server'));
+      expect(events(), contains('pending_change.rejected'));
     });
 
     test('a delete of a folder renamed elsewhere is unchanged: done', () async {
