@@ -34,7 +34,7 @@ The engine version is kept in lockstep with the two Dagger CLIs that talk to it
 Docker image tag is rendered from **`dagger_version` in
 `ansible/group_vars/all.yml`** (gitops) — that variable is the canonical pin;
 the CLIs are pinned in `arc-runner-image/Dockerfile` and `Dockerfile.dev`.
-The engine image is `registry.dagger.io/engine:v1.0.0-beta.27`.
+The engine image is `registry.dagger.io/engine:v1.0.0-beta.28`.
 
 `scripts/check_dagger_versions.sh` enforces that all three agree — the CLI and
 engine must be the exact same version, there is no fallback when they differ
