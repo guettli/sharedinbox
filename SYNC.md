@@ -221,8 +221,8 @@ id), while the other was stored by a recent sync. A change queued on the vanishe
 the move follows the mail to its new UID, stamped with the UIDVALIDITY that UID was learned
 under, and the row keeps showing its queued flag until the change is sent (a newer change
 of the same flag on the other row wins). A read or star change the server acked at the
-old location is dropped then: sent to a UID the mail had left, the `STORE` answered OK and
-changed nothing, so the row shows the server's flags. With no such row, or more than one (e.g. a Gmail
+old location is dropped then: the flush acks a `STORE` only when it hit the mail (#1326,
+below), so the mail took the flag along and the other row's read has it. With no such row, or more than one (e.g. a Gmail
 mail still under two other labels), the vanished row is marked gone (and deleted once
 no change of it is left); so it is when the other row's location was recorded under an
 older UIDVALIDITY of its folder (its UID may name another mail). The carry-over waits for
@@ -288,6 +288,44 @@ it, and the flush holds that change while the row waits: sent to the vanished UI
 `UID STORE` would answer OK and do nothing. On adoption the change follows the mail to its
 new UID and is sent there. When the wait ends without adoption it is sent and fails
 visibly ("message gone").
+
+**Changes sent before the sync saw the foreign move** (#1326, #1327). A sync cycle
+flushes first, so a change queued offline usually reaches the server before the sync of
+its folder notices that another client moved the mail. Sent to the UID the mail left:
+- *Flag `STORE`* (read, star, keywords): the server answers OK and changes nothing.
+  The flush checks the hit (`_storeOnMail`): the untagged `FETCH` the STORE answers
+  with names the UID, or else a `UID FETCH … FLAGS` of it finds the mail. When neither
+  does, the change is not acked. If the row's server location still names that UID
+  (the sync has not seen it vanish), the change is kept (`pending`, one attempt
+  charged, App Log warn `pending_change.target_vanished`), and every queued change of
+  the mail that addresses the same UID, a move included, is marked
+  (`srcVanished` in its payload) and waits behind it. A marked move was never
+  applied, so it does not explain the absence: the source's reconcile lets such a row wait
+  or match by Message-ID, and `_carryOverMovedRow` carries it over although its move is
+  queued. The carry-over points every queued change at the new UID (and drops the mark);
+  the next flush sends them there: the flags, then the move from the new folder (a move
+  whose source is now its destination is done without a command). App Log
+  `email.duplicate_merged` / `email.foreign_move_adopted` say how many queued changes
+  now address the mail there (failed ones are pointed there too, for Retry, but not
+  counted); a re-targeted marked change starts with no attempts and no error. When the row is already gone on the server (the wait
+  ended, or the mail has no Message-ID and no `EMAILID` matched), the change fails
+  visibly (`pending_change.message_gone`).
+- *`UID MOVE`* with a Message-ID: the mail is looked for in the source and the
+  destination; in neither, the move fails at once (`in neither mailbox`), as before.
+  Without a Message-ID nothing can be looked for: the flush checks the UID with a
+  `UID FETCH` right before the MOVE and fails the move visibly when it is gone. After
+  the MOVE, a `COPYUID` is not required as proof (a client library may drop the untagged
+  one RFC 6851 allows): the UID gone from the source counts as moved, still there as
+  not (retried). A move whose source is now its destination is done without a command
+  (App Log info `pending_change.already_in_dest`).
+- *Delete for good*: never follows the mail. It is not marked, so its absence explains
+  the row's to the sync (no wait, no carry-over, also not by `EMAILID`), and the
+  carry-over never re-targets it. Sent to a UID that is gone (checked with a `UID
+  FETCH` first), it settles as done without a command, with App Log warn
+  `pending_change.delete_moot`: a mail another client restored from Trash stays where
+  it is. Retry never points a delete at another row.
+- The App Log line of the carry-over names the folder the mail left (where the server
+  had it), not the folder a queued move shows the row in.
 
 The wait rule: the wait ends when either of these holds:
 - a folder listing (IMAP `LIST`, `sync_states` `FolderListed`) started after the wait
@@ -671,7 +709,17 @@ mailbox-list banner, with **Retry** (a failed change: queues a fresh copy at the
 of the queue, so it cannot jump ahead of newer changes, and shows its effect locally
 again; a stuck or queued change keeps its place and is only flushed sooner) and
 **Discard** (deletes it; a stuck or queued one is first undone locally like a
-failure, so the mail does not keep a state the server never gets). A change that did
+failure, so the mail does not keep a state the server never gets). A retried IMAP change
+goes where the server has its mail now (#1327, `_retargetForRetry`, App Log info
+`pending_change.retry_retargeted`): its row's server location when that is another one
+than the change addressed (the foreign-move carry-over moved it), or, when its row is
+gone, the only other shown row of the account with the mail's Message-ID (else its
+`EMAILID`), not across the Sent folder; copies in All Mail or Drafts are no candidates
+(nor make the match ambiguous). The change then belongs to that row. Not while another
+move or delete of the mail is queued, and never for a delete. The screen names each
+mail by its subject, also when its row is hidden (gone on the server, kept for its
+changes) or removed: the clean-up rule stamps the subject, Message-ID and `EMAILID` on the
+failed changes of a row it deletes (`EmailStateWriter.cleanUpGone`). A change that did
 not apply in a flush, or a stuck one not due yet, holds back the mail's later changes,
 so they reach the server in order; a newer read/star change replaces a queued
 (not yet claimed) or stuck one of the same flag. Queueing the same

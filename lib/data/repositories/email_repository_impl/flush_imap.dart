@@ -20,6 +20,22 @@ class _ImapMessageGoneException implements Exception {
   String toString() => message;
 }
 
+/// A flag `UID STORE` of a queued IMAP change hit no mail: the UID it was
+/// queued with is gone from its folder (another client moved or expunged
+/// the mail), and the server answered OK without changing anything
+/// (#1326). The change is not acked: it stays queued, marked
+/// ([_srcVanishedKey]), until the sync finds where the mail went and
+/// points it there (the foreign-move carry-over), or fails visibly when the
+/// mail is gone ([_FlushImap._keepForForeignMove]).
+class _ImapTargetVanishedException implements Exception {
+  _ImapTargetVanishedException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// The folder a queued IMAP change acts in could not be selected because it
 /// no longer exists: the change is moot (see `_settleImapChange`).
 class _ImapSourceMailboxGoneException implements Exception {
@@ -716,42 +732,18 @@ extension _FlushImap on EmailRepositoryImpl {
         );
         return (applied: 0, connectionLost: null);
       }
-      if (e is _ImapMessageGoneException) {
-        // Retrying cannot bring the message back, but the user's move
-        // (e.g. an Undo's reverse move, #1048) did not happen: mark the
-        // change failed and say so in the App Log at warn level.
-        // One transaction: a phantom row must not outlive a crash here.
-        final (:dependents, :dropped) = await _db.transaction(() async {
-          final dependents =
-              await _markChangeFailedInTransaction(row, e, revert: false);
-          // A lost claim's outcome is not ours to act on.
-          if (dependents == null) return (dependents: null, dropped: null);
-          final dropped = e.inNeitherMailbox ? await _dropGoneRow(row) : null;
-          return (dependents: dependents, dropped: dropped);
-        });
-        if (dependents == null) return (applied: 0, connectionLost: null);
-        log('IMAP change ${row.id} failed: $e');
-        unawaited(
-          _appLogger?.warn(
-            'pending_change.message_gone',
-            'Could not apply ${_describeChange(row)} — the message is no '
-                'longer on the server (deleted or moved by another client); '
-                'kept on the Pending Changes screen',
-            accountId: account.id,
-            // A log row must not reference the email row just dropped.
-            emailId: dropped != null ? null : row.resourceId,
-            data: {'changeType': row.changeType},
-            error: e,
-          ),
-        );
-        _logDependentFailures(row, dependents);
-        _logGoneRowDropped(
+      if (e is _ImapTargetVanishedException) {
+        if (await _keepForForeignMove(account, row, e)) {
+          return (applied: 0, connectionLost: null);
+        }
+        return _failMessageGone(
+          account,
           row,
-          dropped,
-          why: 'a failed ${_describeChange(row)}: the message is in neither '
-              'its source nor its destination folder on the server',
+          _ImapMessageGoneException(e.message),
         );
-        return (applied: 0, connectionLost: null);
+      }
+      if (e is _ImapMessageGoneException) {
+        return _failMessageGone(account, row, e);
       }
       if (e is _ImapSourceSelectFailedException) {
         // Not a definite "gone": kept and retried with backoff. Logged once
@@ -876,6 +868,136 @@ extension _FlushImap on EmailRepositoryImpl {
     }
   }
 
+  /// Settles [row] as failed because its message is gone ([e]): retrying
+  /// cannot bring the message back, but the user's change (e.g. an Undo's
+  /// reverse move, #1048) did not happen. Marks the change failed and says
+  /// so in the App Log at warn level; a move whose message is in neither
+  /// its source nor its destination also drops the row
+  /// ([_ChangeFailures._dropGoneRow]).
+  Future<({int applied, Object? connectionLost})> _failMessageGone(
+    account_model.Account account,
+    PendingChangeRow row,
+    _ImapMessageGoneException e,
+  ) async {
+    // One transaction: a phantom row must not outlive a crash here.
+    final (:dependents, :dropped) = await _db.transaction(() async {
+      final dependents =
+          await _markChangeFailedInTransaction(row, e, revert: false);
+      // A lost claim's outcome is not ours to act on.
+      if (dependents == null) return (dependents: null, dropped: null);
+      final dropped = e.inNeitherMailbox ? await _dropGoneRow(row) : null;
+      return (dependents: dependents, dropped: dropped);
+    });
+    if (dependents == null) return (applied: 0, connectionLost: null);
+    log('IMAP change ${row.id} failed: $e');
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.message_gone',
+        'Could not apply ${_describeChange(row)} — the message is no '
+            'longer on the server (deleted or moved by another client); '
+            'kept on the Pending Changes screen',
+        accountId: account.id,
+        // A log row must not reference the email row just dropped.
+        emailId: dropped != null ? null : row.resourceId,
+        data: {'changeType': row.changeType},
+        error: e,
+      ),
+    );
+    _logDependentFailures(row, dependents);
+    _logGoneRowDropped(
+      row,
+      dropped,
+      why: 'a failed ${_describeChange(row)}: the message is in neither '
+          'its source nor its destination folder on the server',
+    );
+    return (applied: 0, connectionLost: null);
+  }
+
+  /// [row]'s flag `STORE` hit no mail ([e]): the UID it addressed is gone
+  /// from its folder (#1326). When that UID is where the row's server
+  /// location still says the mail is, the sync of that folder has not seen
+  /// it vanish yet: it carries the row over to the mail's new place
+  /// (another client moved it, SYNC.md §3) and points the queued changes
+  /// there, or finds it gone. So the change is kept, charged an attempt
+  /// ([_ChangeFailures._recordChangeError]), and every queued change of the
+  /// mail that addresses the same UID is marked ([_srcVanishedKey]): a
+  /// move or delete marked so does not explain the mail's absence, so the
+  /// sync still carries the row over. Returns false when the sync already
+  /// knows the mail is gone (or the change addressed another place): then
+  /// the caller fails it visibly.
+  Future<bool> _keepForForeignMove(
+    account_model.Account account,
+    PendingChangeRow row,
+    _ImapTargetVanishedException e,
+  ) async {
+    final payload = _decodePayload(row);
+    if (payload == null || payload[_uidAfterMoveKey] == true) return false;
+    final addressed = payload['mailboxPath'] ?? payload['src'];
+    final uid = payload['uid'];
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    if (email == null ||
+        email.srvGone ||
+        email.isLocal ||
+        email.srvMailboxPath != addressed ||
+        email.srvUid != uid) {
+      return false;
+    }
+    final held = await _db.transaction(() async {
+      final live = await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(row.resourceId) &
+                  t.state.isIn(_liveStates),
+            ))
+          .get();
+      final ids = <int>[];
+      for (final change in live) {
+        final p = _decodePayload(change);
+        if (p == null ||
+            (p['mailboxPath'] ?? p['src']) != addressed ||
+            p['uid'] != uid ||
+            p[_uidAfterMoveKey] == true ||
+            // A delete never follows the mail: it would expunge it wherever
+            // another client put it (restored from Trash, say). It stays
+            // unmarked, so the mail's absence settles it as moot.
+            change.changeType == 'delete') {
+          continue;
+        }
+        ids.add(change.id);
+        if (p[_srcVanishedKey] == true) continue;
+        p[_srcVanishedKey] = true;
+        await (_db.update(_db.pendingChanges)
+              ..where((t) => t.id.equals(change.id)))
+            .write(PendingChangesCompanion(payload: Value(jsonEncode(p))));
+      }
+      return ids;
+    });
+    log('IMAP change ${row.id} kept: $e');
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.target_vanished',
+        'Did not apply ${_describeChange(row)} yet: UID $uid in $addressed '
+            'no longer holds "${email.subject ?? '(no subject)'}" (moved or '
+            'deleted by another client), and the server answered OK without '
+            'changing anything. Kept: the next sync finds where the mail '
+            'went and the change is sent there, or it fails visibly',
+        accountId: account.id,
+        emailId: row.resourceId,
+        mailboxPath: addressed is String ? addressed : null,
+        data: {
+          'changeType': row.changeType,
+          'changeId': row.id,
+          'uid': uid,
+          'heldChangeIds': held,
+        },
+      ),
+    );
+    await _recordChangeError(row, e);
+    return true;
+  }
+
   /// Marks [row] failed at once after a command of it got a tagged `BAD`
   /// [error] about the command itself ([isImapPermanentBad]), with an App
   /// Log warn that quotes the server. The mail shows the server's state
@@ -980,23 +1102,71 @@ extension _FlushImap on EmailRepositoryImpl {
       selectedUidValidity: selected.uidValidity,
     );
     final seq = imap.MessageSequence.fromId(uid, isUid: true);
+    if (_locationChangeTypes.contains(row.changeType) &&
+        normaliseMessageId(
+              payload['messageId'] as String? ??
+                  await _messageIdOf(row.resourceId),
+            ) ==
+            null &&
+        !await _uidIsThere(client, seq)) {
+      // Without a Message-ID nothing after the MOVE can find the mail: the
+      // UID must be there before it (#1327), or a MOVE of a UID another
+      // client emptied would count as done. (A `COPYUID` alone is no proof
+      // either way: a client library may drop the untagged one.)
+      throw _ImapMessageGoneException(
+        'UID $uid is gone from $mailboxPath, and the mail has no '
+        'Message-ID to find it by',
+      );
+    }
 
     switch (row.changeType) {
       case 'flag_seen':
         final seen = payload['seen'] as bool;
-        seen ? await client.uidMarkSeen(seq) : await client.uidMarkUnseen(seq);
+        await _storeOnMail(
+          client,
+          seq,
+          mailboxPath,
+          () => seen ? client.uidMarkSeen(seq) : client.uidMarkUnseen(seq),
+        );
       case 'flag_flagged':
         final flagged = payload['flagged'] as bool;
-        flagged
-            ? await client.uidMarkFlagged(seq)
-            : await client.uidMarkUnflagged(seq);
+        await _storeOnMail(
+          client,
+          seq,
+          mailboxPath,
+          () => flagged
+              ? client.uidMarkFlagged(seq)
+              : client.uidMarkUnflagged(seq),
+        );
       case 'add_keywords':
         final keywords = (payload['keywords'] as List<dynamic>).cast<String>();
-        await client.uidStore(seq, keywords, action: imap.StoreAction.add);
+        await _storeOnMail(
+          client,
+          seq,
+          mailboxPath,
+          () => client.uidStore(seq, keywords, action: imap.StoreAction.add),
+        );
       case 'move':
         final dest = payload['dest'] as String;
         if (payload['clearSnooze'] == true) {
           await _removeImapSnoozeFlags(client, seq, undo: undo);
+        }
+        if (dest == mailboxPath) {
+          // The mail is in the destination already: another client moved it
+          // there, and the carry-over pointed the move at it (#1327).
+          log('IMAP change ${row.id}: already in $dest, nothing to move');
+          unawaited(
+            _appLogger?.info(
+              'pending_change.already_in_dest',
+              'The ${_describeChange(row)} to $dest is done without a '
+                  'command: another client had moved the mail there',
+              accountId: row.accountId,
+              emailId: row.resourceId,
+              mailboxPath: dest,
+              data: {'changeType': row.changeType, 'changeId': row.id},
+            ),
+          );
+          return;
         }
         final moveSeq = await _state.nextReadSeq();
         final result = await client.uidMove(seq, targetMailboxPath: dest);
@@ -1025,6 +1195,13 @@ extension _FlushImap on EmailRepositoryImpl {
               : null,
         );
       case 'delete':
+        if (!await _uidIsThere(client, seq)) {
+          // Nothing to expunge here; the mail is not looked for elsewhere:
+          // another client may have restored it, and a delete must not
+          // follow it there (#1327).
+          await _logDeleteMoot(row, uid: uid, mailboxPath: mailboxPath);
+          return;
+        }
         // A refused EXPUNGE must not leave the mail flagged `\Deleted`:
         // any client's next EXPUNGE would remove it.
         undo.add(() => client.uidMarkUndeleted(seq));
@@ -1123,6 +1300,70 @@ extension _FlushImap on EmailRepositoryImpl {
     }
   }
 
+  /// Sends [store], a flag `UID STORE` of the single UID [seq] in the
+  /// selected [mailboxPath], and makes sure it hit a mail: a server answers
+  /// a STORE of a UID that no longer exists with OK and changes nothing
+  /// (#1326). The untagged FETCH it sends for the UID shows the hit; without
+  /// one (a server that sends none for an unchanged flag, or none with the
+  /// UID), a `UID FETCH … FLAGS` asks whether the UID is still there.
+  /// Throws [_ImapTargetVanishedException] when it is not.
+  Future<void> _storeOnMail(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+    String mailboxPath,
+    Future<imap.StoreImapResult> Function() store,
+  ) async {
+    final uid = seq.toList().single;
+    final result = await store();
+    if (result.changedMessages?.any((m) => m.uid == uid) ?? false) return;
+    final there = await client.uidFetchMessages(seq, 'FLAGS');
+    if (there.messages.any((m) => m.uid == uid)) return;
+    throw _ImapTargetVanishedException(
+      'UID $uid is gone from $mailboxPath: the STORE answered OK but '
+      'changed nothing',
+    );
+  }
+
+  /// Whether the selected folder has a message at the single UID [seq]:
+  /// a `UID FETCH … FLAGS` names it (an unsolicited FETCH without the UID
+  /// does not count).
+  Future<bool> _uidIsThere(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+  ) async {
+    final uid = seq.toList().single;
+    final there = await client.uidFetchMessages(seq, 'FLAGS');
+    return there.messages.any((m) => m.uid == uid);
+  }
+
+  /// App Log warn for [row], a delete for good whose [uid] is gone from
+  /// [mailboxPath]: settled as done without a command. Another client
+  /// deleted the mail, or moved it elsewhere, where it stays: the delete
+  /// does not follow it (#1327). Which of the two is not known here.
+  Future<void> _logDeleteMoot(
+    PendingChangeRow row, {
+    required int uid,
+    required String mailboxPath,
+  }) async {
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    log('IMAP change ${row.id}: UID $uid gone from $mailboxPath, delete moot');
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.delete_moot',
+        'Did not apply the delete of '
+            '"${email?.subject ?? '(no subject)'}": UID $uid is no longer '
+            'in $mailboxPath (deleted or moved by another client). If it was '
+            'moved elsewhere it stays there; the delete does not follow it',
+        accountId: row.accountId,
+        emailId: row.resourceId,
+        mailboxPath: mailboxPath,
+        data: {'changeType': row.changeType, 'changeId': row.id, 'uid': uid},
+      ),
+    );
+  }
+
   /// Removes every `snz:` snooze keyword from the message at [seq] in the
   /// selected mailbox, so a later sync does not read the snooze back.
   /// Returns false when no message exists at [seq] (a stale UID).
@@ -1204,8 +1445,9 @@ extension _FlushImap on EmailRepositoryImpl {
   /// drops the change and logs it as already gone. Throws [StateError] when
   /// the MOVE had no effect although the message is still there, so the
   /// change is retried and the failure lands in the App Log.
-  /// Without any Message-ID to verify against, keeps the old behaviour and
-  /// treats the MOVE as applied.
+  /// Without any Message-ID to verify against, the MOVE counts as applied
+  /// when its UID, there right before it, is gone from the source after it;
+  /// otherwise it throws [StateError] (retried).
   Future<void> _retryImapMoveByMessageId(
     imap.ImapClient client, {
     required PendingChangeRow row,
@@ -1220,7 +1462,23 @@ extension _FlushImap on EmailRepositoryImpl {
           ..where((t) => t.id.equals(row.resourceId)))
         .getSingleOrNull();
     final mid = messageId ?? local?.messageId;
-    if (mid == null || mid.isEmpty) return;
+    if (normaliseMessageId(mid) == null) {
+      // Nothing to look for the mail by. [_sendImapChange] made sure the
+      // UID was in the source right before the MOVE (#1327); the source is
+      // still selected. Gone from it now: the MOVE moved it (its COPYUID,
+      // if any, was not seen). Still there: it did nothing.
+      if (staleUid < 0 ||
+          !await _uidIsThere(
+            client,
+            imap.MessageSequence.fromId(staleUid, isUid: true),
+          )) {
+        return;
+      }
+      throw StateError(
+        'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
+        'effect: the UID is still in $mailboxPath',
+      );
+    }
     // Taken before the searches: a location they find is at least this new.
     final searchSeq = await _state.nextReadSeq();
 

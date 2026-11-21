@@ -2026,6 +2026,29 @@ What remains after phase 6, with where it is handled today:
   in-place match's `_unparkOps`, `uidAfterMove` with a Message-ID search).
   The UIDVALIDITY stamp makes a stale UID fail instead of hitting another
   mail, but every new location writer must remember the rewrite.
+- **A change sent to a UID another client emptied** (#1326, #1327). The
+  flush runs before the sync that would see the foreign move, so a queued
+  change can reach the UID the mail left: a `STORE` answers OK and changes
+  nothing, a `MOVE` moves nothing. Since then a flag STORE counts as
+  applied only when it hit the mail (the untagged `FETCH` for the UID, else
+  a `UID FETCH` of it); otherwise it is kept and marked, together with the
+  mail's other queued changes for that UID (`srcVanished`), so the sync
+  carries the row over to the new place (a marked move does not count as
+  the user's own placement) and points them there (SYNC.md §3). A delete
+  for good never follows the mail (not marked, not carried over, not
+  re-targeted by Retry): at a UID that is gone it settles as moot with an
+  App Log warn. A MOVE without a Message-ID needs its UID there right
+  before it and gone from the source after it (no reliance on `COPYUID`);
+  a failed change's Retry goes where the server has the mail now
+  (`_retargetForRetry`: the row's server location, or the only other row
+  with its Message-ID or EMAILID). Left open: a move with a Message-ID found
+  in neither its source nor its destination still fails at once (its Retry
+  then works once the sync stored the mail elsewhere); a move without a
+  Message-ID is carried over only by EMAILID when the destination synced
+  first (no source-first wait without a Message-ID); on Gmail a mail
+  archived elsewhere (only in All Mail, not synced) is not found: its
+  queued flag changes fail visibly once the wait ends; the snooze keyword
+  STORE of a snooze is not checked (its MOVE is).
 - **Folder paths in payloads are rewritten, not aliased** (§7): a writer
   that changes a folder's path without `serverPathChanged` would leave
   queued changes naming a path the server no longer has (they then fail

@@ -150,6 +150,16 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// some (a server whose index lags, or a glitch).
   bool searchAllEmpty = false;
 
+  /// Whether a `STORE` answers with an untagged FETCH for each message it
+  /// hit. When false, it answers none (a server that sends none for an
+  /// unchanged flag, #1326): the app must ask whether the UID is there.
+  bool storeAnswersFetch = true;
+
+  /// Whether the app sees the `COPYUID` of a `MOVE` (with UIDPLUS). When
+  /// false it does not, as when the server sends it untagged (RFC 6851)
+  /// and the client library drops it: the MOVE still moves the mail.
+  bool moveAnswersCopyUid = true;
+
   /// Another client deletes folder [path] (with its messages).
   void deleteFolder(String path) => folders.remove(path);
 
@@ -657,7 +667,16 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       }
       m.modSeq = server._bump(_folder);
     }
-    return _answer('STORE', imap.StoreImapResult());
+    // As a server does (RFC 3501 6.4.6), an untagged FETCH with the new
+    // flags for each message the STORE hit, and none for a UID that names
+    // no message.
+    return _answer(
+      'STORE',
+      imap.StoreImapResult()
+        ..changedMessages = server.storeAnswersFetch
+            ? [for (final m in messages) _flagsMessage(m, withSize: '')]
+            : null,
+    );
   }
 
   @override
@@ -681,7 +700,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       );
     }
     final result = imap.GenericImapResult();
-    if (server.uidPlus && sources.isNotEmpty) {
+    if (server.uidPlus && server.moveAnswersCopyUid && sources.isNotEmpty) {
       result.responseCode =
           'COPYUID ${dest.uidValidity} ${sources.join(',')} ${targets.join(',')}';
     }
