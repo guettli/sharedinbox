@@ -739,6 +739,79 @@ void main() {
     });
 
     test(
+        'the put-back of rows left on a stand-in path takes only a row on the '
+        'one it took: a subfolder carried along stays with its parent',
+        () async {
+      // Row ids are built from paths: "Work/2026" carried along below
+      // "Work"'s stand-in path ends with its own id too.
+      for (final p in ['Work', 'Work/2026', 'P', 'X']) {
+        server.addFolder(p);
+      }
+      await listFolders();
+      final work = await folderAt('Work');
+      final sub = await folderAt('Work/2026');
+      final p = await folderAt('P');
+      final x = await folderAt('X');
+      // Moves no listing gives (X twice): P steps aside, X takes P, Work
+      // steps aside, P takes Work. Work is left aside with both its path
+      // and its target taken: the defensive put-back.
+      await MailboxStateWriter(db).serverPathsChanged(_acc.id, [
+        (p.id, 'Work'),
+        (x.id, 'P'),
+        (work.id, 'P'),
+        (x.id, 'X2'),
+      ]);
+
+      final workNow = (await folderById(work.id))!.path;
+      expect(workNow, startsWith('\u0001'));
+      expect((await folderById(sub.id))!.path, '$workNow/2026');
+      expect((await folderById(p.id))!.path, 'Work');
+      expect(
+        (await db.select(db.mailboxes).get())
+            .where((m) => m.path.startsWith('Work/')),
+        isEmpty,
+      );
+    });
+
+    test(
+        'a listing in which no folder is replaced clears the marks of '
+        'replaced folders: a folder replaced again waits from the start',
+        () async {
+      server
+        ..addFolder('Bad')
+        ..statusError = (path) => path == 'Bad' ? 'NO broken' : null;
+      await workWith(const ['w@test']);
+      final work = await folderAt('Work');
+      final oldId = work.srvMailboxId;
+      server
+        ..deleteFolder('Work')
+        ..addFolder('Work');
+      Future<SyncStateRow?> marks() async =>
+          (await db.select(db.syncStates).get())
+              .where((s) => s.resourceType == 'Mailbox:PendingReplace')
+              .firstOrNull;
+
+      await listFolders();
+      expect(await marks(), isNotNull);
+
+      // "Work" answers no id now: nothing is replaced.
+      server.statusError =
+          (path) => path == 'Bad' || path == 'Work' ? 'NO broken' : null;
+      await listFolders();
+      expect(await marks(), isNull);
+
+      server.statusError = (path) => path == 'Bad' ? 'NO broken' : null;
+      now = now.add(const Duration(hours: 1));
+      await listFolders();
+      await listFolders();
+      await listFolders();
+
+      // Three listings, but not an hour since it was replaced again.
+      expect((await folderById(work.id))!.srvMailboxId, oldId);
+      expect(events(), isNot(contains('mailbox.id_changed')));
+    });
+
+    test(
         'a server that advertises OBJECTID but refuses the MAILBOXID item: '
         'plain STATUS, asked once per connection', () async {
       server.refusesMailboxIdStatus = true;
