@@ -1312,9 +1312,9 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     the folder's `MAILBOXID` too (a raw command, `mailbox_id_status.dart`:
     enough_mail cannot ask or parse it) and stores it on the row
     (`mailboxes.srv_mailbox_id`, schema v79, written by the mailbox state
-    writer). Before the prune, a vanished folder without a queued delete
-    (that one is never followed: its delete counts as done) whose id is
-    stored is taken for renamed to the new folder with the same id, wherever
+    writer). Before the prune, a vanished folder (with a queued delete only
+    by its id, and only when the delete never reached the server, #1340,
+    below) whose id is stored is taken for renamed to the new folder with the same id, wherever
     it went and whatever it holds (#1315): an empty folder under a new
     UIDVALIDITY, a rename and a move at once, two candidates with the same
     mail. A new folder whose id differs is never taken for it by its
@@ -1364,9 +1364,41 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     20 flushes while listings keep failing. An op sent before without an
     answer is refused at once as before (sent to the followed path it
     could undo another client's rename). Mail changes naming the marked
-    folder wait with it. A queued delete of a folder renamed
-    elsewhere still counts as done (its path is gone). JMAP ops name the
-    mailbox id and are unaffected.
+    folder wait with it. JMAP ops name the mailbox id and are unaffected.
+  - *A queued delete of a folder another IMAP client renamed or moved*
+    (#1340). It used to count as done (its path was gone), and the folder
+    showed again under its new name with no word. Now a delete that never
+    reached the server (`attempts` 0) and finds no folder at its path, or,
+    on a server with folder ids, a folder there whose `MAILBOXID` is not the
+    one stored (another client renamed the folder and made a new one at
+    its name: that one is never deleted for it), waits for the listing like
+    a rename (`goneAt`, App Log info `mailbox.op_waits_for_listing`). The
+    listing follows a folder with a queued delete by its `MAILBOXID` only
+    (warn `mailbox.delete_follows`); the delete goes along (keyed by the
+    row id) and the next flush sends it to the new path (warn
+    `pending_change.folder_followed`) with the usual checks: a folder that
+    got mail since (more than the delete was confirmed for, or any when the
+    delete did not take the mail) is refused visibly, the text naming the
+    new path ("the folder was renamed elsewhere to "Work2" ..."), so the
+    user can Retry or Discard. Without an id (no `OBJECTID`, or no id
+    stored yet) a delete never follows: a folder the UIDVALIDITY or
+    Message-ID rules find makes the delete fail visibly, naming it (warn
+    `mailbox.delete_not_followed`); a folder they cannot find is removed
+    by the listing and the delete counts as done (warn
+    `mailbox.delete_found_done`). A delete sent before without an answer
+    is never re-targeted: its folder gone, it counts as done (the earlier
+    try most likely deleted it; warn `mailbox.delete_found_done`).
+  - *A listing during a folder op being sent* (#1341). The follow leaves
+    a folder whose rename or move may be moving it alone, so a listing that
+    ran meanwhile (another isolate) stored the folder's new path as a
+    second row with the same `MAILBOXID`; the next listing could not follow
+    the old row onto it (rows are never merged), pruned it, and the queued
+    op failed as "folder removed on the server". A listing now stores no
+    new folder whose `MAILBOXID` belongs to a cached folder it does not
+    have at its own path (App Log info `mailbox.listing_skipped_followable`,
+    and it does not end the wait of a `goneAt` change); the next listing
+    follows the cached folder there, with its mail, queued changes and
+    checkpoint.
   - *A mail change in a folder another IMAP client renamed or moved*
     (#1339). A read, star, keyword, move, snooze, unsnooze or delete whose
     source folder answers `NO [NONEXISTENT]` to the SELECT, or whose move

@@ -1292,7 +1292,8 @@ void main() {
 
     test(
         'a queued delete never follows a folder that looks renamed: the '
-        'delete counts as done, the other folder stays', () async {
+        'delete fails visibly naming it, the other folder stays (#1340)',
+        () async {
       await workWithMail();
       await rig.mailboxes
           .deleteMailbox(_acc.id, 'Projects', removeEmails: true);
@@ -1308,7 +1309,11 @@ void main() {
       expect(server.folders['Projects-2026']!.messages, hasLength(2));
       expect(server.folderCommands, isEmpty);
       expect(events(), isNot(contains('mailbox.renamed_elsewhere')));
-      expect(events(), contains('mailbox.delete_found_done'));
+      // Not counted as done: the folder may be the one there.
+      expect(events(), contains('mailbox.delete_not_followed'));
+      expect(await _ops(db), [('delete_mailbox', 'failed')]);
+      final op = await db.select(db.pendingChanges).getSingle();
+      expect(op.lastError, contains('renamed elsewhere to "Projects-2026"'));
       await _expectConsistent(db);
     });
 
