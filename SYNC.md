@@ -1348,6 +1348,21 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     folder under a new UIDVALIDITY, two candidates, a rename and a move at
     once) the queued changes fail visibly as "folder removed on the server".
     JMAP renames keep the id and need none of this.
+  - *A queued rename or move of a folder another IMAP client renamed or
+    moved* (#1329). The flush runs before the listing, so the op meets the
+    old path gone. It is not refused then: when the `RENAME` is refused and
+    the listing has the folder at neither path (or a move's new parent, a
+    cached folder, is not listed), the op is marked (payload `goneAt`),
+    put back uncharged (App Log info `mailbox.op_waits_for_listing`) and
+    the loop is kicked. The listing that follows the folder moves its row
+    and ops; the next flush sends the op to the new path (App Log warn
+    `pending_change.folder_followed`). A listing that removes the folder
+    fails it visibly ("folder removed on the server"); after one listing
+    that neither followed nor removed it, the op is refused as before
+    ("the folder no longer exists on the server"). Mail changes naming the
+    marked folder wait with it. A queued delete of a folder renamed
+    elsewhere still counts as done (its path is gone). JMAP ops name the
+    mailbox id and are unaffected.
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder
     queues its `create_mailbox` (role `snoozed`) and waits for it, as on JMAP;
     the snooze and unsnooze flush no longer `CREATE` folders on the side (an

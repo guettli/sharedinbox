@@ -62,6 +62,14 @@ const mailboxOpConfirmedMessages = 'messages';
 /// back.
 const mailboxOpFromPath = 'fromPath';
 
+/// Payload key of an IMAP rename or move whose folder (or, for a move, the
+/// folder it moves into) was not at its server path when the op was sent
+/// (#1329): `{"path": <that path>, "seq": <read sequence>}`. The op waits
+/// for one folder listing started after `seq`, which follows a folder
+/// another client renamed or moved; when that listing did not, the op is
+/// refused.
+const mailboxOpGoneAt = 'goneAt';
+
 /// The `path` prefix of a JMAP mailbox created offline, until the create's
 /// ack gives it the server's id. `~` is not in the JMAP id alphabet
 /// (RFC 8620 §1.2), so it cannot collide with a server id.
