@@ -645,8 +645,9 @@ extension _FlushImap on EmailRepositoryImpl {
     String mailboxPath,
     _ImapUndoJournal undo,
   ) async {
-    final messageId = payload['messageId'] as String?;
-    if (messageId == null || messageId.isEmpty) {
+    // A blank or `<>` Message-ID cannot find the mail either (#1327).
+    final messageId = normaliseMessageId(payload['messageId'] as String?);
+    if (messageId == null) {
       throw _ImapMessageGoneException(
         'the move queued before this one reported no new UID, and the mail '
         'has no Message-ID to find it by',
