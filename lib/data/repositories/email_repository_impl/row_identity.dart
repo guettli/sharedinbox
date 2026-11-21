@@ -166,8 +166,9 @@ extension _RowIdentity on EmailRepositoryImpl {
   /// (#1048). With [fromMailboxPath], the changes that still address the
   /// mail at [oldUid] there (another client moved it) follow it too. They
   /// are stamped with [uidValidity], when given, else with the folder's
-  /// current one.
-  Future<void> _rewritePendingChangeUids({
+  /// current one. Returns how many of them address the mail at [newUid] in
+  /// [mailboxPath] now.
+  Future<int> _rewritePendingChangeUids({
     required String resourceId,
     required String mailboxPath,
     required int newUid,
@@ -178,6 +179,7 @@ extension _RowIdentity on EmailRepositoryImpl {
     final rows = await (_db.select(_db.pendingChanges)
           ..where((t) => t.resourceId.equals(resourceId)))
         .get();
+    var rewritten = 0;
     for (final row in rows) {
       final Map<String, dynamic> payload;
       try {
@@ -193,6 +195,10 @@ extension _RowIdentity on EmailRepositoryImpl {
           addressed == fromMailboxPath &&
           payload['uid'] == oldUid &&
           payload[_uidAfterMoveKey] == null;
+      // A delete never follows a mail another client moved: it would
+      // expunge it wherever that client put it, e.g. restored from Trash
+      // (#1327). Left where it was, it settles as moot.
+      if (leftBehind && row.changeType == 'delete') continue;
       if (leftBehind) {
         payload[payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src'] =
             mailboxPath;
@@ -223,6 +229,13 @@ extension _RowIdentity on EmailRepositoryImpl {
       }
       payload['uid'] = newUid;
       payload.remove(_uidAfterMoveKey);
+      // It names the mail where it is now: the error from the UID it hit
+      // nothing at (#1326) and its backoff no longer apply.
+      final vanished = payload.remove(_srcVanishedKey) == true &&
+          (row.state == _pendingState || row.state == _stuckState);
+      if (_liveStates.contains(row.state) || row.state == _parkedState) {
+        rewritten++;
+      }
       // The new UID was learned under [uidValidity], else under the
       // folder's current UIDVALIDITY.
       payload.remove('uidValidity');
@@ -234,8 +247,19 @@ extension _RowIdentity on EmailRepositoryImpl {
         payload['uidValidity'] = validity;
       }
       await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
-          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+          .write(
+        vanished
+            ? PendingChangesCompanion(
+                payload: Value(jsonEncode(payload)),
+                attempts: const Value(0),
+                lastError: const Value(null),
+                state: const Value(_pendingState),
+                leaseUntil: const Value(null),
+              )
+            : PendingChangesCompanion(payload: Value(jsonEncode(payload))),
+      );
     }
+    return rewritten;
   }
 
   /// The row of the message the server has under [uid] in [mailboxPath],
@@ -386,20 +410,27 @@ extension _RowIdentity on EmailRepositoryImpl {
   /// next sync (`kept`). When [copy]'s location is from before a
   /// UIDVALIDITY change of its folder, its UID may name another mail: no
   /// carry-over, the row is deleted as gone. Returns the dropped copy for
-  /// the App Log when the row carried over.
+  /// the App Log when the row carried over, and how many of the row's
+  /// queued (or failed) changes now address the mail at its new place
+  /// (`retargeted`).
+  ///
+  /// A queued move, snooze or unsnooze of [row] keeps it here, unless the
+  /// flush found it addressing a UID already gone ([_srcVanishedKey],
+  /// #1327): that one was never applied, so it follows the mail and is sent
+  /// from the new place.
   ///
   /// [adopting]: [row] waits, gone, for a foreign move's destination and
   /// [copy] just arrived there ([_adoptForeignMove]): nothing happens unless
   /// both still are what they were (in another isolate a sync may have
   /// adopted or revived [row], or the copy was matched meanwhile).
-  Future<({bool kept, Email? dropped})> _carryOverMovedRow({
+  Future<({bool kept, Email? dropped, int retargeted})> _carryOverMovedRow({
     required Email row,
     required Email copy,
     required String vanishedFrom,
     bool adopting = false,
   }) async {
-    const gone = (kept: false, dropped: null);
-    const later = (kept: true, dropped: null);
+    const gone = (kept: false, dropped: null, retargeted: 0);
+    const later = (kept: true, dropped: null, retargeted: 0);
     return _db.transaction(() async {
       final current = await (_db.select(_db.emails)
             ..where((t) => t.id.equals(row.id)))
@@ -425,7 +456,11 @@ extension _RowIdentity on EmailRepositoryImpl {
       final rowChanges = await _liveChanges(current.id);
       final copyChanges = await _liveChanges(dup.id);
       if (current.srvMailboxPath != vanishedFrom ||
-          rowChanges.any((c) => _locationChangeTypes.contains(c.changeType)) ||
+          rowChanges.any(
+            (c) =>
+                _locationChangeTypes.contains(c.changeType) &&
+                !_addressesVanishedUid(c),
+          ) ||
           copyChanges.any((c) => c.state == _inflightState)) {
         return later;
       }
@@ -437,17 +472,24 @@ extension _RowIdentity on EmailRepositoryImpl {
       if (known != null && newUidValidity != null && known != newUidValidity) {
         return gone;
       }
+      // A delete of the user's is queued: the mail is gone for them. It
+      // must not follow the mail to where another client put it (#1327);
+      // the row is gone, the delete settles as moot and the copy keeps its
+      // own row.
+      if (rowChanges.any((c) => c.changeType == 'delete')) return gone;
       await _mergeDuplicateRow(dropId: dup.id, keepId: current.id);
-      // Read and star changes acked where the mail no longer was did
-      // nothing; folded on, they would show forever (takeOverRow
-      // re-folds).
+      // Read and star changes acked in the folder the mail left: the flush
+      // acks a STORE only when it hit the mail (#1326), so the mail took
+      // the flags along and the copy's read has them; folded on, they
+      // would wait for a read of a folder that no longer has the mail
+      // (takeOverRow re-folds).
       await _state.dropAckedFlagsAt(current.id, vanishedFrom);
       // The copy's server facts, the read/star/snooze state with the read
       // stamp it was read under included. The changes of both rows (the
       // copy's now point here) fold over it: a flag the user changed on
       // [row] before the move keeps showing until a read confirms it.
       await _state.takeOverRow(current.id, dup);
-      await _rewritePendingChangeUids(
+      final retargeted = await _rewritePendingChangeUids(
         resourceId: current.id,
         mailboxPath: newPath,
         newUid: newUid,
@@ -460,7 +502,7 @@ extension _RowIdentity on EmailRepositoryImpl {
       for (final threadId in {dup.threadId ?? dup.id, dup.threadId ?? row.id}) {
         await _updateThread(dup.accountId, dup.mailboxPath, threadId);
       }
-      return (kept: true, dropped: dup);
+      return (kept: true, dropped: dup, retargeted: retargeted);
     });
   }
 
@@ -535,7 +577,13 @@ extension _RowIdentity on EmailRepositoryImpl {
       );
       return false;
     }
-    _logForeignMoveAdopted(row, dropped, from: from, to: arrivalFolder);
+    _logForeignMoveAdopted(
+      row,
+      dropped,
+      from: from,
+      to: arrivalFolder,
+      retargeted: carried.retargeted,
+    );
     return true;
   }
 
@@ -575,12 +623,14 @@ extension _RowIdentity on EmailRepositoryImpl {
   /// App Log line for [row], gone from its folder, carried over in place to
   /// [dropped], the row sync stored for its mail in [to] (another client
   /// moved it from [from]); [destinationFirst]: [to] was synced first.
+  /// [retargeted] of its queued changes now address it in [to].
   void _logForeignMoveAdopted(
     Email row,
     Email dropped, {
     required String from,
     required String to,
     bool destinationFirst = false,
+    int retargeted = 0,
   }) {
     unawaited(
       _appLogger?.warn(
@@ -588,7 +638,7 @@ extension _RowIdentity on EmailRepositoryImpl {
         '"${row.subject ?? '(no subject)'}" left $from and arrived in $to '
             '(moved by another client): its row follows it there with its '
             'cached body and attachments, and the row sync had stored '
-            'there was merged into it.',
+            'there was merged into it.${_retargetedNote(retargeted, to)}',
         accountId: row.accountId,
         mailboxPath: to,
         emailId: row.id,
@@ -597,6 +647,7 @@ extension _RowIdentity on EmailRepositoryImpl {
           'from': from,
           'to': to,
           'order': destinationFirst ? 'destination_first' : 'source_first',
+          if (retargeted > 0) 'retargetedChanges': retargeted,
         },
       ),
     );
@@ -691,26 +742,44 @@ extension _RowIdentity on EmailRepositoryImpl {
             ))
           .get();
 
-  /// App Log line for a copy [_carryOverMovedRow] merged into [kept].
-  void _logMovedRowCarriedOver(Email kept, Email dropped) {
+  /// App Log line for a copy [_carryOverMovedRow] merged into [kept], the
+  /// row of the mail that vanished from [from] (where the server had it,
+  /// not where [kept] is shown: behind a queued move that is its
+  /// destination, #1327); [retargeted] of its queued changes now address it
+  /// at the copy's place.
+  void _logMovedRowCarriedOver(
+    Email kept,
+    Email dropped, {
+    required String from,
+    int retargeted = 0,
+  }) {
+    final to = dropped.srvMailboxPath ?? dropped.mailboxPath;
     unawaited(
       _appLogger?.warn(
         'email.duplicate_merged',
-        '"${dropped.subject ?? '(no subject)'}" was moved from '
-            '${kept.mailboxPath} to ${dropped.mailboxPath} by another '
-            'client: its row follows it there, and the second row sync had '
-            'stored there was merged into it.',
+        '"${dropped.subject ?? '(no subject)'}" was moved from $from to '
+            '$to by another client: its row follows it there, and the '
+            'second row sync had stored there was merged into it.'
+            '${_retargetedNote(retargeted, to)}',
         accountId: kept.accountId,
-        mailboxPath: dropped.mailboxPath,
+        mailboxPath: to,
         emailId: kept.id,
         data: {
           'droppedEmailId': dropped.id,
-          'from': kept.mailboxPath,
-          'to': dropped.mailboxPath,
+          'from': from,
+          'to': to,
+          if (retargeted > 0) 'retargetedChanges': retargeted,
         },
       ),
     );
   }
+
+  /// The App Log note that [count] queued changes of a carried-over row now
+  /// address the mail in [folder] (empty for none).
+  String _retargetedNote(int count, String folder) => count == 0
+      ? ''
+      : ' $count queued change(s) of it now address it in $folder and are '
+          'sent there.';
 
   /// Merges [dropId], a second row of the mail of [keepId], into [keepId]
   /// and deletes it. Row ids are frozen (SYNC-REDESIGN.md §6): this is the

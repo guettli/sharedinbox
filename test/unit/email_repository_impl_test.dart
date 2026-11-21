@@ -471,6 +471,25 @@ class _MoveFailsImapClient extends FakeImapClient {
   }) async =>
       _fakeMailbox(path);
 
+  /// The mail is there: a server without UIDPLUS is asked for the UID of a
+  /// mail without a Message-ID before its MOVE (#1327).
+  @override
+  Future<imap.FetchImapResult> uidFetchMessages(
+    imap.MessageSequence sequence,
+    String? fetchContentDefinition, {
+    int? changedSinceModSequence,
+    Duration? responseTimeout,
+  }) async =>
+      imap.FetchImapResult(
+        [
+          for (final uid in sequence.toList())
+            imap.MimeMessage()
+              ..uid = uid
+              ..flags = [],
+        ],
+        null,
+      );
+
   @override
   Future<imap.GenericImapResult> uidMove(
     imap.MessageSequence sequence, {
@@ -5824,7 +5843,7 @@ void main() {
 
     test('IMAP clear_snooze on a vanished message logs a warning', () async {
       final recorder = _PushStatusRecorder();
-      final spy = SnoozeSpyImapClient();
+      final spy = SnoozeSpyImapClient(messagesMissing: true);
       final r = _makeRepos(
         imapConnect: (_, __, ___) async => spy,
         appLogger: AppLogger(recorder),

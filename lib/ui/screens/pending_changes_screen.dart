@@ -408,15 +408,19 @@ String? _string(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
 /// Resolves the pending change's email into a human-readable `subject · sender`
-/// line. Falls back to the raw resource id while the lookup is in flight or
-/// when the referenced email is no longer stored locally.
+/// line. Falls back to the change's [PendingChange.subject] while the lookup
+/// is in flight or when the referenced email is not shown (or no longer
+/// stored locally), and to the raw resource id without one.
 class _EmailIdentity extends StatelessWidget {
   const _EmailIdentity({required this.change, required this.repo});
 
   final PendingChange change;
   final EmailRepository repo;
 
+  // The mail is not shown (gone on the server, waiting for its changes to
+  // settle, or removed): its subject still names it (#1327).
   String get _fallback => switch (change.resourceType) {
+        'Email' when change.subject != null => change.subject!,
         'Email' => 'email ${change.resourceId}',
         'Mailbox' => 'folder',
         _ => '${change.resourceType} ${change.resourceId}',

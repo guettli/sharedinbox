@@ -154,10 +154,17 @@ class SnoozeSpyImapClient extends FakeImapClient
     this.onSearch,
     this.onUidMove,
     this.messageFlags,
+    this.messagesMissing = false,
   });
 
   /// When non-null, the flags a `UID FETCH … FLAGS` reports for the message.
   final List<String>? messageFlags;
+
+  /// When true, a `UID FETCH` finds no message: every UID asked for is gone
+  /// (another client moved or expunged it). Otherwise each UID names a
+  /// message, with [messageFlags] (none when null), unless a `uidMove`
+  /// moved it out of the selected folder.
+  final bool messagesMissing;
 
   /// Every `UID STORE` and `UID MOVE`, in call order, as
   /// `'store <add|remove|…> <uids> <flags>'` / `'move <mailbox>:<uids>-><target>'`.
@@ -196,6 +203,10 @@ class SnoozeSpyImapClient extends FakeImapClient
   /// Called at the start of every `uidMove`, e.g. to race an Undo against an
   /// in-flight flush.
   final Future<void> Function()? onUidMove;
+
+  /// Per folder, the UIDs a `uidMove` moved out of it: a later `UID FETCH`
+  /// there finds none of them.
+  final Map<String?, Set<int>> _movedOut = {};
 
   /// Every `uidMove` as `'<selected mailbox>:<uids>-><target>'`.
   final List<String> moves = [];
@@ -255,7 +266,12 @@ class SnoozeSpyImapClient extends FakeImapClient
     calls.add(
       'store ${action.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
     );
-    return imap.StoreImapResult();
+    // Every UID names a message here: the untagged FETCH a server sends for
+    // each one it hit.
+    return imap.StoreImapResult()
+      ..changedMessages = [
+        for (final uid in sequence.toList()) imap.MimeMessage()..uid = uid,
+      ];
   }
 
   @override
@@ -265,6 +281,9 @@ class SnoozeSpyImapClient extends FakeImapClient
   ) async {
     await onUidMove?.call();
     movedToMailbox = targetMailboxPath;
+    if (targetMailboxPath != selectedMailbox) {
+      (_movedOut[selectedMailbox] ??= {}).addAll(sequence.toList());
+    }
     moves.add(
       '$selectedMailbox:${sequence.toList().join(',')}->$targetMailboxPath',
     );
@@ -307,9 +326,18 @@ class SnoozeSpyImapClient extends FakeImapClient
     int? changedSinceModSequence,
     Duration? responseTimeout,
   }) async {
-    final flags = messageFlags;
-    if (flags == null) return const imap.FetchImapResult([], null);
-    return imap.FetchImapResult([imap.MimeMessage()..flags = flags], null);
+    if (messagesMissing) return const imap.FetchImapResult([], null);
+    final gone = _movedOut[selectedMailbox] ?? const <int>{};
+    return imap.FetchImapResult(
+      [
+        for (final uid in sequence.toList())
+          if (!gone.contains(uid))
+            imap.MimeMessage()
+              ..uid = uid
+              ..flags = [...?messageFlags],
+      ],
+      null,
+    );
   }
 }
 

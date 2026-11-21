@@ -910,16 +910,62 @@ class EmailStateWriter {
         'WHERE p.resource_id = emails.id AND p.state IN ($_foldableSql))';
     final deleted = <String>[];
     while (true) {
-      final rows = await _db.customWriteReturning(
-        'DELETE FROM emails WHERE $gone AND id IN '
-        '(SELECT id FROM emails WHERE $gone LIMIT $cleanUpChunk) '
-        'RETURNING id',
-        variables: [Variable.withString(accountId)],
-        updates: {_db.emails},
-        updateKind: UpdateKind.delete,
-      );
+      final rows = await _db.transaction(() async {
+        final rows = await _db.customWriteReturning(
+          'DELETE FROM emails WHERE $gone AND id IN '
+          '(SELECT id FROM emails WHERE $gone LIMIT $cleanUpChunk) '
+          'RETURNING id, subject, message_id, server_email_id',
+          variables: [Variable.withString(accountId)],
+          updates: {_db.emails},
+          updateKind: UpdateKind.delete,
+        );
+        await _stampFailedOpsOfDeleted(rows);
+        return rows;
+      });
       deleted.addAll([for (final r in rows) r.read<String>('id')]);
       if (rows.length < cleanUpChunk) return deleted;
+    }
+  }
+
+  /// Payload keys [cleanUpGone] stamps on the failed ops of a row it
+  /// deletes: the op stays on the Pending Changes screen without its mail,
+  /// which shows it by the subject (not the row id, #1327), and a Retry
+  /// finds the mail again by its Message-ID or EMAILID when sync stored it
+  /// as another row.
+  static const goneSubjectKey = 'subject';
+  static const goneServerEmailIdKey = 'serverEmailId';
+
+  /// [cleanUpGone]: stamps the subject, Message-ID and EMAILID of each of
+  /// [deleted] (rows `RETURNING id, subject, message_id, server_email_id`)
+  /// on its failed ops, where not stamped yet.
+  Future<void> _stampFailedOpsOfDeleted(List<QueryRow> deleted) async {
+    if (deleted.isEmpty) return;
+    final byId = {for (final r in deleted) r.read<String>('id'): r};
+    final failed = await (_db.select(_db.pendingChanges)
+          ..where(
+            (t) => t.resourceId.isIn(byId.keys) & t.state.equals('failed'),
+          ))
+        .get();
+    for (final op in failed) {
+      final payload = _payloadOf(op);
+      final row = byId[op.resourceId];
+      if (payload == null || row == null) continue;
+      final stamps = {
+        goneSubjectKey: row.readNullable<String>('subject'),
+        'messageId': row.readNullable<String>('message_id'),
+        goneServerEmailIdKey: row.readNullable<String>('server_email_id'),
+      };
+      var changed = false;
+      for (final MapEntry(:key, :value) in stamps.entries) {
+        if (value == null || value.isEmpty || payload.containsKey(key)) {
+          continue;
+        }
+        payload[key] = value;
+        changed = true;
+      }
+      if (!changed) continue;
+      await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
     }
   }
 
