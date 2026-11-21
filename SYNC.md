@@ -1367,27 +1367,35 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     folder wait with it. JMAP ops name the mailbox id and are unaffected.
   - *A queued delete of a folder another IMAP client renamed or moved*
     (#1340). It used to count as done (its path was gone), and the folder
-    showed again under its new name with no word. Now a delete that never
-    reached the server (`attempts` 0) and finds no folder at its path, or,
-    on a server with folder ids, a folder there whose `MAILBOXID` is not the
-    one stored (another client renamed the folder and made a new one at
-    its name: that one is never deleted for it), waits for the listing like
-    a rename (`goneAt`, App Log info `mailbox.op_waits_for_listing`). The
-    listing follows a folder with a queued delete by its `MAILBOXID` only
-    (warn `mailbox.delete_follows`); the delete goes along (keyed by the
-    row id) and the next flush sends it to the new path (warn
-    `pending_change.folder_followed`) with the usual checks: a folder that
-    got mail since (more than the delete was confirmed for, or any when the
-    delete did not take the mail) is refused visibly, the text naming the
-    new path ("the folder was renamed elsewhere to "Work2" ..."), so the
-    user can Retry or Discard. Without an id (no `OBJECTID`, or no id
-    stored yet) a delete never follows: a folder the UIDVALIDITY or
-    Message-ID rules find makes the delete fail visibly, naming it (warn
-    `mailbox.delete_not_followed`); a folder they cannot find is removed
-    by the listing and the delete counts as done (warn
-    `mailbox.delete_found_done`). A delete sent before without an answer
-    is never re-targeted: its folder gone, it counts as done (the earlier
-    try most likely deleted it; warn `mailbox.delete_found_done`).
+    showed again under its new name with no word. Now a delete that finds
+    no folder at its path (at the LIST, or when its STATUS or DELETE then
+    fails and a new LIST does not have it), or, on a server with folder
+    ids, a folder there whose `MAILBOXID` is not the one stored (another
+    client renamed the folder and made a new one at its name: that one is
+    never deleted for it; checked before the subfolder check), waits for
+    the listing like a rename (`goneAt`, App Log info
+    `mailbox.op_waits_for_listing`), also when it was sent before without
+    an answer. The listing follows a folder with a never-sent delete
+    (`attempts` 0) by its own `MAILBOXID` only (warn
+    `mailbox.delete_follows`; the mark records `byId`); the delete goes
+    along (keyed by the row id) and the next flush sends it to the new
+    path (warn `pending_change.folder_followed`) with the usual checks: a
+    folder that got mail since (more than the delete was confirmed for, or
+    any when the delete did not take the mail) is refused visibly, the
+    text naming the new path ("the folder was renamed elsewhere to "Work2"
+    ...", kept in the payload, `followedFrom`, for a Retry), so the user can
+    Retry or Discard. A delete whose folder moved otherwise (no `byId`
+    mark, e.g. its own queued rename acked) loses the mark and is checked
+    again at the folder's path (info `mailbox.delete_mark_dropped`). The
+    listing fails the delete visibly, naming where the folder is (warn
+    `mailbox.delete_not_followed`), when the folder is found by its id but
+    the delete was sent before (folder ids are never reused, so that try
+    did not delete it, and a delete that may have reached the server is
+    never re-targeted), when it is found only by the UIDVALIDITY or
+    Message-ID rules (no `OBJECTID`, or no id stored), and when it moved
+    along with its parent folder without an id match of its own. A folder
+    the listing does not find is removed and the delete counts as done
+    (warn `mailbox.delete_found_done`).
   - *A listing during a folder op being sent* (#1341). The follow leaves
     a folder whose rename or move may be moving it alone, so a listing that
     ran meanwhile (another isolate) stored the folder's new path as a
@@ -1395,10 +1403,12 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     the old row onto it (rows are never merged), pruned it, and the queued
     op failed as "folder removed on the server". A listing now stores no
     new folder whose `MAILBOXID` belongs to a cached folder it does not
-    have at its own path (App Log info `mailbox.listing_skipped_followable`,
-    and it does not end the wait of a `goneAt` change); the next listing
-    follows the cached folder there, with its mail, queued changes and
-    checkpoint.
+    have at its own path and whose rename or move is being sent right now
+    (not one waiting for a retry; never the inbox, which a server may list
+    in another case) (App Log info `mailbox.listing_skipped_followable`,
+    and it does not end the wait of a `goneAt` change); the next listing,
+    the op settled, follows the cached folder there, with its mail, queued
+    changes and checkpoint.
   - *A mail change in a folder another IMAP client renamed or moved*
     (#1339). A read, star, keyword, move, snooze, unsnooze or delete whose
     source folder answers `NO [NONEXISTENT]` to the SELECT, or whose move

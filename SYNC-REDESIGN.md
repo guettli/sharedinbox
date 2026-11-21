@@ -2079,36 +2079,52 @@ What remains after phase 6, with where it is handled today:
   done (§5 "satisfied"), and #1315 on purpose never followed a folder with
   a delete queued, so the folder came back under its new name with no
   word. Now (`_imapDeleteFoundGone`, `_otherFolderAt` in
-  `flush_mailbox.dart`): a delete that never reached the server
-  (`attempts` 0) whose folder is not listed at its path, or whose path
-  holds a folder with another `MAILBOXID` than the stored one (renamed,
-  and a new folder made at its name: before, that one could be deleted
-  for it), is refused with a `goneAt` and waits for the listing exactly
-  like a folder op of #1329 (`waitForListing`, `FolderListedTrusted`, the
-  24-hour / 20-flush cap). The listing (`_followRenamesElsewhere`) follows
-  a vanished or replaced folder with such a delete by its `MAILBOXID`
-  only, never by UIDVALIDITY or Message-ID (a wrong guess would delete
-  another folder); the delete, keyed by the row id, goes along, gets the
-  `goneAt` mark if it has none (so the flush knows it follows; App Log
-  warn `mailbox.delete_follows`), and the next flush drops the mark and
-  sends it to the new path (`pending_change.folder_followed`). The usual
-  delete checks stand: the folder must have no subfolders, no mail when
-  the delete did not take its mail, and no more mail than the delete was
-  confirmed for (`_refuseNewMail`); a refusal after a follow names the
-  new path ("the folder was renamed elsewhere to "Work2" (was "Work"):
-  ..."), failed and listed, so Retry or Discard decide. Without an id
-  (no `OBJECTID`, or none stored for the folder) a folder the fallback
-  rules find for it fails the delete visibly, naming the paths
-  (`mailbox.delete_not_followed`); the row is then pruned and the folder
-  shows under its new path; a folder they cannot find (an empty one) is
-  removed and the delete counts as done (`mailbox.delete_found_done`). A
-  delete sent before without an answer (`attempts` > 0) is never
-  re-targeted: its folder gone, it counts as done as before (now with
-  warn `mailbox.delete_found_done`), since our DELETE most likely went
-  through and the folder a listing would follow may be another one; its
-  path holding another id, it fails visibly. A replaced folder whose id
-  is listed nowhere keeps the old outcome (removed, delete done). JMAP is
-  untouched (`Mailbox/set destroy` by id).
+  `flush_mailbox.dart`): a delete whose folder is not listed at its path
+  (at the first LIST, or at the LIST after a failed STATUS or DELETE: a
+  race with another client's rename, or a DELETE answered NO), or whose
+  path holds a folder with another `MAILBOXID` than the stored one
+  (renamed, and a new folder made at its name: before, that one could be
+  deleted for it; checked before the subfolder check, so the new folder's
+  subfolders give no misleading refusal), is refused with a `goneAt` and
+  waits for the listing exactly like a folder op of #1329
+  (`waitForListing`, `FolderListedTrusted`, the 24-hour / 20-flush cap),
+  whatever its `attempts`: a resend of a delete undoes nothing, and the
+  listing knows whether the folder is still there. The listing
+  (`_followRenamesElsewhere`) decides per folder with a queued delete:
+  - found at a new path by its own `MAILBOXID` and the delete never
+    reached the server (`attempts` 0): the delete, keyed by the row id,
+    goes along; its `goneAt` mark (added when there is none) records
+    `byId` (App Log warn `mailbox.delete_follows`), and the next flush
+    drops the mark and sends it to the new path
+    (`pending_change.folder_followed`). The flush follows a delete only
+    with `byId`: a mark whose path the folder left otherwise (our own
+    rename or move acked, a parent's follow) is dropped and the delete is
+    checked afresh at the folder's path (info `mailbox.delete_mark_dropped`),
+    with no claim of a rename elsewhere;
+  - found by its id but the delete was sent before without an answer:
+    folder ids are never reused (RFC 8474), so that try did not delete
+    it, and a delete that may have reached the server is never
+    re-targeted: it fails visibly, naming the new path;
+  - found only by UIDVALIDITY or Message-ID (no `OBJECTID`, or no id
+    stored): never followed (a wrong guess would delete another folder);
+    fails visibly, naming the paths;
+  - moved along with its parent's follow without an id match of its own
+    (a subfolder): fails visibly, naming the new path;
+  - not found (the folder is gone, or an empty folder without ids): the
+    listing removes it and the delete counts as done
+    (`mailbox.delete_found_done`).
+  The visible failures are App Log warn `mailbox.delete_not_followed`
+  (with the reason) and happen before the prune, which would else count
+  the delete as done; the folder shows again (under its new path, as a
+  new row when its old one is pruned). The usual delete checks stand at
+  the new path: no subfolders, no mail when the delete did not take its
+  mail, and no more mail than the delete was confirmed for
+  (`_refuseNewMail`); a refusal after a follow names the new path ("the
+  folder was renamed elsewhere to "Work2" (was "Work"): ..."), on a
+  Retry too (payload `followedFrom`), so Retry or Discard decide. A
+  replaced folder whose id is listed nowhere keeps the old outcome
+  (removed, delete done). JMAP is untouched (`Mailbox/set destroy` by
+  id).
 - **A listing during a folder op being sent stores no second row**
   (#1341). A listing that ran while a rename or move was claimed (another
   isolate's listing during the flush) left the folder alone, as it may be
@@ -2118,11 +2134,17 @@ What remains after phase 6, with where it is handled today:
   never merges rows), so it pruned the old row and the queued op failed
   as "folder removed on the server". Now the listing stores no new folder
   whose listed `MAILBOXID` is the stored id of a cached folder that this
-  listing does not have at its own path with that id (App Log info
+  listing does not have at its own path with that id and whose rename or
+  move is being sent right now (`isBeingMoved`: claimed, not one sent
+  before that waits hours for its retry, which `mayBeMoving` also counts;
+  never the inbox, which a server may list as "Inbox") (App Log info
   `mailbox.listing_skipped_followable`): that folder is the cached one,
   and the next listing, with the op put back, follows it there (row id,
-  mail, queued changes, checkpoint kept). Such a listing does not write
-  `FolderListedTrusted`, so it does not end a `goneAt` wait. Chosen over
+  mail, queued changes, checkpoint kept). A deferral lasts only while the
+  op is being sent. Such a listing still does not write
+  `FolderListedTrusted`: it did not follow the folder being moved, and a
+  mail change marked gone at that folder's old path must not end its
+  wait on it (the next listing writes it). Chosen over
   merging two rows by id later: a merge would have to reconcile two sets
   of mail rows, queued changes and checkpoints; not creating the
   duplicate needs none of that. A row that a much older build stored as

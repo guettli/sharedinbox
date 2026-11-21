@@ -134,11 +134,9 @@ extension _FlushMailbox on EmailRepositoryImpl {
           if (mailbox == null) {
             throw MailboxOpRefused('the folder no longer exists');
           }
-          String? followedFrom;
           if (const [renameMailboxOp, moveMailboxOp, deleteMailboxOp]
               .contains(row.changeType)) {
-            (row: row, from: followedFrom) =
-                await _retargetFollowed(row, mailbox);
+            row = (await _retargetFollowed(row, mailbox)).row;
           }
           if (row.changeType == deleteMailboxOp) {
             final bool gone;
@@ -151,8 +149,15 @@ extension _FlushMailbox on EmailRepositoryImpl {
               );
             } on MailboxOpRefused catch (e) {
               // A delete that followed the folder another client renamed
-              // (#1340): its refusal (mail it got since, say) names where.
-              if (followedFrom == null || e.goneAt != null) rethrow;
+              // (#1340): its refusal (mail it got since, say) names where,
+              // on a Retry too.
+              final followedFrom =
+                  _decodePayload(row)?[mailboxOpFollowedFrom] as String?;
+              if (followedFrom == null ||
+                  followedFrom == mailbox.path ||
+                  e.goneAt != null) {
+                rethrow;
+              }
               throw MailboxOpRefused(
                 'the folder was renamed elsewhere to "${mailbox.path}" '
                 '(was "$followedFrom"): ${e.message}',
@@ -275,18 +280,47 @@ extension _FlushMailbox on EmailRepositoryImpl {
   /// server (#1329, [MailboxStateWriter.waitForListing]): when the listing
   /// followed that folder to another path (another client renamed or moved
   /// it), the op loses its mark and is sent there now (App Log warn
-  /// `pending_change.folder_followed`). A delete too, which only a listing
-  /// that recognised the folder by its MAILBOXID follows (#1340). Returns
-  /// the op as stored, and the path it was marked gone at when it follows.
+  /// `pending_change.folder_followed`). A delete too, but only when the
+  /// listing recognised the folder by its MAILBOXID (the mark says so,
+  /// #1340): the path it followed from is kept in the payload
+  /// ([mailboxOpFollowedFrom]) for the refusals. A delete whose folder
+  /// moved otherwise (our own rename or move acked) loses the mark and is
+  /// checked afresh at the folder's path (App Log info
+  /// `mailbox.delete_mark_dropped`). Returns the op as stored, and the
+  /// path it was marked gone at when it follows.
   Future<({PendingChangeRow row, String? from})> _retargetFollowed(
     PendingChangeRow row,
     MailboxRow mailbox,
   ) async {
-    final (:from, row: stored) = await _mailboxState.clearFollowedGoneAt(
+    var (:from, :byId, row: stored) = await _mailboxState.clearFollowedGoneAt(
       row,
       path: mailbox.path,
     );
     if (from == null) return (row: stored, from: null);
+    if (stored.changeType == deleteMailboxOp) {
+      if (!byId) {
+        unawaited(
+          _appLogger?.info(
+            'mailbox.delete_mark_dropped',
+            'The delete of "${mailbox.name}" waited because "$from" was not '
+                'on the server; the folder is at "${mailbox.path}" now, not '
+                'by a folder id the listing recognised: the delete is '
+                'checked again there, as a new one',
+            accountId: row.accountId,
+            mailboxPath: mailbox.path,
+            data: {'changeId': row.id, 'from': from, 'path': mailbox.path},
+          ),
+        );
+        return (row: stored, from: null);
+      }
+      final followed = from;
+      stored = await _mailboxState.updatePayloadKey(
+            stored.id,
+            mailboxOpFollowedFrom,
+            (_) => followed,
+          ) ??
+          stored;
+    }
     final parent = stored.changeType == moveMailboxOp
         ? (_decodePayload(stored)?[mailboxOpParent] as String?)
         : null;
@@ -777,14 +811,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
     final separator = imapSeparatorOf(folders);
     await _mailboxState.recordImapSeparator(row.accountId, separator);
     if (!folders.any((m) => m.path == path)) {
-      return _imapDeleteFoundGone(row, mailbox);
-    }
-    if (folders.any((m) => m.path.startsWith('$path$separator'))) {
-      // IMAP DELETE would leave them (or the server refuses): the app
-      // deletes a folder only once its subfolders are gone.
-      throw MailboxOpRefused('the folder still has subfolders on the server');
+      _imapDeleteFoundGone(row, mailbox);
     }
     final box = imapMailboxFor(path, separator);
+    // Before the subfolder check: a new folder at the old name, with
+    // subfolders of its own, is no reason to refuse.
     if (await _otherFolderAt(imapClient, box, mailbox)) {
       // The folder the user deleted went elsewhere (renamed, and another
       // made at its name): never deleted for it; the listing follows it.
@@ -793,6 +824,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
         'differs)',
         goneAt: path,
       );
+    }
+    if (folders.any((m) => m.path.startsWith('$path$separator'))) {
+      // IMAP DELETE would leave them (or the server refuses): the app
+      // deletes a folder only once its subfolders are gone.
+      throw MailboxOpRefused('the folder still has subfolders on the server');
     }
     try {
       if (!removeEmails || confirmed != null) {
@@ -811,7 +847,9 @@ extension _FlushMailbox on EmailRepositoryImpl {
     } catch (e) {
       if (!imapClient.isConnected || isImapConnectionLost(e)) rethrow;
       final list = await imapClient.listMailboxes(recursive: true);
-      if (!list.any((m) => m.path == path)) return true;
+      // Gone between the LIST and the DELETE (or answered NO): not our
+      // DELETE's doing, maybe another client's rename; the listing decides.
+      if (!list.any((m) => m.path == path)) _imapDeleteFoundGone(row, mailbox);
       final refused = _imapFolderRefusal(e, 'the server refused it');
       if (refused != null) throw refused;
       rethrow;
@@ -819,37 +857,26 @@ extension _FlushMailbox on EmailRepositoryImpl {
     return true;
   }
 
-  /// IMAP delete [row] of [mailbox] found no folder at its path. Sent
-  /// before without an answer ([PendingChangeRow.attempts] > 0): our
-  /// DELETE most likely went through, and it counts as done (App Log warn
-  /// `mailbox.delete_found_done`); it is never sent after a folder the
-  /// listing follows, which may be one another client made since. Never
-  /// sent: another client may have renamed or moved the folder (#1340), so
-  /// it is refused with a `goneAt` and waits for the folder listing
-  /// ([_waitForListing]): one that follows the folder by its MAILBOXID
-  /// takes the delete along, one that finds it renamed by its mail only
-  /// fails it visibly, and one that removes it counts it as done.
-  bool _imapDeleteFoundGone(PendingChangeRow row, MailboxRow mailbox) {
-    if (row.attempts == 0) {
+  /// IMAP delete [row] of [mailbox] found no folder at its path: another
+  /// client may have renamed or moved it (#1340), so it is refused with a
+  /// `goneAt` and waits for the folder listing ([_waitForListing]), also
+  /// when it was sent before without an answer (our DELETE may have gone
+  /// through, but folder ids are never reused: one listed elsewhere was
+  /// not deleted). The listing decides: a folder it follows by its
+  /// MAILBOXID takes a never-sent delete along; one it finds elsewhere by
+  /// its id after an earlier try, or by its mail only, fails the delete
+  /// visibly; one it does not find is removed and the delete counts as
+  /// done (App Log warn `mailbox.delete_found_done`).
+  Never _imapDeleteFoundGone(PendingChangeRow row, MailboxRow mailbox) =>
       throw MailboxOpRefused(
-        'the folder is not at "${mailbox.path}" on the server any more '
-        '(renamed or deleted by another client)',
+        row.attempts == 0
+            ? 'the folder is not at "${mailbox.path}" on the server any '
+                'more (renamed or deleted by another client)'
+            : 'the folder is not at "${mailbox.path}" on the server any '
+                'more (an earlier try may have deleted it, or another client '
+                'renamed it)',
         goneAt: mailbox.path,
       );
-    }
-    unawaited(
-      _appLogger?.warn(
-        'mailbox.delete_found_done',
-        'The folder "${mailbox.path}" is not on the server when its delete '
-            'is sent again: the earlier try most likely deleted it, and the '
-            'delete counts as done',
-        accountId: row.accountId,
-        mailboxPath: mailbox.path,
-        data: {'changeId': row.id, 'attempts': row.attempts},
-      ),
-    );
-    return true;
-  }
 
   /// Whether the IMAP folder at [box] is not [mailbox] (#1340): the
   /// server gives folder ids and its `MAILBOXID` there differs from the

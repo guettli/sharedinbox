@@ -328,6 +328,19 @@ class MailboxStateWriter {
   Future<bool> mayBeMoving(String mailboxId) async =>
       (await _opsOf(mailboxId)).any(_mayHaveMoved);
 
+  /// Whether a rename or move of mailbox [mailboxId] is being sent right
+  /// now (claimed by a flush): unlike [mayBeMoving], not one sent before
+  /// that waits for its retry.
+  Future<bool> isBeingMoved(String mailboxId) async => (await _opsOf(
+        mailboxId,
+      ))
+          .any(
+        (o) =>
+            (o.changeType == renameMailboxOp ||
+                o.changeType == moveMailboxOp) &&
+            o.state == 'inflight',
+      );
+
   /// Whether op [o] is a rename or move being sent or one that may have
   /// reached the server (sent before without an answer).
   static bool _mayHaveMoved(PendingChangeRow o) =>
@@ -401,10 +414,14 @@ class MailboxStateWriter {
     String gone,
   ) async {
     final mark = goneAtOf(row);
-    if (row.attempts == 0 && (mark == null || mark.path != gone)) {
+    // A delete sent before waits too (#1340): it is never sent to where
+    // the listing finds the folder, and a resend cannot undo anything; the
+    // listing decides whether it is done.
+    final fresh = row.attempts == 0 || row.changeType == deleteMailboxOp;
+    if (fresh && (mark == null || mark.path != gone)) {
       return (waits: true, first: true);
     }
-    if (row.attempts == 0 && mark != null) {
+    if (fresh && mark != null) {
       final listed = await trustedListingSeq(row.accountId);
       final since = mark.since;
       final capped = mark.waits + 1 >= goneAtMaxWaits ||
@@ -465,18 +482,32 @@ class MailboxStateWriter {
     int id,
     Map<String, dynamic>? Function(Map<String, dynamic>? stored) change,
   ) =>
+      updatePayloadKey(
+        id,
+        mailboxOpGoneAt,
+        (stored) => change(stored is Map<String, dynamic> ? stored : null),
+      );
+
+  /// Rewrites only payload [key] of op [id], as stored (see
+  /// [updateGoneAt]): [change] gets the stored value and returns the new
+  /// one, or null to drop the key. Returns the op as stored afterwards, or
+  /// null when it is gone.
+  Future<PendingChangeRow?> updatePayloadKey(
+    int id,
+    String key,
+    Object? Function(Object? stored) change,
+  ) =>
       _db.transaction(() async {
         final op = await (_db.select(_db.pendingChanges)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
         if (op == null) return null;
         final payload = _payloadOf(op) ?? <String, dynamic>{};
-        final stored = payload[mailboxOpGoneAt];
-        final next = change(stored is Map<String, dynamic> ? stored : null);
+        final next = change(payload[key]);
         if (next == null) {
-          if (payload.remove(mailboxOpGoneAt) == null) return op;
+          if (payload.remove(key) == null) return op;
         } else {
-          payload[mailboxOpGoneAt] = next;
+          payload[key] = next;
         }
         await _writePayload(id, payload);
         return (_db.select(_db.pendingChanges)..where((t) => t.id.equals(id)))
@@ -492,25 +523,28 @@ class MailboxStateWriter {
   /// into (its `parent`, as stored now: a listing may have followed that
   /// one since [row] was read): a listing followed the folder another
   /// client renamed or moved (#1329), and the op is sent there now. Returns
-  /// the path it was marked gone at (null: no mark, or one still current)
-  /// and the op as stored.
-  Future<({String? from, PendingChangeRow row})> clearFollowedGoneAt(
+  /// the path it was marked gone at (null: no mark, or one still current),
+  /// whether the listing followed it by its MAILBOXID ([byId], set on a
+  /// delete's mark only, #1340), and the op as stored.
+  Future<({String? from, bool byId, PendingChangeRow row})> clearFollowedGoneAt(
     PendingChangeRow row, {
     required String path,
   }) async {
     final current = await (_db.select(_db.pendingChanges)
           ..where((t) => t.id.equals(row.id)))
         .getSingleOrNull();
-    if (current == null) return (from: null, row: row);
+    if (current == null) return (from: null, byId: false, row: row);
     final mark = goneAtOf(current);
     final parent = current.changeType == moveMailboxOp
         ? (_payloadOf(current)?[mailboxOpParent] as String?)
         : null;
     if (mark == null || mark.path == path || mark.path == parent) {
-      return (from: null, row: current);
+      return (from: null, byId: false, row: current);
     }
+    final raw = _payloadOf(current)?[mailboxOpGoneAt];
+    final byId = raw is Map && raw[mailboxOpGoneAtById] == true;
     final stored = await updateGoneAt(row.id, (_) => null);
-    return (from: mark.path, row: stored ?? current);
+    return (from: mark.path, byId: byId, row: stored ?? current);
   }
 
   /// The paths of [accountId]'s folders a queued rename or move waits a
