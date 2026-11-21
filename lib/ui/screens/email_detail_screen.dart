@@ -178,8 +178,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// flashing first, and without the body fetch that view needs.
   bool _draftChecked = false;
 
-  /// The header and its folder's role, read by [_checkForDraft]. They keep
-  /// "Edit draft" usable when the body fails to load.
+  /// The header and its folder's role, read by [_checkForDraft] from the
+  /// cached row. They keep "Edit draft" and every action that needs no body
+  /// (archive, move, snooze, delete, …) usable while the body loads or when
+  /// it fails to load, e.g. offline with no cached body (#1330).
   Email? _checkedHeader;
   String? _checkedRole;
 
@@ -227,6 +229,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       _draftChecked = true;
       _checkedHeader = header;
       _checkedRole = role;
+      if (header != null) _isFlagged = header.isFlagged;
     });
   }
 
@@ -302,6 +305,30 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// Menu entries that cannot run without the message body.
+  static bool _isBodyAction(String value) =>
+      const {'forward', 'select_text', 'headers', 'structure'}.contains(value);
+
+  /// Explains in a SnackBar, and returns true, when [body] is missing or
+  /// failed to load, so an action built on it (Forward, quoting in Reply, …)
+  /// never silently does nothing (#1330). Returns false when the body is there.
+  bool _explainBodyMissing(EmailBody? body, {String? message}) {
+    if (body != null && body.loadError == null) return false;
+    final loading = ref.read(emailDetailProvider(widget.emailId)).isLoading;
+    context.showAppSnackBar(
+      message ??
+          (loading
+              ? 'The message is still loading. Try again in a moment.'
+              : 'The message body could not be loaded (offline?), so this '
+                  'is not available. Tap Retry when online.'),
+      level: AppLogLevel.warn,
+      event: 'email.detail.body_unavailable',
+      emailId: widget.emailId,
+      persist: false,
+    );
+    return true;
+  }
+
   /// One-shot SnackBar pointing at the App Log, shown when this message's body
   /// could not be loaded — whether the fetch threw or returned a body flagged
   /// with a [EmailBody.loadError] (#587, #837).
@@ -364,7 +391,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       },
     );
 
-    final header = detail.value?.$1;
+    // Fall back to the cached row while the body loads or when loading it
+    // failed: the detail provider then has no header, and the actions that
+    // need none must still work offline, as from the list (#1330).
+    final header = detail.value?.$1 ?? _checkedHeader;
     final body = detail.value?.$2;
 
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
@@ -573,6 +603,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ),
             ],
             onSelected: (value) async {
+              if (_isBodyAction(value) && _explainBodyMissing(body)) return;
               if (value == 'forward' && header != null) {
                 unawaited(_forward(context, header, body));
               } else if (value == 'move' && header != null) {
@@ -1610,7 +1641,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
-    final quoted = await _quotedBody(header, body);
+    // Without the body there is nothing to quote: reply anyway, unquoted,
+    // and say so rather than quoting an empty text (#1330).
+    final quoted = _explainBodyMissing(
+      body,
+      message: 'The message body is not available, so the reply does not '
+          'quote it.',
+    )
+        ? ''
+        : await _quotedBody(header, body);
     if (!context.mounted) return;
     unawaited(
       context.push(

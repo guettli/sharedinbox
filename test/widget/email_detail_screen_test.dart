@@ -769,6 +769,97 @@ void main() {
       },
     );
 
+    group('body could not be loaded, e.g. offline (#1330)', () {
+      const archive = Mailbox(
+        id: 'acc-1:Archive',
+        accountId: 'acc-1',
+        path: 'Archive',
+        name: 'Archive',
+        role: 'archive',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      const projects = Mailbox(
+        id: 'acc-1:Projects',
+        accountId: 'acc-1',
+        path: 'Projects',
+        name: 'Projects',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+
+      Future<_OfflineEmailRepository> open(WidgetTester tester) async {
+        final repo = _OfflineEmailRepository();
+        await tester.pumpWidget(
+          buildApp(
+            initialLocation:
+                '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
+            overrides: [
+              ..._overrides(
+                body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+                emails: repo,
+                mailboxes: FakeMailboxRepository([archive, projects]),
+              ),
+              appLogRepositoryProvider.overrideWithValue(
+                const NoOpAppLogRepository(),
+              ),
+            ],
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('This message could not be opened.'), findsOneWidget);
+        // Let the load-failed SnackBar go so the next one is the action's.
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        return repo;
+      }
+
+      Future<void> menu(WidgetTester tester, String entry) async {
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(entry));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('Archive queues the move from the cached row', (
+        tester,
+      ) async {
+        final repo = await open(tester);
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Archive'),
+        );
+        await tester.pumpAndSettle();
+        expect(repo.moves, [('acc-1:42', 'Archive')]);
+      });
+
+      testWidgets('Move to folder queues the move', (tester) async {
+        final repo = await open(tester);
+        await menu(tester, 'Move to folder');
+        await tester.tap(find.text('Projects'));
+        await tester.pumpAndSettle();
+        expect(repo.moves, [('acc-1:42', 'Projects')]);
+      });
+
+      testWidgets('Snooze queues the snooze', (tester) async {
+        final repo = await open(tester);
+        await menu(tester, 'Snooze');
+        await tester.tap(find.text('Tomorrow morning'));
+        await tester.pumpAndSettle();
+        expect(repo.snoozed, ['acc-1:42']);
+      });
+
+      testWidgets('Forward says why it cannot run', (tester) async {
+        await open(tester);
+        await menu(tester, 'Forward');
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(
+          find.text('The message body could not be loaded (offline?), so '
+              'this is not available. Tap Retry when online.'),
+          findsOneWidget,
+        );
+      });
+    });
+
     testWidgets('Reply All button is not present in app bar', (tester) async {
       await tester.pumpWidget(
         buildApp(
@@ -3172,6 +3263,32 @@ class _FailingEmailRepository extends FakeEmailRepository {
     bool forceRefresh = false,
   }) async =>
       throw StateError('boom');
+}
+
+/// Offline with no cached body: the row is there, [getEmailBody] throws.
+/// Records the moves and snoozes the detail view queues (#1330).
+class _OfflineEmailRepository extends FakeEmailRepository {
+  _OfflineEmailRepository() : super(emailDetail: testEmail());
+
+  final List<(String, String)> moves = [];
+  final List<String> snoozed = [];
+
+  @override
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) async =>
+      throw const SocketException('offline');
+
+  @override
+  Future<void> moveEmail(String emailId, String destMailboxPath) async {
+    moves.add((emailId, destMailboxPath));
+  }
+
+  @override
+  Future<void> snoozeEmail(String emailId, DateTime until) async {
+    snoozed.add(emailId);
+  }
 }
 
 /// Email repository whose [deleteEmail] only completes once [gate] is
