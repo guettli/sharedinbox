@@ -38,15 +38,33 @@ void main() {
   void workRenamedTo(String to) =>
       server.renameFolder('Work', to, newUidValidity: true);
 
-  // After the first flush: the change waits, uncharged, unsent, with an
-  // App Log info line and a kick; nothing was dropped as done.
-  Future<void> expectWaiting() async {
-    final op = await mailOp();
+  // After the first flush: the change (the latest of type [type], or the
+  // only mail change) waits, uncharged, unsent, with an App Log info line
+  // and a kick; nothing was dropped as done.
+  Future<void> expectWaitingOn(String? type) async {
+    final op = type == null
+        ? await mailOp()
+        : (await rigOps()).lastWhere((o) => o.changeType == type);
     expect((op.state, op.attempts), ('pending', 0));
     expect(op.payload, contains('goneAt'));
     expect(f.events(), contains('pending_change.waits_for_listing'));
     expect(f.events(), isNot(contains('pending_change.skipped_gone')));
     expect(f.kicks, contains(statefulRigAccount.id));
+  }
+
+  Future<void> expectWaiting() => expectWaitingOn(null);
+
+  // Another client deletes Work: the queued change waits for the listing,
+  // which removes the folder and fails the change, returned.
+  Future<PendingChangeRow> workDeletedElsewhere() async {
+    server.deleteFolder('Work');
+    await rigFlush();
+    await expectWaiting();
+    await rigListFolders();
+    final op = await mailOp();
+    expect(op.state, 'failed');
+    expect(op.lastError, 'folder removed on the server');
+    return op;
   }
 
   // c1@test's delete queued in Work; another client renames Work to
@@ -124,6 +142,12 @@ void main() {
         server.hits.map((h) => h.command),
         contains('MOVE Work2->Archive'),
       );
+      // Only the path that changed is named, and the source folder now.
+      final followed = f.logs.rows
+          .singleWhere((r) => r.event == 'pending_change.folder_followed');
+      expect(followed.mailboxPath, 'Work2');
+      expect(followed.dataJson, contains('"from":{"mailboxPath":"Work"}'));
+      expect(followed.dataJson, contains('"to":{"mailboxPath":"Work2"}'));
       await expectRigConsistent();
     });
 
@@ -171,6 +195,31 @@ void main() {
       await expectRigConsistent();
     });
 
+    test(
+        'a snooze into a Snoozed folder renamed elsewhere (TRYCREATE) waits '
+        'and lands in the renamed folder', () async {
+      await work();
+      // The first snooze makes the Snoozed folder.
+      await emails.snoozeEmail((await mail('c1@test')).id, DateTime.utc(2030));
+      await rigCycle();
+      expect(server.find('c1@test')!.folder.path, 'Snoozed');
+      await emails.snoozeEmail((await rowOfA()).id, DateTime.utc(2031));
+      server.renameFolder('Snoozed', 'Later', newUidValidity: true);
+
+      await rigFlush();
+      await expectWaitingOn('snooze');
+      expect(f.events(), isNot(contains('pending_change.dest_missing')));
+      await rigListFolders();
+      await rigFlush();
+
+      expect(server.find('a@test')!.folder.path, 'Later');
+      expect(
+        server.find('a@test')!.message.flags.where((x) => x.startsWith('snz:')),
+        hasLength(1),
+      );
+      expect(await failed(), isEmpty);
+    });
+
     test('a delete in a folder renamed elsewhere expunges the mail there',
         () async {
       await work();
@@ -193,15 +242,7 @@ void main() {
         () async {
       await work();
       await emails.setFlag((await mail('c1@test')).id, flagged: true);
-      server.deleteFolder('Work');
-
-      await rigFlush();
-      await expectWaiting();
-      await rigListFolders();
-
-      final op = await mailOp();
-      expect(op.state, 'failed');
-      expect(op.lastError, 'folder removed on the server');
+      final op = await workDeletedElsewhere();
       expect(f.events(), contains('pending_change.folder_removed'));
       expect(f.events(), isNot(contains('pending_change.skipped_gone')));
       expect(f.events(), isNot(contains('pending_change.folder_followed')));
@@ -227,9 +268,8 @@ void main() {
     });
 
     test(
-        'a listing that keeps the folder but does not follow it: the change '
-        'fails visibly at the next flush without being sent (one listing '
-        'bounds the wait)', () async {
+        'a listing in doubt that keeps the folder does not end the wait; the '
+        'one that confirms the folder gone fails the change visibly', () async {
       // A role folder a listing leaves out is kept (#1312).
       await emails.moveEmail((await rowOfA()).id, 'Archive');
       await rigFlush();
@@ -245,14 +285,106 @@ void main() {
 
       await rigFlush();
 
-      final op = await mailOp();
-      expect(op.state, 'failed');
-      expect(op.lastError, contains('did not find it renamed or moved'));
-      expect(op.payload, isNot(contains('goneAt')));
-      expect(f.events(), contains('pending_change.folder_not_found'));
+      expect((await mailOp()).state, 'pending');
+      expect(f.events(), isNot(contains('pending_change.folder_not_found')));
       expect(server.hits.length, hits);
       // No second kick: nothing loops.
       expect(f.kicks.length, kicked);
+
+      await rigListFolders();
+      final op = await mailOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, 'folder removed on the server');
+      expect(server.hits.length, hits);
+    });
+
+    test(
+        'a listing in doubt about folder ids, then one that follows the '
+        'folder: the change lands in the renamed folder', () async {
+      await work();
+      await emails.setFlag((await mail('c1@test')).id, flagged: true);
+      workRenamedTo('Work2');
+      await rigFlush();
+      await expectWaiting();
+      // Its STATUS fails: the listing does not know Work2's id.
+      server.statusError = (path) => path == 'Work2' ? 'NO busy' : null;
+
+      await rigListFolders();
+      await rigFlush();
+
+      expect((await mailOp()).state, 'pending');
+      expect(f.events(), isNot(contains('pending_change.folder_not_found')));
+      server.statusError = null;
+      await rigListFolders();
+      await rigFlush();
+
+      expect(server.find('c1@test')!.message.flags, contains(r'\Flagged'));
+      expect(server.find('c1@test')!.folder.path, 'Work2');
+      expect(await failed(), isEmpty);
+    });
+
+    test(
+        'a delete sent before without an answer is not sent to where the '
+        'folder was followed: it fails visibly', () async {
+      await work();
+      await emails.deleteEmail((await mail('c1@test')).id);
+      workRenamedTo('Work2');
+      await db.customStatement(
+        'UPDATE pending_changes SET attempts = 1 '
+        "WHERE resource_type != 'Mailbox'",
+      );
+
+      await rigCycle();
+      await rigFlush();
+
+      expect(server.find('c1@test')!.folder.path, 'Work2');
+      final op = await mailOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, contains('sent without an answer'));
+      expect(f.events(), contains('pending_change.folder_not_found'));
+      expect(
+        server.hits.where((h) => h.command == 'EXPUNGE'),
+        isEmpty,
+      );
+    });
+
+    test(
+        'a move into a folder deleted elsewhere waits one listing, then '
+        'fails visibly; the mail stays in its folder', () async {
+      await work();
+      await emails.moveEmail((await rowOfA()).id, 'Work');
+      await workDeletedElsewhere();
+      expect(server.find('a@test')!.folder.path, 'INBOX');
+      expect((await rowOfA()).mailboxPath, 'INBOX');
+    });
+
+    test(
+        'a later change of the mail is held while its move waits, then sent '
+        'after it', () async {
+      await work();
+      final id = (await mail('c1@test')).id;
+      await emails.moveEmail(id, 'Archive');
+      await emails.setFlag((await mail('c1@test')).id, flagged: true);
+      workRenamedTo('Work2');
+
+      await rigFlush();
+
+      expect(server.hits, isEmpty);
+      final ops = [
+        for (final o in await rigOps())
+          if (o.resourceType != 'Mailbox') o,
+      ];
+      expect(ops.map((o) => (o.state, o.attempts)), [
+        ('pending', 0),
+        ('pending', 0),
+      ]);
+      await rigListFolders();
+      await rigFlush();
+
+      final onServer = server.find('c1@test')!;
+      expect(onServer.folder.path, 'Archive');
+      expect(onServer.message.flags, contains(r'\Flagged'));
+      expect(await failed(), isEmpty);
     });
 
     test(

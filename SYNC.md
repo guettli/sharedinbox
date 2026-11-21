@@ -1379,16 +1379,25 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     (`EmailStateWriter.renameFolder`, warn `pending_change.folder_renamed`);
     the next flush sees the change no longer names the marked path, drops
     the mark and sends it there (`pending_change.folder_followed`: info, or
-    warn when the change was sent before without an answer). A listing that
+    warn when the change was sent before without an answer; it names the
+    paths that changed). A delete sent before without an answer is not
+    followed but fails visibly: its resend would look the mail up by
+    Message-ID in the renumbered folder and could expunge another copy. A
+    listing that
     removes the folder fails the change visibly ("folder removed on the
     server"), a delete too: the mail may have been moved elsewhere before the
     folder went, so the delete is not counted as done. When a listing that
     started after the mark finished and the change still names the path (a
-    folder is listed there again, maybe another one; or a listing in doubt
-    kept it), it fails visibly without being sent (warn
+    folder is listed there again, maybe another one), it fails visibly without being sent (warn
     `pending_change.folder_not_found`), so a delete or flag change never
     lands on a folder another client made at the old path; so it does after
-    24 hours or 20 flushes while listings keep failing. Retry drops the mark.
+    24 hours or 20 flushes while listings keep failing. Only a listing that
+    could follow every folder counts (`FolderListedTrusted`: not in doubt
+    about folder ids, every id stored, trusted by the prune), for folder ops
+    too: a listing in doubt keeps a folder it did not follow, and the change
+    waits on. Only the mark is ever written back, onto the payload as stored,
+    so a follow written meanwhile (another isolate's listing) is kept. Retry
+    drops the mark.
     A folder the app does not have cached keeps the old outcome (moot,
     `pending_change.skipped_gone`): no listing can follow it.
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder

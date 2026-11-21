@@ -91,6 +91,13 @@ class EmailStateWriter {
   /// mail is known only after a listing.
   static const folderListedKey = 'FolderListed';
 
+  /// `sync_states.resource_type` of the read sequence the last IMAP folder
+  /// listing started at that could follow every folder: not in doubt about
+  /// folder ids, with every listed id stored, and trusted by the prune
+  /// (#1339). A change marked gone waits for one such listing
+  /// ([MailboxStateWriter.trustedListingSeq]).
+  static const folderListedTrustedKey = 'FolderListedTrusted';
+
   /// The next value of the read sequence (SYNC-REDESIGN.md §4.1). Take it
   /// right before sending a server read, and at an ack.
   Future<int> nextReadSeq() async {

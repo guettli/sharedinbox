@@ -22,6 +22,23 @@ class _ImapFolderGoneException implements Exception {
   String toString() => cause.toString();
 }
 
+/// A [mailboxOpGoneAt] mark ([MailboxStateWriter.goneAtOf]).
+typedef _GoneAtMark = ({
+  String path,
+  int seq,
+  DateTime? since,
+  int waits,
+  Map<String, String> at,
+});
+
+/// What [_FlushImapFolderWait._resolveFolderGoneAt] decided for a marked
+/// change: [send] it (as stored), or it [failed], or neither (put back).
+typedef _GoneAtOutcome = ({
+  PendingChangeRow? send,
+  _GoneAtMark? mark,
+  ({String why, List<PendingChangeRow> dependents, bool listed})? failed,
+});
+
 extension _FlushImapFolderWait on EmailRepositoryImpl {
   /// Whether [path] is a folder of [accountId] the app has a server copy
   /// of (a mailbox row not created offline): one a folder listing can
@@ -41,139 +58,180 @@ extension _FlushImapFolderWait on EmailRepositoryImpl {
           if (payload[key] case final String path) path,
       };
 
-  /// Claimed change [row] after [_waitForFolderListing] marked it
-  /// ([mailboxOpGoneAt]), before anything is sent:
+  /// Claimed change [claimed] after [_waitForFolderListing] marked it
+  /// ([mailboxOpGoneAt]), before anything is sent. Decided on the change as
+  /// stored, in one transaction: a folder listing (another isolate's, the
+  /// folder diagnostics') may have followed the folder since [claimed] was
+  /// read, and only the mark is ever written back.
   ///
   /// - the change no longer names the marked path: a folder listing
   ///   followed the folder to its new path and named that in the change
   ///   ([EmailStateWriter.renameFolder], App Log warn
   ///   `pending_change.folder_renamed`). The mark goes, and the change is
-  ///   returned to be sent there (App Log `pending_change.folder_followed`:
-  ///   info, or warn when the change was sent before without an answer and
-  ///   may have reached the server at the old path);
-  /// - it still names it, and a listing that started after the mark
-  ///   finished: that listing did not find the folder elsewhere and kept a
-  ///   folder at that path (one listed there again, which may be another
-  ///   folder, or one a listing in doubt kept, #1312). The change fails
-  ///   visibly without being sent: sent to the path, a delete or flag
-  ///   change could land on a folder another client made there. A listing
-  ///   that removed the folder failed the change itself
+  ///   returned to be sent there (App Log `pending_change.folder_followed`
+  ///   with the paths that changed: info, or warn when the change was sent
+  ///   before without an answer and may have reached the server at the old
+  ///   path). Not a delete that was sent before: its resend would look the
+  ///   mail up by Message-ID in a renumbered folder and could expunge
+  ///   another copy, so it fails visibly;
+  /// - it still names it, and a folder listing that could follow every
+  ///   folder ([MailboxStateWriter.trustedListingSeq]) started after the
+  ///   mark and finished: that listing did not find the folder elsewhere
+  ///   and kept a folder at that path, which may be another folder. The
+  ///   change fails visibly without being sent: sent to the path, a delete
+  ///   or flag change could land on a folder another client made there. A
+  ///   listing that removed the folder failed the change itself
   ///   (`removeLocalMailbox`, "folder removed on the server");
-  /// - otherwise (no listing finished since: listings fail) the change
-  ///   waits on, put back uncharged and unsent, at most
+  /// - otherwise (no such listing since: listings fail, or are in doubt)
+  ///   the change waits on, put back uncharged and unsent, at most
   ///   [MailboxStateWriter.goneAtMaxWait] and
   ///   [MailboxStateWriter.goneAtMaxWaits] flushes; then it fails visibly.
   ///
   /// Returns the change to send (as stored), or null when it was settled
-  /// here (failed or put back).
+  /// here (failed or put back) or the claim was lost.
   Future<PendingChangeRow?> _resolveFolderGoneAt(
     account_model.Account account,
-    PendingChangeRow row,
+    PendingChangeRow claimed,
   ) async {
-    final mark = MailboxStateWriter.goneAtOf(row);
-    if (mark == null) return row;
-    final payload = _decodePayload(row)!;
-    final named = _namedFolders(payload);
-    payload.remove(mailboxOpGoneAt);
-    if (!named.contains(mark.path)) {
-      final stored = await _db.transaction(() async {
-        final owned = await (_db.update(_db.pendingChanges)
-                  ..where((t) => _ownsClaim(t, row)))
-                .write(
-              PendingChangesCompanion(payload: Value(jsonEncode(payload))),
-            ) >
-            0;
-        if (!owned) return null;
-        return (_db.select(_db.pendingChanges)
-              ..where((t) => t.id.equals(row.id)))
-            .getSingle();
-      });
-      if (stored == null) return null;
-      final sentBefore = row.attempts > 0;
-      final to = _namedFolders(payload).join('" and "');
-      final message = 'The ${_describeChange(row)} waited because its '
-          'folder "${mark.path}" was not on the server; the folder list '
-          'found it renamed or moved by another client, and the change is '
-          'sent to "$to" now'
-          '${sentBefore ? ' (it was sent before without an answer, to the '
-              'old path)' : ''}';
-      final data = {
-        'changeId': row.id,
-        'changeType': row.changeType,
-        'from': mark.path,
-        'attempts': row.attempts,
-      };
-      unawaited(
-        sentBefore
-            ? _appLogger?.warn(
-                'pending_change.folder_followed',
-                message,
-                accountId: row.accountId,
-                emailId: row.resourceId,
-                data: data,
-              )
-            : _appLogger?.info(
-                'pending_change.folder_followed',
-                message,
-                accountId: row.accountId,
-                emailId: row.resourceId,
-                data: data,
-              ),
-      );
-      return stored;
-    }
-    final listed = await _mailboxState.folderListedSeq(row.accountId);
-    final since = mark.since;
-    final listedSince = listed != null && listed >= mark.seq;
-    final capped = mark.waits + 1 >= MailboxStateWriter.goneAtMaxWaits ||
-        (since != null &&
-            _now().difference(since) >= MailboxStateWriter.goneAtMaxWait);
-    if (!listedSince && !capped) {
-      payload[mailboxOpGoneAt] = {
-        ...(_decodePayload(row)![mailboxOpGoneAt] as Map<String, dynamic>),
-        'waits': mark.waits + 1,
-      };
-      await _db.transaction(() async {
-        await (_db.update(_db.pendingChanges)..where((t) => _ownsClaim(t, row)))
-            .write(
-          PendingChangesCompanion(payload: Value(jsonEncode(payload))),
+    if (MailboxStateWriter.goneAtOf(claimed) == null) return claimed;
+    final listed = await _mailboxState.trustedListingSeq(claimed.accountId);
+    final outcome = await _db.transaction<_GoneAtOutcome?>(() async {
+      final row = await (_db.select(_db.pendingChanges)
+            ..where((t) => _ownsClaim(t, claimed)))
+          .getSingleOrNull();
+      if (row == null) return null;
+      final mark = MailboxStateWriter.goneAtOf(row);
+      if (mark == null) return (send: row, mark: null, failed: null);
+      final payload = _decodePayload(row)!;
+      final followed = !_namedFolders(payload).contains(mark.path);
+      final since = mark.since;
+      final capped = mark.waits + 1 >= MailboxStateWriter.goneAtMaxWaits ||
+          (since != null &&
+              _now().difference(since) >= MailboxStateWriter.goneAtMaxWait);
+      final listedSince = listed != null && listed >= mark.seq;
+      final String why;
+      if (followed && (row.changeType != 'delete' || row.attempts == 0)) {
+        final stored = await _mailboxState.updateGoneAt(row.id, (_) => null);
+        return (send: stored, mark: mark, failed: null);
+      } else if (followed) {
+        why = 'the folder "${mark.path}" was renamed or moved by another '
+            'client after this delete was sent without an answer; it is not '
+            'sent to the new path, where it could delete another copy of the '
+            'mail';
+      } else if (!listedSince && !capped) {
+        await _mailboxState.updateGoneAt(
+          row.id,
+          (stored) => {...?stored, 'waits': mark.waits + 1},
         );
         await _unclaimPendingChange(row);
-      });
-      return null;
-    }
-    final why = listedSince
-        ? 'the folder "${mark.path}" is not on the server, and the folder '
-            'list did not find it renamed or moved'
-        : 'the folder "${mark.path}" is not on the server, and no folder '
-            'list could be read to find it renamed or moved';
-    // The mark goes with the failure: a Retry waits for one listing again.
-    final dependents = await _db.transaction(() async {
-      await (_db.update(_db.pendingChanges)..where((t) => _ownsClaim(t, row)))
-          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
-      return _markChangeFailedInTransaction(row, why, revert: true);
+        return (send: null, mark: mark, failed: null);
+      } else {
+        why = listedSince
+            ? 'the folder "${mark.path}" is not on the server, and the '
+                'folder list did not find it renamed or moved'
+            : 'the folder "${mark.path}" is not on the server, and no '
+                'folder list could be read to find it renamed or moved';
+      }
+      // The mark goes with the failure: a Retry waits for one listing
+      // again.
+      final stored =
+          await _mailboxState.updateGoneAt(row.id, (_) => null) ?? row;
+      final dependents =
+          await _markChangeFailedInTransaction(stored, why, revert: true);
+      if (dependents == null) return null;
+      return (
+        send: null,
+        mark: mark,
+        failed: (why: why, dependents: dependents, listed: listedSince),
+      );
     });
-    if (dependents == null) return null;
-    _logDependentFailures(row, dependents);
-    log('IMAP change ${row.id} failed: $why');
+    if (outcome == null) return null;
+    final (:send, :mark, :failed) = outcome;
+    if (mark == null) return send;
+    if (send != null) {
+      _logFolderFollowed(send, mark);
+      return send;
+    }
+    if (failed == null) return null;
+    _logDependentFailures(claimed, failed.dependents);
+    log('IMAP change ${claimed.id} failed: ${failed.why}');
     unawaited(
       _appLogger?.warn(
         'pending_change.folder_not_found',
-        'Could not apply ${_describeChange(row)} — $why; not sent, kept on '
-            'the Pending Changes screen',
+        'Could not apply ${_describeChange(claimed)} — ${failed.why}; not '
+            'sent, kept on the Pending Changes screen',
         accountId: account.id,
-        emailId: row.resourceId,
+        emailId: claimed.resourceId,
         mailboxPath: mark.path,
         data: {
-          'changeId': row.id,
-          'changeType': row.changeType,
+          'changeId': claimed.id,
+          'changeType': claimed.changeType,
           'gone': mark.path,
-          'listed': listedSince,
+          'listed': failed.listed,
           'waits': mark.waits + 1,
+          'attempts': claimed.attempts,
         },
       ),
     );
     return null;
+  }
+
+  /// App Log `pending_change.folder_followed` for [row], as stored after a
+  /// folder listing followed the folder its [mark] names: the payload keys
+  /// whose paths changed since the mark (`from`, `to`), and the change's
+  /// source folder now.
+  void _logFolderFollowed(
+    PendingChangeRow row,
+    _GoneAtMark mark,
+  ) {
+    final payload = _decodePayload(row) ?? const <String, dynamic>{};
+    final from = <String, String>{};
+    final to = <String, String>{};
+    for (final MapEntry(:key, :value) in mark.at.entries) {
+      final now = payload[key];
+      if (now is! String || now == value) continue;
+      from[key] = value;
+      to[key] = now;
+    }
+    if (from.isEmpty) from['path'] = mark.path;
+    final source = (payload['mailboxPath'] ?? payload['src']) as String?;
+    final sentBefore = row.attempts > 0;
+    final moved = [
+      for (final key in from.keys)
+        '"${from[key]}"${to[key] == null ? '' : ' → "${to[key]}"'}',
+    ].join(', ');
+    final message = 'The ${_describeChange(row)} waited because its folder '
+        '"${mark.path}" was not on the server; the folder list found it '
+        'renamed or moved by another client ($moved), and the change is '
+        'sent there now'
+        '${sentBefore ? ' (it was sent before without an answer, to the '
+            'old path)' : ''}';
+    final data = {
+      'changeId': row.id,
+      'changeType': row.changeType,
+      'from': from,
+      'to': to,
+      'attempts': row.attempts,
+    };
+    unawaited(
+      sentBefore
+          ? _appLogger?.warn(
+              'pending_change.folder_followed',
+              message,
+              accountId: row.accountId,
+              emailId: row.resourceId,
+              mailboxPath: source,
+              data: data,
+            )
+          : _appLogger?.info(
+              'pending_change.folder_followed',
+              message,
+              accountId: row.accountId,
+              emailId: row.resourceId,
+              mailboxPath: source,
+              data: data,
+            ),
+    );
   }
 
   /// Claimed change [row] found [e]'s folder not on the server (#1339): it
@@ -194,7 +252,11 @@ extension _FlushImapFolderWait on EmailRepositoryImpl {
     _ImapFolderGoneException e,
   ) async {
     await _unclaimPendingChange(row);
-    await _mailboxState.markGoneAt(row.id, e.path);
+    await _mailboxState.markGoneAt(
+      row.id,
+      e.path,
+      pathKeys: const ['mailboxPath', 'src', 'dest'],
+    );
     log('IMAP change ${row.id} waits: ${e.path} is not on the server');
     unawaited(
       _appLogger?.info(

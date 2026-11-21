@@ -199,12 +199,12 @@ void main() {
     });
 
     test(
-        'a listing that keeps the folder but does not follow it: the next '
-        'flush refuses the rename visibly (one listing bounds the wait)',
-        () async {
+        'a listing in doubt that keeps the folder does not end the wait; the '
+        'one that confirms the folder gone fails the rename visibly', () async {
       final archive = await folderAt('Archive');
       await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
-      // A role folder a listing leaves out is kept (#1312).
+      // A role folder a listing leaves out is kept (#1312): the listing is
+      // not trusted.
       server.deleteFolder('Archive');
 
       await rigFlush();
@@ -215,21 +215,46 @@ void main() {
 
       await rigFlush();
 
-      final op = await folderOp();
-      expect(op.state, 'failed');
-      expect(op.lastError, contains('no longer exists on the server'));
-      expect(f.events(), contains('pending_change.rejected'));
-      expect(
-        server.folderCommands.where((c) => c.startsWith('RENAME')),
-        hasLength(2),
-      );
+      // Not refused on a listing in doubt (#1339): it waits on.
+      expect((await folderOp()).state, 'pending');
+      expect(f.events(), isNot(contains('pending_change.rejected')));
       // No second kick: nothing loops.
       expect(f.kicks.length, kicked);
-      // The user's Retry waits for one listing again.
+
+      // The next listing asks about the marked folder: gone, removed, and
+      // the rename fails visibly.
+      await rigListFolders();
+      expect(await folderById(archive.id), isNull);
+      final op = await folderOp();
+      expect(op.state, 'failed');
+      expect(op.lastError, 'folder removed on the server');
       expect(op.payload, isNot(contains('goneAt')));
-      await emails.retryMutation(op.id);
+    });
+
+    test(
+        'a follow the listing wrote after the op was read is kept when the '
+        'op is settled from that read (no stale payload written back)',
+        () async {
+      server.addFolder('Work');
+      await acme();
+      await rig.mailboxes.moveMailbox(
+        _acc.id,
+        'Work',
+        newParentDisplayPath: 'Clients/Acme',
+      );
+      acmeRenamedTo('Clients/Acme2');
       await rigFlush();
-      expect((await folderOp()).state, 'pending');
+      final read = await folderOp();
+      expect(read.payload, contains('goneAt'));
+
+      // A listing (another isolate's) follows the parent meanwhile.
+      await rigListFolders();
+      expect((await folderOp()).payload, contains('"parent":"Clients/Acme2"'));
+      await MailboxStateWriter(db).waitForListing(read, 'Clients/Acme');
+
+      final stored = await folderOp();
+      expect(stored.payload, contains('"parent":"Clients/Acme2"'));
+      expect(stored.payload, isNot(contains('goneAt')));
     });
 
     test(

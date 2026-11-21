@@ -266,15 +266,14 @@ extension _FlushMailbox on EmailRepositoryImpl {
     PendingChangeRow row,
     MailboxRow mailbox,
   ) async {
-    final parent = row.changeType == moveMailboxOp
-        ? (_decodePayload(row)?[mailboxOpParent] as String?)
-        : null;
     final (:from, row: stored) = await _mailboxState.clearFollowedGoneAt(
       row,
       path: mailbox.path,
-      parent: parent,
     );
     if (from == null) return stored;
+    final parent = stored.changeType == moveMailboxOp
+        ? (_decodePayload(stored)?[mailboxOpParent] as String?)
+        : null;
     unawaited(
       _appLogger?.warn(
         'pending_change.folder_followed',

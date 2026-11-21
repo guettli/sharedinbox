@@ -345,9 +345,16 @@ class MailboxStateWriter {
 
   /// The [mailboxOpGoneAt] mark of op [op]: the path the op found gone on
   /// the server, the read sequence taken right after the op was put back,
-  /// since when it waits and how many flushes it waited. Null when it has
-  /// none.
-  static ({String path, int seq, DateTime? since, int waits})? goneAtOf(
+  /// since when it waits, how many flushes it waited, and the paths its
+  /// payload named then ([markGoneAt]'s `pathKeys`, empty for folder ops).
+  /// Null when it has none.
+  static ({
+    String path,
+    int seq,
+    DateTime? since,
+    int waits,
+    Map<String, String> at,
+  })? goneAtOf(
     PendingChangeRow op,
   ) {
     final mark = _payloadOf(op)?[mailboxOpGoneAt];
@@ -357,11 +364,17 @@ class MailboxStateWriter {
     if (path is! String || seq is! int) return null;
     final since = mark['since'];
     final waits = mark['waits'];
+    final at = mark['at'];
     return (
       path: path,
       seq: seq,
       since: since is String ? DateTime.tryParse(since) : null,
       waits: waits is int ? waits : 0,
+      at: {
+        if (at is Map)
+          for (final MapEntry(:key, :value) in at.entries)
+            if (key is String && value is String) key: value,
+      },
     );
   }
 
@@ -391,32 +404,33 @@ class MailboxStateWriter {
     if (row.attempts == 0 && (mark == null || mark.path != gone)) {
       return (waits: true, first: true);
     }
-    final payload = _payloadOf(row) ?? <String, dynamic>{};
     if (row.attempts == 0 && mark != null) {
-      final listed = await folderListedSeq(row.accountId);
+      final listed = await trustedListingSeq(row.accountId);
       final since = mark.since;
       final capped = mark.waits + 1 >= goneAtMaxWaits ||
           (since != null && _now().difference(since) >= goneAtMaxWait);
       if (!capped && (listed == null || listed < mark.seq)) {
-        payload[mailboxOpGoneAt] = {
-          ...payload[mailboxOpGoneAt] as Map<String, dynamic>,
-          'waits': mark.waits + 1,
-        };
-        await _writePayload(row.id, payload);
+        await updateGoneAt(
+          row.id,
+          (stored) => {...?stored, 'waits': mark.waits + 1},
+        );
         return (waits: true, first: false);
       }
     }
-    if (mark != null) {
-      payload.remove(mailboxOpGoneAt);
-      await _writePayload(row.id, payload);
-    }
+    if (mark != null) await updateGoneAt(row.id, (_) => null);
     return (waits: false, first: false);
   }
 
-  /// Marks op [id], put back after [waitForListing] said it waits, as
-  /// waiting for a listing that follows [gone] ([mailboxOpGoneAt]), with a
-  /// read sequence taken now.
-  Future<void> markGoneAt(int id, String gone) async {
+  /// Marks op [id], put back after [waitForListing] said it waits (or a
+  /// mail change, #1339), as waiting for a listing that follows [gone]
+  /// ([mailboxOpGoneAt]), with a read sequence taken now. [pathKeys]: the
+  /// payload keys whose paths the mark records (`at`), as stored now, so
+  /// that a follow can tell which of them changed.
+  Future<void> markGoneAt(
+    int id,
+    String gone, {
+    List<String> pathKeys = const [],
+  }) async {
     final seq = await _emails.nextReadSeq();
     await _db.transaction(() async {
       final op = await (_db.select(_db.pendingChanges)
@@ -424,42 +438,79 @@ class MailboxStateWriter {
           .getSingleOrNull();
       if (op == null) return;
       final payload = _payloadOf(op) ?? <String, dynamic>{};
-      payload[mailboxOpGoneAt] = {
-        'path': gone,
-        'seq': seq,
-        'since': _now().toUtc().toIso8601String(),
-        'waits': 0,
-      };
-      await _writePayload(id, payload);
+      await updateGoneAt(
+        id,
+        (_) => {
+          'path': gone,
+          'seq': seq,
+          'since': _now().toUtc().toIso8601String(),
+          'waits': 0,
+          if (pathKeys.isNotEmpty)
+            'at': {
+              for (final key in pathKeys)
+                if (payload[key] case final String path) key: path,
+            },
+        },
+      );
     });
   }
+
+  /// Rewrites only the [mailboxOpGoneAt] mark of op [id], as stored: a
+  /// folder listing may have rewritten the op's paths since the caller read
+  /// it (a follow, [serverPathChanged]), and writing back a snapshot would
+  /// undo that. [change] gets the stored mark and returns the new one, or
+  /// null to drop it. Returns the op as stored afterwards, or null when it
+  /// is gone.
+  Future<PendingChangeRow?> updateGoneAt(
+    int id,
+    Map<String, dynamic>? Function(Map<String, dynamic>? stored) change,
+  ) =>
+      _db.transaction(() async {
+        final op = await (_db.select(_db.pendingChanges)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        if (op == null) return null;
+        final payload = _payloadOf(op) ?? <String, dynamic>{};
+        final stored = payload[mailboxOpGoneAt];
+        final next = change(stored is Map<String, dynamic> ? stored : null);
+        if (next == null) {
+          if (payload.remove(mailboxOpGoneAt) == null) return op;
+        } else {
+          payload[mailboxOpGoneAt] = next;
+        }
+        await _writePayload(id, payload);
+        return (_db.select(_db.pendingChanges)..where((t) => t.id.equals(id)))
+            .getSingle();
+      });
 
   Future<void> _writePayload(int id, Map<String, dynamic> payload) =>
       (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id)))
           .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
 
   /// Op [row] (claimed) without its [mailboxOpGoneAt] mark when the mark
-  /// names neither [path], where its folder is now, nor [parent], the
-  /// folder it moves into: a listing followed the folder another client
-  /// renamed or moved (#1329), and the op is sent there now. Returns the
-  /// path it was marked gone at (null: no mark, or one still current) and
-  /// the op as stored.
+  /// names neither [path], where its folder is now, nor the folder it moves
+  /// into (its `parent`, as stored now: a listing may have followed that
+  /// one since [row] was read): a listing followed the folder another
+  /// client renamed or moved (#1329), and the op is sent there now. Returns
+  /// the path it was marked gone at (null: no mark, or one still current)
+  /// and the op as stored.
   Future<({String? from, PendingChangeRow row})> clearFollowedGoneAt(
     PendingChangeRow row, {
     required String path,
-    required String? parent,
   }) async {
-    final mark = goneAtOf(row);
-    if (mark == null || mark.path == path || mark.path == parent) {
-      return (from: null, row: row);
-    }
-    final payload = _payloadOf(row)!..remove(mailboxOpGoneAt);
-    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
-        .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
-    final stored = await (_db.select(_db.pendingChanges)
+    final current = await (_db.select(_db.pendingChanges)
           ..where((t) => t.id.equals(row.id)))
-        .getSingle();
-    return (from: mark.path, row: stored);
+        .getSingleOrNull();
+    if (current == null) return (from: null, row: row);
+    final mark = goneAtOf(current);
+    final parent = current.changeType == moveMailboxOp
+        ? (_payloadOf(current)?[mailboxOpParent] as String?)
+        : null;
+    if (mark == null || mark.path == path || mark.path == parent) {
+      return (from: null, row: current);
+    }
+    final stored = await updateGoneAt(row.id, (_) => null);
+    return (from: mark.path, row: stored ?? current);
   }
 
   /// The paths of [accountId]'s folders a queued rename or move waits a
@@ -488,13 +539,17 @@ class MailboxStateWriter {
   }
 
   /// The read sequence the last finished IMAP folder listing of
-  /// [accountId] started at ([EmailStateWriter.folderListedKey]), or null.
-  Future<int?> folderListedSeq(String accountId) async {
+  /// [accountId] that could follow every folder started at
+  /// ([EmailStateWriter.folderListedTrustedKey]: not in doubt about folder
+  /// ids, every id stored, a listing the prune trusted), or null. A listing
+  /// in doubt may have kept a folder it could not follow, so it does not
+  /// end the wait of a change marked gone ([waitForListing], #1339).
+  Future<int?> trustedListingSeq(String accountId) async {
     final stored = await (_db.select(_db.syncStates)
           ..where(
             (t) =>
                 t.accountId.equals(accountId) &
-                t.resourceType.equals(EmailStateWriter.folderListedKey),
+                t.resourceType.equals(EmailStateWriter.folderListedTrustedKey),
           ))
         .getSingleOrNull();
     return stored == null ? null : int.tryParse(stored.state);
@@ -2327,10 +2382,7 @@ class MailboxStateWriter {
         continue;
       }
       // A Retry of the op waits for one folder listing again (#1329).
-      final payload = _payloadOf(op);
-      if (payload != null && payload.remove(mailboxOpGoneAt) != null) {
-        await _writePayload(op.id, payload);
-      }
+      if (goneAtOf(op) != null) await updateGoneAt(op.id, (_) => null);
       // A create below the removed folder or a move into it: the text says
       // which folder is gone, not the one the op is for.
       final named = row?.srvName ?? row?.name ?? path;
