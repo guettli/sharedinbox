@@ -6,61 +6,24 @@
 // sent to where the folder is; only when the listing does not follow it is
 // the op refused, visibly.
 
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 
-import 'db_test_helper.dart';
+import 'helpers/folder_follow_rig.dart';
 import 'helpers/stateful_imap_rig.dart';
-import 'recording_app_log_repository.dart';
 
 const _acc = statefulRigAccount;
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
-  late RecordingAppLogRepository logs;
-  late List<String> kicks;
-  late StreamSubscription<String> kickSub;
-  Future<void> open({required bool objectIds}) async {
-    logs = await openRigWithMailA(
-      uidValidityByFolder: {'INBOX': 11, 'Archive': 22},
-      folders: [('INBOX', 'inbox'), ('Archive', 'archive')],
-      objectIds: objectIds,
-    );
-    kicks = [];
-    kickSub = emails.onChangesQueued.listen(kicks.add);
-  }
-
-  Future<void> close() async {
-    await kickSub.cancel();
-    await db.close();
-  }
-
-  Future<void> listFolders() => rig.mailboxes.syncMailboxes(_acc.id);
-  Future<void> flush() => emails.flushPendingChanges(_acc.id, 'pw');
-  // One sync cycle: the flush first, then the folder listing.
-  Future<void> cycle() async {
-    await flush();
-    await listFolders();
-  }
-
-  Iterable<String> events() => logs.rows.map((r) => r.event);
+  final f = FolderFollowRig.forSuite();
   Future<MailboxRow?> folderById(String id) =>
       MailboxStateWriter(db).rowById(id);
   Future<MailboxRow> folderAt(String path) async =>
       (await db.select(db.mailboxes).get()).singleWhere((m) => m.path == path);
   Future<PendingChangeRow> folderOp() async =>
       (await rigOps()).singleWhere((o) => o.resourceType == 'Mailbox');
-  Future<void> expectConsistent() async {
-    expect(await EmailStateWriter(db).consistencyProblems(), isEmpty);
-    expect(await MailboxStateWriter(db).consistencyProblems(), isEmpty);
-  }
-
   // Another client renames Clients/Acme to [to] (a new UIDVALIDITY, as
   // Stalwart gives it; the MAILBOXID stays).
   void acmeRenamedTo(String to) =>
@@ -74,14 +37,13 @@ void main() {
     for (final id in mail) {
       server.deliver('Clients/Acme', id);
     }
-    await listFolders();
+    await rigListFolders();
     if (mail.isNotEmpty) await emails.syncEmails(_acc.id, 'Clients/Acme');
     return folderAt('Clients/Acme');
   }
 
   group('with OBJECTID', () {
-    setUp(() => open(objectIds: true));
-    tearDown(close);
+    f.use(objectIds: true);
 
     test(
         'an offline rename of a folder another client renamed waits for the '
@@ -91,20 +53,20 @@ void main() {
       // Another client renames the same folder while the app is offline.
       acmeRenamedTo('Clients/Acme2');
 
-      await flush();
+      await rigFlush();
 
       // Not refused: it waits, uncharged, and the loop is kicked.
       final waiting = await folderOp();
       expect((waiting.state, waiting.attempts), ('pending', 0));
-      expect(events(), isNot(contains('pending_change.rejected')));
-      expect(events(), contains('mailbox.op_waits_for_listing'));
-      expect(kicks, contains(_acc.id));
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      expect(f.events(), contains('mailbox.op_waits_for_listing'));
+      expect(f.kicks, contains(_acc.id));
 
-      await listFolders();
+      await rigListFolders();
       expect((await folderById(folder.id))!.path, 'Clients/Acme2');
-      expect(events(), contains('mailbox.renamed_elsewhere'));
+      expect(f.events(), contains('mailbox.renamed_elsewhere'));
 
-      await cycle();
+      await rigCycle();
 
       expect(server.folders.keys, contains('Clients/AcmeCorp'));
       expect(server.folders.keys, isNot(contains('Clients/Acme2')));
@@ -121,12 +83,12 @@ void main() {
         (await rigOps()).where((o) => o.state == 'failed'),
         isEmpty,
       );
-      expect(events(), isNot(contains('pending_change.rejected')));
-      final followed = logs.rows
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      final followed = f.logs.rows
           .singleWhere((r) => r.event == 'pending_change.folder_followed');
       expect(followed.dataJson, contains('"from":"Clients/Acme"'));
       expect(followed.dataJson, contains('"path":"Clients/Acme2"'));
-      await expectConsistent();
+      await expectRigConsistent();
     });
 
     test(
@@ -137,17 +99,17 @@ void main() {
       await emails.moveEmail((await rowOfA()).id, 'Clients/Acme');
       acmeRenamedTo('Clients/Acme2');
 
-      await cycle();
-      await cycle();
+      await rigCycle();
+      await rigCycle();
 
       expect(server.find('a@test')!.folder.path, 'Clients/AcmeCorp');
       expect(
         (await rigOps()).where((o) => o.state == 'failed'),
         isEmpty,
       );
-      expect(events(), isNot(contains('pending_change.dest_missing')));
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await expectConsistent();
+      expect(f.events(), isNot(contains('pending_change.dest_missing')));
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await expectRigConsistent();
     });
 
     test(
@@ -157,14 +119,14 @@ void main() {
       await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
       acmeRenamedTo('Archive/Acme');
 
-      await cycle();
-      await cycle();
+      await rigCycle();
+      await rigCycle();
 
       expect(server.folders.keys, contains('Archive/AcmeCorp'));
       expect((await folderById(folder.id))!.path, 'Archive/AcmeCorp');
       expect(server.find('c1@test')!.folder.path, 'Archive/AcmeCorp');
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await expectConsistent();
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await expectRigConsistent();
     });
 
     test(
@@ -178,16 +140,16 @@ void main() {
       );
       acmeRenamedTo('Clients/Acme2');
 
-      await flush();
+      await rigFlush();
       expect((await folderOp()).state, 'pending');
-      await listFolders();
-      await cycle();
+      await rigListFolders();
+      await rigCycle();
 
       expect(server.folders.keys, contains('Archive/Acme2'));
       expect((await folderById(folder.id))!.path, 'Archive/Acme2');
-      expect(events(), contains('pending_change.folder_followed'));
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await expectConsistent();
+      expect(f.events(), contains('pending_change.folder_followed'));
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await expectRigConsistent();
     });
 
     test(
@@ -202,13 +164,13 @@ void main() {
       );
       acmeRenamedTo('Clients/Acme2');
 
-      await cycle();
-      await cycle();
+      await rigCycle();
+      await rigCycle();
 
       expect(server.folders.keys, contains('Clients/Acme2/Work'));
       expect((await folderById(folder.id))!.path, 'Clients/Acme2');
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await expectConsistent();
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await expectRigConsistent();
     });
 
     test(
@@ -218,9 +180,9 @@ void main() {
       await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
       server.deleteFolder('Clients/Acme');
 
-      await flush();
+      await rigFlush();
       expect((await folderOp()).state, 'pending');
-      await listFolders();
+      await rigListFolders();
 
       expect(await folderById(folder.id), isNull);
       final op = await folderOp();
@@ -228,12 +190,12 @@ void main() {
       expect(op.lastError, 'folder removed on the server');
       // The mark goes with the failure: a Retry waits one listing again.
       expect(op.payload, isNot(contains('goneAt')));
-      expect(events(), contains('pending_change.folder_removed'));
-      expect(events(), isNot(contains('pending_change.folder_followed')));
+      expect(f.events(), contains('pending_change.folder_removed'));
+      expect(f.events(), isNot(contains('pending_change.folder_followed')));
 
-      await cycle();
+      await rigCycle();
       expect(server.folders.keys, isNot(contains('Clients/AcmeCorp')));
-      await expectConsistent();
+      await expectRigConsistent();
     });
 
     test(
@@ -245,28 +207,28 @@ void main() {
       // A role folder a listing leaves out is kept (#1312).
       server.deleteFolder('Archive');
 
-      await flush();
+      await rigFlush();
       expect((await folderOp()).state, 'pending');
-      await listFolders();
+      await rigListFolders();
       expect(await folderById(archive.id), isNotNull);
-      final kicked = kicks.length;
+      final kicked = f.kicks.length;
 
-      await flush();
+      await rigFlush();
 
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, contains('no longer exists on the server'));
-      expect(events(), contains('pending_change.rejected'));
+      expect(f.events(), contains('pending_change.rejected'));
       expect(
         server.folderCommands.where((c) => c.startsWith('RENAME')),
         hasLength(2),
       );
       // No second kick: nothing loops.
-      expect(kicks.length, kicked);
+      expect(f.kicks.length, kicked);
       // The user's Retry waits for one listing again.
       expect(op.payload, isNot(contains('goneAt')));
       await emails.retryMutation(op.id);
-      await flush();
+      await rigFlush();
       expect((await folderOp()).state, 'pending');
     });
 
@@ -288,14 +250,14 @@ void main() {
         "WHERE resource_type = 'Mailbox'",
       );
 
-      await cycle();
-      await cycle();
+      await rigCycle();
+      await rigCycle();
 
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, contains('no longer exists on the server'));
-      expect(events(), contains('pending_change.rejected'));
-      expect(events(), isNot(contains('mailbox.op_waits_for_listing')));
+      expect(f.events(), contains('pending_change.rejected'));
+      expect(f.events(), isNot(contains('mailbox.op_waits_for_listing')));
       // The other client's rename stays: no RENAME back to AcmeCorp.
       expect(
         server.folderCommands.where((c) => c.startsWith('RENAME')),
@@ -321,19 +283,19 @@ void main() {
         listed = true;
         // Another isolate's listing while the op is claimed: it takes the
         // op for moving and follows nothing.
-        await listFolders();
+        await rigListFolders();
       };
 
-      await flush();
+      await rigFlush();
       server.beforeAnswer = null;
 
       expect(listed, isTrue);
       expect((await folderOp()).state, 'pending');
-      await flush();
+      await rigFlush();
       expect((await folderOp()).state, 'pending');
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await listFolders();
-      await cycle();
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await rigListFolders();
+      await rigCycle();
 
       // Left open: that listing stored Clients/Acme2 as a second row with
       // the folder's MAILBOXID, so the next one does not follow the old row
@@ -343,7 +305,7 @@ void main() {
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, 'folder removed on the server');
-      expect(events(), contains('pending_change.folder_removed'));
+      expect(f.events(), contains('pending_change.folder_removed'));
       expect(
         server.folderCommands.where((c) => c.startsWith('RENAME')),
         everyElement(startsWith('RENAME Clients/Acme->')),
@@ -358,17 +320,12 @@ void main() {
       await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
       acmeRenamedTo('Clients/Acme2');
 
-      await flush();
-      now = now.add(const Duration(hours: 23));
-      await flush();
-      expect((await folderOp()).state, 'pending');
-      now = now.add(const Duration(hours: 2));
-      await flush();
+      await flushPastListingWaitCap(() async => (await folderOp()).state);
 
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, contains('no longer exists on the server'));
-      expect(events(), contains('pending_change.rejected'));
+      expect(f.events(), contains('pending_change.rejected'));
     });
 
     test('a delete of a folder renamed elsewhere is unchanged: done', () async {
@@ -376,7 +333,7 @@ void main() {
       await rig.mailboxes.deleteMailbox(_acc.id, 'Clients/Acme');
       acmeRenamedTo('Clients/Acme2');
 
-      await cycle();
+      await rigCycle();
 
       expect(
         server.folderCommands.where((c) => c.startsWith('DELETE')),
@@ -384,13 +341,12 @@ void main() {
       );
       expect(server.folders.keys, contains('Clients/Acme2'));
       expect(await folderById(folder.id), isNull);
-      expect(events(), isNot(contains('mailbox.op_waits_for_listing')));
+      expect(f.events(), isNot(contains('mailbox.op_waits_for_listing')));
     });
   });
 
   group('without OBJECTID', () {
-    setUp(() => open(objectIds: false));
-    tearDown(close);
+    f.use(objectIds: false);
 
     test(
         'a folder renamed elsewhere with its mail is followed by its '
@@ -399,13 +355,13 @@ void main() {
       await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
       acmeRenamedTo('Clients/Acme2');
 
-      await cycle();
-      await cycle();
+      await rigCycle();
+      await rigCycle();
 
       expect(server.folders.keys, contains('Clients/AcmeCorp'));
       expect((await folderById(folder.id))!.path, 'Clients/AcmeCorp');
-      expect(events(), isNot(contains('pending_change.rejected')));
-      await expectConsistent();
+      expect(f.events(), isNot(contains('pending_change.rejected')));
+      await expectRigConsistent();
     });
 
     test(
@@ -415,14 +371,14 @@ void main() {
       await rig.mailboxes.renameMailbox(_acc.id, 'Clients/Acme', 'AcmeCorp');
       acmeRenamedTo('Clients/Acme2');
 
-      await cycle();
+      await rigCycle();
 
       expect(await folderById(folder.id), isNull);
       final op = await folderOp();
       expect(op.state, 'failed');
       expect(op.lastError, 'folder removed on the server');
-      expect(events(), contains('pending_change.folder_removed'));
-      await cycle();
+      expect(f.events(), contains('pending_change.folder_removed'));
+      await rigCycle();
       expect(server.folders.keys, isNot(contains('Clients/AcmeCorp')));
     });
   });

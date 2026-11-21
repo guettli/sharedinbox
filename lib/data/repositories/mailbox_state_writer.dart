@@ -393,7 +393,7 @@ class MailboxStateWriter {
     }
     final payload = _payloadOf(row) ?? <String, dynamic>{};
     if (row.attempts == 0 && mark != null) {
-      final listed = await _folderListedSeq(row.accountId);
+      final listed = await folderListedSeq(row.accountId);
       final since = mark.since;
       final capped = mark.waits + 1 >= goneAtMaxWaits ||
           (since != null && _now().difference(since) >= goneAtMaxWait);
@@ -489,7 +489,7 @@ class MailboxStateWriter {
 
   /// The read sequence the last finished IMAP folder listing of
   /// [accountId] started at ([EmailStateWriter.folderListedKey]), or null.
-  Future<int?> _folderListedSeq(String accountId) async {
+  Future<int?> folderListedSeq(String accountId) async {
     final stored = await (_db.select(_db.syncStates)
           ..where(
             (t) =>

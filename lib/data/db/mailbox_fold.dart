@@ -68,6 +68,11 @@ const mailboxOpFromPath = 'fromPath';
 /// for one folder listing started after `seq`, which follows a folder
 /// another client renamed or moved; when that listing did not, the op is
 /// refused.
+///
+/// An IMAP mail change carries the same mark when its folder (source, or
+/// the folder a move goes into) was not on the server (#1339): it waits
+/// for that listing, and is sent to where the listing followed the folder,
+/// or fails visibly.
 const mailboxOpGoneAt = 'goneAt';
 
 /// The `path` prefix of a JMAP mailbox created offline, until the create's

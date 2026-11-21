@@ -373,6 +373,9 @@ extension _FlushImap on EmailRepositoryImpl {
     try {
       final payload = jsonDecode(row.payload) as Map<String, dynamic>;
       if (payload['clearSnooze'] == true) return null;
+      // Waits for a folder listing, or is checked against it first
+      // ([_FlushImapFolderWait._resolveFolderGoneAt], #1339).
+      if (payload.containsKey(mailboxOpGoneAt)) return null;
       // Its UID is not known yet: looked up on its own ([_currentImapUid]).
       if (payload[_uidAfterMoveKey] == true) return null;
       final src = payload['mailboxPath'];
@@ -692,8 +695,14 @@ extension _FlushImap on EmailRepositoryImpl {
   Future<({int applied, Object? connectionLost})> _settleImapChange(
     account_model.Account account,
     imap.ImapClient client,
-    PendingChangeRow row,
+    PendingChangeRow claimed,
   ) async {
+    // A change that waited for a folder listing (#1339): sent to where the
+    // listing followed its folder, failed visibly when it did not, or
+    // waiting on.
+    final resolved = await _resolveFolderGoneAt(account, claimed);
+    if (resolved == null) return (applied: 0, connectionLost: null);
+    final row = resolved;
     try {
       await _applyPendingChangeImap(client, row);
       // A delete for good expunged the mail: gone, as of the ack.
@@ -710,6 +719,10 @@ extension _FlushImap on EmailRepositoryImpl {
         await _recordChangeError(row, e);
         log('IMAP flush for ${account.id} stopped: connection lost ($e)');
         return (applied: 0, connectionLost: e);
+      }
+      if (e is _ImapFolderGoneException) {
+        await _waitForFolderListing(account, row, e);
+        return (applied: 0, connectionLost: null);
       }
       if (e is _ImapUidValidityChangedException) {
         // The folder was renumbered and the message cannot be identified
@@ -1033,6 +1046,12 @@ extension _FlushImap on EmailRepositoryImpl {
         (_vagueSelectFailures[client] ??= {})[mailboxPath] = e;
         throw _ImapSourceSelectFailedException(e, repeat: false);
       }
+      // A cached folder may have been renamed or moved by another client:
+      // the change waits for the folder listing that may follow it
+      // (#1339), instead of being dropped as moot.
+      if (await _isCachedServerFolder(row.accountId, mailboxPath)) {
+        throw _ImapFolderGoneException(mailboxPath, e);
+      }
       throw _ImapSourceMailboxGoneException(e);
     }
     final undo = _ImapUndoJournal(client, mailboxPath);
@@ -1041,6 +1060,21 @@ extension _FlushImap on EmailRepositoryImpl {
     } catch (e) {
       if (isImapPermanentBad(e) || isImapPermanentRefusal(e)) {
         await _undoImapEdits(row, undo, e);
+        rethrow;
+      }
+      // The source was selected: a "no such folder" answer of a move is
+      // about the folder it goes into. A cached one may have been renamed
+      // or moved by another client: the change waits for the listing
+      // (#1339), as for a gone source.
+      final dest = payload['dest'];
+      if (_locationChangeTypes.contains(row.changeType) &&
+          dest is String &&
+          dest != mailboxPath &&
+          e is imap.ImapException &&
+          isImapMailboxNotFound(e) &&
+          !_isImapConnectionLost(client, e) &&
+          await _isCachedServerFolder(row.accountId, dest)) {
+        throw _ImapFolderGoneException(dest, e);
       }
       rethrow;
     }
