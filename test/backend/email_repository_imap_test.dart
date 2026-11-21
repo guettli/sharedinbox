@@ -652,6 +652,114 @@ void main() {
     }
   });
 
+  // A read change queued (offline) before another session moved the mail
+  // (#1326): Stalwart answers the STORE to the UID the mail left with OK and
+  // changes nothing. The change must not count as done; it follows the
+  // mail once the sync carried the row over, and is set there.
+  test(
+      'a read change queued before another session moved the mail is set '
+      'in its new folder', () async {
+    final folder = 'FlagMove-${DateTime.now().millisecondsSinceEpoch}';
+    final setup = await connectImap(env: env, user: user);
+    try {
+      await setup.createMailbox(folder);
+    } finally {
+      await setup.logout();
+    }
+    await appendToInbox('flag-then-moved');
+
+    /// The mail's flags in [path] on the server, or null when not there.
+    Future<List<String>?> serverFlagsIn(String path) async {
+      final client = await connectImap(env: env, user: user);
+      try {
+        await client.selectMailboxByPath(path);
+        final search = await client.uidSearchMessages(
+          searchCriteria: 'SUBJECT "flag-then-moved"',
+        );
+        final uids = search.matchingSequence?.toList() ?? const <int>[];
+        if (uids.isEmpty) return null;
+        final fetch = await client.uidFetchMessages(
+          MessageSequence.fromIds(uids, isUid: true),
+          'FLAGS',
+        );
+        return fetch.messages.single.flags ?? const [];
+      } finally {
+        await client.logout();
+      }
+    }
+
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    for (final (path, role) in [('INBOX', 'inbox'), (folder, null)]) {
+      await r.db.into(r.db.mailboxes).insert(
+            MailboxesCompanion.insert(
+              id: 'test:$path',
+              accountId: 'test',
+              path: path,
+              name: path,
+              srvName: Value(path),
+              role: Value(role),
+            ),
+          );
+    }
+    try {
+      await r.emails.syncEmails('test', 'INBOX');
+      await r.emails.syncEmails('test', folder);
+      final row = (await r.emails.observeEmails('test', 'INBOX').first).single;
+      expect(row.isSeen, isFalse);
+      // Queued, not sent yet (the device is offline).
+      await r.emails.setFlag(row.id, seen: true);
+
+      final other = await connectImap(env: env, user: user);
+      try {
+        await other.selectMailboxByPath('INBOX');
+        final search = await other.uidSearchMessages(
+          searchCriteria: 'SUBJECT "flag-then-moved"',
+        );
+        await other.uidMove(
+          MessageSequence.fromIds(
+            search.matchingSequence!.toList(),
+            isUid: true,
+          ),
+          targetMailboxPath: folder,
+        );
+      } finally {
+        await other.logout();
+      }
+
+      // Back online: the flush comes first and sends the STORE to the UID
+      // the mail left. It hit nothing, so the change stays queued.
+      await r.emails.flushPendingChanges('test', user.password);
+      expect(await serverFlagsIn(folder), isNot(contains(r'\Seen')));
+      final kept = await unsettledChanges(r.db);
+      expect([for (final c in kept) c.state], ['pending']);
+      expect(
+        logs.inserts
+            .where((l) => l['event'] == 'pending_change.target_vanished'),
+        hasLength(1),
+      );
+
+      await r.emails.syncEmails('test', 'INBOX');
+      await r.emails.syncEmails('test', folder);
+      await r.emails.flushPendingChanges('test', user.password);
+
+      expect(await serverFlagsIn(folder), contains(r'\Seen'));
+      expect(await unsettledChanges(r.db), isEmpty);
+      final moved = (await r.emails.observeEmails('test', folder).first).single;
+      expect((moved.id, moved.isSeen), (row.id, true));
+    } finally {
+      final cleanup = await connectImap(env: env, user: user);
+      try {
+        await cleanup.deleteMailbox(
+          (await cleanup.listMailboxes()).firstWhere((m) => m.path == folder),
+        );
+      } finally {
+        await cleanup.logout();
+      }
+    }
+  });
+
   test('getEmailBody fetches body from IMAP and caches it', () async {
     await appendToInbox('body-test', body: 'Hello from IMAP body');
 

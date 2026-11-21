@@ -154,10 +154,16 @@ class SnoozeSpyImapClient extends FakeImapClient
     this.onSearch,
     this.onUidMove,
     this.messageFlags,
+    this.messagesMissing = false,
   });
 
   /// When non-null, the flags a `UID FETCH … FLAGS` reports for the message.
   final List<String>? messageFlags;
+
+  /// When true, a `UID FETCH` finds no message: every UID asked for is gone
+  /// (another client moved or expunged it). Otherwise each UID names a
+  /// message, with [messageFlags] (none when null).
+  final bool messagesMissing;
 
   /// Every `UID STORE` and `UID MOVE`, in call order, as
   /// `'store <add|remove|…> <uids> <flags>'` / `'move <mailbox>:<uids>-><target>'`.
@@ -255,7 +261,12 @@ class SnoozeSpyImapClient extends FakeImapClient
     calls.add(
       'store ${action.name} ${sequence.toList().join(',')} ${flags.join(' ')}',
     );
-    return imap.StoreImapResult();
+    // Every UID names a message here: the untagged FETCH a server sends for
+    // each one it hit.
+    return imap.StoreImapResult()
+      ..changedMessages = [
+        for (final uid in sequence.toList()) imap.MimeMessage()..uid = uid,
+      ];
   }
 
   @override
@@ -307,9 +318,20 @@ class SnoozeSpyImapClient extends FakeImapClient
     int? changedSinceModSequence,
     Duration? responseTimeout,
   }) async {
+    if (messagesMissing) return const imap.FetchImapResult([], null);
     final flags = messageFlags;
-    if (flags == null) return const imap.FetchImapResult([], null);
-    return imap.FetchImapResult([imap.MimeMessage()..flags = flags], null);
+    if (flags != null) {
+      return imap.FetchImapResult([imap.MimeMessage()..flags = flags], null);
+    }
+    return imap.FetchImapResult(
+      [
+        for (final uid in sequence.toList())
+          imap.MimeMessage()
+            ..uid = uid
+            ..flags = [],
+      ],
+      null,
+    );
   }
 }
 

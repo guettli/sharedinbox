@@ -1105,6 +1105,10 @@ class _FuzzRun {
     String? last;
     var stable = 0;
     for (var i = 0; i < 15 && stable < 2; i++) {
+      // A wait that starts while the queue drains ends by the cap too: a
+      // flag change sent to a UID another client emptied is kept until the
+      // sync finds the mail gone (#1326), and that row then waits.
+      if (i > 0) _now = _now.add(EmailStateWriter.foreignMoveMaxWait);
       await _cycle().timeout(const Duration(seconds: 10));
       final now = await _snapshot();
       final pending = await _pendingRows();

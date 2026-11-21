@@ -1383,22 +1383,27 @@ extension _SyncImap on EmailRepositoryImpl {
       );
 
   /// Of [emailIds], the rows with a move, snooze, unsnooze or delete of the
-  /// user's that is queued, being sent, acked or parked.
+  /// user's that is queued, being sent, acked or parked. Not one the flush
+  /// found addressing a UID already gone ([_srcVanishedKey]): it was never
+  /// applied, so it cannot explain the mail's absence (#1327).
   Future<Set<String>> _rowsWithPlacementChange(List<String> emailIds) async {
     final found = <String>{};
     for (var i = 0; i < emailIds.length; i += 500) {
       final chunk = emailIds.sublist(i, math.min(i + 500, emailIds.length));
-      final rows = await (_db.selectOnly(_db.pendingChanges)
-            ..addColumns([_db.pendingChanges.resourceId])
+      final rows = await (_db.select(_db.pendingChanges)
             ..where(
-              _db.pendingChanges.resourceId.isIn(chunk) &
-                  _db.pendingChanges.changeType.isIn(_placementChangeTypes) &
-                  _db.pendingChanges.state.isIn(
+              (t) =>
+                  t.resourceId.isIn(chunk) &
+                  t.changeType.isIn(_placementChangeTypes) &
+                  t.state.isIn(
                     const [..._liveStates, _ackedState, _parkedState],
                   ),
             ))
           .get();
-      found.addAll(rows.map((r) => r.read(_db.pendingChanges.resourceId)!));
+      found.addAll([
+        for (final r in rows)
+          if (r.state == _ackedState || !_addressesVanishedUid(r)) r.resourceId,
+      ]);
     }
     return found;
   }
@@ -1673,7 +1678,12 @@ extension _SyncImap on EmailRepositoryImpl {
           vanishedFrom: mailboxPath,
         );
         if (carried.dropped case final dropped?) {
-          _logMovedRowCarriedOver(row, dropped);
+          _logMovedRowCarriedOver(
+            row,
+            dropped,
+            from: mailboxPath,
+            retargeted: carried.retargeted,
+          );
           await _updateThread(accountId, mailboxPath, row.threadId ?? row.id);
         }
         if (carried.kept) continue;
@@ -1697,6 +1707,7 @@ extension _SyncImap on EmailRepositoryImpl {
             from: mailboxPath,
             to: dropped.srvMailboxPath ?? dropped.mailboxPath,
             destinationFirst: true,
+            retargeted: carried.retargeted,
           );
           await _updateThread(accountId, mailboxPath, row.threadId ?? row.id);
           continue;

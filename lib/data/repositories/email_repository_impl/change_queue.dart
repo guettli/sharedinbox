@@ -184,6 +184,19 @@ List<String> _supersededBy(String changeType) {
 /// Payload key set by [_ChangeQueue._markUidAfterQueuedMove].
 const _uidAfterMoveKey = 'uidAfterMove';
 
+/// Payload key set by [_FlushImap._keepForForeignMove]: a flag `STORE` the
+/// change (or an earlier one of its mail) sent to this UID hit no mail, so
+/// the UID is gone from its folder (another client moved or deleted the
+/// mail, #1326). Such a move or delete was never applied: it does not
+/// explain the mail's absence to the sync, which may still carry the row
+/// over to the mail's new place ([_RowIdentity._carryOverMovedRow]). The
+/// carry-over's rewrite of the UID drops the key.
+const _srcVanishedKey = 'srcVanished';
+
+/// Whether [change]'s payload carries [_srcVanishedKey].
+bool _addressesVanishedUid(PendingChangeRow change) =>
+    _decodePayload(change)?[_srcVanishedKey] == true;
+
 /// Stamps the JMAP Email id [jmapId] of the mail on a change [payload],
 /// so the flush finds the mail on the server even when its row is gone
 /// by then.
@@ -214,6 +227,7 @@ String _newClaimToken() => List.generate(
 model.PendingChange _toPendingChange(
   PendingChangeRow r, [
   Map<String, String> localFolders = const {},
+  Map<String, String?> subjects = const {},
 ]) =>
     model.PendingChange(
       id: r.id,
@@ -231,6 +245,13 @@ model.PendingChange _toPendingChange(
       nextTry: r.state == _stuckState ? r.leaseUntil : null,
       parked: r.state == _parkedState,
       waitingForFolder: _waitingForFolder(r, localFolders),
+      subject: r.resourceType == mailboxResourceType
+          ? null
+          : subjects[r.resourceId] ??
+              switch (_decodePayload(r)?[EmailStateWriter.goneSubjectKey]) {
+                final String stamped => stamped,
+                _ => null,
+              },
     );
 
 /// The name of the folder created offline that queued change [r] waits for
@@ -1221,11 +1242,16 @@ extension _ChangeQueue on EmailRepositoryImpl {
       _changeCtrl.add(row.accountId);
       return;
     }
+    ({PendingChangeRow from, PendingChangeRow to})? retargeted;
     await _db.transaction(() async {
-      final current = await (_db.select(_db.pendingChanges)
+      final failed = await (_db.select(_db.pendingChanges)
             ..where((t) => t.id.equals(id) & t.state.equals(_failedState)))
           .getSingleOrNull();
-      if (current == null) return;
+      if (failed == null) return;
+      // Sent again as it was, a change queued for a place the mail has
+      // left fails again: it goes where the mail is now (#1327).
+      final current = await _retargetForRetry(failed) ?? failed;
+      if (current != failed) retargeted = (from: failed, to: current);
       // The failure showed the server's state again; show the user's
       // intent again while it is retried.
       await _reapplyRetriedChange(current);
@@ -1257,14 +1283,184 @@ extension _ChangeQueue on EmailRepositoryImpl {
               state: parked ? const Value(_parkedState) : const Value.absent(),
             ),
           );
-      await _deletePendingChange(current);
+      await _deletePendingChange(failed);
       if (parked && !await _hasNoServerCopy(email)) {
         await _unparkOps(email.id);
       }
       // The retried change folds again: the folder, read/star and snooze.
       await _refoldAndRethread(current.resourceId);
+      // A change re-pointed at another row of the mail no longer folds here.
+      if (current.resourceId != failed.resourceId) {
+        await _refoldAndRethread(failed.resourceId);
+      }
     });
+    if (retargeted case (:final from, :final to)) _logRetryRetargeted(from, to);
     _changeCtrl.add(row.accountId);
+  }
+
+  /// [failed], an IMAP change the user retries, pointed at where the
+  /// server has its mail now, or null when it already addresses that place
+  /// (or nothing better is known). A change that failed because its mail
+  /// had left the place it addressed (another client moved it, #1327)
+  /// would otherwise fail again on every Retry:
+  ///
+  /// - its row records another server location now (the foreign-move
+  ///   carry-over, a relocation): the change takes that UID, folder and
+  ///   UIDVALIDITY;
+  /// - its row is gone (removed, or gone on the server and no longer
+  ///   waiting for a foreign move's destination) and exactly one other row
+  ///   of the account, shown and with a server location, has the mail's
+  ///   Message-ID (else its EMAILID), stamped on the change or read from
+  ///   the old row: the change moves to that row. Not into All Mail or
+  ///   Drafts, nor across the Sent folder (another copy, like the
+  ///   foreign-move adoption).
+  ///
+  /// Not while another move, snooze, unsnooze or delete of the mail is
+  /// queued (the change addresses the mail where that one puts it), nor for
+  /// a change queued behind an unanswered move ([_uidAfterMoveKey]), a
+  /// parked one, or one without a UID.
+  Future<PendingChangeRow?> _retargetForRetry(PendingChangeRow failed) async {
+    if (failed.resourceType == mailboxResourceType) return null;
+    final payload = _decodePayload(failed);
+    if (payload == null ||
+        payload[_uidAfterMoveKey] == true ||
+        payload.containsKey(_parkedShownInKey) ||
+        payload['uid'] is! int) {
+      return null;
+    }
+    final addressKey =
+        payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src';
+    final addressed = payload[addressKey];
+    if (addressed is! String) return null;
+    final account = await _accounts.getAccount(failed.accountId);
+    if (account?.type != account_model.AccountType.imap) return null;
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(failed.resourceId)))
+        .getSingleOrNull();
+    if (email != null && email.srvGone && email.foreignMoveWaitSeq != null) {
+      // The sync may still find it; the flush holds the change meanwhile.
+      return null;
+    }
+    Email? target;
+    if (email != null && !email.srvGone && !email.isLocal) {
+      target = email;
+    }
+    if (email == null || email.srvGone) {
+      target = await _otherRowOfMail(
+        failed,
+        payload,
+        email,
+        addressed: addressed,
+      );
+    }
+    if (target == null) return null;
+    final path = target.srvMailboxPath;
+    final uid = target.srvUid;
+    if (path == null || uid == null) return null;
+    if (path == addressed &&
+        uid == payload['uid'] &&
+        target.id == failed.resourceId) {
+      return null;
+    }
+    if (await _hasLivePlacementChange(target.id)) return null;
+    payload
+      ..[addressKey] = path
+      ..['uid'] = uid
+      ..remove(_srcVanishedKey)
+      ..remove('uidValidity');
+    if (target.srvUidValidity case final int validity when validity != 0) {
+      payload['uidValidity'] = validity;
+    }
+    return failed.copyWith(
+      resourceId: target.id,
+      payload: jsonEncode(payload),
+    );
+  }
+
+  /// For [_retargetForRetry]: the only other shown row of [failed]'s mail
+  /// with a server location, found by the Message-ID (else the EMAILID)
+  /// stamped on [payload] or of [gone], the mail's old row; null when there
+  /// is none or more than one, or when it is in All Mail or Drafts or on the
+  /// other side of the Sent folder from [addressed].
+  Future<Email?> _otherRowOfMail(
+    PendingChangeRow failed,
+    Map<String, dynamic> payload,
+    Email? gone, {
+    required String addressed,
+  }) async {
+    Future<Email?> unique(Expression<bool> Function($EmailsTable t) by) async {
+      final rows = await (_db.select(_db.emails)
+            ..where(
+              (t) =>
+                  t.accountId.equals(failed.accountId) &
+                  t.id.equals(failed.resourceId).not() &
+                  t.isLocal.equals(false) &
+                  t.srvGone.equals(false) &
+                  t.srvUid.isNotNull() &
+                  t.srvMailboxPath.isNotNull() &
+                  by(t),
+            )
+            ..limit(2))
+          .get();
+      return rows.length == 1 ? rows.single : null;
+    }
+
+    final mid = normaliseMessageId(
+      payload['messageId'] as String? ?? gone?.messageId,
+    );
+    final serverEmailId =
+        payload[EmailStateWriter.goneServerEmailIdKey] as String? ??
+            gone?.serverEmailId;
+    final found = mid != null
+        ? await unique(
+            (t) => t.messageId.equals(mid) | t.messageId.equals('<$mid>'),
+          )
+        : serverEmailId != null && serverEmailId.isNotEmpty
+            ? await unique((t) => t.serverEmailId.equals(serverEmailId))
+            : null;
+    if (found == null) return null;
+    final role = await _mailboxRole(failed.accountId, found.srvMailboxPath!);
+    if (role == 'all' || role == 'drafts') return null;
+    final sourceRole = await _mailboxRole(failed.accountId, addressed);
+    if ((role == 'sent') != (sourceRole == 'sent')) return null;
+    return found;
+  }
+
+  /// Whether a move, snooze, unsnooze or delete of row [emailId] is queued,
+  /// being sent or stuck.
+  Future<bool> _hasLivePlacementChange(String emailId) async =>
+      await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.resourceId.equals(emailId) &
+                  t.state.isIn(_liveStates) &
+                  t.changeType.isIn(_placementChangeTypes),
+            )
+            ..limit(1))
+          .getSingleOrNull() !=
+      null;
+
+  /// App Log line for a failed change [from] the user retried at its mail's
+  /// current place ([to], [_retargetForRetry]).
+  void _logRetryRetargeted(PendingChangeRow from, PendingChangeRow to) {
+    final before = _decodePayload(from);
+    final after = _decodePayload(to);
+    String where(Map<String, dynamic>? p) =>
+        'UID ${p?['uid']} in ${p?['mailboxPath'] ?? p?['src']}';
+    unawaited(
+      _appLogger?.info(
+        'pending_change.retry_retargeted',
+        'Retrying ${_describeChange(from)} where the server has the mail '
+            'now: ${where(after)} (it was queued for ${where(before)})',
+        accountId: from.accountId,
+        emailId: to.resourceId,
+        data: {
+          'changeId': from.id,
+          'changeType': from.changeType,
+          if (from.resourceId != to.resourceId) 'fromEmailId': from.resourceId,
+        },
+      ),
+    );
   }
 
   /// Re-applies the local-only part of a failed [row] that is being
@@ -1335,8 +1531,27 @@ extension _ChangeQueue on EmailRepositoryImpl {
       (local[r.read<String>('account_id')] ??= {})[r.read<String>('path')] =
           r.read<String>('name');
     }
+    // The mails' subjects, whether shown or not (a row gone on the server
+    // keeps its changes until they settle).
+    final emailIds = {
+      for (final r in rows)
+        if (r.resourceType != mailboxResourceType) r.resourceId,
+    }.toList();
+    final subjects = <String, String?>{};
+    for (var i = 0; i < emailIds.length; i += 500) {
+      final chunk = emailIds.sublist(i, math.min(i + 500, emailIds.length));
+      final found = await (_db.selectOnly(_db.emails)
+            ..addColumns([_db.emails.id, _db.emails.subject])
+            ..where(_db.emails.id.isIn(chunk)))
+          .get();
+      for (final row in found) {
+        subjects[row.read(_db.emails.id)!] =
+            row.read(_db.emails.subject) ?? '(no subject)';
+      }
+    }
     return [
-      for (final r in rows) _toPendingChange(r, local[r.accountId] ?? const {}),
+      for (final r in rows)
+        _toPendingChange(r, local[r.accountId] ?? const {}, subjects),
     ];
   }
 }

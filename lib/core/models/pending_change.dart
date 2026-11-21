@@ -30,6 +30,7 @@ class PendingChange {
     this.nextTry,
     this.parked = false,
     this.waitingForFolder,
+    this.subject,
   });
 
   final int id;
@@ -76,6 +77,12 @@ class PendingChange {
   /// change needs: it waits for the folder's creation and is sent right
   /// after it (SYNC.md §6b). Derived when read; the change stays queued.
   final String? waitingForFolder;
+
+  /// The subject of the mail the change is for, also when its row is
+  /// hidden (gone on the server, waiting for its changes to settle) or was
+  /// removed (the subject stamped on the failed change then, #1327). Null
+  /// for a folder change, or when it is not known.
+  final String? subject;
 
   bool get hasError => lastError != null;
 }
