@@ -22,7 +22,9 @@ Future<void> refreshThreadAggregate(
           (t) =>
               t.accountId.equals(accountId) &
               t.mailboxPath.equals(mailboxPath) &
-              t.threadId.equals(threadId),
+              // Keyed `threadId ?? id`, as every caller derives it.
+              (t.threadId.equals(threadId) |
+                  (t.threadId.isNull() & t.id.equals(threadId))),
         )
         // Same key as `latestDate` below, so an undated message sorts by
         // its arrival time rather than first (SQLite orders NULL lowest).

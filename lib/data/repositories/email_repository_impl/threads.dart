@@ -253,6 +253,61 @@ extension _Threads on EmailRepositoryImpl {
         'thread row(s) (emails=${emails.length})',
       );
     }
+    await _restoreUnlistedRows(accountId, mailboxPath, emails);
     return removed;
+  }
+
+  /// The other half of [_sweepOrphanThreads]: refreshes the thread of each
+  /// row of [mailboxPath] ([emails]) that no thread row there lists. The
+  /// list screen shows thread rows only, so such a mail counted in the
+  /// folder and was found by search, but was missing from the list until
+  /// something refreshed its thread (#1328: a carried-over row took the
+  /// thread id of the copy merged into it, and that copy's thread was swept
+  /// as an orphan). A no-op on a healthy folder; App Log warn
+  /// `thread.list_repaired` for the rows it brings back.
+  Future<void> _restoreUnlistedRows(
+    String accountId,
+    String mailboxPath,
+    List<Email> emails,
+  ) async {
+    if (emails.isEmpty) return;
+    Future<Set<String>> listedIds() async => {
+          for (final t in await (_db.select(_db.threads)
+                ..where(
+                  (t) =>
+                      t.accountId.equals(accountId) &
+                      t.mailboxPath.equals(mailboxPath),
+                ))
+              .get())
+            ...List<String>.from(jsonDecode(t.emailIdsJson) as List),
+        };
+    final listed = await listedIds();
+    final unlisted = [
+      for (final e in emails)
+        if (!listed.contains(e.id)) e,
+    ];
+    if (unlisted.isEmpty) return;
+    await _updateThreadsOfRows(unlisted);
+    final nowListed = await listedIds();
+    final restored = [
+      for (final e in unlisted)
+        if (nowListed.contains(e.id)) e,
+    ];
+    if (restored.isEmpty) return;
+    unawaited(
+      _appLogger?.warn(
+        'thread.list_repaired',
+        '${restored.length} mail(s) of $mailboxPath were missing from its '
+            'list (their conversation entry was out of date) and show again',
+        accountId: accountId,
+        mailboxPath: mailboxPath,
+        data: {
+          'emailIds': [for (final e in restored.take(100)) e.id],
+          'subjects': [
+            for (final e in restored.take(20)) e.subject ?? '(no subject)',
+          ],
+        },
+      ),
+    );
   }
 }
