@@ -395,8 +395,8 @@ void main() {
   Future<void> renameElsewhere(String from, String to) async {
     final other = await connectImap(env: env, user: user);
     try {
-      final box =
-          (await other.listMailboxes()).singleWhere((b) => b.path == from);
+      final box = (await other.listMailboxes(recursive: true))
+          .singleWhere((b) => b.path == from);
       await other.renameMailbox(box, to);
     } finally {
       await other.logout();
@@ -533,6 +533,80 @@ void main() {
         (await emails.observeEmails('test', after).first).map((e) => e.id),
         [mail.id],
       );
+    } finally {
+      await drop();
+    }
+  });
+
+  // #1329: a rename queued offline of a folder another client renamed
+  // meanwhile. The flush runs before the listing: the RENAME of the old
+  // path is refused, so the op waits for the listing (not refused), which
+  // follows the folder by its MAILBOXID; the next flush renames it there.
+  test(
+      'an offline rename of a folder another client renamed waits for the '
+      'listing and renames the followed folder', () async {
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    const parent = 'R1329Clients';
+    const before = '$parent/Acme';
+    const elsewhere = '$parent/Acme2';
+    const mine = '$parent/AcmeCorp';
+    Future<void> drop() =>
+        dropFolders(r, const {parent, 'Acme', 'Acme2', 'AcmeCorp'});
+    final flushing = EmailRepositoryImpl(
+      r.db,
+      r.accounts,
+      imapConnect: testImapConnect,
+      appLogger: AppLogger(logs),
+    );
+
+    await drop();
+    try {
+      final client = await connectImap(env: env, user: user);
+      try {
+        await client.createMailbox(parent);
+        await client.createMailbox(before);
+      } finally {
+        await client.logout();
+      }
+      await r.mailboxes.syncMailboxes('test');
+      final row = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.path.equals(before)))
+          .getSingle();
+      expect(row.srvMailboxId, isNotNull, reason: 'Stalwart has OBJECTID');
+      await r.mailboxes.renameMailbox('test', before, 'AcmeCorp');
+
+      await renameElsewhere(before, elsewhere);
+      await flushing.flushPendingChanges('test', user.password);
+
+      final waiting = await r.db.select(r.db.pendingChanges).getSingle();
+      expect((waiting.state, waiting.attempts), ('pending', 0));
+      await r.mailboxes.syncMailboxes('test');
+      await flushing.flushPendingChanges('test', user.password);
+      await r.mailboxes.syncMailboxes('test');
+
+      final renamed = await (r.db.select(r.db.mailboxes)
+            ..where((t) => t.id.equals(row.id)))
+          .getSingle();
+      expect(
+        (renamed.path, renamed.srvMailboxId),
+        (mine, row.srvMailboxId),
+      );
+      final check = await connectImap(env: env, user: user);
+      try {
+        final paths =
+            (await check.listMailboxes(recursive: true)).map((m) => m.path);
+        expect(paths, contains(mine));
+        expect(paths, isNot(contains(elsewhere)));
+      } finally {
+        await check.logout();
+      }
+      await pumpEventQueue();
+      final events = logs.rows.map((l) => l.event);
+      expect(events, isNot(contains('pending_change.rejected')));
+      expect(events, contains('mailbox.op_waits_for_listing'));
+      expect(events, contains('pending_change.folder_followed'));
     } finally {
       await drop();
     }

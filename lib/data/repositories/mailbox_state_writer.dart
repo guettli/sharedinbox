@@ -22,12 +22,18 @@ class MailboxExistsException implements Exception {
 
 /// A mailbox op the server refused for good: it becomes `failed`.
 class MailboxOpRefused implements Exception {
-  MailboxOpRefused(this.message, {this.badAnswer});
+  MailboxOpRefused(this.message, {this.badAnswer, this.goneAt});
 
   final String message;
 
   /// The server's tagged IMAP `BAD` answer, when that is the refusal.
   final Object? badAnswer;
+
+  /// The IMAP path the refusal found not on the server (the folder, or the
+  /// folder a move goes into), when that is the refusal: another client
+  /// may have renamed or moved it, and the op waits for a folder listing
+  /// first ([MailboxStateWriter.waitForListing], #1329).
+  final String? goneAt;
 
   @override
   String toString() => message;
@@ -320,14 +326,179 @@ class MailboxStateWriter {
   /// Whether a rename or move of mailbox [mailboxId] is being sent or may
   /// have reached the server (sent before without an answer).
   Future<bool> mayBeMoving(String mailboxId) async =>
-      (await _opsOf(mailboxId)).any(
-        (o) =>
-            (o.changeType == renameMailboxOp ||
-                o.changeType == moveMailboxOp) &&
-            (o.state == 'inflight' ||
-                (o.attempts > 0 &&
-                    const ['pending', 'stuck'].contains(o.state))),
-      );
+      (await _opsOf(mailboxId)).any(_mayHaveMoved);
+
+  /// Whether op [o] is a rename or move being sent or one that may have
+  /// reached the server (sent before without an answer).
+  static bool _mayHaveMoved(PendingChangeRow o) =>
+      (o.changeType == renameMailboxOp || o.changeType == moveMailboxOp) &&
+      (o.state == 'inflight' ||
+          (o.attempts > 0 && const ['pending', 'stuck'].contains(o.state)));
+
+  /// How long a rename or move waits at most for a folder listing to
+  /// follow a folder it found gone ([waitForListing]), however many
+  /// listings fail meanwhile.
+  static const goneAtMaxWait = Duration(hours: 24);
+
+  /// How many flushes a rename or move waits at most for that listing.
+  static const goneAtMaxWaits = 20;
+
+  /// The [mailboxOpGoneAt] mark of op [op]: the path the op found gone on
+  /// the server, the read sequence taken right after the op was put back,
+  /// since when it waits and how many flushes it waited. Null when it has
+  /// none.
+  static ({String path, int seq, DateTime? since, int waits})? goneAtOf(
+    PendingChangeRow op,
+  ) {
+    final mark = _payloadOf(op)?[mailboxOpGoneAt];
+    if (mark is! Map) return null;
+    final path = mark['path'];
+    final seq = mark['seq'];
+    if (path is! String || seq is! int) return null;
+    final since = mark['since'];
+    final waits = mark['waits'];
+    return (
+      path: path,
+      seq: seq,
+      since: since is String ? DateTime.tryParse(since) : null,
+      waits: waits is int ? waits : 0,
+    );
+  }
+
+  /// IMAP rename or move [row] (claimed) was refused because [gone], its
+  /// folder's server path (or the folder it moves into), is not on the
+  /// server (#1329): another client may have renamed or moved it, and the
+  /// next folder listing follows it there by its MAILBOXID (or the fallback
+  /// rules, `_followRenamesElsewhere`). Whether the op waits ([waits]) for
+  /// that listing; [first]: it was not waiting yet, and the caller marks it
+  /// ([markGoneAt]) once it is put back, so that only a listing started
+  /// after that counts (one started while the op was claimed takes it for
+  /// moving and follows nothing). It waits again while no listing started
+  /// after the mark has finished, for at most [goneAtMaxWait] and
+  /// [goneAtMaxWaits] flushes. It does not wait (refused, and the mark
+  /// goes, so a Retry waits for one listing again) once such a listing has
+  /// finished and the folder is still not found there, at the cap, and
+  /// when the op may have reached the server before ([PendingChangeRow.
+  /// attempts]): sent to the path where the listing finds the folder now,
+  /// it could undo another client's rename of the folder our lost RENAME
+  /// made. A listing that removes the folder fails the op itself
+  /// ([failOpsOfRemoved]).
+  Future<({bool waits, bool first})> waitForListing(
+    PendingChangeRow row,
+    String gone,
+  ) async {
+    final mark = goneAtOf(row);
+    if (row.attempts == 0 && (mark == null || mark.path != gone)) {
+      return (waits: true, first: true);
+    }
+    final payload = _payloadOf(row) ?? <String, dynamic>{};
+    if (row.attempts == 0 && mark != null) {
+      final listed = await _folderListedSeq(row.accountId);
+      final since = mark.since;
+      final capped = mark.waits + 1 >= goneAtMaxWaits ||
+          (since != null && _now().difference(since) >= goneAtMaxWait);
+      if (!capped && (listed == null || listed < mark.seq)) {
+        payload[mailboxOpGoneAt] = {
+          ...payload[mailboxOpGoneAt] as Map<String, dynamic>,
+          'waits': mark.waits + 1,
+        };
+        await _writePayload(row.id, payload);
+        return (waits: true, first: false);
+      }
+    }
+    if (mark != null) {
+      payload.remove(mailboxOpGoneAt);
+      await _writePayload(row.id, payload);
+    }
+    return (waits: false, first: false);
+  }
+
+  /// Marks op [id], put back after [waitForListing] said it waits, as
+  /// waiting for a listing that follows [gone] ([mailboxOpGoneAt]), with a
+  /// read sequence taken now.
+  Future<void> markGoneAt(int id, String gone) async {
+    final seq = await _emails.nextReadSeq();
+    await _db.transaction(() async {
+      final op = await (_db.select(_db.pendingChanges)
+            ..where((t) => t.id.equals(id)))
+          .getSingleOrNull();
+      if (op == null) return;
+      final payload = _payloadOf(op) ?? <String, dynamic>{};
+      payload[mailboxOpGoneAt] = {
+        'path': gone,
+        'seq': seq,
+        'since': _now().toUtc().toIso8601String(),
+        'waits': 0,
+      };
+      await _writePayload(id, payload);
+    });
+  }
+
+  Future<void> _writePayload(int id, Map<String, dynamic> payload) =>
+      (_db.update(_db.pendingChanges)..where((t) => t.id.equals(id)))
+          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+
+  /// Op [row] (claimed) without its [mailboxOpGoneAt] mark when the mark
+  /// names neither [path], where its folder is now, nor [parent], the
+  /// folder it moves into: a listing followed the folder another client
+  /// renamed or moved (#1329), and the op is sent there now. Returns the
+  /// path it was marked gone at (null: no mark, or one still current) and
+  /// the op as stored.
+  Future<({String? from, PendingChangeRow row})> clearFollowedGoneAt(
+    PendingChangeRow row, {
+    required String path,
+    required String? parent,
+  }) async {
+    final mark = goneAtOf(row);
+    if (mark == null || mark.path == path || mark.path == parent) {
+      return (from: null, row: row);
+    }
+    final payload = _payloadOf(row)!..remove(mailboxOpGoneAt);
+    await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
+        .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+    final stored = await (_db.select(_db.pendingChanges)
+          ..where((t) => t.id.equals(row.id)))
+        .getSingle();
+    return (from: mark.path, row: stored);
+  }
+
+  /// The paths of [accountId]'s folders a queued rename or move waits a
+  /// folder listing for ([waitForListing]), with their subfolders on IMAP:
+  /// not on the server at that path, so a mail change naming one waits
+  /// too, and the listing that follows the folder names the new path in it.
+  Future<Set<String>> pathsWaitingForListing(String accountId) async {
+    final paths = <String>{
+      for (final op in await (_db.select(_db.pendingChanges)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.resourceType.equals(mailboxResourceType) &
+                  t.changeType.isIn(const [renameMailboxOp, moveMailboxOp]) &
+                  t.state.isIn(const ['pending', 'stuck']),
+            ))
+          .get())
+        if (goneAtOf(op)?.path case final gone?) gone,
+    };
+    if (paths.isEmpty) return paths;
+    final separator = await imapSeparator(accountId);
+    return {
+      for (final r in await _rowsOf(accountId))
+        if (paths.any((p) => _isAtOrBelow(r.path, p, separator))) r.path,
+    };
+  }
+
+  /// The read sequence the last finished IMAP folder listing of
+  /// [accountId] started at ([EmailStateWriter.folderListedKey]), or null.
+  Future<int?> _folderListedSeq(String accountId) async {
+    final stored = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(EmailStateWriter.folderListedKey),
+          ))
+        .getSingleOrNull();
+    return stored == null ? null : int.tryParse(stored.state);
+  }
 
   /// Whether a subfolder (on the server) of [mailbox] has a folder op
   /// queued before op [before] that is not done yet (queued, being sent,
@@ -1530,14 +1701,7 @@ class MailboxStateWriter {
     // gone either while it may have reached the server.
     final moving = <String>[];
     for (final r in rows) {
-      final maybeMoved = (await _opsOf(r.id)).any(
-        (o) =>
-            (o.changeType == renameMailboxOp ||
-                o.changeType == moveMailboxOp) &&
-            (o.state == 'inflight' ||
-                (o.attempts > 0 &&
-                    const ['pending', 'stuck'].contains(o.state))),
-      );
+      final maybeMoved = (await _opsOf(r.id)).any(_mayHaveMoved);
       if (maybeMoved) moving.add(r.path);
     }
     // IMAP INBOX is case-insensitive (RFC 3501 §5.1): a server that lists
@@ -2162,7 +2326,22 @@ class MailboxStateWriter {
         );
         continue;
       }
-      final dependents = await fail(op, why, claimed: false);
+      // A Retry of the op waits for one folder listing again (#1329).
+      final payload = _payloadOf(op);
+      if (payload != null && payload.remove(mailboxOpGoneAt) != null) {
+        await _writePayload(op.id, payload);
+      }
+      // A create below the removed folder or a move into it: the text says
+      // which folder is gone, not the one the op is for.
+      final named = row?.srvName ?? row?.name ?? path;
+      final gone =
+          why == 'folder deleted' ? 'was deleted' : 'was removed on the server';
+      final opWhy = op.resourceId == row?.id
+          ? why
+          : op.changeType == moveMailboxOp
+              ? 'the destination folder "$named" $gone'
+              : 'the parent folder "$named" $gone';
+      final dependents = await fail(op, opWhy, claimed: false);
       if (dependents == null) continue;
       failed
         ..add(op)

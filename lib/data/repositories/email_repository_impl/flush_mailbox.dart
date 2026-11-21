@@ -107,11 +107,12 @@ extension _FlushMailbox on EmailRepositoryImpl {
             continue;
           }
         }
-        final row = await _claimPendingChange(snapshot);
-        if (row == null) {
+        final claimed = await _claimPendingChange(snapshot);
+        if (claimed == null) {
           blocked.add(snapshot.resourceId);
           continue;
         }
+        var row = claimed;
         if (row.changeType != createMailboxOp) {
           // Again after the claim: a mail flush that claimed a change
           // naming the folder in between backs off the same way (claim,
@@ -132,6 +133,10 @@ extension _FlushMailbox on EmailRepositoryImpl {
         try {
           if (mailbox == null) {
             throw MailboxOpRefused('the folder no longer exists');
+          }
+          if (row.changeType == renameMailboxOp ||
+              row.changeType == moveMailboxOp) {
+            row = await _retargetFollowed(row, mailbox);
           }
           if (row.changeType == deleteMailboxOp) {
             final gone = await _applyMailboxDelete(
@@ -207,6 +212,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
           }
         } on MailboxOpRefused catch (e) {
           blocked.add(row.resourceId);
+          if (e.goneAt case final gone? when mailbox != null) {
+            if (await _waitForListing(account, row, mailbox, gone, e)) {
+              continue;
+            }
+          }
           final dependents = await _mailboxState.fail(row, e.message);
           if (dependents == null) continue;
           _mailboxState.logDependents(row, dependents);
@@ -246,6 +256,93 @@ extension _FlushMailbox on EmailRepositoryImpl {
     return applied;
   }
 
+  /// Rename or move [row] of [mailbox] that waited for a folder listing,
+  /// as its folder (or the folder it moves into) was not at its path on the
+  /// server (#1329, [MailboxStateWriter.waitForListing]): when the listing
+  /// followed that folder to another path (another client renamed or moved
+  /// it), the op loses its mark and is sent there now (App Log warn
+  /// `pending_change.folder_followed`). Returns the op as stored.
+  Future<PendingChangeRow> _retargetFollowed(
+    PendingChangeRow row,
+    MailboxRow mailbox,
+  ) async {
+    final parent = row.changeType == moveMailboxOp
+        ? (_decodePayload(row)?[mailboxOpParent] as String?)
+        : null;
+    final (:from, row: stored) = await _mailboxState.clearFollowedGoneAt(
+      row,
+      path: mailbox.path,
+      parent: parent,
+    );
+    if (from == null) return stored;
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.folder_followed',
+        'The ${_describeChange(row)} of "${mailbox.name}" waited because '
+            '"$from" was not on the server; the folder list found it '
+            'renamed or moved by another client, and the change is sent to '
+            'the folder at "${mailbox.path}"'
+            '${parent == null ? '' : ' (into "$parent")'} now',
+        accountId: row.accountId,
+        mailboxPath: mailbox.path,
+        data: {
+          'changeId': row.id,
+          'changeType': row.changeType,
+          'from': from,
+          'path': mailbox.path,
+          if (parent != null) 'parent': parent,
+        },
+      ),
+    );
+    return stored;
+  }
+
+  /// Rename or move [row] (claimed) of [mailbox] was refused with [e]
+  /// because [gone] is not on the server (#1329): the folder, or the one
+  /// it moves into, may have been renamed or moved by another client, and
+  /// the folder listing after this flush follows it by its MAILBOXID (or
+  /// the fallback rules). Returns true when the op waits for that listing
+  /// (put back uncharged; the first time App Log info
+  /// `mailbox.op_waits_for_listing`, and a kick so that the next cycle
+  /// sends it to where the listing found the folder); false when the op
+  /// may have reached the server before, once a listing started after the
+  /// op was first put back finished without following the folder, or at
+  /// the cap ([MailboxStateWriter.waitForListing]): the caller fails the op
+  /// visibly.
+  Future<bool> _waitForListing(
+    account_model.Account account,
+    PendingChangeRow row,
+    MailboxRow mailbox,
+    String gone,
+    MailboxOpRefused e,
+  ) async {
+    final (:waits, :first) = await _mailboxState.waitForListing(row, gone);
+    if (!waits) return false;
+    await _unclaimPendingChange(row);
+    if (!first) return true;
+    // After the release: a listing that started while the op was claimed
+    // took it for moving and followed nothing, so it must not count.
+    await _mailboxState.markGoneAt(row.id, gone);
+    unawaited(
+      _appLogger?.info(
+        'mailbox.op_waits_for_listing',
+        'The ${_describeChange(row)} of "${mailbox.name}" waits: "$gone" is '
+            'not on the server (${e.message}). Another client may have '
+            'renamed or moved it; the folder list is read first, and the '
+            'change is refused only if the folder is not found there',
+        accountId: account.id,
+        mailboxPath: mailbox.path,
+        data: {
+          'changeId': row.id,
+          'changeType': row.changeType,
+          'gone': gone,
+        },
+      ),
+    );
+    _changeCtrl.add(account.id);
+    return true;
+  }
+
   /// Whether claimed mail change [row] names a folder (or, on IMAP, a
   /// subfolder of one) whose rename, move or delete another flush is
   /// sending: the change is released and waits.
@@ -272,11 +369,13 @@ extension _FlushMailbox on EmailRepositoryImpl {
         in await _mailboxState.failOrphanedWaiting(accountId)) {
       _mailboxState.logDependents(cause, dependents);
     }
-    // Folders not to name now: not created yet, or being renamed by
-    // another flush.
+    // Folders not to name now: not created yet, being renamed by another
+    // flush, or not at their path on the server while a rename or move of
+    // theirs waits for the listing that may follow them (#1329).
     final waitFor = {
       ...await _mailboxState.localPaths(accountId),
       ...await _mailboxState.pathsBeingRenamed(accountId),
+      ...await _mailboxState.pathsWaitingForListing(accountId),
     };
     // Folders being deleted: a change queued after the delete that names
     // one waits for it (phase 5b); one queued before goes first (the
@@ -459,8 +558,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
         throw MailboxOpRefused('a folder named "$name" already exists');
       }
       if (!hasFrom) {
+        // Deleted, or renamed or moved by another client: the op waits for
+        // a folder listing that may follow it (#1329).
         throw MailboxOpRefused(
           'the folder no longer exists on the server',
+          goneAt: from,
         );
       }
       final refused = _imapFolderRefusal(e, 'the server refused it');
@@ -536,6 +638,11 @@ extension _FlushMailbox on EmailRepositoryImpl {
     if (parent != null && !folders.any((m) => m.path == parent)) {
       throw MailboxOpRefused(
         'the folder it is moved into does not exist on the server',
+        // A cached folder may have been renamed or moved by another
+        // client: the move waits for a listing that may follow it (#1329).
+        goneAt: await _mailboxState.rowByPath(row.accountId, parent) != null
+            ? parent
+            : null,
       );
     }
     final cut = from.lastIndexOf(separator);

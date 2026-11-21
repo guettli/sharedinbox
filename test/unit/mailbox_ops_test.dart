@@ -1469,12 +1469,21 @@ void main() {
 
       expect(await rig.mailboxes.undoFolderChange(_acc.id, work.id), isTrue);
       await flush();
+      // It waits for the listing first: another client may have renamed
+      // or moved Box (#1329).
+      expect(server.folders.keys, isNot(contains('Box')));
+      expect(events(), contains('mailbox.op_waits_for_listing'));
+      await rig.mailboxes.syncMailboxes(_acc.id);
+      await flush();
 
       expect(server.folders.keys, isNot(contains('Box')));
       expect(server.folders.keys, contains('Work'));
       final failed = (await db.select(db.pendingChanges).get())
           .singleWhere((o) => o.state == 'failed');
-      expect(failed.lastError, contains('does not exist on the server'));
+      expect(
+        failed.lastError,
+        'the destination folder "Box" was removed on the server',
+      );
     });
 
     test('Undo of a delete being sent says so and changes nothing', () async {
