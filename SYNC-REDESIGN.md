@@ -1939,7 +1939,7 @@ What remains after phase 6, with where it is handled today:
   root) does not count for that. A replaced folder whose new id is not
   settled that way keeps its old id only until it has been replaced for
   1 hour and 3 listings (`Mailbox:PendingReplace`, like the #1312
-  marks); then it takes the new one (`mailbox.id_changed`), so a STATUS
+  marks, cleared by a listing in which no folder is replaced); then it takes the new one (`mailbox.id_changed`), so a STATUS
   that always fails cannot keep listings in doubt. A new folder whose id
   is known and that no cached folder has is stored also in doubt. Moves
   that cannot all be made (two rows, the ones carried by a moving parent

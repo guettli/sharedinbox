@@ -989,7 +989,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
     }
     final vanished = await _writer.prunable(accountId, allListed, readSeq);
     const none = (moved: <String>{}, hold: <String>{}, doubt: null);
-    if (vanished.isEmpty && replaced.isEmpty) return none;
+    if (vanished.isEmpty && replaced.isEmpty) {
+      // Nothing replaced: the marks of earlier listings are cleared, so a
+      // row replaced again later waits from the start.
+      await _ageReplaced(accountId, const []);
+      return none;
+    }
     final cached = {for (final r in rows) r.path};
     final fresh = [
       for (final mb in listed)

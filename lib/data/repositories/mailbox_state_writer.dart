@@ -2363,6 +2363,9 @@ class MailboxStateWriter {
             if (active.contains(id)) (id, to),
         ];
         var aside = 0;
+        // The stand-in path each row that stepped aside took (row id):
+        // its subfolders went along below it, at paths of their own.
+        final asideAt = <String, String>{};
         while (left.isNotEmpty) {
           var progress = false;
           final waiting = <MailboxRow>[];
@@ -2409,19 +2412,17 @@ class MailboxStateWriter {
               .where((r) => !r.path.startsWith(_asidePrefix))
               .firstOrNull;
           if (row == null || aside > 2 * moves.length) break;
-          await serverPathChanged(
-            accountId,
-            row.path,
-            '$_asidePrefix${aside++}:${row.id}',
-            quiet: true,
-          );
+          final standIn = '$_asidePrefix${aside++}:${row.id}';
+          asideAt[row.id] = standIn;
+          await serverPathChanged(accountId, row.path, standIn, quiet: true);
         }
         // Never left on a stand-in path: back where it was, or (when a row
         // took that path) on to where it was going.
         for (final r in await _rowsOf(accountId)) {
-          if (!r.path.startsWith(_asidePrefix)) continue;
-          // A subfolder of an aside row goes along with it.
-          if (!r.path.endsWith(':${r.id}')) continue;
+          // Only a row on the stand-in path it took: a subfolder of one
+          // goes along with it (its path may end with its own id too, as
+          // row ids are built from paths).
+          if (asideAt[r.id] != r.path) continue;
           final home = origin[r.id]!;
           final target = targetOf[r.id];
           final dest = await rowByPath(accountId, home) == null
