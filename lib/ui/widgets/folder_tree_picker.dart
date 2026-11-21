@@ -158,16 +158,18 @@ class _FolderTreePickerDialogState
     final isSelected =
         node.displayPath != null && node.displayPath == _initialDisplayPath;
     final indent = AppSpacing.md + depth * AppSpacing.lg;
+    final VoidCallback? onTap = node.displayPath == null
+        ? (hasChildren ? () => _toggle(node.key) : null)
+        : () => Navigator.pop(context, node.displayPath);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Expose rows as buttons to screen readers (#1334).
+        // Expose rows as buttons to screen readers (#1334); a row that does
+        // nothing on tap is not announced as a button.
         Semantics(
-          button: true,
+          button: onTap != null,
           child: InkWell(
-            onTap: node.displayPath == null
-                ? (hasChildren ? () => _toggle(node.key) : null)
-                : () => Navigator.pop(context, node.displayPath),
+            onTap: onTap,
             child: Padding(
               padding: EdgeInsetsDirectional.only(
                 start: indent,
