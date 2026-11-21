@@ -195,6 +195,10 @@ extension _RowIdentity on EmailRepositoryImpl {
           addressed == fromMailboxPath &&
           payload['uid'] == oldUid &&
           payload[_uidAfterMoveKey] == null;
+      // A delete never follows a mail another client moved: it would
+      // expunge it wherever that client put it, e.g. restored from Trash
+      // (#1327). Left where it was, it settles as moot.
+      if (leftBehind && row.changeType == 'delete') continue;
       if (leftBehind) {
         payload[payload.containsKey('mailboxPath') ? 'mailboxPath' : 'src'] =
             mailboxPath;
@@ -225,9 +229,13 @@ extension _RowIdentity on EmailRepositoryImpl {
       }
       payload['uid'] = newUid;
       payload.remove(_uidAfterMoveKey);
-      // It names the mail where it is now.
-      payload.remove(_srcVanishedKey);
-      if (row.state != _ackedState) rewritten++;
+      // It names the mail where it is now: the error from the UID it hit
+      // nothing at (#1326) and its backoff no longer apply.
+      final vanished = payload.remove(_srcVanishedKey) == true &&
+          (row.state == _pendingState || row.state == _stuckState);
+      if (_liveStates.contains(row.state) || row.state == _parkedState) {
+        rewritten++;
+      }
       // The new UID was learned under [uidValidity], else under the
       // folder's current UIDVALIDITY.
       payload.remove('uidValidity');
@@ -239,7 +247,17 @@ extension _RowIdentity on EmailRepositoryImpl {
         payload['uidValidity'] = validity;
       }
       await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(row.id)))
-          .write(PendingChangesCompanion(payload: Value(jsonEncode(payload))));
+          .write(
+        vanished
+            ? PendingChangesCompanion(
+                payload: Value(jsonEncode(payload)),
+                attempts: const Value(0),
+                lastError: const Value(null),
+                state: const Value(_pendingState),
+                leaseUntil: const Value(null),
+              )
+            : PendingChangesCompanion(payload: Value(jsonEncode(payload))),
+      );
     }
     return rewritten;
   }
@@ -454,6 +472,11 @@ extension _RowIdentity on EmailRepositoryImpl {
       if (known != null && newUidValidity != null && known != newUidValidity) {
         return gone;
       }
+      // A delete of the user's is queued: the mail is gone for them. It
+      // must not follow the mail to where another client put it (#1327);
+      // the row is gone, the delete settles as moot and the copy keeps its
+      // own row.
+      if (rowChanges.any((c) => c.changeType == 'delete')) return gone;
       await _mergeDuplicateRow(dropId: dup.id, keepId: current.id);
       // Read and star changes acked in the folder the mail left: the flush
       // acks a STORE only when it hit the mail (#1326), so the mail took

@@ -7,6 +7,7 @@
 
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -25,23 +26,42 @@ void main() {
 
   late RecordingAppLogRepository logs;
 
-  Future<void> open({bool objectIds = false, bool uidPlus = true}) async {
+  /// With [trash], a Trash folder holding `t@test` (a delete there is a
+  /// delete for good).
+  Future<void> open({
+    bool objectIds = false,
+    bool uidPlus = true,
+    bool trash = false,
+  }) async {
     logs = RecordingAppLogRepository();
+    final server = StatefulFakeImapServer(
+      uidValidityByFolder: {
+        'INBOX': 11,
+        'Archive': 22,
+        'Jobs': 33,
+        if (trash) 'Trash': 44,
+      },
+      objectIds: objectIds,
+      uidPlus: uidPlus,
+    )
+      ..deliver('INBOX', 'a@test')
+      ..deliver('INBOX', _noMid)
+      // So a mail moved to Archive gets another UID than it had in INBOX.
+      ..deliver('Archive', 'filler@test');
+    if (trash) server.deliver('Trash', 't@test');
     rig = await StatefulImapRig.open(
-      StatefulFakeImapServer(
-        uidValidityByFolder: {'INBOX': 11, 'Archive': 22, 'Jobs': 33},
-        objectIds: objectIds,
-        uidPlus: uidPlus,
-      )
-        ..deliver('INBOX', 'a@test')
-        ..deliver('INBOX', _noMid)
-        // So a mail moved to Archive gets another UID than it had in INBOX.
-        ..deliver('Archive', 'filler@test'),
-      folders: [('INBOX', 'inbox'), ('Archive', 'archive'), ('Jobs', '')],
+      server,
+      folders: [
+        ('INBOX', 'inbox'),
+        ('Archive', 'archive'),
+        ('Jobs', ''),
+        if (trash) ('Trash', 'trash'),
+      ],
       appLogger: AppLogger(logs),
     );
     await emails.syncEmails(_account.id, 'Archive');
     await emails.syncEmails(_account.id, 'Jobs');
+    if (trash) await emails.syncEmails(_account.id, 'Trash');
   }
 
   tearDown(() => db.close());
@@ -324,6 +344,124 @@ void main() {
       ];
       expect(shown, ['Jobs']);
       expect(await rigProblems(), isEmpty);
+    });
+
+    test(
+        'without a Message-ID: a MOVE whose COPYUID is not seen counts as '
+        'done once the UID left the source', () async {
+      await open();
+      server.moveAnswersCopyUid = false;
+      final id = (await rowOfNoMid()).id;
+      await emails.moveEmail(id, 'Jobs');
+
+      await flush();
+
+      expect(server.find(_noMid)!.folder.path, 'Jobs');
+      expect(await unsettledChanges(db), isEmpty);
+      expect(logsOf('pending_change.message_gone'), isEmpty);
+    });
+  });
+
+  group('#1327: a delete for good never follows the mail', () {
+    Future<Email> rowOfT() async => (await db.select(db.emails).get())
+        .singleWhere((e) => e.messageId == 't@test');
+
+    test('restored elsewhere before the flush: it stays there', () async {
+      await open(trash: true);
+      final id = (await rowOfT()).id;
+      await emails.setFlag(id, seen: true);
+      expect(await emails.deleteEmail(id), isNull);
+      expect(
+        [for (final c in await unsettledChanges(db)) c.changeType],
+        ['flag_seen', 'delete'],
+      );
+      // Another client restores it to INBOX.
+      server.moveElsewhere('t@test', 'INBOX');
+
+      await flush();
+      await sync('Trash');
+      await sync('INBOX');
+      await flush();
+      await flush();
+
+      expect(server.find('t@test')!.folder.path, 'INBOX');
+      expect(server.hits.where((h) => h.command == 'EXPUNGE'), isEmpty);
+      final moot = logsOf('pending_change.delete_moot').single;
+      expect(moot.level, AppLogLevel.warn);
+      expect(moot.message, contains('Mail t@test'));
+      // The read change could not follow either (the delete is the user's
+      // last word on that row): listed as failed, not dropped.
+      expect(
+        [for (final c in await unsettledChanges(db)) (c.changeType, c.state)],
+        [('flag_seen', 'failed')],
+      );
+      // The restored mail shows in INBOX as a row of its own.
+      final rows = await (db.select(db.emails)
+            ..where((t) => t.messageId.equals('t@test')))
+          .get();
+      expect(
+        [
+          for (final e in rows)
+            if (e.mailboxPath.isNotEmpty) e.mailboxPath,
+        ],
+        ['INBOX'],
+      );
+    });
+
+    test('with EMAILID, destination first: no carry-over of the delete',
+        () async {
+      await open(trash: true, objectIds: true);
+      final id = (await rowOfT()).id;
+      expect(await emails.deleteEmail(id), isNull);
+      server.moveElsewhere('t@test', 'INBOX');
+
+      await sync('INBOX');
+      await sync('Trash');
+      await flush();
+
+      expect(server.find('t@test')!.folder.path, 'INBOX');
+      expect(server.hits.where((h) => h.command == 'EXPUNGE'), isEmpty);
+      expect(logsOf('pending_change.delete_moot'), hasLength(1));
+      expect(await unsettledChanges(db), isEmpty);
+      final rows = await (db.select(db.emails)
+            ..where((t) => t.messageId.equals('t@test')))
+          .get();
+      expect(
+        [
+          for (final e in rows)
+            if (e.mailboxPath.isNotEmpty) (e.mailboxPath, e.id == id),
+        ],
+        [('INBOX', false)],
+      );
+    });
+
+    test('Retry of a failed delete is never pointed at another row', () async {
+      await open(trash: true);
+      final other = (await rowOfA()).id;
+      final changeId = await db.into(db.pendingChanges).insert(
+            PendingChangesCompanion.insert(
+              accountId: _account.id,
+              resourceType: 'Email',
+              resourceId: 'acc-1:gone-row',
+              changeType: 'delete',
+              payload: jsonEncode({
+                'uid': 9,
+                'mailboxPath': 'Trash',
+                'messageId': 'a@test',
+              }),
+              createdAt: DateTime(2026),
+              state: const Value('failed'),
+              lastError: const Value('gone'),
+            ),
+          );
+
+      await emails.retryMutation(changeId);
+
+      final retried = (await unsettledChanges(db)).single;
+      expect(retried.resourceId, 'acc-1:gone-row');
+      expect(retried.resourceId, isNot(other));
+      expect(payloadOf(retried)['mailboxPath'], 'Trash');
+      expect(logsOf('pending_change.retry_retargeted'), isEmpty);
     });
   });
 }

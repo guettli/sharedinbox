@@ -1318,9 +1318,15 @@ extension _ChangeQueue on EmailRepositoryImpl {
   /// Not while another move, snooze, unsnooze or delete of the mail is
   /// queued (the change addresses the mail where that one puts it), nor for
   /// a change queued behind an unanswered move ([_uidAfterMoveKey]), a
-  /// parked one, or one without a UID.
+  /// parked one, one without a UID, or a delete (it would expunge the mail
+  /// where another client put it, or another copy of it).
   Future<PendingChangeRow?> _retargetForRetry(PendingChangeRow failed) async {
-    if (failed.resourceType == mailboxResourceType) return null;
+    // A delete goes nowhere else: elsewhere it would expunge a mail another
+    // client moved there (or another copy of it).
+    if (failed.resourceType == mailboxResourceType ||
+        failed.changeType == 'delete') {
+      return null;
+    }
     final payload = _decodePayload(failed);
     if (payload == null ||
         payload[_uidAfterMoveKey] == true ||
@@ -1388,6 +1394,16 @@ extension _ChangeQueue on EmailRepositoryImpl {
     Email? gone, {
     required String addressed,
   }) async {
+    // Copies in All Mail (Gmail: every mail is there too) and Drafts are
+    // not candidates, so they do not make the match ambiguous either.
+    final excluded = await (_db.selectOnly(_db.mailboxes)
+          ..addColumns([_db.mailboxes.path])
+          ..where(
+            _db.mailboxes.accountId.equals(failed.accountId) &
+                _db.mailboxes.role.isIn(const ['all', 'drafts']),
+          ))
+        .map((r) => r.read(_db.mailboxes.path)!)
+        .get();
     Future<Email?> unique(Expression<bool> Function($EmailsTable t) by) async {
       final rows = await (_db.select(_db.emails)
             ..where(
@@ -1398,6 +1414,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
                   t.srvGone.equals(false) &
                   t.srvUid.isNotNull() &
                   t.srvMailboxPath.isNotNull() &
+                  t.srvMailboxPath.isNotIn(excluded) &
                   by(t),
             )
             ..limit(2))

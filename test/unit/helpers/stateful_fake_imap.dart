@@ -155,6 +155,11 @@ class StatefulFakeImapServer with StaleAnswerHook {
   /// unchanged flag, #1326): the app must ask whether the UID is there.
   bool storeAnswersFetch = true;
 
+  /// Whether the app sees the `COPYUID` of a `MOVE` (with UIDPLUS). When
+  /// false it does not, as when the server sends it untagged (RFC 6851)
+  /// and the client library drops it: the MOVE still moves the mail.
+  bool moveAnswersCopyUid = true;
+
   /// Another client deletes folder [path] (with its messages).
   void deleteFolder(String path) => folders.remove(path);
 
@@ -695,7 +700,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       );
     }
     final result = imap.GenericImapResult();
-    if (server.uidPlus && sources.isNotEmpty) {
+    if (server.uidPlus && server.moveAnswersCopyUid && sources.isNotEmpty) {
       result.responseCode =
           'COPYUID ${dest.uidValidity} ${sources.join(',')} ${targets.join(',')}';
     }

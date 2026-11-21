@@ -958,7 +958,11 @@ extension _FlushImap on EmailRepositoryImpl {
         if (p == null ||
             (p['mailboxPath'] ?? p['src']) != addressed ||
             p['uid'] != uid ||
-            p[_uidAfterMoveKey] == true) {
+            p[_uidAfterMoveKey] == true ||
+            // A delete never follows the mail: it would expunge it wherever
+            // another client put it (restored from Trash, say). It stays
+            // unmarked, so the mail's absence settles it as moot.
+            change.changeType == 'delete') {
           continue;
         }
         ids.add(change.id);
@@ -1099,19 +1103,20 @@ extension _FlushImap on EmailRepositoryImpl {
     );
     final seq = imap.MessageSequence.fromId(uid, isUid: true);
     if (_locationChangeTypes.contains(row.changeType) &&
-        !client.serverInfo.supportsUidPlus &&
-        (payload['messageId'] ?? await _messageIdOf(row.resourceId)) == null) {
-      // Without COPYUID and without a Message-ID nothing after the MOVE can
-      // tell whether it moved the mail: the UID must be there before it
-      // (#1327), or a MOVE of a UID another client emptied would count as
-      // done.
-      final there = await client.uidFetchMessages(seq, 'FLAGS');
-      if (!there.messages.any((m) => m.uid == null || m.uid == uid)) {
-        throw _ImapMessageGoneException(
-          'UID $uid is gone from $mailboxPath, and the mail has no '
-          'Message-ID to find it by',
-        );
-      }
+        normaliseMessageId(
+              payload['messageId'] as String? ??
+                  await _messageIdOf(row.resourceId),
+            ) ==
+            null &&
+        !await _uidIsThere(client, seq)) {
+      // Without a Message-ID nothing after the MOVE can find the mail: the
+      // UID must be there before it (#1327), or a MOVE of a UID another
+      // client emptied would count as done. (A `COPYUID` alone is no proof
+      // either way: a client library may drop the untagged one.)
+      throw _ImapMessageGoneException(
+        'UID $uid is gone from $mailboxPath, and the mail has no '
+        'Message-ID to find it by',
+      );
     }
 
     switch (row.changeType) {
@@ -1149,6 +1154,18 @@ extension _FlushImap on EmailRepositoryImpl {
         if (dest == mailboxPath) {
           // The mail is in the destination already: another client moved it
           // there, and the carry-over pointed the move at it (#1327).
+          log('IMAP change ${row.id}: already in $dest, nothing to move');
+          unawaited(
+            _appLogger?.info(
+              'pending_change.already_in_dest',
+              'The ${_describeChange(row)} to $dest is done without a '
+                  'command: another client had moved the mail there',
+              accountId: row.accountId,
+              emailId: row.resourceId,
+              mailboxPath: dest,
+              data: {'changeType': row.changeType, 'changeId': row.id},
+            ),
+          );
           return;
         }
         final moveSeq = await _state.nextReadSeq();
@@ -1178,6 +1195,13 @@ extension _FlushImap on EmailRepositoryImpl {
               : null,
         );
       case 'delete':
+        if (!await _uidIsThere(client, seq)) {
+          // Nothing to expunge here; the mail is not looked for elsewhere:
+          // another client may have restored it, and a delete must not
+          // follow it there (#1327).
+          await _logDeleteMoot(row, uid: uid, mailboxPath: mailboxPath);
+          return;
+        }
         // A refused EXPUNGE must not leave the mail flagged `\Deleted`:
         // any client's next EXPUNGE would remove it.
         undo.add(() => client.uidMarkUndeleted(seq));
@@ -1293,10 +1317,50 @@ extension _FlushImap on EmailRepositoryImpl {
     final result = await store();
     if (result.changedMessages?.any((m) => m.uid == uid) ?? false) return;
     final there = await client.uidFetchMessages(seq, 'FLAGS');
-    if (there.messages.any((m) => m.uid == null || m.uid == uid)) return;
+    if (there.messages.any((m) => m.uid == uid)) return;
     throw _ImapTargetVanishedException(
       'UID $uid is gone from $mailboxPath: the STORE answered OK but '
       'changed nothing',
+    );
+  }
+
+  /// Whether the selected folder has a message at the single UID [seq]:
+  /// a `UID FETCH … FLAGS` names it (an unsolicited FETCH without the UID
+  /// does not count).
+  Future<bool> _uidIsThere(
+    imap.ImapClient client,
+    imap.MessageSequence seq,
+  ) async {
+    final uid = seq.toList().single;
+    final there = await client.uidFetchMessages(seq, 'FLAGS');
+    return there.messages.any((m) => m.uid == uid);
+  }
+
+  /// App Log warn for [row], a delete for good whose [uid] is gone from
+  /// [mailboxPath]: settled as done without a command. Another client
+  /// deleted the mail, or moved it elsewhere, where it stays: the delete
+  /// does not follow it (#1327). Which of the two is not known here.
+  Future<void> _logDeleteMoot(
+    PendingChangeRow row, {
+    required int uid,
+    required String mailboxPath,
+  }) async {
+    final email = await (_db.select(_db.emails)
+          ..where((t) => t.id.equals(row.resourceId)))
+        .getSingleOrNull();
+    log('IMAP change ${row.id}: UID $uid gone from $mailboxPath, delete moot');
+    unawaited(
+      _appLogger?.warn(
+        'pending_change.delete_moot',
+        'Did not apply the delete of '
+            '"${email?.subject ?? '(no subject)'}": UID $uid is no longer '
+            'in $mailboxPath (deleted or moved by another client). If it was '
+            'moved elsewhere it stays there; the delete does not follow it',
+        accountId: row.accountId,
+        emailId: row.resourceId,
+        mailboxPath: mailboxPath,
+        data: {'changeType': row.changeType, 'changeId': row.id, 'uid': uid},
+      ),
     );
   }
 
@@ -1381,9 +1445,9 @@ extension _FlushImap on EmailRepositoryImpl {
   /// drops the change and logs it as already gone. Throws [StateError] when
   /// the MOVE had no effect although the message is still there, so the
   /// change is retried and the failure lands in the App Log.
-  /// Without any Message-ID to verify against, a MOVE that visibly moved
-  /// nothing fails ([_ImapMessageGoneException]); one without UIDPLUS
-  /// counts as applied (its UID was checked right before it).
+  /// Without any Message-ID to verify against, the MOVE counts as applied
+  /// when its UID, there right before it, is gone from the source after it;
+  /// otherwise it throws [StateError] (retried).
   Future<void> _retryImapMoveByMessageId(
     imap.ImapClient client, {
     required PendingChangeRow row,
@@ -1398,16 +1462,21 @@ extension _FlushImap on EmailRepositoryImpl {
           ..where((t) => t.id.equals(row.resourceId)))
         .getSingleOrNull();
     final mid = messageId ?? local?.messageId;
-    if (mid == null || mid.isEmpty) {
-      // Nothing to look for the mail by. A MOVE that visibly moved nothing
-      // (UIDPLUS without COPYUID) did not happen: the UID was gone from the
-      // source (#1327). Without UIDPLUS [_sendImapChange] made sure the UID
-      // was there right before the MOVE, which then answered OK.
-      if (!movedNothing) return;
-      throw _ImapMessageGoneException(
-        'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath moved '
-        'nothing (no COPYUID: the UID is gone from $mailboxPath), and the '
-        'mail has no Message-ID to find it by',
+    if (normaliseMessageId(mid) == null) {
+      // Nothing to look for the mail by. [_sendImapChange] made sure the
+      // UID was in the source right before the MOVE (#1327); the source is
+      // still selected. Gone from it now: the MOVE moved it (its COPYUID,
+      // if any, was not seen). Still there: it did nothing.
+      if (staleUid < 0 ||
+          !await _uidIsThere(
+            client,
+            imap.MessageSequence.fromId(staleUid, isUid: true),
+          )) {
+        return;
+      }
+      throw StateError(
+        'MOVE of UID $staleUid from $mailboxPath to $destMailboxPath had no '
+        'effect: the UID is still in $mailboxPath',
       );
     }
     // Taken before the searches: a location they find is at least this new.
