@@ -857,30 +857,34 @@ class _BulkActionButtonState extends State<_BulkActionButton> {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: widget.tooltip,
-      child: InkResponse(
-        onTap: _handle,
-        radius: 28,
-        child: AnimatedScale(
-          scale: _pulsing ? 1.5 : 1.0,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutBack,
-          child: AnimatedContainer(
+    // InkResponse alone exposes no button role to screen readers (#1334).
+    return Semantics(
+      button: true,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: InkResponse(
+          onTap: _handle,
+          radius: 28,
+          child: AnimatedScale(
+            scale: _pulsing ? 1.5 : 1.0,
             duration: const Duration(milliseconds: 160),
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _pulsing
-                  ? widget.color
-                  : widget.color.withValues(alpha: 0.18),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Icon(
-              widget.icon,
-              size: 24,
-              color: _pulsing ? Colors.white : widget.color,
+            curve: Curves.easeOutBack,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _pulsing
+                    ? widget.color
+                    : widget.color.withValues(alpha: 0.18),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                widget.icon,
+                size: 24,
+                color: _pulsing ? Colors.white : widget.color,
+              ),
             ),
           ),
         ),
