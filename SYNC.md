@@ -1300,7 +1300,8 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     it; a folder flush that claimed its op while a mail change naming the
     folder is being sent releases it), so the two are never sent at once.
     The IMAP "source folder gone" outcome that drops a change as done is a
-    warn now (`pending_change.skipped_gone`).
+    warn now (`pending_change.skipped_gone`), and only for a folder the app
+    has no cached row of; a cached one waits for a listing (#1339, below).
   - *No folder comes back by a move.* An IMAP RENAME creates missing parents,
     so a move into a parent the server does not list (deleted elsewhere, an
     Undo's old parent) is refused, and a move waits while its parent's own
@@ -1366,6 +1367,39 @@ changes the row's `path`, never its id; sync finds rows by `path`.
     folder wait with it. A queued delete of a folder renamed
     elsewhere still counts as done (its path is gone). JMAP ops name the
     mailbox id and are unaffected.
+  - *A mail change in a folder another IMAP client renamed or moved*
+    (#1339). A read, star, keyword, move, snooze, unsnooze or delete whose
+    source folder answers `NO [NONEXISTENT]` to the SELECT, or whose move
+    into a folder gets a "no such folder" answer (`TRYCREATE`), is no longer
+    dropped as done (`pending_change.skipped_gone`) or failed as
+    "destination missing" when that folder is a cached server folder: it
+    gets the same `goneAt` mark, goes back uncharged (App Log info
+    `pending_change.waits_for_listing`) and kicks the loop once. The
+    listing that follows the folder names the new path in the change
+    (`EmailStateWriter.renameFolder`, warn `pending_change.folder_renamed`);
+    the next flush sees the change no longer names the marked path, drops
+    the mark and sends it there (`pending_change.folder_followed`: info, or
+    warn when the change was sent before without an answer; it names the
+    paths that changed). A delete sent before without an answer is not
+    followed but fails visibly: its resend would look the mail up by
+    Message-ID in the renumbered folder and could expunge another copy. A
+    listing that
+    removes the folder fails the change visibly ("folder removed on the
+    server"), a delete too: the mail may have been moved elsewhere before the
+    folder went, so the delete is not counted as done. When a listing that
+    started after the mark finished and the change still names the path (a
+    folder is listed there again, maybe another one), it fails visibly without being sent (warn
+    `pending_change.folder_not_found`), so a delete or flag change never
+    lands on a folder another client made at the old path; so it does after
+    24 hours or 20 flushes while listings keep failing. Only a listing that
+    could follow every folder counts (`FolderListedTrusted`: not in doubt
+    about folder ids, every id stored, trusted by the prune), for folder ops
+    too: a listing in doubt keeps a folder it did not follow, and the change
+    waits on. Only the mark is ever written back, onto the payload as stored,
+    so a follow written meanwhile (another isolate's listing) is kept. Retry
+    drops the mark.
+    A folder the app does not have cached keeps the old outcome (moot,
+    `pending_change.skipped_gone`): no listing can follow it.
   - *The Snoozed folder on IMAP.* A snooze without a known Snoozed folder
     queues its `create_mailbox` (role `snoozed`) and waits for it, as on JMAP;
     the snooze and unsnooze flush no longer `CREATE` folders on the side (an

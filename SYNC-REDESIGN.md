@@ -1998,9 +1998,11 @@ What remains after phase 6, with where it is handled today:
   trusted one): the op fails visibly as "folder removed on the server"
   (`pending_change.folder_removed`), as before the change for a folder
   another client deleted. One listing bounds the wait: when a listing that
-  started after the mark finished (`FolderListed`) and the op still finds
-  the same path gone (a listing not trusted kept the folder), it is
-  refused as before; so it is after 24 hours or 20 flushes of waiting
+  started after the mark finished and the op still finds the same path
+  gone, it is refused as before. Since #1339 only a listing that could
+  follow every folder counts (`FolderListedTrusted`); one not trusted or in
+  doubt about folder ids, which may keep the folder without following it,
+  does not; so it is after 24 hours or 20 flushes of waiting
   while listings keep failing. The refusal and a removal by the listing
   drop the mark, so a Retry waits for one listing again; a create or move
   that fails because the folder it goes into was removed says which one
@@ -2018,14 +2020,59 @@ What remains after phase 6, with where it is handled today:
   rename elsewhere keeps (`notFound` means destroyed, refused at once).
   Unchanged and left open: a queued delete of a folder renamed elsewhere
   counts as done (its path is gone, the existing §5 rule; a delete never
-  follows a folder), and the folder shows again under its new name; a mail
-  change of a folder renamed elsewhere with no folder op queued is still
-  sent before the listing, and its source folder's NONEXISTENT drops it as
-  done (`pending_change.skipped_gone`). A listing that runs while the op
+  follows a folder), and the folder shows again under its new name. A mail
+  change of a folder renamed elsewhere with no folder op queued waits the
+  same way since #1339 (next entry). A listing that runs while the op
   is claimed (another isolate) skips the folder (it may be moving) and
   stores its new path as a second row with the same MAILBOXID; the next
   listing does not follow the old row onto it (no row is merged), so the
   op fails visibly as "folder removed on the server".
+- **A mail change whose IMAP folder another client renamed or moved**
+  (#1339). The flush sent it to the old path before the listing ran; the
+  SELECT's `NO [NONEXISTENT]` dropped it as done (`pending_change.
+  skipped_gone`) and a move into the folder failed (`pending_change.
+  dest_missing`), one listing before that listing followed the folder by
+  MAILBOXID. Now (`flush_imap_folder_wait.dart`), when that folder (the
+  source, or a move / snooze / unsnooze destination after the source was
+  selected) is a cached server folder, the change takes the same `goneAt`
+  mark as a folder op (`MailboxStateWriter.markGoneAt`, after the change is
+  put back uncharged), App Log info `pending_change.waits_for_listing`, one
+  kick. Nothing else is needed for the follow: the listing's
+  `serverPathChanged` → `EmailStateWriter.renameFolder` already rewrites
+  `mailboxPath` / `src` / `dest` of every queued mail change, and leaves the
+  mark's path alone. Before anything is sent, `_resolveFolderGoneAt` decides
+  for a marked change: it no longer names the marked path → followed, the
+  mark goes and it is sent (`pending_change.folder_followed` with
+  `mailboxPath` and the changed paths only, warn when `attempts` > 0: a
+  change that may have reached the server is re-targeted only by the
+  logged follow, never silently, and its retry looks for the mail as
+  before; not a delete with `attempts` > 0, which fails visibly, as its
+  resend would look the mail up by Message-ID after the UIDVALIDITY change
+  and could expunge a duplicate); it still names it and a listing that
+  could follow every folder started after the mark and finished
+  (`FolderListedTrusted`, written only when the listing had no doubt about
+  folder ids, stored every id and was trusted by the prune; the folder ops
+  of #1329 use it too) → it fails visibly unsent (`pending_change.
+  folder_not_found`): the folder at that path may be another one (renamed
+  away and recreated without ids to follow), and a delete or STORE there
+  would hit the wrong mail; else it waits on, unsent, up to
+  `goneAtMaxWait` / `goneAtMaxWaits`. A listing that removes the folder
+  fails the change through `removeLocalMailbox` ("folder removed on the
+  server"), deletes included: decided as a visible failure rather than
+  "done", because another client may have moved the mail out before it
+  deleted the folder. Marked changes are never batched into one `UID MOVE`.
+  The decision is made in one transaction on the change as stored, and
+  only the `goneAt` key is written back (`MailboxStateWriter.updateGoneAt`,
+  also for the folder ops' `waitForListing` / `markGoneAt` /
+  `clearFollowedGoneAt`): a listing of another isolate (the folder
+  diagnostics, a force resync) may have followed the folder after the
+  change was read, and writing the read payload back would undo that
+  follow and fail the change. Retry drops the mark. JMAP is untouched
+  (mailbox ids survive renames).
+  Left open: a snooze's keyword or a clear-snooze's flag edits made before
+  a MOVE into a gone folder stay on the server while the change waits and
+  if it then fails (as for `dest_missing` before); a folder the app has no
+  row of keeps the old moot outcome.
 - **A UIDVALIDITY change re-matches by Message-ID** (#1314, §6): a cached
   row whose mail the renumbered folder still has keeps its id, body,
   downloaded attachments and queued changes. Left open: a mail without a

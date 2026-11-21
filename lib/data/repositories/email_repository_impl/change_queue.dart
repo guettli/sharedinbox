@@ -156,6 +156,19 @@ Map<String, dynamic>? _decodePayload(PendingChangeRow row) {
   }
 }
 
+/// [payload] without the [mailboxOpGoneAt] mark of a change that waited
+/// for a folder listing (#1339).
+String _withoutGoneAt(String payload) {
+  try {
+    final map = jsonDecode(payload);
+    if (map is! Map<String, dynamic>) return payload;
+    if (map.remove(mailboxOpGoneAt) == null) return payload;
+    return jsonEncode(map);
+  } catch (_) {
+    return payload;
+  }
+}
+
 // ── pending_changes queue ──────────────────────────────────────────────────
 
 /// Zone key marking changes the app queues on its own (snooze wake-up and
@@ -1278,7 +1291,9 @@ extension _ChangeQueue on EmailRepositoryImpl {
               resourceType: current.resourceType,
               resourceId: current.resourceId,
               changeType: current.changeType,
-              payload: current.payload,
+              // A change that waited for a folder listing (#1339) waits
+              // for one again when it meets its folder gone.
+              payload: _withoutGoneAt(current.payload),
               createdAt: DateTime.now(),
               state: parked ? const Value(_parkedState) : const Value.absent(),
             ),

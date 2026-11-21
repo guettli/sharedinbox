@@ -426,6 +426,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
         EmailStateWriter.folderListedKey,
         '$listSeq',
       );
+      // Only a listing that could follow every folder ends the wait of a
+      // change marked gone (#1339): one in doubt may have kept a folder it
+      // did not follow.
+      if (trusted && doubt == null && hold.isEmpty) {
+        await _saveSyncState(
+          account.id,
+          EmailStateWriter.folderListedTrustedKey,
+          '$listSeq',
+        );
+      }
       return mailboxes.length;
     } finally {
       await closeImapClient(client);

@@ -7,6 +7,7 @@
 import 'dart:io';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
@@ -67,8 +68,9 @@ void main() {
       AppDatabase db,
       AccountRepositoryImpl accounts,
       MailboxRepositoryImpl mailboxes,
-    }) r,
-  ) {
+    }) r, {
+    AppLogger? appLogger,
+  }) {
     final cache = Directory.systemTemp.createTempSync('mailbox_imap_');
     addTearDown(() => cache.deleteSync(recursive: true));
     return EmailRepositoryImpl(
@@ -76,7 +78,36 @@ void main() {
       r.accounts,
       imapConnect: testImapConnect,
       getCacheDir: () async => cache,
+      appLogger: appLogger,
     );
+  }
+
+  // Another client creates folder [path] with a mail [subject] in it, and
+  // a mail [inboxSubject] in INBOX when given.
+  Future<void> createWithMail(
+    String path,
+    String subject, {
+    String? inboxSubject,
+  }) async {
+    final client = await connectImap(env: env, user: user);
+    try {
+      await client.createMailbox(path);
+      await appendMessage(
+        client,
+        subject: subject,
+        userEmail: user.email,
+        mailboxPath: path,
+      );
+      if (inboxSubject != null) {
+        await appendMessage(
+          client,
+          subject: inboxSubject,
+          userEmail: user.email,
+        );
+      }
+    } finally {
+      await client.logout();
+    }
   }
 
   // Deletes the folders called one of [names] an earlier run left (with
@@ -446,19 +477,7 @@ void main() {
 
     await drop();
     try {
-      final client = await connectImap(env: env, user: user);
-      try {
-        await client.createMailbox(before);
-        await appendMessage(
-          client,
-          subject: 'p5b-rn-in-work',
-          userEmail: user.email,
-          mailboxPath: before,
-        );
-        await appendMessage(client, subject: 'p5b-rn', userEmail: user.email);
-      } finally {
-        await client.logout();
-      }
+      await createWithMail(before, 'p5b-rn-in-work', inboxSubject: 'p5b-rn');
       await r.mailboxes.syncMailboxes('test');
       await emails.syncEmails('test', before);
       await emails.syncEmails('test', 'INBOX');
@@ -606,6 +625,66 @@ void main() {
       final events = logs.rows.map((l) => l.event);
       expect(events, isNot(contains('pending_change.rejected')));
       expect(events, contains('mailbox.op_waits_for_listing'));
+      expect(events, contains('pending_change.folder_followed'));
+    } finally {
+      await drop();
+    }
+  });
+
+  // #1339: a star queued offline in a folder another client renamed
+  // meanwhile, with no folder op queued. The flush runs before the listing:
+  // the SELECT of the old path answers NONEXISTENT, and the change waits
+  // for the listing (it was dropped as done), which follows the folder by
+  // its MAILBOXID; the next flush stars the mail there.
+  test(
+      'a star in a folder another client renamed waits for the listing and '
+      'lands in the renamed folder', () async {
+    final logs = RecordingAppLogRepository();
+    final r = makeRepo(appLogger: AppLogger(logs));
+    final emails = emailsOf(r, appLogger: AppLogger(logs));
+    await r.accounts.addAccount(account, user.password);
+    const before = 'S1339Work';
+    const after = 'S1339Work2';
+    Future<void> drop() => dropFolders(r, const {before, after});
+
+    await drop();
+    try {
+      await createWithMail(before, 's1339');
+      await r.mailboxes.syncMailboxes('test');
+      await emails.syncEmails('test', before);
+      final mail = (await emails.observeEmails('test', before).first).single;
+      await emails.setFlag(mail.id, flagged: true);
+
+      await renameElsewhere(before, after);
+      await emails.flushPendingChanges('test', user.password);
+
+      final waiting = await r.db.select(r.db.pendingChanges).getSingle();
+      expect((waiting.state, waiting.attempts), ('pending', 0));
+      await r.mailboxes.syncMailboxes('test');
+      await emails.flushPendingChanges('test', user.password);
+
+      final check = await connectImap(env: env, user: user);
+      try {
+        final box = (await check.listMailboxes(recursive: true))
+            .singleWhere((b) => b.path == after);
+        await check.selectMailbox(box);
+        final fetched = await check.fetchMessages(
+          imap.MessageSequence.fromAll(),
+          '(FLAGS)',
+        );
+        expect(fetched.messages.single.isFlagged, isTrue);
+      } finally {
+        await check.logout();
+      }
+      expect(
+        (await r.db.select(r.db.pendingChanges).get())
+            .where((c) => c.state == 'failed'),
+        isEmpty,
+      );
+      await pumpEventQueue();
+      final events = logs.rows.map((l) => l.event);
+      expect(events, isNot(contains('pending_change.skipped_gone')));
+      expect(events, contains('pending_change.waits_for_listing'));
       expect(events, contains('pending_change.folder_followed'));
     } finally {
       await drop();

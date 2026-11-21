@@ -72,6 +72,7 @@ part 'email_repository_impl/change_queue.dart';
 part 'email_repository_impl/counterparts.dart';
 part 'email_repository_impl/diagnostics.dart';
 part 'email_repository_impl/flush_imap.dart';
+part 'email_repository_impl/flush_imap_folder_wait.dart';
 part 'email_repository_impl/flush_jmap.dart';
 part 'email_repository_impl/flush_mailbox.dart';
 part 'email_repository_impl/jmap_push.dart';
