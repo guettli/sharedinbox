@@ -1232,17 +1232,19 @@ As implemented, phase 4 is two PRs:
      `unread_seq`; `observeMailboxes` adds `unreadDeltaSql`: over the rows
      with a pending/inflight/stuck/parked/shadow op or one acked after
      `unread_seq`, unread rows shown in the folder minus unread rows the
-     server has there (`srv_*`, not gone), virtual rows excluded. It
-     covers read/unread changes and moves, deletes and snoozes of unread
-     mail. The v74 migration stamps the stored counts with the current
+     server had there when it counted (`srv_*`, not gone; read where the
+     row's newest `flag_seen` acked at or before `unread_seq` says so,
+     #1333), virtual rows excluded. It covers read/unread changes and
+     moves, deletes and snoozes of unread mail. The total count gets the
+     same delta over all such rows (`totalDeltaSql`), and the total shown
+     is at least the unread count. The v74 migration stamps the stored counts with the current
      read sequence, so changes acked before the upgrade are not counted
      on top of counts that reflect them. Limits: `srv_*` is the server's
      state as last read, not as of the count; a row read again after the
      count (its change confirmed and dropped) no longer adjusts it, so the
      folder shows the older count until the next count read (once per sync
-     cycle); a row with one change the count reflects and another it does
-     not can be off by one. A negative sum (a count read before mail it
-     now has) shows 0 and logs `mailbox.unread_negative` once per folder.
+     cycle). A negative sum (a count read before mail it now has) shows 0
+     and logs `mailbox.unread_negative` once per folder.
      `EXPLAIN QUERY PLAN`: the delta is driven from the foldable ops
      (covering index `pending_changes_resource_state`, then the `emails`
      primary key), one probe per queued change and mailbox when it reruns
@@ -2270,9 +2272,8 @@ What remains after phase 6, with where it is handled today:
   past `check_email_writes.sh` is caught by the sampled consistency checks
   (`OverlayConsistencySampler`, repaired and logged), not refused at
   compile time.
-- **Unread counts** are `server + delta` (§7); the delta can be off by one
-  for a row with one change the count reflects and another it does not,
-  and shows the older count until the next count read.
+- **Unread counts** are `server + delta` (§7); the delta shows the older
+  count until the next count read for a row read or moved after the count.
 - **Not measured:** the v72/v73 copy `UPDATE`s and the location index on a
   50k-row database (WAL growth at upgrade), and the fold cost of
   `markAllAsRead` and large Sieve runs.

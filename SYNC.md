@@ -987,14 +987,21 @@ the same statement and never rewrites the whole row.
   that read (`mailboxes.unread_seq`, v74). The count shown (`observeMailboxes`) adds
   the change the count does not reflect: over the rows with a pending, in-flight,
   stuck, parked or shadow change, or one acked after `unread_seq`, the unread rows
-  shown in the folder minus the unread rows the server has there as last read
-  (`srv_*`; virtual rows left out). A read/unread change, and a move, delete or
-  snooze of unread mail, count at once and once; a count read after the ack does
-  not count them again. The v74 upgrade stamps the stored counts with the current
-  read sequence. Limits: `srv_*` is the server's state as last read, not as of the
-  count, so a row read again after the count no longer adjusts it until the next
-  count read; a row with changes on both sides of the count's read can be off by
-  one. A negative sum shows 0 and logs `mailbox.unread_negative` once per folder.
+  shown in the folder minus the unread rows the server had there when it counted
+  (`srv_*`, read where the row's newest read/unread change acked at or before the
+  count's read says so, as the count reflects it while `srv_is_seen` waits for a
+  read of the mail; virtual rows left out). A read/unread change, and a move,
+  delete or snooze of unread mail, count at once and once; a count read after the
+  ack does not count them again, also for a mail marked read and then moved
+  whose read reached the server before the count and whose move did not (#1333).
+  The total count shown adds the same rows, read or not, so a move or delete
+  changes both counts of its folders at once; the total shown is never below the
+  unread count. The v74 upgrade stamps the stored counts with the current read
+  sequence. Limits: `srv_*` is the server's state as last read, not as of the
+  count (the folder is written at the ack), so a row read or moved after the
+  count no longer adjusts it until the next count read. A negative sum shows 0
+  and logs `mailbox.unread_negative` (or `mailbox.total_negative`) once per
+  folder.
 
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
   overlays it deletes rows (`deleteRow`, `cleanUpGone`), inserts and updates the rows of

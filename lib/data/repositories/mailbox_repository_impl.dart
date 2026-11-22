@@ -29,11 +29,19 @@ import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 /// (SYNC-REDESIGN.md §7): over the rows of its account with a change that
 /// is queued, being sent, stuck, parked or a counterpart's shadow, or acked
 /// after the count was read (`ack_seq > m.unread_seq`), the unread rows the
-/// app shows in `m` minus the unread rows the server has in `m` as last
-/// read (`srv_*`). This covers read/unread changes, and moves, deletes and
+/// app shows in `m` minus the unread rows the server had in `m` when it
+/// counted. This covers read/unread changes, and moves, deletes and
 /// snoozes of unread mail, each once; a change the count already reflects
 /// is not counted again, so the number does not flicker back. Virtual rows
 /// (no server copy) are left out: the server's count never had them.
+///
+/// "Unread on the server when it counted" is `srv_is_seen`, unless the row
+/// has a read/unread change acked at or before the count's read (and not
+/// contradicted by then): the count reflects that change, while
+/// `srv_is_seen` waits for a read of the mail to confirm it. Without this,
+/// a mail marked read and then moved offline, whose read change reached
+/// the server before the count and whose move did not, was taken off its
+/// folder's count a second time (#1333).
 ///
 /// Limits: `srv_*` is the server's state as last read, not as of the
 /// count's read. A row read again after the count (its change confirmed
@@ -44,19 +52,42 @@ import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 /// (`pending_changes_resource_state`, then the `emails` primary key), so
 /// re-running it on every write costs one probe per queued change and
 /// mailbox.
-const unreadDeltaSql = 'COALESCE((SELECT SUM(c.n) FROM ('
-    'SELECT e.id, e.account_id, e.mailbox_path AS path, 1 AS n '
-    'FROM emails e WHERE e.is_seen = 0 AND e.is_local = 0 '
-    'AND e.id IN ($_queuedRowsSql) '
+final unreadDeltaSql = _countDeltaSql(unreadOnly: true);
+
+/// The change in a mailbox `m`'s total count that `m.total_count` (read
+/// with the unread count, at `m.unread_seq`) does not reflect yet: the
+/// same rows as [unreadDeltaSql], read or not. A move or delete of a mail
+/// changes both counts of its folders at once, so a folder never shows
+/// more unread than total mail (#1333).
+final totalDeltaSql = _countDeltaSql(unreadOnly: false);
+
+/// [unreadDeltaSql] ([unreadOnly]) or [totalDeltaSql].
+String _countDeltaSql({required bool unreadOnly}) =>
+    'COALESCE((SELECT SUM(c.n) FROM ('
+    'SELECT e.id, e.account_id, e.mailbox_path AS path, 1 AS n, '
+    'NULL AS srv_seen '
+    'FROM emails e WHERE ${unreadOnly ? 'e.is_seen = 0 AND ' : ''}'
+    'e.is_local = 0 AND e.id IN ($_queuedRowsSql) '
     'UNION ALL '
-    'SELECT e.id, e.account_id, e.srv_mailbox_path AS path, -1 AS n '
-    'FROM emails e WHERE e.srv_is_seen = 0 AND e.srv_gone = 0 '
-    'AND e.is_local = 0 '
+    'SELECT e.id, e.account_id, e.srv_mailbox_path AS path, -1 AS n, '
+    'e.srv_is_seen AS srv_seen '
+    'FROM emails e WHERE e.srv_gone = 0 AND e.is_local = 0 '
     'AND e.id IN ($_queuedRowsSql)'
     ') c WHERE c.account_id = m.account_id AND c.path = m.path '
+    '${unreadOnly ? 'AND (c.n = 1 OR $_srvSeenAtCountSql = 0) ' : ''}'
     'AND EXISTS (SELECT 1 FROM pending_changes p WHERE p.resource_id = c.id '
     "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
     "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq)))), 0)";
+
+/// Whether the server had row `c` read when it counted `m` (see
+/// [unreadDeltaSql]): the newest read/unread change of the row acked at or
+/// before `m.unread_seq` and not contradicted by then, else `srv_is_seen`.
+const _srvSeenAtCountSql = '(COALESCE((SELECT json_extract(s.payload, '
+    r"'$.seen') FROM pending_changes s WHERE s.resource_id = c.id "
+    "AND s.change_type = 'flag_seen' AND s.state = 'acked' "
+    'AND s.ack_seq <= m.unread_seq '
+    'AND (s.contradicted_seq IS NULL OR s.contradicted_seq > m.unread_seq) '
+    'ORDER BY s.id DESC LIMIT 1), c.srv_seen))';
 
 const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
     "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow', "
@@ -138,14 +169,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
 
-  /// The mailboxes, each with the unread count the UI shows: the server's
-  /// count plus the effect of the user's changes it does not reflect yet
-  /// (SYNC-REDESIGN.md §7, [unreadDeltaSql]).
+  /// The mailboxes, each with the unread and total counts the UI shows:
+  /// the server's counts plus the effect of the user's changes they do not
+  /// reflect yet (SYNC-REDESIGN.md §7, [unreadDeltaSql], [totalDeltaSql]).
   @override
   Stream<List<model.Mailbox>> observeMailboxes(String? accountId) {
     return _db
         .customSelect(
-          'SELECT m.*, ($unreadDeltaSql) AS unread_delta FROM mailboxes m '
+          'SELECT m.*, ($unreadDeltaSql) AS unread_delta, '
+          '($totalDeltaSql) AS total_delta FROM mailboxes m '
           'WHERE ${mailboxShownSql('m')}'
           '${accountId == null ? '' : ' AND m.account_id = ?1'} '
           'ORDER BY m.path',
@@ -156,9 +188,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
         .map(
           (rows) => [
             for (final r in rows)
-              _shownUnread(
+              _shownCounts(
                 _db.mailboxes.map(r.data),
-                r.read<int>('unread_delta'),
+                unreadDelta: r.read<int>('unread_delta'),
+                totalDelta: r.read<int>('total_delta'),
               ),
           ],
         );
@@ -175,28 +208,38 @@ class MailboxRepositoryImpl implements MailboxRepository {
           )
           .distinct((a, b) => a.length == b.length && a.containsAll(b));
 
-  /// Folders whose shown unread count came out negative, logged once each.
+  /// Folders whose shown unread or total count came out negative, logged
+  /// once each (keys `unread:<id>`, `total:<id>`).
   final _negativeLogged = <String>{};
 
-  /// [row] with the unread count the UI shows (server count plus
-  /// [delta]); a negative sum (a count read before mail it now has, see
-  /// [unreadDeltaSql]) shows as 0 and is logged once per folder.
-  model.Mailbox _shownUnread(MailboxRow row, int delta) {
-    final shown = row.unreadCount + delta;
-    if (shown < 0 && _negativeLogged.add(row.id)) {
-      unawaited(
-        _appLogger?.warn(
-          'mailbox.unread_negative',
-          'The unread count of "${row.name}" came out at $shown (server '
-              '${row.unreadCount}, local changes $delta); showing 0 until '
-              'the next count read',
-          accountId: row.accountId,
-          mailboxPath: row.path,
-          data: {'server': row.unreadCount, 'delta': delta},
-        ),
-      );
-    }
-    return _toModel(row, unreadDelta: delta);
+  /// [row] with the counts the UI shows (server counts plus [unreadDelta]
+  /// and [totalDelta]); a negative sum (a count read before mail it now
+  /// has, see [unreadDeltaSql]) shows as 0 and is logged once per folder
+  /// and count.
+  model.Mailbox _shownCounts(
+    MailboxRow row, {
+    required int unreadDelta,
+    required int totalDelta,
+  }) {
+    _logNegative(row, 'unread', row.unreadCount, unreadDelta);
+    _logNegative(row, 'total', row.totalCount, totalDelta);
+    return _toModel(row, unreadDelta: unreadDelta, totalDelta: totalDelta);
+  }
+
+  void _logNegative(MailboxRow row, String count, int server, int delta) {
+    final shown = server + delta;
+    if (shown >= 0 || !_negativeLogged.add('$count:${row.id}')) return;
+    unawaited(
+      _appLogger?.warn(
+        'mailbox.${count}_negative',
+        'The $count count of "${row.name}" came out at $shown (server '
+            '$server, local changes $delta); showing 0 until the next '
+            'count read',
+        accountId: row.accountId,
+        mailboxPath: row.path,
+        data: {'server': server, 'delta': delta},
+      ),
+    );
   }
 
   @override
@@ -864,24 +907,35 @@ class MailboxRepositoryImpl implements MailboxRepository {
     return triple[1] as Map<String, dynamic>;
   }
 
-  model.Mailbox _toModel(MailboxRow row, {int unreadDelta = 0}) =>
-      model.Mailbox(
-        id: row.id,
-        accountId: row.accountId,
-        path: row.path,
-        name: row.name,
-        // Fall back to `path` when display_path is empty (row predates the
-        // v47 migration, or was inserted by test setup with the older API).
-        displayPath: row.displayPath.isEmpty ? row.path : row.displayPath,
-        parentId: effectiveMailboxParent(
-          parentId: row.parentId,
-          localParent: row.localParent,
-        ),
-        unreadCount: max(0, row.unreadCount + unreadDelta),
-        totalCount: row.totalCount,
-        role: row.role,
-        isLocal: row.isLocal,
-      );
+  /// [row] as a model; [unreadDelta] and [totalDelta] are the local
+  /// changes its server counts do not reflect yet. The total shown is at
+  /// least the unread count: both are server counts, and one read before
+  /// the other or before mail arrived must not show unread mail in a
+  /// folder counted empty (#1333).
+  model.Mailbox _toModel(
+    MailboxRow row, {
+    int unreadDelta = 0,
+    int totalDelta = 0,
+  }) {
+    final unread = max(0, row.unreadCount + unreadDelta);
+    return model.Mailbox(
+      id: row.id,
+      accountId: row.accountId,
+      path: row.path,
+      name: row.name,
+      // Fall back to `path` when display_path is empty (row predates the
+      // v47 migration, or was inserted by test setup with the older API).
+      displayPath: row.displayPath.isEmpty ? row.path : row.displayPath,
+      parentId: effectiveMailboxParent(
+        parentId: row.parentId,
+        localParent: row.localParent,
+      ),
+      unreadCount: unread,
+      totalCount: max(unread, row.totalCount + totalDelta),
+      role: row.role,
+      isLocal: row.isLocal,
+    );
+  }
 
   /// Maps enough_mail special-use flags (RFC 6154) to JMAP role strings (RFC 8621).
   static String? _imapRole(imap.Mailbox mb) {

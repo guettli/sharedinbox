@@ -11,6 +11,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
@@ -21,6 +22,7 @@ import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'helpers/offline_repos.dart';
+import 'recording_app_log_repository.dart';
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -644,17 +646,27 @@ void main() {
 
   group('unread-count delta', () {
     late MailboxRepositoryImpl mailboxes;
+    late RecordingAppLogRepository logs;
 
     setUp(() async {
-      mailboxes = MailboxRepositoryImpl(db, accounts);
-      // The server counted 3 unread in INBOX (one of them is imap-p:5).
+      logs = RecordingAppLogRepository();
+      mailboxes =
+          MailboxRepositoryImpl(db, accounts, appLogger: AppLogger(logs));
+      // The server counted 3 unread of 3 in INBOX (one of them is
+      // imap-p:5), and an empty Archive.
       await (db.update(db.mailboxes)..where((t) => t.id.equals('imap-p:INBOX')))
           .write(
-        const MailboxesCompanion(unreadCount: Value(3), unreadSeq: Value(0)),
+        const MailboxesCompanion(
+          unreadCount: Value(3),
+          totalCount: Value(3),
+          unreadSeq: Value(0),
+        ),
       );
       await (db.update(db.mailboxes)
             ..where((t) => t.id.equals('imap-p:Archive')))
-          .write(const MailboxesCompanion(unreadCount: Value(0)));
+          .write(
+        const MailboxesCompanion(unreadCount: Value(0), totalCount: Value(0)),
+      );
       await db.customStatement(
         'UPDATE emails SET is_seen = 0, srv_is_seen = 0 '
         "WHERE id = 'imap-p:5'",
@@ -671,9 +683,105 @@ void main() {
       expect(await unread(), {'Archive': 0, 'INBOX': 2});
     });
 
+    Future<Map<String, (int, int)>> counts() async => {
+          for (final m in await mailboxes.observeMailboxes('imap-p').first)
+            m.path: (m.unreadCount, m.totalCount),
+        };
+
+    /// Acks the queued change [op] as a flush would.
+    Future<void> ackOp(PendingChangeRow op) async {
+      await (db.update(db.pendingChanges)..where((t) => t.id.equals(op.id)))
+          .write(const PendingChangesCompanion(state: Value('inflight')));
+      await EmailStateWriter(db).ack(
+        await (db.select(db.pendingChanges)..where((t) => t.id.equals(op.id)))
+            .getSingle(),
+      );
+    }
+
     test('a queued move of an unread mail moves its count', () async {
       await emails.moveEmail('imap-p:5', 'Archive');
       expect(await unread(), {'Archive': 1, 'INBOX': 2});
+    });
+
+    test(
+        'a queued move of an unread mail moves its total too: the target '
+        'never shows unread mail in a folder counted empty (#1333)', () async {
+      await emails.moveEmail('imap-p:5', 'Archive');
+      expect(await counts(), {'Archive': (1, 1), 'INBOX': (2, 2)});
+
+      await emails.deleteEmail('imap-p:5');
+      final shown = await counts();
+      expect(shown['Archive'], (0, 0));
+      expect(shown['INBOX'], (2, 2));
+    });
+
+    test(
+        'marked read, then moved: the read reached the server before the '
+        'count, the move not yet; not taken off the count twice (#1333)',
+        () async {
+      // The server counted imap-p:5 as the only unread mail of INBOX.
+      await (db.update(db.mailboxes)..where((t) => t.id.equals('imap-p:INBOX')))
+          .write(const MailboxesCompanion(unreadCount: Value(1)));
+      await emails.setFlag('imap-p:5', seen: true);
+      await emails.moveEmail('imap-p:5', 'Archive');
+      expect(await unread(), {'Archive': 0, 'INBOX': 0});
+
+      // Back online: the read change is sent and acked, then a sync counts
+      // INBOX again (no unread left there); the move is still queued.
+      final flag = (await opsOf('imap-p'))
+          .singleWhere((o) => o.changeType == 'flag_seen');
+      await ackOp(flag);
+      final seq = await EmailStateWriter(db).nextReadSeq();
+      await (db.update(db.mailboxes)..where((t) => t.id.equals('imap-p:INBOX')))
+          .write(
+        MailboxesCompanion(unreadCount: const Value(0), unreadSeq: Value(seq)),
+      );
+
+      expect(await unread(), {'Archive': 0, 'INBOX': 0});
+      await pumpEventQueue();
+      expect(
+        logs.rows.map((r) => r.event),
+        isNot(contains('mailbox.unread_negative')),
+      );
+      expect(await counts(), {'Archive': (0, 1), 'INBOX': (0, 2)});
+
+      // The move is acked too and the folders are counted after it.
+      final move =
+          (await opsOf('imap-p')).singleWhere((o) => o.changeType == 'move');
+      await ackOp(move);
+      final after = await EmailStateWriter(db).nextReadSeq();
+      for (final (id, total) in const [
+        ('imap-p:INBOX', 2),
+        ('imap-p:Archive', 1),
+      ]) {
+        await (db.update(db.mailboxes)..where((t) => t.id.equals(id))).write(
+          MailboxesCompanion(
+            unreadCount: const Value(0),
+            totalCount: Value(total),
+            unreadSeq: Value(after),
+          ),
+        );
+      }
+      expect(await counts(), {'Archive': (0, 1), 'INBOX': (0, 2)});
+      await pumpEventQueue();
+      expect(
+        logs.rows.map((r) => r.event),
+        isNot(contains('mailbox.unread_negative')),
+      );
+    });
+
+    test('a real inconsistency is still logged, once', () async {
+      // The count is older than the mail: the server never counted it.
+      await (db.update(db.mailboxes)..where((t) => t.id.equals('imap-p:INBOX')))
+          .write(const MailboxesCompanion(unreadCount: Value(0)));
+      await emails.moveEmail('imap-p:5', 'Archive');
+      expect((await counts())['INBOX'], (0, 2));
+      expect((await counts())['INBOX'], (0, 2));
+      await pumpEventQueue();
+      expect(
+        logs.rows.where((r) => r.event == 'mailbox.unread_negative'),
+        hasLength(1),
+      );
     });
 
     test('a count read before a mail arrived does not go below 0', () async {
