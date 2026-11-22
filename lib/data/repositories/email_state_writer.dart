@@ -355,13 +355,17 @@ class EmailStateWriter {
         dropped = true;
       }
       if (countPrev != null) {
-        await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
-            .write(
-          PendingChangesCompanion(
-            payload: Value(
-              jsonEncode({...?_payloadOf(op), countPrevKey: countPrev}),
-            ),
-          ),
+        // Into the stored payload: a folder rename or a UID rewrite may
+        // have changed it while the change was in flight.
+        await _db.customUpdate(
+          'UPDATE pending_changes SET payload = '
+          "json_set(payload, '\$.$countPrevKey', json(?1)) WHERE id = ?2",
+          variables: [
+            Variable.withString(jsonEncode(countPrev)),
+            Variable.withInt(op.id),
+          ],
+          updates: {_db.pendingChanges},
+          updateKind: UpdateKind.update,
         );
       }
       if (dropped) await refold(op.resourceId);
@@ -1565,6 +1569,11 @@ class EmailStateWriter {
             payload[key] = to;
             changed = true;
           }
+          final countPrev = payload[countPrevKey];
+          if (countPrev is Map && countPrev['path'] == from) {
+            payload[countPrevKey] = {...countPrev, 'path': to};
+            changed = true;
+          }
           if (!changed) continue;
           rewrittenOps++;
           refoldIds.add(op.resourceId);
@@ -2135,9 +2144,13 @@ class EmailStateWriter {
       if (shadowed) {
         // Kept until a read covers what it wrote: until then a folder count
         // read after its ack reflects its state, which `srv_*` does not
-        // have yet (`mailboxesWithCountDeltasSql`, #1333).
-        if ((hasKeywords && keywordsSeq <= ackSeq) ||
-            (hasLocation && locationSeq <= ackSeq)) {
+        // have yet (`mailboxesWithCountDeltasSql`, #1333). Not for a mail
+        // the server no longer has: no read of it comes, and the kept op
+        // would hold the row forever.
+        final goneSinceAck = gone && locationSeq > ackSeq;
+        if (!goneSinceAck &&
+            ((hasKeywords && keywordsSeq <= ackSeq) ||
+                (hasLocation && locationSeq <= ackSeq))) {
           continue;
         }
         await _dropOp(op);

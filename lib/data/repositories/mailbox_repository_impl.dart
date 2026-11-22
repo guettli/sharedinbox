@@ -57,50 +57,64 @@ import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 /// dropped) adds nothing any more, so until the next count read the folder
 /// shows the older server count; a count read before a mail arrived can
 /// make a sum negative ([MailboxRepositoryImpl] shows 0 and logs it); an
-/// op keeps one dropped older op, not a chain of them, and of a row's
-/// acked read/unread changes only the newest is looked at (a twin row's
-/// shadows can have two).
-String mailboxesWithCountDeltasSql(String where) => 'WITH c AS ('
-    // As the app shows the row.
-    'SELECT m.id AS mid, 1 AS n, e.is_seen = 0 AS u FROM emails e '
-    'JOIN mailboxes m ON m.account_id = e.account_id '
-    'AND m.path = e.mailbox_path '
-    'WHERE e.id IN ($_queuedRowsSql) AND e.is_local = 0 '
-    'AND $_unreflectedSql '
-    'UNION ALL '
-    // As the server had it, in the folder it has it in now.
-    'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM emails e '
-    'JOIN mailboxes m ON m.account_id = e.account_id '
-    'AND m.path = e.srv_mailbox_path '
-    'WHERE e.id IN ($_queuedRowsSql) AND e.is_local = 0 '
-    'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path '
-    'UNION ALL '
-    // As the server had it, in a folder an op acked after the count took
-    // it from.
-    'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM ('
-    'SELECT o.resource_id AS id, $_opSourceSql AS src '
-    'FROM pending_changes o '
-    "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql "
-    'UNION '
-    r"SELECT o.resource_id, json_extract(o.payload, '$.countPrev.path') "
-    'FROM pending_changes o '
-    "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql) l "
-    'JOIN emails e ON e.id = l.id '
-    'JOIN mailboxes m ON m.account_id = e.account_id AND m.path = l.src '
-    'WHERE e.is_local = 0 AND l.src IS NOT e.srv_mailbox_path '
-    'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path), '
-    'd AS (SELECT mid, SUM(n) AS total_delta, SUM(n * u) AS unread_delta '
-    'FROM c GROUP BY mid) '
-    'SELECT m.*, COALESCE(d.unread_delta, 0) AS unread_delta, '
-    'COALESCE(d.total_delta, 0) AS total_delta '
-    'FROM mailboxes m LEFT JOIN d ON d.mid = m.id WHERE $where';
+/// op keeps one dropped older op, not a chain of them (three acked changes
+/// of one mail before a read of it can be off by one).
+///
+/// [oneAccount]: `?1` is the account the folders of [where] belong to, and
+/// only its changes are read.
+String mailboxesWithCountDeltasSql(String where, {bool oneAccount = false}) {
+  final account = oneAccount ? 'AND o.account_id = ?1 ' : '';
+  final queued = _queuedRowsSql(oneAccount: oneAccount);
+  return 'WITH c AS ('
+      // As the app shows the row.
+      'SELECT m.id AS mid, 1 AS n, e.is_seen = 0 AS u FROM emails e '
+      'JOIN mailboxes m ON m.account_id = e.account_id '
+      'AND m.path = e.mailbox_path '
+      'WHERE e.id IN ($queued) AND e.is_local = 0 '
+      'AND $_unreflectedSql '
+      'UNION ALL '
+      // As the server had it, in the folder it has it in now.
+      'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM emails e '
+      'JOIN mailboxes m ON m.account_id = e.account_id '
+      'AND m.path = e.srv_mailbox_path '
+      'WHERE e.id IN ($queued) AND e.is_local = 0 '
+      'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path '
+      'UNION ALL '
+      // As the server had it, in a folder an op acked after the count took
+      // it from.
+      'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM ('
+      'SELECT o.resource_id AS id, $_opSourceSql AS src '
+      'FROM pending_changes o '
+      "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql "
+      '$account'
+      'UNION '
+      r"SELECT o.resource_id, json_extract(o.payload, '$.countPrev.path') "
+      'FROM pending_changes o '
+      "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql "
+      '$account) l '
+      'JOIN emails e ON e.id = l.id '
+      'JOIN mailboxes m ON m.account_id = e.account_id AND m.path = l.src '
+      'WHERE e.is_local = 0 AND l.src IS NOT e.srv_mailbox_path '
+      'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path), '
+      'd AS (SELECT mid, SUM(n) AS total_delta, SUM(n * u) AS unread_delta '
+      'FROM c GROUP BY mid) '
+      'SELECT m.*, COALESCE(d.unread_delta, 0) AS unread_delta, '
+      'COALESCE(d.total_delta, 0) AS total_delta '
+      'FROM mailboxes m LEFT JOIN d ON d.mid = m.id WHERE $where';
+}
 
-/// The rows with a change some folder's count may not reflect: one not
-/// acked, or acked after the oldest count.
-const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
-    "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
-    "OR (state = 'acked' "
-    'AND ack_seq > (SELECT MIN(unread_seq) FROM mailboxes))';
+/// The rows (of account `?1` when [oneAccount]) with a change some folder's
+/// count may not reflect: one not acked, or acked after the oldest count
+/// of a shown server folder of its account (none counted yet: any).
+String _queuedRowsSql({required bool oneAccount}) =>
+    'SELECT p.resource_id FROM pending_changes p '
+    'LEFT JOIN (SELECT account_id, MIN(unread_seq) AS seq FROM mailboxes '
+    'WHERE is_local = 0 AND local_hidden = 0 '
+    '${oneAccount ? 'AND account_id = ?1 ' : ''}'
+    'GROUP BY account_id) a ON a.account_id = p.account_id '
+    'WHERE ${oneAccount ? 'p.account_id = ?1 AND ' : ''}'
+    "(p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
+    "OR (p.state = 'acked' AND (a.seq IS NULL OR p.ack_seq > a.seq)))";
 
 /// Row `e` has a change folder `m`'s stored counts do not reflect.
 const _unreflectedSql = '(EXISTS (SELECT 1 FROM pending_changes p '
@@ -108,10 +122,10 @@ const _unreflectedSql = '(EXISTS (SELECT 1 FROM pending_changes p '
     "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
     "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq))))";
 
-/// Whether the server had row `e` read when it counted `m`: the state its
-/// newest acked read/unread change knows at or before `m.unread_seq` (its
-/// own, unless a read contradicted it by then, or that of the older op it
-/// dropped, `countPrev`), else `srv_is_seen`. A read change acked before
+/// Whether the server had row `e` read when it counted `m`: the state the
+/// newest acked read/unread change that knows one at or before
+/// `m.unread_seq` knows (its own, unless a read contradicted it by then,
+/// or that of the older op it dropped, `countPrev`), else `srv_is_seen`. A read change acked before
 /// the count is reflected by it, while `srv_is_seen` waits for a read of
 /// the mail; without this a mail marked read and then moved was taken off
 /// its folder's unread count twice (#1333).
@@ -122,6 +136,8 @@ const _srvSeenAtCountSql = '(COALESCE((SELECT CASE '
     r"THEN json_extract(s.payload, '$.countPrev.seen') END "
     'FROM pending_changes s WHERE s.resource_id = e.id '
     "AND s.state = 'acked' AND s.change_type = 'flag_seen' "
+    'AND (s.ack_seq <= m.unread_seq '
+    r"OR json_extract(s.payload, '$.countPrev.seq') <= m.unread_seq) "
     'ORDER BY s.id DESC LIMIT 1), e.srv_is_seen))';
 
 /// The folder the server had row `e` in when it counted `m` (NULL: in
@@ -237,6 +253,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             '${mailboxShownSql('m')}'
             '${accountId == null ? '' : ' AND m.account_id = ?1'} '
             'ORDER BY m.path',
+            oneAccount: accountId != null,
           ),
           variables: [if (accountId != null) Variable.withString(accountId)],
           readsFrom: {_db.mailboxes, _db.emails, _db.pendingChanges},

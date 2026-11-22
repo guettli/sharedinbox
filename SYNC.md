@@ -1004,14 +1004,16 @@ the same statement and never rewrites the whole row.
     needs in its payload (`countPrev`: that op's `ack_seq` and read state or source
     folder), and a read drops a shadowed acked op only once it read the group it wrote.
   The total shown is never below the unread count. Computed in one pass, the sums
-  grouped per folder (not one scan per folder); rows whose acked changes are older
-  than every folder's count are skipped. The v74 upgrade stamps the stored counts with
-  the current read sequence. Limits: a row read again after the count (its change
-  confirmed and dropped) no longer adjusts it until the next count read; an op keeps
-  one dropped older op, not a chain; of a twin row's acked shadows only the newest
-  read/unread one is looked at; a folder renamed after the ack is not followed in
-  `countPrev`. A negative sum shows 0 and logs `mailbox.unread_negative` or
-  `mailbox.total_negative` once per folder and count read.
+  grouped per folder (not one scan per folder), only over the account asked for; rows
+  whose acked changes are older than every count of a shown server folder of their
+  account are skipped. A shadowed acked op of a mail the server no longer has is
+  dropped at once (no read of it comes), and a folder rename rewrites `countPrev`
+  too. The v74 upgrade stamps the stored counts with the current read sequence.
+  Limits: a row read again after the count (its change confirmed and dropped) no
+  longer adjusts it until the next count read; an op keeps one dropped older op, not
+  a chain (three acked changes of a mail before a read of it can be off by one). A
+  negative sum shows 0 and logs `mailbox.unread_negative` or `mailbox.total_negative`
+  once per folder and count read.
 
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
   overlays it deletes rows (`deleteRow`, `cleanUpGone`), inserts and updates the rows of
