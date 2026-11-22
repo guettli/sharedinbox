@@ -241,6 +241,7 @@ model.PendingChange _toPendingChange(
   PendingChangeRow r, [
   Map<String, String> localFolders = const {},
   Map<String, String?> subjects = const {},
+  Map<String, String> folderNamesById = const {},
 ]) =>
     model.PendingChange(
       id: r.id,
@@ -258,6 +259,10 @@ model.PendingChange _toPendingChange(
       nextTry: r.state == _stuckState ? r.leaseUntil : null,
       parked: r.state == _parkedState,
       waitingForFolder: _waitingForFolder(r, localFolders),
+      folderName: r.resourceType == mailboxResourceType
+          ? folderNamesById[r.resourceId]
+          : null,
+      folderNames: _namedLocalFolders(r, localFolders),
       subject: r.resourceType == mailboxResourceType
           ? null
           : subjects[r.resourceId] ??
@@ -291,6 +296,26 @@ String? _waitingForFolder(
     if (name != null) return name;
   }
   return null;
+}
+
+/// The current names of the folders created offline ([localFolders]: path
+/// → name) that change [r]'s payload names by path, keyed by that path.
+Map<String, String> _namedLocalFolders(
+  PendingChangeRow r,
+  Map<String, String> localFolders,
+) {
+  if (localFolders.isEmpty) return const {};
+  final payload = _decodePayload(r);
+  if (payload == null) return const {};
+  final keys = r.resourceType == mailboxResourceType
+      ? const [mailboxOpParent]
+      : emailOpFolderKeys;
+  return {
+    for (final key in keys)
+      if (payload[key] case final String path
+          when localFolders.containsKey(path))
+        path: localFolders[path]!,
+  };
 }
 
 extension _ChangeQueue on EmailRepositoryImpl {
@@ -1563,6 +1588,23 @@ extension _ChangeQueue on EmailRepositoryImpl {
       (local[r.read<String>('account_id')] ??= {})[r.read<String>('path')] =
           r.read<String>('name');
     }
+    // The names of the folders the folder changes are for.
+    final folderIds = {
+      for (final r in rows)
+        if (r.resourceType == mailboxResourceType) r.resourceId,
+    }.toList();
+    final folderNames = <String, String>{};
+    for (var i = 0; i < folderIds.length; i += 500) {
+      final chunk = folderIds.sublist(i, math.min(i + 500, folderIds.length));
+      final found = await (_db.selectOnly(_db.mailboxes)
+            ..addColumns([_db.mailboxes.id, _db.mailboxes.name])
+            ..where(_db.mailboxes.id.isIn(chunk)))
+          .get();
+      for (final row in found) {
+        folderNames[row.read(_db.mailboxes.id)!] =
+            row.read(_db.mailboxes.name)!;
+      }
+    }
     // The mails' subjects, whether shown or not (a row gone on the server
     // keeps its changes until they settle).
     final emailIds = {
@@ -1583,7 +1625,12 @@ extension _ChangeQueue on EmailRepositoryImpl {
     }
     return [
       for (final r in rows)
-        _toPendingChange(r, local[r.accountId] ?? const {}, subjects),
+        _toPendingChange(
+          r,
+          local[r.accountId] ?? const {},
+          subjects,
+          folderNames,
+        ),
     ];
   }
 }

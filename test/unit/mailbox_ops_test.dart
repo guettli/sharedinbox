@@ -1553,6 +1553,28 @@ void main() {
     });
 
     test(
+        'the Pending Changes list names a folder created offline and renamed '
+        'by its new name, and each folder change by its folder (#1335)',
+        () async {
+      await rig.mailboxes.createMailbox(_acc.id, 'Projects');
+      await emails.moveEmail((await rowOfA()).id, 'Projects');
+      await rig.mailboxes.renameMailbox(_acc.id, 'Projects', 'Work');
+
+      final listed = await emails.observePendingChanges(_acc.id).first;
+
+      final move = listed.singleWhere((c) => c.kind == 'move');
+      expect(move.waitingForFolder, 'Work');
+      expect(move.folderNames, {'Projects': 'Work'});
+      expect(move.folderName, isNull);
+      expect(
+        listed
+            .where((c) => c.resourceType == 'Mailbox')
+            .map((c) => c.folderName),
+        everyElement('Work'),
+      );
+    });
+
+    test(
         'a snooze without a Snoozed folder queues its create; the flush '
         'creates it before the snooze, never on the side', () async {
       await emails.snoozeEmail(

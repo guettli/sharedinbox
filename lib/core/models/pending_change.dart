@@ -31,6 +31,8 @@ class PendingChange {
     this.parked = false,
     this.waitingForFolder,
     this.subject,
+    this.folderName,
+    this.folderNames = const {},
   });
 
   final int id;
@@ -83,6 +85,17 @@ class PendingChange {
   /// removed (the subject stamped on the failed change then, #1327). Null
   /// for a folder change, or when it is not known.
   final String? subject;
+
+  /// The name of the folder a folder change (`resourceType` "Mailbox") is
+  /// for, as the folder list shows it now; null for a mail change, or when
+  /// the folder is no longer stored.
+  final String? folderName;
+
+  /// The names, as the folder list shows them now, of the folders created
+  /// offline that this change's payload names by path. Such a folder keeps
+  /// the path it was created with when it is renamed before it reaches the
+  /// server, so the path alone may show its old name.
+  final Map<String, String> folderNames;
 
   bool get hasError => lastError != null;
 }

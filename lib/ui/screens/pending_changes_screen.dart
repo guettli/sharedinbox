@@ -30,9 +30,10 @@ final _dateFmt = DateFormat('MMM d, HH:mm');
 ///    queue (fresh attempt/error state) and shows its effect locally again;
 ///    for a change still queued, keeps its place. Either way asks the sync
 ///    manager to flush the account immediately.
-///  * **Discard**  — drops the row from the queue. Nothing is undone locally:
-///    a failed change already shows the server's state again; for a change
-///    still queued, the next sync shows the server's state.
+///  * **Discard**  — drops the row from the queue. A failed change already
+///    shows the server's state again; a change still queued (or not synced
+///    yet) is first undone locally, like a failure, so the mail does not keep
+///    a state the server never gets (SYNC.md §6).
 ///
 /// A failed change (given up on, no longer flushed) is marked as such; one
 /// with an error that is not failed yet is still being retried.
@@ -363,13 +364,13 @@ String describeChange(PendingChange change) {
       }
       return 'Add keywords';
     case 'move':
-      final src = _string(payload['src']);
-      final dest = _string(payload['dest']);
+      final src = _folder(change, payload['src']);
+      final dest = _folder(change, payload['dest']);
       if (src != null && dest != null) return 'Move: $src → $dest';
       if (dest != null) return 'Move to $dest';
       return 'Move';
     case 'delete':
-      final from = _string(payload['mailboxPath']);
+      final from = _folder(change, payload['mailboxPath']);
       return from != null ? 'Delete from $from' : 'Delete';
     case 'create_mailbox':
       final name = _string(payload['name']);
@@ -407,6 +408,15 @@ Map<String, dynamic> _decodePayload(String payload) {
 String? _string(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
+/// The folder at path [value] of [change]'s payload, by the name the folder
+/// list shows: a folder created offline and renamed before it reached the
+/// server still has the path it was created with (#1335).
+String? _folder(PendingChange change, Object? value) {
+  final path = _string(value);
+  if (path == null) return null;
+  return change.folderNames[path] ?? path;
+}
+
 /// Resolves the pending change's email into a human-readable `subject · sender`
 /// line. Falls back to the change's [PendingChange.subject] while the lookup
 /// is in flight or when the referenced email is not shown (or no longer
@@ -422,6 +432,8 @@ class _EmailIdentity extends StatelessWidget {
   String get _fallback => switch (change.resourceType) {
         'Email' when change.subject != null => change.subject!,
         'Email' => 'email ${change.resourceId}',
+        'Mailbox' when change.folderName != null =>
+          'folder "${change.folderName}"',
         'Mailbox' => 'folder',
         _ => '${change.resourceType} ${change.resourceId}',
       };

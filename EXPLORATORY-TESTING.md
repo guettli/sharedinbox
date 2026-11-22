@@ -192,14 +192,21 @@ scrolls it into view, and Return activates it.
 ```python
 import smtplib
 from email.message import EmailMessage
+from email.utils import make_msgid
 
 m = EmailMessage()
 m["From"], m["To"], m["Subject"] = "alice@example.com", "bob@example.com", "Hello"
+m["Message-ID"] = make_msgid()
 m.set_content("Body")
 with smtplib.SMTP("localhost", 21025) as s:
     s.login("alice@example.com", "secret")
     s.send_message(m)
 ```
+
+Always set a `Message-ID`: Stalwart does not add one, and real mail always has
+one. Without it the app takes other sync paths, such as re-matching a mail by
+its Message-ID or following a move made by another client. A mail without a
+`Message-ID` is a test case of its own, so leave it out only on purpose.
 
 **Check what the server really has.** When the app shows something surprising,
 compare it with the server before you blame the UI:
@@ -293,6 +300,21 @@ while a flag change or move is pending, then `up`, and compare with the server.
   meanwhile. A `shot` right after a drag can
   still show the frame before the last move, so nudge by a pixel first
   (another `hold=1` drag) when you check what the pointer is over.
+- **A filled search field loses its name.** The search field's accessible
+  name is its hint text (`Search…`, `Search emails…`), which goes away once
+  the field has text, so a second `c fill` cannot find it. The field still
+  has focus: replace the text with `c key key=ctrl+a` and then
+  `c type text=…`.
+- **Escape does not go back from a mail.** In the mail view, `c key
+  key=Escape` does nothing. The back button is an icon button without an
+  accessible name on Linux (see `click-unnamed` above):
+  `c click-unnamed index=0`.
+- **The DEBUG banner covers the mail view's ⋮ button.** The menu button in the
+  top right corner of the mail view sits under the debug build's DEBUG
+  banner, so look for it under the banner in a screenshot.
+- **Rows move.** The offline banner and the selection mode's app bar push the
+  list down by about 60–90 px. Coordinates from an older screenshot then hit
+  the wrong row, so take a new `shot` right before you use `press` or `drag`.
 - **Window size:** the window is 1280×800 on a 1280×900 screen. The black strip
   at the bottom of screenshots is the empty part of the screen, not a bug.
 - **ManageSieve:** the log reports a failed ManageSieve probe on port 4190. The
