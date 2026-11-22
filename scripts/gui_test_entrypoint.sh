@@ -67,4 +67,17 @@ echo "--- running GUI tests ---"
 # Everything from here is a verdict about the release itself, so failures
 # propagate unchanged rather than being softened to EX_TEMPFAIL.
 PHASE=test
-python3 "$(dirname "$0")/gui_release_test.py"
+rc=0
+python3 "$(dirname "$0")/gui_release_test.py" || rc=$?
+[ "$rc" -eq 0 ] && exit 0
+# A failed assertion alone cannot tell "the app crashed" from "the app showed
+# the wrong thing", so report whether it is still alive and what it logged.
+if kill -0 "$APP_PID" 2>/dev/null; then
+    echo "--- the app is still running ---"
+else
+    wait "$APP_PID" && app_rc=0 || app_rc=$?
+    echo "--- the app exited (rc=$app_rc) ---"
+fi
+echo "--- app log (last 50 lines) ---"
+tail -50 /tmp/app.log || true
+exit "$rc"

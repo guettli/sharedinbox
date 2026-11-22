@@ -1315,6 +1315,14 @@ cat SHA256SUMS
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
     echo "Release $TAG exists — uploading assets"
     gh release upload "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --clobber
+    # A failed GUI verification retracts the release to a draft. Re-running the
+    # job must publish it again so it can be re-verified — the verification
+    # step retracts it again if the defect is real. Without this every re-run
+    # fails here on the draft check and never re-tests the release.
+    if [ "$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')" = "true" ]; then
+        echo "Release $TAG is a draft (retracted by an earlier run) — publishing it again"
+        gh release edit "$TAG" --repo "$REPO" --draft=false
+    fi
 else
     echo "Creating release $TAG"
     set -- "$TAG" "${ASSET}" SHA256SUMS --repo "$REPO" --title "$TAG" --generate-notes
