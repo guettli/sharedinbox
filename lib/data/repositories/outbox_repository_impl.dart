@@ -56,6 +56,13 @@ class OutboxRepositoryImpl implements OutboxRepository {
   /// never select and transmit the same outbox row concurrently (#755).
   final Map<String, Future<void>> _flushChain = {};
 
+  /// Flushes per account that run or wait in [_flushChain].
+  final Map<String, int> _busy = {};
+
+  /// Per account, the flush a `skipIfBusy` call asked for while the account
+  /// was busy; run once the busy flushes ended.
+  final Map<String, Future<int> Function()> _followUp = {};
+
   /// Ids of rows someone holds right now: [flush] while it hands a row to
   /// the sender, [takeForEdit] while it moves a row into a draft. Claiming is
   /// synchronous, so the two never both get the same row — an edited message
@@ -98,7 +105,7 @@ class OutboxRepositoryImpl implements OutboxRepository {
               mimeBase64: mimeBase64,
               envelopeJson: envelope,
               attachmentsJson: Value(jsonEncode(paths)),
-              createdAt: DateTime.now(),
+              createdAt: _clock(),
             ),
           );
       // A file that is already gone keeps its path: the send then fails
@@ -139,7 +146,14 @@ class OutboxRepositoryImpl implements OutboxRepository {
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
     OutboxFlushObserver? observer,
+    bool skipIfBusy = false,
   }) {
+    if (skipIfBusy && (_busy[accountId] ?? 0) > 0) {
+      _followUp[accountId] =
+          () => flush(accountId, sender, now: now, observer: observer);
+      return Future.value(0);
+    }
+    _busy[accountId] = (_busy[accountId] ?? 0) + 1;
     // Serialise flushes per account so a UI-initiated send (via
     // EmailRepository.sendNow) and the background sync loop's flush can never
     // both select and transmit the same row — which would deliver the message
@@ -152,8 +166,23 @@ class OutboxRepositoryImpl implements OutboxRepository {
     // The stored chain link must never reject, or a single failed flush would
     // wedge every later flush for the account; swallow errors on it (the real
     // error still propagates through [result] to this caller).
-    _flushChain[accountId] = result.then((_) {}, onError: (_) {});
+    _flushChain[accountId] = result.then((_) {}, onError: (_) {}).whenComplete(
+          () => _flushEnded(accountId),
+        );
     return result;
+  }
+
+  void _flushEnded(String accountId) {
+    final left = (_busy[accountId] ?? 1) - 1;
+    if (left > 0) {
+      _busy[accountId] = left;
+      return;
+    }
+    _busy.remove(accountId);
+    final followUp = _followUp.remove(accountId);
+    if (followUp == null) return;
+    // Its errors went to nobody before either: the skipped caller got 0.
+    unawaited(followUp().then((_) {}, onError: (_) {}));
   }
 
   Future<int> _flushLocked(

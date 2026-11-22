@@ -521,9 +521,19 @@ until its 50 s timeout was otherwise due again in the past, #1331).
   one timer for the earliest `nextAttemptAt` of a pending row, then drains that
   account through `sendNow`. It does not wake the sync loops, so an IMAP loop stays
   in IDLE. Each drain logs `outbox.retry.due`; one account is drained at most every
-  30 s by it.
+  30 s by it. A drain that throws before it reaches a row (no password readable from
+  a locked keyring) backs off 30 s, 2 min, 10 min, then 1 h, and logs
+  `outbox.retry.failed` once per distinct error; the backoff starts over once the
+  account's rows change. The timer is re-armed from the wall clock when the app
+  resumes (a suspend delays it).
+- **Rows with `nextAttemptAt == null`** (just queued, or reset by "Retry now" or a
+  reconnect) are not the scheduler's: whoever queued or reset them flushes at once,
+  and the sync cycle picks up the rest.
 - **Also drained** at the start of every sync cycle, on reconnect (backoff cleared)
-  and by "Retry now" in the Sent Queue.
+  and by "Retry now" in the Sent Queue. The sync cycle's flush (`flushOutbox`) does
+  not wait for a flush already running for the account (`skipIfBusy`): a retry
+  hanging on dead SMTP would otherwise hold the fetch of new mail. It asks for one
+  more flush instead, which runs once the busy ones ended.
 - **No double send**: every flush goes through `OutboxRepository.flush`, which
   serialises flushes per account and claims a row while it is sent; a flush that
   waited re-reads each row before sending it.

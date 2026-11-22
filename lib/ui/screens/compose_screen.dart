@@ -829,11 +829,31 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         onTimeout: () => null,
       );
       if (result == null) {
+        final logger = _appLogger;
+        // The screen is gone by then. Should the app's messenger be gone too
+        // (the app is closing), the outcome still reaches the App Log.
+        void report(void Function() show) {
+          try {
+            show();
+          } catch (e, stack) {
+            unawaited(
+              logger.warn(
+                'compose.send_result_unshown',
+                'Could not show how a background send ended: $e',
+                accountId: accountId,
+                error: e,
+                stack: stack,
+              ),
+            );
+          }
+        }
+
         unawaited(
           sending.then(
-            (r) => _showSendResult(messenger, accountId, r!),
-            onError: (Object e, StackTrace stack) =>
-                _showQueuedAfterError(messenger, accountId, e, stack),
+            (r) => report(() => _showSendResult(messenger, accountId, r!)),
+            onError: (Object e, StackTrace stack) => report(
+              () => _showQueuedAfterError(messenger, accountId, e, stack),
+            ),
           ),
         );
         messenger.show(

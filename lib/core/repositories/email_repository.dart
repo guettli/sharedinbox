@@ -99,6 +99,10 @@ abstract class EmailRepository {
   /// Drains queued outbox messages for [accountId] via the appropriate
   /// protocol. Called from [AccountSyncManager] on every sync cycle.
   /// Returns the number of messages successfully transmitted.
+  ///
+  /// Does not wait for a flush already running for the account (a send
+  /// hanging on a dead SMTP link would hold the sync cycle, #1331): it then
+  /// returns 0 and the outbox flushes once more after that flush ended.
   Future<int> flushOutbox(String accountId, String password);
 
   /// Immediately attempts to send the queued outbox messages for [accountId]

@@ -267,7 +267,7 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     unawaited(ref.read(connectivityServiceProvider).initialize());
     ref.read(reconnectFlushProvider);
     // Retry a failed send when its retry time comes, even while IDLE.
-    ref.read(outboxRetrySchedulerProvider).start();
+    ref.read(outboxRetrySchedulerProvider);
     // Attachment copies of drafts and queued messages that no longer exist
     // (the app stopped between deleting a row and its files, #955).
     unawaited(ref.read(draftRepositoryProvider).deleteOrphanedAttachments());

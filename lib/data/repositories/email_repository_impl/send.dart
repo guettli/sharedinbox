@@ -57,6 +57,7 @@ extension _Send on EmailRepositoryImpl {
     String password, {
     OutboxFlushObserver? extraObserver,
     Map<int, String>? warnings,
+    bool skipIfBusy = false,
   }) async {
     final account = (await _accounts.getAccount(accountId))!;
     // Per-row timing breakdowns, keyed by outbox row id, so the log observer
@@ -133,6 +134,7 @@ extension _Send on EmailRepositoryImpl {
         extraObserver,
         _outboxLogObserver(accountId, timings),
       ),
+      skipIfBusy: skipIfBusy,
     );
   }
 

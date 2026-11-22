@@ -22,11 +22,18 @@ abstract class OutboxRepository {
   /// When [observer] is supplied it is notified of each outcome so callers
   /// (e.g. the [EmailRepository] flush wrapper) can mirror the events into the
   /// application log without this repository having to depend on any logger.
+  ///
+  /// With [skipIfBusy], a call made while another flush for [accountId] runs
+  /// or waits returns 0 at once instead of queueing behind it (a sync cycle
+  /// must not wait for a send hanging on a dead link, #1331). Rows queued
+  /// meanwhile are not left behind: once the busy flushes ended, one more
+  /// flush with this [sender] and [observer] runs in the background.
   Future<int> flush(
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
     OutboxFlushObserver? observer,
+    bool skipIfBusy = false,
   });
 
   /// Emits the current list of queued messages for [accountId], live.

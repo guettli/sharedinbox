@@ -496,6 +496,69 @@ void main() {
       },
     );
 
+    test(
+      'skipIfBusy does not wait for a hanging flush, and sends rows queued '
+      'meanwhile once it ended (#1331)',
+      () async {
+        // A retry hangs on a dead SMTP link; the sync cycle's flush must not
+        // wait behind it (it would delay fetching new mail by up to 50 s per
+        // row), but a message queued meanwhile must still go out.
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        final repo = OutboxRepositoryImpl(db);
+        await repo.enqueue(_accountId, _makeDraft(subject: 'hanging'));
+
+        final sent = <String>[];
+        final entered = Completer<void>();
+        final release = Completer<void>();
+        final hanging = repo.flush(_accountId, (job) async {
+          if (!entered.isCompleted) entered.complete();
+          await release.future;
+          sent.add(job.draft.subject);
+        });
+        await entered.future;
+
+        final queued = await repo.enqueue(
+          _accountId,
+          _makeDraft(subject: 'queued meanwhile'),
+        );
+        final followUpDone = Completer<void>();
+        final skipped = await repo.flush(
+          _accountId,
+          (job) async {
+            sent.add(job.draft.subject);
+            if (job.id == queued) followUpDone.complete();
+          },
+          skipIfBusy: true,
+        ).timeout(const Duration(seconds: 1));
+        expect(skipped, 0, reason: 'returned at once, nothing sent');
+        expect(sent, isEmpty);
+
+        release.complete();
+        // The hanging flush selected only its own row; the follow-up flush
+        // sends the one queued meanwhile, exactly once.
+        expect(await hanging, 1);
+        await followUpDone.future.timeout(const Duration(seconds: 5));
+        // The follow-up deletes the row right after its sender returned.
+        await repo
+            .observeAllOutbox()
+            .firstWhere((rows) => rows.isEmpty)
+            .timeout(const Duration(seconds: 5));
+        expect(sent, ['hanging', 'queued meanwhile']);
+      },
+    );
+
+    test('skipIfBusy flushes normally when nothing else runs', () async {
+      final db = openTestDatabase();
+      await _seedAccount(db);
+      final repo = OutboxRepositoryImpl(db);
+      await repo.enqueue(_accountId, _makeDraft());
+      expect(
+        await repo.flush(_accountId, (job) async {}, skipIfBusy: true),
+        1,
+      );
+    });
+
     test('flushes for different accounts still run concurrently', () async {
       // The lock is per-account, so an in-flight send for one account must not
       // block a send for another.

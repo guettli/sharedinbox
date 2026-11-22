@@ -374,6 +374,7 @@ class FakeOutboxRepository implements OutboxRepository {
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
     OutboxFlushObserver? observer,
+    bool skipIfBusy = false,
   }) async =>
       0;
 

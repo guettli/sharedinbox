@@ -6,11 +6,13 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
+import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/sync/outbox_retry_scheduler.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'recording_app_log_repository.dart';
 
 // A failed send is retried when its retry time comes, also while the IMAP
 // loop sits in IDLE: the sync loops drained the outbox only at the start of
@@ -114,17 +116,68 @@ void main() {
     });
   });
 
-  test('a drain that leaves the row due does not spin', () {
+  test('a drain that throws backs off and logs each error once', () {
     fakeAsync((async) {
+      // E.g. a locked keyring: reading the password throws before the flush
+      // reaches the row, so its retry time never moves. Retrying every 30 s
+      // with two log lines each time would go on forever.
+      final outbox = StreamController<List<OutboxMessage>>();
+      final clock = async.getClock(t0);
+      final logs = RecordingAppLogRepository();
+      final drains = <Duration>[];
+      var error = 'No password stored';
+      final scheduler = OutboxRetryScheduler(
+        outbox: outbox.stream,
+        drain: (accountId) async {
+          drains.add(clock.now().difference(t0));
+          throw StateError(error);
+        },
+        logger: AppLogger(logs),
+        clock: clock.now,
+      )..start();
+      List<String> failedLogs() => [
+            for (final r in logs.rows)
+              if (r.event == 'outbox.retry.failed') r.message,
+          ];
+
+      outbox.add([_row(nextAttemptAt: t0)]);
+      async.elapse(const Duration(hours: 2));
+      expect(drains, const [
+        Duration.zero,
+        Duration(seconds: 30),
+        Duration(seconds: 30 + 120),
+        Duration(seconds: 30 + 120 + 600),
+        Duration(seconds: 30 + 120 + 600 + 3600),
+      ]);
+      expect(failedLogs(), hasLength(1));
+
+      // Another error is logged once again.
+      error = 'Keyring locked';
+      async.elapse(const Duration(hours: 1));
+      expect(drains, hasLength(6));
+      expect(failedLogs(), hasLength(2));
+      expect(failedLogs().last, contains('Keyring locked'));
+
+      // The row changed (the user hit "Retry now", or a drain got to it):
+      // the backoff starts over.
+      outbox.add([
+        _row(nextAttemptAt: clock.now().add(const Duration(seconds: 5))),
+      ]);
+      async.elapse(const Duration(seconds: 5));
+      expect(drains, hasLength(7));
+      scheduler.dispose();
+      unawaited(outbox.close());
+    });
+  });
+
+  test('a drain that leaves the row due waits minGap, not zero', () {
+    fakeAsync((async) {
+      // The row was being edited: the drain returned without touching it.
       final outbox = StreamController<List<OutboxMessage>>();
       var drains = 0;
       final scheduler = OutboxRetryScheduler(
         outbox: outbox.stream,
-        // E.g. no password stored: the row is not touched.
-        drain: (accountId) async {
-          drains++;
-          throw StateError('No password stored');
-        },
+        drain: (accountId) async => drains++,
         clock: async.getClock(t0).now,
       )..start();
 
@@ -135,6 +188,30 @@ void main() {
       expect(drains, 1);
       async.elapse(const Duration(seconds: 1));
       expect(drains, 2);
+      scheduler.dispose();
+      unawaited(outbox.close());
+    });
+  });
+
+  test('rearm uses the wall clock after a suspend', () {
+    fakeAsync((async) {
+      // The timer was armed for 10 min, but the device slept through the
+      // retry time: on resume, the retry runs at once.
+      final outbox = StreamController<List<OutboxMessage>>();
+      var wall = t0;
+      var drains = 0;
+      final scheduler = OutboxRetryScheduler(
+        outbox: outbox.stream,
+        drain: (accountId) async => drains++,
+        clock: () => wall,
+      )..start();
+      outbox.add([_row(nextAttemptAt: t0.add(const Duration(minutes: 10)))]);
+      async.flushMicrotasks();
+
+      wall = t0.add(const Duration(hours: 1));
+      scheduler.rearm();
+      async.elapse(Duration.zero);
+      expect(drains, 1);
       scheduler.dispose();
       unawaited(outbox.close());
     });
