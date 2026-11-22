@@ -240,6 +240,66 @@ void main() {
     expect(find.text('Mark read/unread'), findsOneWidget);
   });
 
+  testWidgets(
+      'a move to a folder renamed offline names it by the path the folder '
+      'list shows, like the folder it waits for (#1335)', (tester) async {
+    final repo = _StubbedQueue([
+      PendingChange(
+        id: 1,
+        accountId: 'acc-1',
+        kind: 'move',
+        resourceType: 'Email',
+        resourceId: 'acc-1:42',
+        payload: '{"src":"INBOX","dest":"Projects"}',
+        createdAt: DateTime.utc(2026, 3, 4, 9),
+        attempts: 0,
+        waitingForFolder: 'Archive/Work',
+        folderNames: const {'INBOX': 'INBOX', 'Projects': 'Archive/Work'},
+      ),
+    ]);
+    await pump(tester, repo: repo);
+
+    expect(find.text('Move: INBOX → Archive/Work'), findsOneWidget);
+    expect(find.textContaining('Projects'), findsNothing);
+    expect(
+      find.textContaining('waiting for folder "Archive/Work" to be created'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a folder change names the folder (#1335)', (tester) async {
+    final repo = _StubbedQueue([
+      PendingChange(
+        id: 1,
+        accountId: 'acc-1',
+        kind: 'move_mailbox',
+        resourceType: 'Mailbox',
+        resourceId: 'acc-1:mbx-7',
+        payload: '{"parent":"Archive"}',
+        createdAt: DateTime.utc(2026, 3, 4, 9),
+        attempts: 0,
+        folderName: 'Receipts',
+        folderNames: const {'Archive': 'Old Mail'},
+      ),
+      PendingChange(
+        id: 2,
+        accountId: 'acc-1',
+        kind: 'delete_mailbox',
+        resourceType: 'Mailbox',
+        resourceId: 'acc-1:mbx-8',
+        payload: '{}',
+        createdAt: DateTime.utc(2026, 3, 4, 9),
+        attempts: 0,
+      ),
+    ]);
+    await pump(tester, repo: repo);
+
+    expect(find.text('Move folder into "Old Mail"'), findsOneWidget);
+    expect(find.text('folder "Receipts"'), findsOneWidget);
+    // Not stored any more: still says what kind of thing it is.
+    expect(find.text('folder'), findsOneWidget);
+  });
+
   testWidgets('retry resets the row, kicks sync, and shows a SnackBar',
       (tester) async {
     final repo = _StubbedQueue([_pc(id: 42)]);

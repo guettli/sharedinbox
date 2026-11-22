@@ -30,9 +30,12 @@ final _dateFmt = DateFormat('MMM d, HH:mm');
 ///    queue (fresh attempt/error state) and shows its effect locally again;
 ///    for a change still queued, keeps its place. Either way asks the sync
 ///    manager to flush the account immediately.
-///  * **Discard**  — drops the row from the queue. Nothing is undone locally:
-///    a failed change already shows the server's state again; for a change
-///    still queued, the next sync shows the server's state.
+///  * **Discard**  — drops the row from the queue. A failed change already
+///    shows the server's state again; a change still queued (or not synced
+///    yet) is first undone locally, like a failure, so the mail does not keep
+///    a state the server never gets (SYNC.md §6). A folder change goes
+///    another way: discarding the create of a folder made offline removes
+///    the folder, and the changes waiting for it fail.
 ///
 /// A failed change (given up on, no longer flushed) is marked as such; one
 /// with an error that is not failed yet is still being retried.
@@ -363,13 +366,13 @@ String describeChange(PendingChange change) {
       }
       return 'Add keywords';
     case 'move':
-      final src = _string(payload['src']);
-      final dest = _string(payload['dest']);
+      final src = _folder(change, payload['src']);
+      final dest = _folder(change, payload['dest']);
       if (src != null && dest != null) return 'Move: $src → $dest';
       if (dest != null) return 'Move to $dest';
       return 'Move';
     case 'delete':
-      final from = _string(payload['mailboxPath']);
+      final from = _folder(change, payload['mailboxPath']);
       return from != null ? 'Delete from $from' : 'Delete';
     case 'create_mailbox':
       final name = _string(payload['name']);
@@ -378,11 +381,13 @@ String describeChange(PendingChange change) {
       final name = _string(payload['name']);
       return name != null ? 'Rename folder to "$name"' : 'Rename folder';
     case 'move_mailbox':
-      // The parent is a folder path (on JMAP an opaque id): shown only to
-      // tell the top level apart.
-      return payload.containsKey('parent') && payload['parent'] == null
-          ? 'Move folder to the top level'
-          : 'Move folder';
+      if (payload.containsKey('parent') && payload['parent'] == null) {
+        return 'Move folder to the top level';
+      }
+      // The parent is a folder path (on JMAP an opaque id): named only by
+      // the path the folder list shows.
+      final parent = change.folderNames[_string(payload['parent'])];
+      return parent != null ? 'Move folder into "$parent"' : 'Move folder';
     case 'delete_mailbox':
       return payload['removeEmails'] == true
           ? 'Delete folder and its mail'
@@ -407,6 +412,15 @@ Map<String, dynamic> _decodePayload(String payload) {
 String? _string(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
+/// The folder at path [value] of [change]'s payload, by the path the folder
+/// list shows: a folder renamed or moved offline keeps the path the server
+/// has until the server confirms it, and on JMAP the path is an id (#1335).
+String? _folder(PendingChange change, Object? value) {
+  final path = _string(value);
+  if (path == null) return null;
+  return change.folderNames[path] ?? path;
+}
+
 /// Resolves the pending change's email into a human-readable `subject · sender`
 /// line. Falls back to the change's [PendingChange.subject] while the lookup
 /// is in flight or when the referenced email is not shown (or no longer
@@ -422,6 +436,8 @@ class _EmailIdentity extends StatelessWidget {
   String get _fallback => switch (change.resourceType) {
         'Email' when change.subject != null => change.subject!,
         'Email' => 'email ${change.resourceId}',
+        'Mailbox' when change.folderName != null =>
+          'folder "${change.folderName}"',
         'Mailbox' => 'folder',
         _ => '${change.resourceType} ${change.resourceId}',
       };
