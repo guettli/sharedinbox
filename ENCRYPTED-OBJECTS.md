@@ -345,8 +345,12 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
   `h` (then deviceId, seq); FSRS elapsed time from `t`, clamped ≥ 0. The same
   card reviewed offline on two devices → both reviews count.
 - **Deck options / FSRS params**: device-state docs, effective value
-  account-global (5.4 item 4); a change triggers a full replay. Day boundary =
-  local timezone.
+  account-global (5.4 item 4); a change triggers a full replay. A study day
+  starts at **04:00 local time** by default (like Anki; `dayStartHour` is a
+  deck option), so a late-night session still counts as the same day.
+- **Interval fuzz** is kept but deterministic: the PRNG is seeded from
+  `(cardId, h of the review)`, so a replay gives the same due dates on every
+  device.
 - **Compaction**: owner device only, at > 30 own segments or month rollover;
   packs of closed months are immutable. Events of deleted cards are dropped at
   the next pack **only** if a synced tombstone exists.
