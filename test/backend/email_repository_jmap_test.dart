@@ -965,7 +965,8 @@ if header :contains "subject" "lunch" {
         ],
       ]);
       final list = [
-        for (final m in (got[0][1] as Map<String, dynamic>)['list'] as List)
+        for (final m
+            in ((got[0] as List)[1] as Map<String, dynamic>)['list'] as List)
           m as Map<String, dynamic>,
       ];
       final parentOf = {
@@ -1023,8 +1024,8 @@ if header :contains "subject" "lunch" {
         ],
       ]);
       final ids = {
-        for (final e in ((created[0][1] as Map<String, dynamic>)['created']
-                as Map<String, dynamic>)
+        for (final e in (((created[0] as List)[1]
+                as Map<String, dynamic>)['created'] as Map<String, dynamic>)
             .entries)
           e.key: (e.value as Map<String, dynamic>)['id'] as String,
       };
@@ -1049,11 +1050,11 @@ if header :contains "subject" "lunch" {
       await r.mailboxes.syncMailboxes('test-jmap');
 
       expect(
-        [
+        {
           for (final m
               in await r.mailboxes.observeAppDataFolders('test-jmap').first)
             m.path,
-        ].toSet(),
+        },
         {ids['si'], ids['k'], ids['d']},
       );
       final shown = [
