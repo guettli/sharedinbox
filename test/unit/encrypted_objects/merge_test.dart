@@ -60,8 +60,12 @@ void main() {
 
   test('a crash leftover B next to D(parent B) is superseded', () async {
     final result = mergeItem(
-      known: [await version(b, parents: [a])],
-      incoming: [await version(d, parents: [b], body: 'd')],
+      known: [
+        await version(b, parents: [a]),
+      ],
+      incoming: [
+        await version(d, parents: [b], body: 'd'),
+      ],
       vv: {'devA': b},
     );
     expect(result.state, MergeState.live);
@@ -71,7 +75,9 @@ void main() {
 
   test('a replayed old version with hlc ≤ vv is ignored', () async {
     final vv = {'devA': b, 'devB': d};
-    final known = [await version(d, parents: [b], body: 'd')];
+    final known = [
+      await version(d, parents: [b], body: 'd'),
+    ];
     final result = mergeItem(
       known: known,
       incoming: [await version(a, body: 'a'), ...known],
@@ -116,7 +122,9 @@ void main() {
   test('a single tombstone is deleted', () async {
     final result = mergeItem(
       known: [await version(a)],
-      incoming: [await version(b, parents: [a], deleted: true)],
+      incoming: [
+        await version(b, parents: [a], deleted: true),
+      ],
       vv: const {},
     );
     expect(result.state, MergeState.deleted);
@@ -182,7 +190,9 @@ void main() {
     test('tombstone drops parts and keeps fields', () async {
       final result = mergeItem(
         known: const [],
-        incoming: [await version(b, parents: [a])],
+        incoming: [
+          await version(b, parents: [a]),
+        ],
         vv: const {},
       );
       final next = tombstone(
@@ -200,7 +210,9 @@ void main() {
     test('an unparseable head is not editable', () async {
       final result = mergeItem(
         known: [await version(a)],
-        incoming: [await version(b, parents: [a], v: 2)],
+        incoming: [
+          await version(b, parents: [a], v: 2),
+        ],
         vv: const {},
       );
       expect(result.editable, isFalse);
