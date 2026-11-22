@@ -75,9 +75,10 @@ class PendingChange {
   /// locally and is sent once the server copy is found.
   final bool parked;
 
-  /// The name of a folder created offline (not on the server yet) that the
-  /// change needs: it waits for the folder's creation and is sent right
-  /// after it (SYNC.md §6b). Derived when read; the change stays queued.
+  /// The folder created offline (not on the server yet) that the change
+  /// needs, by the path the folder list shows (`Archive/Work`): it waits
+  /// for the folder's creation and is sent right after it (SYNC.md §6b).
+  /// Derived when read; the change stays queued.
   final String? waitingForFolder;
 
   /// The subject of the mail the change is for, also when its row is
@@ -86,15 +87,16 @@ class PendingChange {
   /// for a folder change, or when it is not known.
   final String? subject;
 
-  /// The name of the folder a folder change (`resourceType` "Mailbox") is
-  /// for, as the folder list shows it now; null for a mail change, or when
-  /// the folder is no longer stored.
+  /// The folder a folder change (`resourceType` "Mailbox") is for, by the
+  /// path the folder list shows now; null for a mail change, or when the
+  /// folder is no longer stored.
   final String? folderName;
 
-  /// The names, as the folder list shows them now, of the folders created
-  /// offline that this change's payload names by path. Such a folder keeps
-  /// the path it was created with when it is renamed before it reaches the
-  /// server, so the path alone may show its old name.
+  /// The folders this change's payload names by path (`src`, `dest`, a
+  /// folder move's `parent`), keyed by that path, by the path the folder
+  /// list shows now. They differ while a rename or move of the folder (or
+  /// of a parent) is not confirmed by the server yet, and on JMAP, where the
+  /// payload names a folder by its id.
   final Map<String, String> folderNames;
 
   bool get hasError => lastError != null;

@@ -1564,13 +1564,56 @@ void main() {
 
       final move = listed.singleWhere((c) => c.kind == 'move');
       expect(move.waitingForFolder, 'Work');
-      expect(move.folderNames, {'Projects': 'Work'});
+      expect(move.folderNames['Projects'], 'Work');
       expect(move.folderName, isNull);
       expect(
-        listed
-            .where((c) => c.resourceType == 'Mailbox')
-            .map((c) => c.folderName),
-        everyElement('Work'),
+        listed.singleWhere((c) => c.kind == 'create_mailbox').folderName,
+        'Work',
+      );
+    });
+
+    test(
+        'the Pending Changes list names a subfolder created offline by its '
+        'whole path, with its parent\'s new name (#1335)', () async {
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+      final projects = await rig.mailboxes.createMailbox(
+        _acc.id,
+        'Projects',
+        parentDisplayPath: 'Old Mail',
+      );
+      await emails.moveEmail((await rowOfA()).id, projects.path);
+      await rig.mailboxes.renameMailbox(_acc.id, projects.path, 'Work');
+
+      final listed = await emails.observePendingChanges(_acc.id).first;
+
+      final move = listed.singleWhere((c) => c.kind == 'move');
+      expect(move.folderNames[projects.path], 'Old Mail/Work');
+      expect(move.waitingForFolder, 'Old Mail/Work');
+      expect(
+        listed.singleWhere((c) => c.kind == 'create_mailbox').folderName,
+        'Old Mail/Work',
+      );
+    });
+
+    test(
+        'the Pending Changes list names a server folder renamed offline by '
+        'its new name while the server still has the old one (#1335)',
+        () async {
+      await rig.mailboxes.renameMailbox(_acc.id, 'Archive', 'Old Mail');
+      // The folder keeps the server's path until the rename is confirmed.
+      final archive = (await db.select(db.mailboxes).get())
+          .singleWhere((m) => m.displayPath == 'Old Mail');
+      expect(archive.path, 'Archive');
+      await emails.moveEmail((await rowOfA()).id, archive.path);
+
+      final listed = await emails.observePendingChanges(_acc.id).first;
+
+      final move = listed.singleWhere((c) => c.kind == 'move');
+      expect(move.folderNames['Archive'], 'Old Mail');
+      expect(move.waitingForFolder, isNull);
+      expect(
+        listed.singleWhere((c) => c.kind == 'rename_mailbox').folderName,
+        'Old Mail',
       );
     });
 

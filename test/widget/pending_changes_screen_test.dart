@@ -241,8 +241,8 @@ void main() {
   });
 
   testWidgets(
-      'a move to a folder created offline and renamed names it by its '
-      'current name, like the folder it waits for (#1335)', (tester) async {
+      'a move to a folder renamed offline names it by the path the folder '
+      'list shows, like the folder it waits for (#1335)', (tester) async {
     final repo = _StubbedQueue([
       PendingChange(
         id: 1,
@@ -253,16 +253,16 @@ void main() {
         payload: '{"src":"INBOX","dest":"Projects"}',
         createdAt: DateTime.utc(2026, 3, 4, 9),
         attempts: 0,
-        waitingForFolder: 'Work',
-        folderNames: const {'Projects': 'Work'},
+        waitingForFolder: 'Archive/Work',
+        folderNames: const {'INBOX': 'INBOX', 'Projects': 'Archive/Work'},
       ),
     ]);
     await pump(tester, repo: repo);
 
-    expect(find.text('Move: INBOX → Work'), findsOneWidget);
+    expect(find.text('Move: INBOX → Archive/Work'), findsOneWidget);
     expect(find.textContaining('Projects'), findsNothing);
     expect(
-      find.textContaining('waiting for folder "Work" to be created'),
+      find.textContaining('waiting for folder "Archive/Work" to be created'),
       findsOneWidget,
     );
   });
@@ -279,6 +279,7 @@ void main() {
         createdAt: DateTime.utc(2026, 3, 4, 9),
         attempts: 0,
         folderName: 'Receipts',
+        folderNames: const {'Archive': 'Old Mail'},
       ),
       PendingChange(
         id: 2,
@@ -293,7 +294,7 @@ void main() {
     ]);
     await pump(tester, repo: repo);
 
-    expect(find.text('Move folder'), findsOneWidget);
+    expect(find.text('Move folder into "Old Mail"'), findsOneWidget);
     expect(find.text('folder "Receipts"'), findsOneWidget);
     // Not stored any more: still says what kind of thing it is.
     expect(find.text('folder'), findsOneWidget);

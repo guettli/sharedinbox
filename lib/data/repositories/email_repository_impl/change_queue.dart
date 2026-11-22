@@ -237,85 +237,79 @@ String _newClaimToken() => List.generate(
       (_) => _claimRandom.nextInt(16).toRadixString(16),
     ).join();
 
-model.PendingChange _toPendingChange(
-  PendingChangeRow r, [
-  Map<String, String> localFolders = const {},
-  Map<String, String?> subjects = const {},
-  Map<String, String> folderNamesById = const {},
-]) =>
-    model.PendingChange(
-      id: r.id,
-      accountId: r.accountId,
-      kind: r.changeType,
-      resourceType: r.resourceType,
-      resourceId: r.resourceId,
-      payload: r.payload,
-      createdAt: r.createdAt,
-      attempts: r.attempts,
-      lastError: r.lastError,
-      failed: r.state == _failedState,
-      sending: r.state == _inflightState,
-      stuck: r.state == _stuckState,
-      nextTry: r.state == _stuckState ? r.leaseUntil : null,
-      parked: r.state == _parkedState,
-      waitingForFolder: _waitingForFolder(r, localFolders),
-      folderName: r.resourceType == mailboxResourceType
-          ? folderNamesById[r.resourceId]
-          : null,
-      folderNames: _namedLocalFolders(r, localFolders),
-      subject: r.resourceType == mailboxResourceType
-          ? null
-          : subjects[r.resourceId] ??
-              switch (_decodePayload(r)?[EmailStateWriter.goneSubjectKey]) {
-                final String stamped => stamped,
-                _ => null,
-              },
-    );
+/// The folders of one account as the Pending Changes list names them: by
+/// their display path (`mailboxes.display_path`), which shows a name
+/// changed offline at once, also of a parent, while `path` keeps the name
+/// (on JMAP the id) the server has until it confirms the change.
+class _FolderLabels {
+  /// path → display path, of every folder of the account.
+  final byPath = <String, String>{};
 
-/// The name of the folder created offline that queued change [r] waits for
-/// ([localFolders]: path → name of the account's folders without a server
-/// copy), or null.
-String? _waitingForFolder(
-  PendingChangeRow r,
-  Map<String, String> localFolders,
-) {
-  if (localFolders.isEmpty) return null;
-  if (r.state != _pendingState && r.state != _stuckState) return null;
-  final Object? decoded;
-  try {
-    decoded = jsonDecode(r.payload);
-  } catch (_) {
-    return null;
-  }
-  if (decoded is! Map<String, dynamic>) return null;
-  final keys = r.resourceType == mailboxResourceType
-      ? const [mailboxOpParent]
-      : emailOpFolderKeys;
-  for (final key in keys) {
-    final name = localFolders[decoded[key]];
-    if (name != null) return name;
-  }
-  return null;
+  /// id → display path, of every folder of the account.
+  final byId = <String, String>{};
+
+  /// The paths of the folders created offline (no server copy yet).
+  final local = <String>{};
 }
 
-/// The current names of the folders created offline ([localFolders]: path
-/// → name) that change [r]'s payload names by path, keyed by that path.
-Map<String, String> _namedLocalFolders(
+model.PendingChange _toPendingChange(
+  PendingChangeRow r, [
+  _FolderLabels? folders,
+  Map<String, String?> subjects = const {},
+]) {
+  final payload = _decodePayload(r) ?? const <String, dynamic>{};
+  final isFolderChange = r.resourceType == mailboxResourceType;
+  // The payload keys that name a folder by its path.
+  final folderPaths = [
+    for (final key
+        in isFolderChange ? const [mailboxOpParent] : emailOpFolderKeys)
+      if (payload[key] case final String path) path,
+  ];
+  return model.PendingChange(
+    id: r.id,
+    accountId: r.accountId,
+    kind: r.changeType,
+    resourceType: r.resourceType,
+    resourceId: r.resourceId,
+    payload: r.payload,
+    createdAt: r.createdAt,
+    attempts: r.attempts,
+    lastError: r.lastError,
+    failed: r.state == _failedState,
+    sending: r.state == _inflightState,
+    stuck: r.state == _stuckState,
+    nextTry: r.state == _stuckState ? r.leaseUntil : null,
+    parked: r.state == _parkedState,
+    waitingForFolder: _waitingForFolder(r, folderPaths, folders),
+    folderName: isFolderChange ? folders?.byId[r.resourceId] : null,
+    folderNames: {
+      if (folders != null)
+        for (final path in folderPaths)
+          if (folders.byPath[path] case final label?) path: label,
+    },
+    subject: isFolderChange
+        ? null
+        : subjects[r.resourceId] ??
+            switch (payload[EmailStateWriter.goneSubjectKey]) {
+              final String stamped => stamped,
+              _ => null,
+            },
+  );
+}
+
+/// The display path of the folder created offline that queued change [r]
+/// waits for ([folderPaths]: the folders its payload names), or null.
+String? _waitingForFolder(
   PendingChangeRow r,
-  Map<String, String> localFolders,
+  List<String> folderPaths,
+  _FolderLabels? folders,
 ) {
-  if (localFolders.isEmpty) return const {};
-  final payload = _decodePayload(r);
-  if (payload == null) return const {};
-  final keys = r.resourceType == mailboxResourceType
-      ? const [mailboxOpParent]
-      : emailOpFolderKeys;
-  return {
-    for (final key in keys)
-      if (payload[key] case final String path
-          when localFolders.containsKey(path))
-        path: localFolders[path]!,
-  };
+  if (folders == null || folders.local.isEmpty) return null;
+  if (r.state != _pendingState && r.state != _stuckState) return null;
+  for (final path in folderPaths) {
+    if (folders.local.contains(path)) return folders.byPath[path];
+  }
+  return null;
 }
 
 extension _ChangeQueue on EmailRepositoryImpl {
@@ -1579,30 +1573,19 @@ extension _ChangeQueue on EmailRepositoryImpl {
   Future<List<model.PendingChange>> _withWaitingFolders(
     List<PendingChangeRow> rows,
   ) async {
-    final local = <String, Map<String, String>>{};
-    for (final r in await _db
-        .customSelect(
-          'SELECT account_id, path, name FROM mailboxes WHERE is_local = 1',
-        )
-        .get()) {
-      (local[r.read<String>('account_id')] ??= {})[r.read<String>('path')] =
-          r.read<String>('name');
-    }
-    // The names of the folders the folder changes are for.
-    final folderIds = {
-      for (final r in rows)
-        if (r.resourceType == mailboxResourceType) r.resourceId,
-    }.toList();
-    final folderNames = <String, String>{};
-    for (var i = 0; i < folderIds.length; i += 500) {
-      final chunk = folderIds.sublist(i, math.min(i + 500, folderIds.length));
-      final found = await (_db.selectOnly(_db.mailboxes)
-            ..addColumns([_db.mailboxes.id, _db.mailboxes.name])
-            ..where(_db.mailboxes.id.isIn(chunk)))
-          .get();
-      for (final row in found) {
-        folderNames[row.read(_db.mailboxes.id)!] =
-            row.read(_db.mailboxes.name)!;
+    // The accounts' folders, read once per update. Not watched: a change
+    // of a folder's name or place queues a change, which updates the list.
+    final accountIds = {for (final r in rows) r.accountId}.toList();
+    final folders = <String, _FolderLabels>{};
+    if (accountIds.isNotEmpty) {
+      for (final m in await (_db.select(_db.mailboxes)
+            ..where((t) => t.accountId.isIn(accountIds)))
+          .get()) {
+        final label = m.displayPath.isEmpty ? m.path : m.displayPath;
+        final account = folders[m.accountId] ??= _FolderLabels();
+        account.byPath[m.path] = label;
+        account.byId[m.id] = label;
+        if (m.isLocal) account.local.add(m.path);
       }
     }
     // The mails' subjects, whether shown or not (a row gone on the server
@@ -1624,13 +1607,7 @@ extension _ChangeQueue on EmailRepositoryImpl {
       }
     }
     return [
-      for (final r in rows)
-        _toPendingChange(
-          r,
-          local[r.accountId] ?? const {},
-          subjects,
-          folderNames,
-        ),
+      for (final r in rows) _toPendingChange(r, folders[r.accountId], subjects),
     ];
   }
 }
