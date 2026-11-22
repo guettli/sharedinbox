@@ -28,10 +28,18 @@ class _MemSecureStorage implements SecureStorage {
   final _map = <String, String>{};
 
   @override
-  Future<String?> read({required String key}) async => _map[key];
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async =>
+      _map[key];
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     if (value == null) {
       _map.remove(key);
     } else {
@@ -40,7 +48,11 @@ class _MemSecureStorage implements SecureStorage {
   }
 
   @override
-  Future<void> delete({required String key}) async => _map.remove(key);
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async =>
+      _map.remove(key);
 }
 
 /// Plain-text IMAP connect for the local Stalwart dev server (no TLS).

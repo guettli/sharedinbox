@@ -181,6 +181,41 @@ re-encrypted lazily on their next edit or by a background job; the old key
 is kept until no object references it. Rotation does not protect data that a
 lost device already had.
 
+### 4.6 Wire details
+
+Implemented in `lib/core/encrypted_objects/` (pure Dart).
+
+- **AAD encoding**: fixed-size 16-byte ids are written raw; every string
+  field is written as `enc(s) = u16be(len) ‖ utf8(s)`.
+  - Slot AAD: `accountKeyId (16) ‖ slotId (16) ‖ enc(type)`.
+  - Collection-key wrap AAD:
+    `"SICK1" ‖ accountKeyId (16) ‖ enc(collectionId) ‖ keyId (16) ‖ enc(wrapType)`.
+- `slotId`: 16 random bytes for every slot, including `recovery`.
+- Wrapped values are `ciphertext ‖ tag (16)` of the raw 32-byte key.
+- In JSON, every binary value is **base64url without padding**.
+- Key mail (`application/json`):
+  `{"v": 1, "kind": "account-key", "accountKeyId", "slotListVersion", "slots": [...]}`;
+  a slot is `{"slotId", "type", "nonce", "wrapped", ...}` (types
+  `recovery`, `passphrase`, `passkey-prf`; type-specific fields such as the
+  passphrase salt and params sit next to them). The MAC is
+  HMAC-SHA256(`k_slots`, the exact stored bytes) — never a re-serialization;
+  JSON with the same content in another key order does not verify.
+- Collection-key mail (`application/json`, no separate MAC):
+  `{"v": 1, "kind": "collection-key", "accountKeyId", "collectionId", "keyId", "wraps": [{"type": "account", "nonce", "wrapped"}]}`.
+- Readers preserve unknown fields (top level, slots, wraps) and skip unknown
+  wrap types.
+- **Recovery key**: checksum = the first 4 bytes of SHA-256 of the raw 16
+  bytes; `raw ‖ checksum` (160 bit) is written MSB-first in Crockford base32
+  (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`) as 8 groups of 4 joined by `-`.
+  Parsing is case-insensitive, ignores spaces, `-` and `_`, and reads `O` as
+  `0` and `I`/`L` as `1`. The KEK input is the raw 16 bytes only (not the
+  checksum).
+- **Merge** of equal `slotListVersion`s: union of slots by `slotId` at
+  `max + 1`; for the same `slotId` with different content (and for a
+  conflicting unknown top-level field) the value whose canonical JSON
+  (recursively sorted keys) sorts smallest wins. Slots are written in
+  `slotId` order, so the result does not depend on the input order.
+
 ## 5. Object format
 
 ### 5.1 Outer mail (RFC 5322)
@@ -357,11 +392,14 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
 
 ## 8. Test vectors
 
-The slice that implements the envelope (#1354) adds
-`test/fixtures/encrypted_objects/vectors.json`: fixed keys, nonces, plaintexts and the
-expected bytes for HKDF sub-keys, item HMAC, slot wrap, envelope, padding. Once
-merged, vectors are **frozen**: changing them requires a new magic
-(`SIE2`) or schema version and a migration.
+`test/fixtures/encrypted_objects/vectors.json` holds fixed keys, nonces,
+plaintexts and the expected bytes, with **one top-level section per slice**.
+The key-hierarchy slice (#1365) created it with `hkdf`, `recoveryKey`,
+`slotWrap`, `collectionWrap` and `keyMailMac`, computed independently by
+`scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1354) adds
+sections for item HMAC, envelope and padding. Once merged, a section is
+**frozen**: changing it requires a new magic (`SIE2`) or schema version and a
+migration. New slices add sections; they never edit existing ones.
 
 ## 9. Rollout and user flows
 

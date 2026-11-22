@@ -33,7 +33,11 @@ class MapSecureStorage implements SecureStorage {
   final _map = <String, String>{};
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     if (value == null) {
       _map.remove(key);
     } else {
@@ -42,10 +46,17 @@ class MapSecureStorage implements SecureStorage {
   }
 
   @override
-  Future<String?> read({required String key}) async => _map[key];
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async =>
+      _map[key];
 
   @override
-  Future<void> delete({required String key}) async {
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     _map.remove(key);
   }
 }

@@ -14,15 +14,26 @@ import 'helpers/fake_secure_storage.dart';
 /// of [processPendingDbEncryptionChange] without touching sqlite.
 class _ThrowingSecureStorage implements SecureStorage {
   @override
-  Future<String?> read({required String key}) async => null;
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async =>
+      null;
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     throw const FileSystemException('storage write refused');
   }
 
   @override
-  Future<void> delete({required String key}) async {}
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {}
 }
 
 /// SecureStorage whose write silently no-ops and whose read always returns
@@ -31,13 +42,24 @@ class _ThrowingSecureStorage implements SecureStorage {
 /// up with an encrypted file whose key nobody has.
 class _NoOpWriteSecureStorage implements SecureStorage {
   @override
-  Future<String?> read({required String key}) async => null;
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async =>
+      null;
 
   @override
-  Future<void> write({required String key, required String? value}) async {}
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {}
 
   @override
-  Future<void> delete({required String key}) async {}
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {}
 }
 
 /// The 16-byte plaintext SQLite header — the ASCII string "SQLite format 3"

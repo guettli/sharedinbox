@@ -296,6 +296,7 @@ class MockSecureStorage extends _i1.Mock implements _i7.SecureStorage {
   _i3.Future<void> write({
     required String? key,
     required String? value,
+    _i7.SecureStorageAccess? access = _i7.SecureStorageAccess.defaultAccess,
   }) =>
       (super.noSuchMethod(
         Invocation.method(
@@ -304,6 +305,7 @@ class MockSecureStorage extends _i1.Mock implements _i7.SecureStorage {
           {
             #key: key,
             #value: value,
+            #access: access,
           },
         ),
         returnValue: _i3.Future<void>.value(),
@@ -311,21 +313,35 @@ class MockSecureStorage extends _i1.Mock implements _i7.SecureStorage {
       ) as _i3.Future<void>);
 
   @override
-  _i3.Future<String?> read({required String? key}) => (super.noSuchMethod(
+  _i3.Future<String?> read({
+    required String? key,
+    _i7.SecureStorageAccess? access = _i7.SecureStorageAccess.defaultAccess,
+  }) =>
+      (super.noSuchMethod(
         Invocation.method(
           #read,
           [],
-          {#key: key},
+          {
+            #key: key,
+            #access: access,
+          },
         ),
         returnValue: _i3.Future<String?>.value(),
       ) as _i3.Future<String?>);
 
   @override
-  _i3.Future<void> delete({required String? key}) => (super.noSuchMethod(
+  _i3.Future<void> delete({
+    required String? key,
+    _i7.SecureStorageAccess? access = _i7.SecureStorageAccess.defaultAccess,
+  }) =>
+      (super.noSuchMethod(
         Invocation.method(
           #delete,
           [],
-          {#key: key},
+          {
+            #key: key,
+            #access: access,
+          },
         ),
         returnValue: _i3.Future<void>.value(),
         returnValueForMissingStub: _i3.Future<void>.value(),

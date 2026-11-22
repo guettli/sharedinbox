@@ -577,10 +577,17 @@ class _MemSecureStorage implements SecureStorage {
   final Map<String, String> _values = <String, String>{};
 
   @override
-  Future<String?> read({required String key}) async => _values[key];
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async => _values[key];
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     if (value == null) {
       _values.remove(key);
     } else {
@@ -589,7 +596,10 @@ class _MemSecureStorage implements SecureStorage {
   }
 
   @override
-  Future<void> delete({required String key}) async {
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     _values.remove(key);
   }
 }
