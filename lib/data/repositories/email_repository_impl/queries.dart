@@ -80,10 +80,13 @@ Stream<R> _combineLatest<A, B, R>(
 }
 
 /// SQL (correlated on the `emails` alias [e]): the mail shows in a folder
-/// whose delete is queued.
+/// whose delete is queued, or in one of the app's own data folders, which
+/// shows nowhere and is never mail-synced (#1364).
 String _inHiddenFolderSql(String e) =>
-    'EXISTS (SELECT 1 FROM mailboxes hm WHERE hm.account_id = $e.account_id '
-    'AND hm.path = $e.mailbox_path AND hm.local_hidden = 1)';
+    '(EXISTS (SELECT 1 FROM mailboxes hm WHERE hm.account_id = $e.account_id '
+    'AND hm.path = $e.mailbox_path AND hm.local_hidden = 1) '
+    'OR EXISTS (SELECT 1 FROM app_data_folders ad '
+    'WHERE ad.account_id = $e.account_id AND ad.path = $e.mailbox_path))';
 
 /// Escapes characters that would break out of a JSON string literal.
 String _jsonEsc(String s) => s.replaceAll(r'\', r'\\').replaceAll('"', r'\"');

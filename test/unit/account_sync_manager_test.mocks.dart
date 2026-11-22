@@ -212,6 +212,33 @@ class MockMailboxRepository extends _i1.Mock implements _i9.MailboxRepository {
       ) as _i6.Future<int>);
 
   @override
+  _i6.Stream<List<_i2.Mailbox>> observeAppDataFolders(String? accountId) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #observeAppDataFolders,
+          [accountId],
+        ),
+        returnValue: _i6.Stream<List<_i2.Mailbox>>.empty(),
+      ) as _i6.Stream<List<_i2.Mailbox>>);
+
+  @override
+  _i6.Future<void> registerAppDataFolders(
+    String? accountId,
+    Iterable<String>? paths,
+  ) =>
+      (super.noSuchMethod(
+        Invocation.method(
+          #registerAppDataFolders,
+          [
+            accountId,
+            paths,
+          ],
+        ),
+        returnValue: _i6.Future<void>.value(),
+        returnValueForMissingStub: _i6.Future<void>.value(),
+      ) as _i6.Future<void>);
+
+  @override
   _i6.Future<_i2.Mailbox?> findMailboxByRole(
     String? accountId,
     String? role,

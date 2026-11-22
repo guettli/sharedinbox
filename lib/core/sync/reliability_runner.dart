@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:drift/drift.dart';
+import 'package:sharedinbox/core/models/mailbox.dart' show isAppDataFolder;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
@@ -136,6 +137,8 @@ class ReliabilityRunner {
 
       for (final mailbox in mailboxes) {
         if (!force && !_running) break;
+        // The app's own data folders are never mail-synced (#1364).
+        if (isAppDataFolder(mailbox)) continue;
         final result = await _emails.verifySyncReliability(
           accountId,
           mailbox.path,

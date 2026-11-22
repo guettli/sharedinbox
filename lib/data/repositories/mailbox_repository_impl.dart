@@ -105,11 +105,13 @@ String mailboxesWithCountDeltasSql(String where, {bool oneAccount = false}) {
 
 /// The rows (of account `?1` when [oneAccount]) with a change some folder's
 /// count may not reflect: one not acked, or acked after the oldest count
-/// of a shown server folder of its account (none counted yet: any).
+/// of a shown server folder of its account (none counted yet: any). The
+/// app's own data folders show nowhere and are not counted (#1364).
 String _queuedRowsSql({required bool oneAccount}) =>
     'SELECT p.resource_id FROM pending_changes p '
     'LEFT JOIN (SELECT account_id, MIN(unread_seq) AS seq FROM mailboxes '
     'WHERE is_local = 0 AND local_hidden = 0 '
+    'AND NOT ${appDataFolderSql('mailboxes')} '
     '${oneAccount ? 'AND account_id = ?1 ' : ''}'
     'GROUP BY account_id) a ON a.account_id = p.account_id '
     'WHERE ${oneAccount ? 'p.account_id = ?1 AND ' : ''}'
@@ -256,7 +258,12 @@ class MailboxRepositoryImpl implements MailboxRepository {
             oneAccount: accountId != null,
           ),
           variables: [if (accountId != null) Variable.withString(accountId)],
-          readsFrom: {_db.mailboxes, _db.emails, _db.pendingChanges},
+          readsFrom: {
+            _db.mailboxes,
+            _db.emails, // not an emails write
+            _db.pendingChanges,
+            _db.appDataFolders,
+          },
         )
         .watch()
         .map(
@@ -316,6 +323,79 @@ class MailboxRepositoryImpl implements MailboxRepository {
         accountId: row.accountId,
         mailboxPath: row.path,
         data: {'server': server, 'delta': delta, 'countSeq': row.unreadSeq},
+      ),
+    );
+  }
+
+  @override
+  Stream<List<model.Mailbox>> observeAppDataFolders(String accountId) => _db
+      .customSelect(
+        'SELECT m.* FROM mailboxes m WHERE m.account_id = ?1 '
+        'AND ${appDataFolderSql('m')} ORDER BY m.path',
+        variables: [Variable.withString(accountId)],
+        readsFrom: {_db.mailboxes, _db.appDataFolders},
+      )
+      .watch()
+      .map(
+        (rows) => [
+          for (final r in rows)
+            _toModel(_db.mailboxes.map(r.data), isAppData: true),
+        ],
+      );
+
+  @override
+  Future<void> registerAppDataFolders(
+    String accountId,
+    Iterable<String> paths,
+  ) async {
+    final known = {
+      for (final r in await (_db.select(_db.appDataFolders)
+            ..where((t) => t.accountId.equals(accountId)))
+          .get())
+        r.path,
+    };
+    for (final path in paths.toSet().difference(known)) {
+      await _db.into(_db.appDataFolders).insertOnConflictUpdate(
+            AppDataFoldersCompanion.insert(accountId: accountId, path: path),
+          );
+      await _dropMailOfAppDataFolder(accountId, path);
+    }
+  }
+
+  /// A folder just recorded as an app data folder may have been mail-synced
+  /// before (#1364): its cached mail, threads and sync checkpoints go, as
+  /// for a folder gone on the server ([removeLocalMailbox]), but the folder
+  /// row stays (hidden).
+  Future<void> _dropMailOfAppDataFolder(String accountId, String path) async {
+    await _db.transaction(() async {
+      await (_db.delete(_db.threads)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.mailboxPath.equals(path),
+            ))
+          .go();
+      await (_db.delete(_db.syncStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.resourceType.isIn([
+                    'IMAP:$path',
+                    'JMAP:Email:$path',
+                    'JMAP:FullSync:$path',
+                    'JMAP:Reconcile:$path',
+                  ]),
+            ))
+          .go();
+    });
+    final (:kept, :removed) = await EmailStateWriter(_db, appLogger: _appLogger)
+        .markFolderGone(accountId, path);
+    unawaited(
+      _appLogger?.info(
+        'mailbox.app_data_folder',
+        'The folder "$path" holds the app\'s own data: hidden, and its mail '
+            'is not synced (dropped $removed cached mail(s))',
+        accountId: accountId,
+        mailboxPath: path,
+        data: {'removedEmails': removed, 'kept': kept.length},
       ),
     );
   }
@@ -583,6 +663,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
         );
       }
       await _writer.rebuildDisplayPaths(account.id);
+      await registerAppDataFolders(
+        account.id,
+        imapAppDataFolderPaths(serverPaths, separator),
+      );
       await _afterListing(account.id, listSeq, trusted: trusted);
       // Every folder of this listing is stored now: a mail gone from one
       // folder that waits for a foreign move's destination does not stop
@@ -629,11 +713,18 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
     final storedState = await _loadSyncState(account.id, 'Mailbox');
 
-    if (storedState == null) {
-      return _jmapFullMailboxSync(account.id, jmap);
-    } else {
-      return _jmapIncrementalMailboxSync(account.id, jmap, storedState);
-    }
+    final synced = storedState == null
+        ? await _jmapFullMailboxSync(account.id, jmap)
+        : await _jmapIncrementalMailboxSync(account.id, jmap, storedState);
+    await registerAppDataFolders(
+      account.id,
+      jmapAppDataFolderIds(
+        await (_db.select(_db.mailboxes)
+              ..where((t) => t.accountId.equals(account.id)))
+            .get(),
+      ),
+    );
+    return synced;
   }
 
   /// First-time sync: fetch all mailboxes and persist state.
@@ -994,6 +1085,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
     MailboxRow row, {
     int unreadDelta = 0,
     int totalDelta = 0,
+    bool isAppData = false,
   }) {
     final unread = max(0, row.unreadCount + unreadDelta);
     return model.Mailbox(
@@ -1012,6 +1104,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
       totalCount: max(unread, row.totalCount + totalDelta),
       role: row.role,
       isLocal: row.isLocal,
+      isAppData: isAppData,
     );
   }
 
@@ -2443,6 +2536,49 @@ String imapSeparatorOf(List<imap.Mailbox> listed) {
     if (m.pathSeparator.isNotEmpty) return m.pathSeparator;
   }
   return '/';
+}
+
+/// The name of the top-level folder the app keeps its own data in
+/// (ENCRYPTED-OBJECTS.md §3), and of its subfolders.
+const appDataRootName = 'SharedInbox';
+const appDataChildNames = ['Keys', 'Data'];
+
+/// The app data folders among the IMAP paths [listed]: `SharedInbox` and
+/// its `Keys` and `Data` subfolders, joined with the server's hierarchy
+/// [separator] (#1364). By full path only: a `Work/SharedInbox` or an
+/// unknown `SharedInbox/Foo` is an ordinary folder.
+Set<String> imapAppDataFolderPaths(Iterable<String> listed, String separator) {
+  final wanted = {
+    appDataRootName,
+    for (final child in appDataChildNames) '$appDataRootName$separator$child',
+  };
+  return {
+    for (final path in listed)
+      if (wanted.contains(path)) path,
+  };
+}
+
+/// The JMAP mailbox ids of the app data folders among the cached [rows]:
+/// the top-level mailbox `SharedInbox` without a role, and its direct
+/// children `Keys` and `Data` (#1364). By the server's names and parent
+/// chain, never a name alone; a folder created offline is not one yet.
+Set<String> jmapAppDataFolderIds(Iterable<MailboxRow> rows) {
+  final roots = {
+    for (final r in rows)
+      if (!r.isLocal &&
+          r.parentId == null &&
+          r.role == null &&
+          r.srvName == appDataRootName)
+        r.path,
+  };
+  return {
+    ...roots,
+    for (final r in rows)
+      if (!r.isLocal &&
+          roots.contains(r.parentId) &&
+          appDataChildNames.contains(r.srvName))
+        r.path,
+  };
 }
 
 /// [imapSeparatorOf] the server's LIST over [client].

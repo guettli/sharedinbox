@@ -245,6 +245,32 @@ void main() {
     });
   });
 
+  group('isAppDataFolder', () {
+    const plain = Mailbox(
+      id: 'a1:SharedInbox',
+      accountId: 'a1',
+      path: 'SharedInbox',
+      name: 'SharedInbox',
+      unreadCount: 0,
+      totalCount: 0,
+    );
+
+    test('follows the registry flag, not the name', () {
+      // Named like the app folder, but not recorded as one (#1364).
+      expect(isAppDataFolder(plain), isFalse);
+      expect(isAppDataFolder(plain.copyWith(isAppData: true)), isTrue);
+    });
+
+    test('the flag survives a JSON round-trip', () {
+      final app = plain.copyWith(isAppData: true);
+      expect(Mailbox.fromJson(app.toJson()).isAppData, isTrue);
+      expect(Mailbox.fromJson(plain.toJson()).isAppData, isFalse);
+      // JSON written before the flag existed.
+      final old = plain.toJson()..remove('isAppData');
+      expect(Mailbox.fromJson(old).isAppData, isFalse);
+    });
+  });
+
   group('resolveMailboxDisplayPath', () {
     const jmapMailbox = Mailbox(
       id: 'j1:a',

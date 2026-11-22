@@ -939,4 +939,142 @@ if header :contains "subject" "lunch" {
       await dropFolders();
     }
   });
+
+  test(
+      'the SharedInbox app data mailboxes made by Mailbox/set are recorded '
+      'by id, hidden and not mail-synced; W1364j/SharedInbox is (#1364)',
+      () async {
+    final r = makeRepo();
+    // A bob user: the IMAP suite's alice works on a SharedInbox folder of
+    // its own, which this test must not race (#1364).
+    final owner = pickPoolUser(env: env, prefix: 'bob');
+    await r.accounts.addAccount(
+      owner.jmapAccount(id: 'test-jmap', env: env),
+      owner.password,
+    );
+
+    // The mailboxes named [roots] and everything below them, children
+    // first; the app shows the app folders nowhere, so raw JMAP.
+    Future<void> dropRaw() async {
+      final jmap = await connectJmap(env: env, user: owner);
+      final got = await jmap.call([
+        [
+          'Mailbox/get',
+          {'accountId': jmap.accountId, 'ids': null},
+          '0',
+        ],
+      ]);
+      final list = [
+        for (final m
+            in ((got[0] as List)[1] as Map<String, dynamic>)['list'] as List)
+          m as Map<String, dynamic>,
+      ];
+      final parentOf = {
+        for (final m in list) m['id'] as String: m['parentId'] as String?,
+      };
+      int depthUnder(String id) {
+        var depth = 0;
+        for (String? at = id; at != null; at = parentOf[at]) {
+          final box = list.firstWhere((m) => m['id'] == at);
+          if (box['parentId'] == null &&
+              (box['name'] == 'SharedInbox' || box['name'] == 'W1364j')) {
+            return depth;
+          }
+          depth++;
+        }
+        return -1;
+      }
+
+      final doomed = [
+        for (final m in list)
+          if (depthUnder(m['id'] as String) >= 0) m['id'] as String,
+      ]..sort((a, b) => depthUnder(b).compareTo(depthUnder(a)));
+      for (final id in doomed) {
+        await jmap.call([
+          [
+            'Mailbox/set',
+            {
+              'accountId': jmap.accountId,
+              'destroy': [id],
+              'onDestroyRemoveEmails': true,
+            },
+            '0',
+          ],
+        ]);
+      }
+    }
+
+    await dropRaw();
+    try {
+      final jmap = await connectJmap(env: env, user: owner);
+      final created = await jmap.call([
+        [
+          'Mailbox/set',
+          {
+            'accountId': jmap.accountId,
+            'create': {
+              'si': {'name': 'SharedInbox'},
+              'k': {'name': 'Keys', 'parentId': '#si'},
+              'd': {'name': 'Data', 'parentId': '#si'},
+              'w': {'name': 'W1364j'},
+              'ws': {'name': 'SharedInbox', 'parentId': '#w'},
+            },
+          },
+          '0',
+        ],
+      ]);
+      final ids = {
+        for (final e in (((created[0] as List)[1]
+                as Map<String, dynamic>)['created'] as Map<String, dynamic>)
+            .entries)
+          e.key: (e.value as Map<String, dynamic>)['id'] as String,
+      };
+      expect(ids.keys, containsAll(['si', 'k', 'd', 'w', 'ws']));
+      final client = await connectImap(env: env, user: owner);
+      try {
+        for (final (path, subject) in [
+          ('SharedInbox/Data', 's1364j-app'),
+          ('W1364j/SharedInbox', 's1364j-user'),
+        ]) {
+          await appendMessage(
+            client,
+            subject: subject,
+            userEmail: owner.email,
+            mailboxPath: path,
+          );
+        }
+      } finally {
+        await client.logout();
+      }
+
+      await r.mailboxes.syncMailboxes('test-jmap');
+
+      expect(
+        {
+          for (final m
+              in await r.mailboxes.observeAppDataFolders('test-jmap').first)
+            m.path,
+        },
+        {ids['si'], ids['k'], ids['d']},
+      );
+      final shown = [
+        for (final m in await r.mailboxes.observeMailboxes('test-jmap').first)
+          m.path,
+      ];
+      expect(shown, isNot(contains(ids['d'])));
+      expect(shown, containsAll([ids['w'], ids['ws']]));
+
+      final appResult = await r.emails.syncEmails('test-jmap', ids['d']!);
+      expect(appResult.fetched, 0);
+      await r.emails.syncEmails('test-jmap', ids['ws']!);
+      final stored = await r.db.select(r.db.emails).get();
+      expect(stored.where((e) => e.mailboxPath == ids['d']), isEmpty);
+      expect(
+        stored.where((e) => e.mailboxPath == ids['ws']).map((e) => e.subject),
+        ['s1364j-user'],
+      );
+    } finally {
+      await dropRaw();
+    }
+  });
 }

@@ -19,6 +19,11 @@ extension _Sync on EmailRepositoryImpl {
     if (folder != null && (folder.isLocal || folder.localHidden)) {
       return model.SyncEmailsResult.zero;
     }
+    // Nor one of the app's own data folders (#1364): IDLE, push and any
+    // direct call included.
+    if (await _mailboxState.isAppDataPath(accountId, mailboxPath)) {
+      return model.SyncEmailsResult.zero;
+    }
     final account = (await _accounts.getAccount(accountId))!;
     final password = await _accounts.getPassword(accountId);
     final started = _now();

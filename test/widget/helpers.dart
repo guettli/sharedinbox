@@ -229,6 +229,14 @@ class FakeMailboxRepository implements MailboxRepository {
   Future<int> syncMailboxes(String accountId) async => 0;
 
   @override
+  Stream<List<Mailbox>> observeAppDataFolders(String accountId) =>
+      Stream.value(const []);
+  @override
+  Future<void> registerAppDataFolders(
+    String accountId,
+    Iterable<String> paths,
+  ) async {}
+  @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
       _mailboxes.where((m) => m.role == role).firstOrNull;
 

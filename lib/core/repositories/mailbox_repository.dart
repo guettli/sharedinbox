@@ -11,6 +11,16 @@ abstract class MailboxRepository {
   /// Returns the number of mailboxes synced.
   Future<int> syncMailboxes(String accountId);
 
+  /// The app's own data folders of [accountId] (`SharedInbox`, its `Keys`
+  /// and `Data` subfolders) as the folder listing recorded them: hidden
+  /// from [observeMailboxes] and never mail-synced (#1364).
+  Stream<List<Mailbox>> observeAppDataFolders(String accountId);
+
+  /// Records [paths] (`Mailbox.path`: IMAP path, JMAP mailbox id) of
+  /// [accountId] as app data folders. A folder newly recorded loses the
+  /// mail cached for it before. [syncMailboxes] calls it.
+  Future<void> registerAppDataFolders(String accountId, Iterable<String> paths);
+
   /// Returns the first mailbox with the given [role] for [accountId], or null.
   Future<Mailbox?> findMailboxByRole(String accountId, String role);
 

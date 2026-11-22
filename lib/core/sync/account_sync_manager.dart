@@ -8,7 +8,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart'
     show ImapMailboxState, SyncEmailsResult;
 import 'package:sharedinbox/core/models/mailbox.dart'
-    show Mailbox, isDuplicateOfOtherFolders;
+    show Mailbox, isAppDataFolder, isDuplicateOfOtherFolders;
 import 'package:sharedinbox/core/net/connection_lost_exception.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
@@ -532,6 +532,8 @@ class AccountSyncManager {
         // Skip folders that just duplicate other folders (Gmail's "All Mail"),
         // otherwise every message is downloaded twice (#691).
         if (isDuplicateOfOtherFolders(mailbox)) continue;
+        // The app's own data folders hold no mail to sync (#1364).
+        if (isAppDataFolder(mailbox)) continue;
         emit(
           ForceResyncProgress(
             phase: ForceResyncPhase.syncingEmails,
@@ -1852,6 +1854,8 @@ Future<_FolderSyncOutcome> _syncFolders({
     // Skip folders that just duplicate other folders (Gmail's "All Mail"),
     // otherwise every message is downloaded twice (#691).
     if (isDuplicateOfOtherFolders(mailbox)) continue;
+    // The app's own data folders hold no mail to sync (#1364).
+    if (isAppDataFolder(mailbox)) continue;
     // A folder created offline has no server copy to sync yet: the flush
     // creates it first (SYNC-REDESIGN.md §7).
     if (mailbox.isLocal) continue;

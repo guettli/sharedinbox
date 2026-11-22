@@ -6,14 +6,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 
 import 'fake_imap.dart';
-
-const _imapAccount = Account(
-  id: 'acc-1',
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
-);
+import 'helpers/test_accounts.dart';
 
 const _jmapAccount = Account(
   id: 'acc-2',
@@ -97,7 +90,7 @@ void main() {
 
     test('returns email when no username and email succeeds', () async {
       final svc = _makeService(httpStatus: 200);
-      final result = await svc.testConnection(_imapAccount, 'pw');
+      final result = await svc.testConnection(testImapAccount, 'pw');
       expect(result.username, 'alice@example.com');
     });
 
@@ -115,7 +108,7 @@ void main() {
         },
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
-      final result = await svc.testConnection(_imapAccount, 'pw');
+      final result = await svc.testConnection(testImapAccount, 'pw');
       expect(result.username, 'alice');
       expect(callCount, 2);
     });
@@ -126,7 +119,7 @@ void main() {
         imapConnect: (_, __, ___) async => throw Exception('auth failed'),
         smtpConnect: (_, __, ___) async => FakeSmtpClient(),
       );
-      expect(() => svc.testConnection(_imapAccount, 'pw'), throwsException);
+      expect(() => svc.testConnection(testImapAccount, 'pw'), throwsException);
     });
 
     test('reports SMTP failure after IMAP success', () async {
@@ -136,7 +129,7 @@ void main() {
         smtpConnect: (_, __, ___) async => throw Exception('smtp boom'),
       );
       expect(
-        () => svc.testConnection(_imapAccount, 'pw'),
+        () => svc.testConnection(testImapAccount, 'pw'),
         throwsA(predicate((e) => e.toString().contains('SMTP: '))),
       );
     });
@@ -156,7 +149,7 @@ void main() {
           throw Exception('should not be called');
         },
       );
-      await svc.testConnection(_imapAccount, 'pw');
+      await svc.testConnection(testImapAccount, 'pw');
       expect(sieveCalled, false);
     });
 
