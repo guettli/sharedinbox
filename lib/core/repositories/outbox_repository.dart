@@ -3,7 +3,8 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 
 /// Persistent send queue. Sits between the compose UI and the live SMTP / JMAP
 /// network calls so that "Send" always returns immediately and the actual
-/// transmission is retried on the next sync cycle once the device is online.
+/// transmission is retried on the next sync cycle once the device is online,
+/// or when a failed row's retry time comes (`OutboxRetryScheduler`, #1331).
 abstract class OutboxRepository {
   /// Persists [draft] for later sending and returns the new outbox row id.
   /// Always returns immediately — does not touch the network.
@@ -21,11 +22,18 @@ abstract class OutboxRepository {
   /// When [observer] is supplied it is notified of each outcome so callers
   /// (e.g. the [EmailRepository] flush wrapper) can mirror the events into the
   /// application log without this repository having to depend on any logger.
+  ///
+  /// With [skipIfBusy], a call made while another flush for [accountId] runs
+  /// or waits returns 0 at once instead of queueing behind it (a sync cycle
+  /// must not wait for a send hanging on a dead link, #1331). Rows queued
+  /// meanwhile are not left behind: once the busy flushes ended, one more
+  /// flush with this [sender] and [observer] runs in the background.
   Future<int> flush(
     String accountId,
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
     OutboxFlushObserver? observer,
+    bool skipIfBusy = false,
   });
 
   /// Emits the current list of queued messages for [accountId], live.

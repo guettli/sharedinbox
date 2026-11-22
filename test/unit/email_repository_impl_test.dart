@@ -622,6 +622,41 @@ void main() {
     );
 
     test(
+      'the sync cycle flush does not wait for a send hanging on dead SMTP '
+      '(#1331)',
+      () async {
+        // A blackholed SMTP link: the connect never answers. The retry
+        // drain (sendNow) holds the account's outbox; the sync cycle's
+        // flushOutbox must return at once so new mail is still fetched.
+        final connect = Completer<imap.SmtpClient>();
+        final r = _makeRepos(smtpConnect: (a, u, p) => connect.future);
+        await r.accounts.addAccount(_account, 'pw');
+        await r.emails.enqueueSend(
+          _account.id,
+          const EmailDraft(
+            from: EmailAddress(name: 'Alice', email: 'alice@example.com'),
+            to: [EmailAddress(email: 'bob@example.com')],
+            cc: [],
+            subject: 'Hi',
+            body: 'body',
+          ),
+        );
+
+        final hanging = r.emails.sendNow(_account.id);
+        // Let sendNow get to the SMTP connect.
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final flushed = await r.emails
+            .flushOutbox(_account.id, 'pw')
+            .timeout(const Duration(seconds: 2));
+        expect(flushed, 0);
+
+        connect.completeError(const SocketException('connect timed out'));
+        expect((await hanging).outcome, SendNowOutcome.queued);
+      },
+    );
+
+    test(
       'IMAP Sent copy is appended to the resolved Sent folder, not a '
       'hard-coded "Sent"',
       () async {

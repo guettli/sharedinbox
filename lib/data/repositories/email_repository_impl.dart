@@ -559,7 +559,7 @@ class EmailRepositoryImpl implements EmailRepository {
 
   @override
   Future<int> flushOutbox(String accountId, String password) =>
-      _flushOutbox(accountId, password);
+      _flushOutbox(accountId, password, skipIfBusy: true);
 
   @override
   Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) =>

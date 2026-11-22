@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
@@ -49,6 +50,7 @@ import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/core/sync/log_retention_scheduler.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
+import 'package:sharedinbox/core/sync/outbox_retry_scheduler.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart'
@@ -467,6 +469,27 @@ final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
   });
   ref.onDispose(sub.cancel);
   return sub;
+});
+
+/// Sends a queued message again once its retry time comes, also while the
+/// sync loops wait in IDLE or push (#1331). Reading the provider installs
+/// the schedule; it is started here, so an instance rebuilt after a
+/// dependency changed keeps retrying.
+final outboxRetrySchedulerProvider = Provider<OutboxRetryScheduler>((ref) {
+  final emails = ref.watch(emailRepositoryProvider);
+  final scheduler = OutboxRetryScheduler(
+    outbox: ref.watch(outboxRepositoryProvider).observeAllOutbox(),
+    drain: (accountId) => emails.sendNow(accountId),
+    logger: ref.watch(appLoggerProvider),
+  )..start();
+  // A suspended laptop or a dozing phone delays the timer; re-arm it from
+  // the wall clock when the app comes back.
+  final lifecycle = AppLifecycleListener(onResume: scheduler.rearm);
+  ref.onDispose(() {
+    lifecycle.dispose();
+    scheduler.dispose();
+  });
+  return scheduler;
 });
 
 final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((

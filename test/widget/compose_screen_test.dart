@@ -887,6 +887,47 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a send that hangs on a dead link does not hold Compose (#1331)',
+      (tester) async {
+        // Blackholed SMTP: the connect never answers and times out after
+        // 50 s. Compose sat on a spinner all that time.
+        final gate = Completer<SendNowResult>();
+        final email = FakeEmailRepository()..sendNowGate = gate;
+        await _openComposeWithRecipient(tester, email: email);
+        await tester.pump();
+
+        await tester.tap(find.byIcon(Icons.send));
+        await tester.pump();
+        await tester.pump(ComposeScreen.sendResultWait);
+        await tester.pumpAndSettle();
+
+        // Queued, attempted, and closed while the attempt still runs.
+        expect(email.sentEmailAccountId, kTestAccount.id);
+        expect(email.sendNowRowIds, isNotEmpty);
+        expect(gate.isCompleted, isFalse);
+        expect(find.text('home'), findsOneWidget);
+        expect(find.text('Sending in the background'), findsOneWidget);
+
+        // The attempt's outcome is still reported once it ends.
+        gate.complete(
+          const SendNowResult(
+            SendNowOutcome.transientFailed,
+            message: 'SMTP connect/auth timed out',
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 4));
+        await tester.pump(const Duration(seconds: 1));
+        expect(
+          find.text('Queued — will retry: SMTP connect/auth timed out'),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
     testWidgets('appends the account signature on a new message', (
       tester,
     ) async {

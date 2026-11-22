@@ -374,6 +374,7 @@ class FakeOutboxRepository implements OutboxRepository {
     Future<void> Function(OutboxJob job) sender, {
     DateTime? now,
     OutboxFlushObserver? observer,
+    bool skipIfBusy = false,
   }) async =>
       0;
 
@@ -671,9 +672,15 @@ class FakeEmailRepository implements EmailRepository {
   /// tests can exercise the Retry error path (e.g. no stored password).
   Object? sendNowError;
 
+  /// When set, [sendNow] waits for it, like a send on a dead link that hangs
+  /// until its SMTP timeout (#1331).
+  Completer<SendNowResult>? sendNowGate;
+
   @override
   Future<SendNowResult> sendNow(String accountId, {int? outboxRowId}) async {
     sendNowRowIds.add(outboxRowId);
+    final gate = sendNowGate;
+    if (gate != null) return gate.future;
     final error = sendNowError;
     if (error != null) throw error;
     return sendNowResult;

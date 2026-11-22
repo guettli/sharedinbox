@@ -13,7 +13,7 @@ import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart'
-    show SendNowOutcome;
+    show SendNowOutcome, SendNowResult;
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/utils/attachment_files.dart';
@@ -42,6 +42,12 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.inReplyTo,
     this.references = const [],
   });
+
+  /// How long Send waits for the first delivery attempt before it closes
+  /// and lets the send finish in the background (#1331). Long enough for a
+  /// healthy server to accept the message or reject a recipient, short
+  /// enough that a dead link does not hold the screen.
+  static const sendResultWait = Duration(seconds: 2);
 
   /// Builds the screen from a `/compose` route's `extra` map. Shared by the
   /// app router and the widget-test router so the two cannot drift.
@@ -805,60 +811,70 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       // so the message goes out "directly" and the user sees the concrete
       // outcome via a SnackBar (which AppMessenger also mirrors to the app log)
       // rather than a fire-and-forget "queued" with no follow-up (#755).
-      final result = await ref
+      //
+      // Wait only [sendResultWait] for it, though: on a dead link the SMTP
+      // connect hangs until its 50 s timeout, and Compose sat on a spinner
+      // all that time (#1331). The message is in the outbox already, so close
+      // and let the send finish in the background; its outcome still shows
+      // up as a SnackBar and in the App Log, and a failed row stays in the
+      // Sent Queue. A quick answer (sent, or rejected outright) is reported
+      // as before.
+      final accountId = _accountId!;
+      final sending = ref
           .read(emailRepositoryProvider)
-          .sendNow(_accountId!, outboxRowId: rowId);
-      if (mounted) {
-        switch (result.outcome) {
-          case SendNowOutcome.sent:
-            final warning = result.warning;
-            messenger.show(
-              warning == null ? 'Message sent' : 'Message sent. $warning',
-              level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
-              event: 'compose.sent',
-              accountId: _accountId,
-              duration: Duration(seconds: warning == null ? 3 : 8),
+          .sendNow(accountId, outboxRowId: rowId)
+          .then<SendNowResult?>((r) => r);
+      final result = await sending.timeout(
+        ComposeScreen.sendResultWait,
+        onTimeout: () => null,
+      );
+      if (result == null) {
+        final logger = _appLogger;
+        // The screen is gone by then. Should the app's messenger be gone too
+        // (the app is closing), the outcome still reaches the App Log.
+        void report(void Function() show) {
+          try {
+            show();
+          } catch (e, stack) {
+            unawaited(
+              logger.warn(
+                'compose.send_result_unshown',
+                'Could not show how a background send ended: $e',
+                accountId: accountId,
+                error: e,
+                stack: stack,
+              ),
             );
-          case SendNowOutcome.transientFailed:
-            messenger.show(
-              'Queued — will retry: ${result.message}',
-              level: AppLogLevel.warn,
-              event: 'compose.send_queued',
-              accountId: _accountId,
-              duration: const Duration(seconds: 5),
-            );
-          case SendNowOutcome.permanentlyFailed:
-            messenger.show(
-              'Send failed: ${result.message}',
-              level: AppLogLevel.error,
-              event: 'compose.send_failed',
-              accountId: _accountId,
-              duration: const Duration(seconds: 5),
-            );
-          case SendNowOutcome.queued:
-            messenger.show(
-              'Message queued',
-              event: 'compose.queued',
-              accountId: _accountId,
-              duration: const Duration(seconds: 3),
-            );
+          }
         }
+
+        unawaited(
+          sending.then(
+            (r) => report(() => _showSendResult(messenger, accountId, r!)),
+            onError: (Object e, StackTrace stack) => report(
+              () => _showQueuedAfterError(messenger, accountId, e, stack),
+            ),
+          ),
+        );
+        messenger.show(
+          'Sending in the background',
+          event: 'compose.sending_background',
+          accountId: accountId,
+          duration: const Duration(seconds: 3),
+        );
+        if (mounted) context.pop();
+        return;
+      }
+      if (mounted) {
+        _showSendResult(messenger, accountId, result);
         context.pop();
       }
     } catch (e, stack) {
       if (!mounted) return;
       if (queued) {
-        // The outbox already holds the message and retries it on every sync
-        // cycle, so report it as queued and close, as for a transient failure.
-        messenger.show(
-          'Queued — will retry: ${userErrorMessage(e)}',
-          level: AppLogLevel.warn,
-          event: 'compose.send_queued',
-          accountId: _accountId,
-          error: e,
-          stack: stack,
-          duration: const Duration(seconds: 5),
-        );
+        // The outbox already holds the message and retries it, so report it
+        // as queued and close, as for a transient failure.
+        _showQueuedAfterError(messenger, _accountId, e, stack);
         context.pop();
         return;
       }
@@ -874,6 +890,69 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Reports how the send started by [_send] ended. Uses only [messenger]
+  /// (the app's, which outlives this screen), so it also works once the
+  /// screen has closed and the send finished in the background.
+  static void _showSendResult(
+    AppMessenger messenger,
+    String accountId,
+    SendNowResult result,
+  ) {
+    switch (result.outcome) {
+      case SendNowOutcome.sent:
+        final warning = result.warning;
+        messenger.show(
+          warning == null ? 'Message sent' : 'Message sent. $warning',
+          level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
+          event: 'compose.sent',
+          accountId: accountId,
+          duration: Duration(seconds: warning == null ? 3 : 8),
+        );
+      case SendNowOutcome.transientFailed:
+        messenger.show(
+          'Queued — will retry: ${result.message}',
+          level: AppLogLevel.warn,
+          event: 'compose.send_queued',
+          accountId: accountId,
+          duration: const Duration(seconds: 5),
+        );
+      case SendNowOutcome.permanentlyFailed:
+        messenger.show(
+          'Send failed: ${result.message}',
+          level: AppLogLevel.error,
+          event: 'compose.send_failed',
+          accountId: accountId,
+          duration: const Duration(seconds: 5),
+        );
+      case SendNowOutcome.queued:
+        messenger.show(
+          'Message queued',
+          event: 'compose.queued',
+          accountId: accountId,
+          duration: const Duration(seconds: 3),
+        );
+    }
+  }
+
+  /// A send that threw once the message was queued: it stays in the outbox
+  /// and is retried, so this is reported as queued, not as lost.
+  static void _showQueuedAfterError(
+    AppMessenger messenger,
+    String? accountId,
+    Object e,
+    StackTrace stack,
+  ) {
+    messenger.show(
+      'Queued — will retry: ${userErrorMessage(e)}',
+      level: AppLogLevel.warn,
+      event: 'compose.send_queued',
+      accountId: accountId,
+      error: e,
+      stack: stack,
+      duration: const Duration(seconds: 5),
+    );
   }
 
   /// Throws away the draft: cancels any pending auto-save, deletes the saved
