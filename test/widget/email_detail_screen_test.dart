@@ -6,6 +6,7 @@ import 'package:dbus/dbus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show ProviderScope;
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
@@ -768,6 +769,399 @@ void main() {
         );
       },
     );
+
+    group('body could not be loaded, e.g. offline (#1330)', () {
+      const archive = Mailbox(
+        id: 'acc-1:Archive',
+        accountId: 'acc-1',
+        path: 'Archive',
+        name: 'Archive',
+        role: 'archive',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+      const projects = Mailbox(
+        id: 'acc-1:Projects',
+        accountId: 'acc-1',
+        path: 'Projects',
+        name: 'Projects',
+        unreadCount: 0,
+        totalCount: 0,
+      );
+
+      Future<void> pumpScreen(
+        WidgetTester tester,
+        FakeEmailRepository repo, {
+        String emailId = 'acc-1:42',
+        EmailDetailNav? nav,
+      }) =>
+          tester.pumpWidget(
+            buildApp(
+              initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/'
+                  '${Uri.encodeComponent(emailId)}',
+              initialExtra: nav,
+              overrides: [
+                ..._overrides(
+                  body: const EmailBody(emailId: 'acc-1:42', attachments: []),
+                  emails: repo,
+                  mailboxes: FakeMailboxRepository([archive, projects]),
+                ),
+                draftRepositoryProvider
+                    .overrideWithValue(FakeDraftRepository()),
+                appLogRepositoryProvider.overrideWithValue(
+                  const NoOpAppLogRepository(),
+                ),
+              ],
+            ),
+          );
+
+      // Lets the load-failed SnackBar go so the next one is the action's.
+      Future<void> dismissLoadFailed(WidgetTester tester) async {
+        expect(find.text('This message could not be opened.'), findsOneWidget);
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+      }
+
+      Future<_OfflineEmailRepository> open(
+        WidgetTester tester, [
+        _OfflineEmailRepository? given,
+      ]) async {
+        final repo = given ?? _OfflineEmailRepository();
+        await pumpScreen(tester, repo);
+        await tester.pumpAndSettle();
+        await dismissLoadFailed(tester);
+        return repo;
+      }
+
+      Finder button(String tooltip) =>
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == tooltip);
+
+      Finder composeTextContaining(String text) => find.byWidgetPredicate(
+            (w) => w is EditableText && w.controller.text.contains(text),
+          );
+
+      Future<void> menu(WidgetTester tester, String entry) async {
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(entry));
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('Archive queues the move from the cached row', (
+        tester,
+      ) async {
+        final repo = await open(tester);
+        await tester.tap(
+          find.byWidgetPredicate((w) => w is Tooltip && w.message == 'Archive'),
+        );
+        await tester.pumpAndSettle();
+        expect(repo.moves, [('acc-1:42', 'Archive')]);
+      });
+
+      testWidgets('Move to folder queues the move', (tester) async {
+        final repo = await open(tester);
+        await menu(tester, 'Move to folder');
+        await tester.tap(find.text('Projects'));
+        await tester.pumpAndSettle();
+        expect(repo.moves, [('acc-1:42', 'Projects')]);
+      });
+
+      testWidgets('Snooze queues the snooze', (tester) async {
+        final repo = await open(tester);
+        await menu(tester, 'Snooze');
+        await tester.tap(find.text('Tomorrow morning'));
+        await tester.pumpAndSettle();
+        expect(repo.snoozed, ['acc-1:42']);
+      });
+
+      testWidgets('Forward says why it cannot run', (tester) async {
+        await open(tester);
+        await menu(tester, 'Forward');
+        expect(find.byType(ComposeScreen), findsNothing);
+        expect(
+          find.text('The message body could not be loaded (offline?), so '
+              'this is not available. Tap Retry when online.'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('Reply opens Compose unquoted and says so', (tester) async {
+        await open(tester);
+        await tester.tap(button('Reply'));
+        await tester.pumpAndSettle();
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(_editableWithText('bob@example.com'), findsOneWidget);
+        expect(composeTextContaining('wrote:'), findsNothing);
+        expect(
+          find.text('The message body is not available, so the reply does '
+              'not quote it.'),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('Reply while the body still loads waits and quotes it', (
+        tester,
+      ) async {
+        final gate = Completer<EmailBody>();
+        final repo = _OfflineEmailRepository(loadBody: (_) => gate.future);
+        await pumpScreen(tester, repo);
+        // The spinner never settles; a few pumps run the cached-row read.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        await tester.tap(button('Reply'));
+        await tester.pump();
+        expect(find.byType(ComposeScreen), findsNothing);
+        gate.complete(
+          const EmailBody(
+            emailId: 'acc-1:42',
+            textBody: 'the original text',
+            attachments: [],
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(composeTextContaining('> the original text'), findsOneWidget);
+        expect(
+          find.text('The message body is not available, so the reply does '
+              'not quote it.'),
+          findsNothing,
+        );
+      });
+
+      testWidgets(
+          'a load error with a cached body still counts as a body (#837)', (
+        tester,
+      ) async {
+        final repo = _OfflineEmailRepository(
+          loadBody: (_) async => const EmailBody(
+            emailId: 'acc-1:42',
+            textBody: 'the cached text',
+            attachments: [],
+            loadError: 'This message is no longer at its previous location.',
+          ),
+        );
+        await pumpScreen(tester, repo);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        await tester.tap(button('Reply'));
+        await tester.pumpAndSettle();
+        expect(composeTextContaining('> the cached text'), findsOneWidget);
+        expect(
+          find.text('The message body is not available, so the reply does '
+              'not quote it.'),
+          findsNothing,
+        );
+      });
+
+      testWidgets('without the row, menu entries say why they do nothing', (
+        tester,
+      ) async {
+        // Opened e.g. from a notification before the folder synced: no row.
+        final repo = _OfflineEmailRepository(emails: const []);
+        await pumpScreen(tester, repo);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 7));
+        await tester.pumpAndSettle();
+        await menu(tester, 'Move to folder');
+        expect(
+          find.text('Message details are not available yet. Try again after '
+              'the next sync.'),
+          findsOneWidget,
+        );
+        expect(repo.moves, isEmpty);
+      });
+
+      group('after stepping to a mail whose body does not load', () {
+        final flaggedFirst =
+            testEmail(id: 'acc-1:1', subject: 'First', isFlagged: true);
+        final second = Email(
+          id: 'acc-1:2',
+          accountId: 'acc-1',
+          mailboxPath: 'INBOX',
+          uid: 2,
+          subject: 'Second',
+          receivedAt: DateTime(2024, 6),
+          sentAt: DateTime(2024, 6),
+          from: const [
+            EmailAddress(name: 'Carol', email: 'carol@example.com'),
+          ],
+          to: const [EmailAddress(email: 'alice@example.com')],
+          cc: const [],
+          isSeen: false,
+          isFlagged: false,
+          hasAttachment: false,
+        );
+
+        // The first mail's body is cached, the second's is not (offline).
+        Future<_OfflineEmailRepository> step(
+          WidgetTester tester, {
+          Email? firstMail,
+          Completer<void>? flagGate,
+          Future<void> Function()? beforeStep,
+        }) async {
+          final first = firstMail ?? flaggedFirst;
+          final repo = _OfflineEmailRepository(
+            emails: [first, second],
+            flagGate: flagGate,
+            loadBody: (id) => id != first.id
+                ? null
+                : Future.value(
+                    const EmailBody(
+                      emailId: 'acc-1:1',
+                      textBody: 'first body',
+                      attachments: [],
+                    ),
+                  ),
+          );
+          await pumpScreen(
+            tester,
+            repo,
+            emailId: first.id,
+            nav: EmailDetailNav.fromEmails([first, second]),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('first body'), findsOneWidget);
+          await beforeStep?.call();
+          await tester.tap(find.byIcon(Icons.chevron_right));
+          await tester.pumpAndSettle();
+          await dismissLoadFailed(tester);
+          return repo;
+        }
+
+        Future<void> onDesktop(Future<void> Function() body) async {
+          // The Prev/Next chevrons only show on desktop.
+          debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+          try {
+            await body();
+          } finally {
+            debugDefaultTargetPlatformOverride = null;
+          }
+        }
+
+        testWidgets(
+          'Archive acts on the second mail, not the first',
+          (tester) => onDesktop(() async {
+            final repo = await step(tester);
+            // The star shows the second mail's state, not the first's.
+            expect(button('Flag'), findsOneWidget);
+            final container = ProviderScope.containerOf(
+              tester.element(find.byType(EmailDetailScreen)),
+            );
+            await tester.tap(button('Archive'));
+            await tester.pumpAndSettle();
+            expect(repo.moves, [('acc-1:2', 'Archive')]);
+            final undo = container.read(undoServiceProvider).last;
+            expect(undo.emailIds, ['acc-1:2']);
+            expect(undo.originalEmails.map((e) => e.id), ['acc-1:2']);
+          }),
+        );
+
+        testWidgets(
+          'Reply goes to the second mail\'s sender',
+          (tester) => onDesktop(() async {
+            await step(tester);
+            await tester.tap(button('Reply'));
+            await tester.pumpAndSettle();
+            expect(find.byType(ComposeScreen), findsOneWidget);
+            expect(_editableWithText('carol@example.com'), findsOneWidget);
+            expect(_editableWithText('bob@example.com'), findsNothing);
+            expect(_editableWithText('Re: Second'), findsOneWidget);
+          }),
+        );
+
+        testWidgets(
+          'a star tapped before the step does not change the next mail\'s',
+          (tester) => onDesktop(() async {
+            final gate = Completer<void>();
+            final repo = await step(
+              tester,
+              firstMail: flaggedFirst.copyWith(isFlagged: false),
+              flagGate: gate,
+              beforeStep: () async {
+                // setFlag is still running when the user steps on.
+                await tester.tap(button('Flag'));
+                await tester.pump();
+              },
+            );
+            gate.complete();
+            await tester.pumpAndSettle();
+            expect(
+              repo.setFlagCalls.where((c) => c.flagged != null).single,
+              (emailId: 'acc-1:1', seen: null, flagged: true),
+            );
+            // The second mail is not flagged and its star says so.
+            expect(button('Flag'), findsOneWidget);
+            expect(button('Unflag'), findsNothing);
+          }),
+        );
+      });
+
+      group('Reply while the body still loads', () {
+        Future<void> tapReplyWhileLoading(WidgetTester tester) async {
+          await pumpScreen(
+            tester,
+            _OfflineEmailRepository(
+              loadBody: (_) => Completer<EmailBody>().future,
+            ),
+          );
+          for (var i = 0; i < 5; i++) {
+            await tester.pump();
+          }
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          expect(find.text('Loading message…'), findsOneWidget);
+        }
+
+        testWidgets('a second tap does not open a second Compose', (
+          tester,
+        ) async {
+          final gate = Completer<EmailBody>();
+          await pumpScreen(
+            tester,
+            _OfflineEmailRepository(loadBody: (_) => gate.future),
+          );
+          for (var i = 0; i < 5; i++) {
+            await tester.pump();
+          }
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          gate.complete(
+            const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'the original text',
+              attachments: [],
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byType(ComposeScreen, skipOffstage: false),
+            findsOneWidget,
+          );
+        });
+
+        testWidgets('gives up after the timeout and replies unquoted', (
+          tester,
+        ) async {
+          await tapReplyWhileLoading(tester);
+          await tester.pump(const Duration(seconds: 11));
+          for (var i = 0; i < 10; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.text('Loading message…'), findsNothing);
+          expect(find.byType(ComposeScreen), findsOneWidget);
+          expect(composeTextContaining('wrote:'), findsNothing);
+          expect(
+            find.text('The message body is not available, so the reply '
+                'does not quote it.'),
+            findsOneWidget,
+          );
+        });
+      });
+    });
 
     testWidgets('Reply All button is not present in app bar', (tester) async {
       await tester.pumpWidget(
@@ -3172,6 +3566,50 @@ class _FailingEmailRepository extends FakeEmailRepository {
     bool forceRefresh = false,
   }) async =>
       throw StateError('boom');
+}
+
+/// Offline with no cached body: the row is there, [getEmailBody] throws
+/// unless [loadBody] serves that mail. Records the moves and snoozes the
+/// detail view queues (#1330).
+class _OfflineEmailRepository extends FakeEmailRepository {
+  _OfflineEmailRepository({
+    super.emails,
+    Email? detail,
+    this.loadBody,
+    this.flagGate,
+  }) : super(emailDetail: detail ?? (emails == null ? testEmail() : null));
+
+  /// Body of a mail that is served; null means offline for it.
+  final Future<EmailBody>? Function(String emailId)? loadBody;
+
+  /// When set, a star change only completes once this completes.
+  final Completer<void>? flagGate;
+
+  @override
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+    await super.setFlag(emailId, seen: seen, flagged: flagged);
+    if (flagged != null) await flagGate?.future;
+  }
+
+  final List<(String, String)> moves = [];
+  final List<String> snoozed = [];
+
+  @override
+  Future<EmailBody> getEmailBody(
+    String emailId, {
+    bool forceRefresh = false,
+  }) =>
+      loadBody?.call(emailId) ?? Future.error(const SocketException('offline'));
+
+  @override
+  Future<void> moveEmail(String emailId, String destMailboxPath) async {
+    moves.add((emailId, destMailboxPath));
+  }
+
+  @override
+  Future<void> snoozeEmail(String emailId, DateTime until) async {
+    snoozed.add(emailId);
+  }
 }
 
 /// Email repository whose [deleteEmail] only completes once [gate] is

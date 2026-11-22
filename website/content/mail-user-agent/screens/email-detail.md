@@ -29,6 +29,16 @@ attachments. Opening the screen also marks the message as read.
 - Tap a sender or recipient to open **Address Emails** (all messages to/from
   that address on the current account).
 
+## When the body cannot be loaded
+
+Offline, a message whose body was never downloaded shows "This message could
+not be opened" with a Retry button. Actions that need only the message itself
+still work and are queued like everywhere else: archive, move, snooze, delete,
+star, mark as spam, mark as unread. Reply opens Compose without the quoted
+text and says so. Forward, Select text, Mail Headers and Mail Structure need
+the body: they show a message saying it is not available instead of doing
+nothing.
+
 ## Navigation from this screen
 
 - [Compose](/mail-user-agent/screens/compose/) — Reply, Reply all, Forward

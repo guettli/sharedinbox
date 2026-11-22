@@ -62,6 +62,10 @@ class EmailDetailScreen extends ConsumerStatefulWidget {
 
 class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   bool _isFlagged = false;
+
+  /// Whether the user toggled the star on this mail. A load that finishes
+  /// afterwards then keeps the user's choice instead of the older row's.
+  bool _flagTouched = false;
   bool _loadRemoteImages = false;
 
   /// [htmlHasRemoteResources] result for the body last checked, so the regex
@@ -135,6 +139,14 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       _autoRequestedImages.clear();
       _imageLoadFailed.clear();
       _imageUnsupported.clear();
+      // The cached row and star belong to the previous mail: drop them, so
+      // no action runs on it, and read this mail's row (#1330). Stepping
+      // never opens a draft in compose, so no draft check here.
+      _checkedHeader = null;
+      _checkedRole = null;
+      _isFlagged = false;
+      _flagTouched = false;
+      unawaited(_refreshCachedRow());
     }
   }
 
@@ -178,8 +190,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// flashing first, and without the body fetch that view needs.
   bool _draftChecked = false;
 
-  /// The header and its folder's role, read by [_checkForDraft]. They keep
-  /// "Edit draft" usable when the body fails to load.
+  /// The header and its folder's role, read by [_checkForDraft] from the
+  /// cached row. They keep "Edit draft" and every action that needs no body
+  /// (archive, move, snooze, delete, …) usable while the body loads or when
+  /// it fails to load, e.g. offline with no cached body (#1330).
   Email? _checkedHeader;
   String? _checkedRole;
 
@@ -198,20 +212,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// Reached by prev/next or after an action it stays here. Without a local
   /// draft yet it stays here too, with "Edit draft" in place of Reply.
   Future<void> _checkForDraft() async {
+    // A notification tap can swap in another mail while this runs.
+    final emailId = widget.emailId;
     Email? header;
     String? role;
     try {
-      header = await ref.read(emailRepositoryProvider).getEmail(widget.emailId);
-      if (header != null) {
-        final mailboxes = await ref
-            .read(mailboxRepositoryProvider)
-            .observeMailboxes(header.accountId)
-            .first;
-        role = mailboxes
-            .where((m) => m.path == header!.mailboxPath)
-            .firstOrNull
-            ?.role;
-      }
+      (header, role) = await _readCachedRow(emailId);
       if (header != null &&
           role == 'drafts' &&
           !(widget.nav?.steppedTo ?? false) &&
@@ -225,9 +231,42 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (!mounted) return;
     setState(() {
       _draftChecked = true;
+      // Another mail is on screen: its own row read is in flight.
+      if (widget.emailId != emailId) return;
       _checkedHeader = header;
       _checkedRole = role;
+      if (header != null && !_flagTouched) _isFlagged = header.isFlagged;
     });
+  }
+
+  /// The cached row of [emailId] and the role of its folder.
+  Future<(Email?, String?)> _readCachedRow(String emailId) async {
+    final header = await ref.read(emailRepositoryProvider).getEmail(emailId);
+    if (header == null) return (null, null);
+    final mailboxes = await ref
+        .read(mailboxRepositoryProvider)
+        .observeMailboxes(header.accountId)
+        .first;
+    final role =
+        mailboxes.where((m) => m.path == header.mailboxPath).firstOrNull?.role;
+    return (header, role);
+  }
+
+  /// Re-reads the cached row after Prev/Next swapped in another mail.
+  Future<void> _refreshCachedRow() async {
+    final emailId = widget.emailId;
+    try {
+      final (header, role) = await _readCachedRow(emailId);
+      if (!mounted || widget.emailId != emailId) return;
+      setState(() {
+        _checkedHeader = header;
+        _checkedRole = role;
+        if (header != null && !_flagTouched) _isFlagged = header.isFlagged;
+      });
+    } catch (e, stack) {
+      // Not fatal: the detail view loads (and reports) the message itself.
+      log('cached row read failed', error: e, stackTrace: stack);
+    }
   }
 
   /// Opens compose for [header]'s local draft in place of this screen.
@@ -302,6 +341,83 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// Menu entries that cannot run without the message body.
+  static bool _isBodyAction(String value) =>
+      const {'forward', 'select_text', 'headers', 'structure'}.contains(value);
+
+  /// Menu entries that need the message's row (account, folder, sender).
+  static const _headerActions = {
+    'forward',
+    'move',
+    'snooze',
+    'find_similar',
+    'notify_sender',
+    'headers',
+    'debug_mail',
+  };
+
+  /// Says why a menu entry that needs the message's row did nothing: the
+  /// row is not in the local database (e.g. opened from a notification
+  /// before the folder synced) (#1330).
+  void _explainHeaderMissing() {
+    context.showAppSnackBar(
+      'Message details are not available yet. Try again after the next sync.',
+      level: AppLogLevel.warn,
+      event: 'email.detail.header_unavailable',
+      emailId: widget.emailId,
+      persist: false,
+    );
+  }
+
+  /// Whether there is no body to work with: not loaded, or a failed load
+  /// (#837) that brought back no cached content either. A load error with a
+  /// cached body still counts as a body, as the screen shows it.
+  static bool _bodyMissing(EmailBody? body) {
+    if (body == null) return true;
+    if (body.loadError == null) return false;
+    return (body.textBody?.isEmpty ?? true) &&
+        (body.htmlBody?.isEmpty ?? true) &&
+        body.attachments.isEmpty;
+  }
+
+  /// While the body of [emailId] is still loading, waits for it (at most a
+  /// few seconds, under a scrim that also stops Prev/Next) so Reply can
+  /// quote it. Returns [body] when the load is not running or fails.
+  Future<EmailBody?> _awaitLoadingBody(String emailId, EmailBody? body) async {
+    final provider = emailDetailProvider(emailId);
+    if (!ref.read(provider).isLoading) return body;
+    try {
+      final (_, loaded) = await _runDimmed(
+        'Loading message…',
+        () => ref.read(provider.future).timeout(const Duration(seconds: 10)),
+      );
+      return loaded;
+    } catch (_) {
+      // Failure is reported by the detail view itself; reply unquoted.
+      return body;
+    }
+  }
+
+  /// Explains in a SnackBar, and returns true, when [body] is missing or
+  /// failed to load, so an action built on it (Forward, quoting in Reply, …)
+  /// never silently does nothing (#1330). Returns false when the body is there.
+  bool _explainBodyMissing(EmailBody? body, {String? message}) {
+    if (!_bodyMissing(body)) return false;
+    final loading = ref.read(emailDetailProvider(widget.emailId)).isLoading;
+    context.showAppSnackBar(
+      message ??
+          (loading
+              ? 'The message is still loading. Try again in a moment.'
+              : 'The message body could not be loaded (offline?), so this '
+                  'is not available. Tap Retry when online.'),
+      level: AppLogLevel.warn,
+      event: 'email.detail.body_unavailable',
+      emailId: widget.emailId,
+      persist: false,
+    );
+    return true;
+  }
+
   /// One-shot SnackBar pointing at the App Log, shown when this message's body
   /// could not be loaded — whether the fetch threw or returned a body flagged
   /// with a [EmailBody.loadError] (#587, #837).
@@ -341,7 +457,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       emailDetailProvider(widget.emailId),
       (prev, next) {
         final email = next.value?.$1;
-        if (email != null && mounted) {
+        if (email != null && mounted && !_flagTouched) {
           setState(() => _isFlagged = email.isFlagged);
         }
         // Surface the load failure as a SnackBar so an empty body screen isn't
@@ -364,15 +480,24 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       },
     );
 
-    final header = detail.value?.$1;
+    // Fall back to the cached row while the body loads or when loading it
+    // failed: the detail provider then has no header, and the actions that
+    // need none must still work offline, as from the list (#1330).
+    // Only this mail's row: after Prev/Next the State is reused and the row
+    // of the next mail may not be read yet.
+    final cached = _checkedHeader?.id == widget.emailId ? _checkedHeader : null;
+    final header = detail.value?.$1 ?? cached;
     final body = detail.value?.$2;
 
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
 
     final activeNav = _activeNav(header);
-    final prevItem = activeNav?.prevOf(widget.emailId);
-    final nextItem = activeNav?.nextOf(widget.emailId);
+    // No stepping while an action runs on this mail under its scrim (a
+    // Reply waiting for the body, a delete): it would land on the next one.
+    final canStep = _actionInFlight == null;
+    final prevItem = canStep ? activeNav?.prevOf(widget.emailId) : null;
+    final nextItem = canStep ? activeNav?.nextOf(widget.emailId) : null;
 
     // Role of the folder the open message lives in. When it is the Junk or
     // Trash folder the destructive action turns into its inverse (un-junk /
@@ -386,8 +511,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             )
             .value
             ?.role;
-    final draftHeader = header ?? _checkedHeader;
-    final isDraft = (folderRole ?? _checkedRole) == 'drafts';
+    final isDraft =
+        (folderRole ?? (cached == null ? null : _checkedRole)) == 'drafts';
 
     return Scaffold(
       appBar: AppBar(
@@ -411,9 +536,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             IconButton(
               icon: const Icon(Icons.edit),
               tooltip: 'Edit draft',
-              onPressed: draftHeader == null || _editingDraft
+              onPressed: header == null || _editingDraft
                   ? null
-                  : () => unawaited(_editDraft(draftHeader)),
+                  : () => unawaited(_editDraft(header)),
             )
           else
             IconButton(
@@ -421,11 +546,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               tooltip: 'Reply',
               onPressed: header == null
                   ? null
-                  : () {
-                      unawaited(
-                        _replyWithRecipientDialog(context, header, body),
-                      );
-                    },
+                  : () => unawaited(
+                        _composeOnce(
+                          () =>
+                              _replyWithRecipientDialog(context, header, body),
+                        ),
+                      ),
             ),
           _ActionMorphButton(
             icon: Icons.archive,
@@ -499,8 +625,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             tooltip: _isFlagged ? 'Unflag' : 'Flag',
             onPressed: () async {
               final next = !_isFlagged;
-              await repo.setFlag(widget.emailId, flagged: next);
-              if (mounted) setState(() => _isFlagged = next);
+              final emailId = widget.emailId;
+              _flagTouched = true;
+              await repo.setFlag(emailId, flagged: next);
+              // Prev/Next during the await: the star now shows another mail.
+              if (!mounted || widget.emailId != emailId) return;
+              setState(() => _isFlagged = next);
             },
           ),
           if (folderRole == 'junk')
@@ -573,6 +703,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               ),
             ],
             onSelected: (value) async {
+              if (header == null && _headerActions.contains(value)) {
+                _explainHeaderMissing();
+                return;
+              }
+              if (_isBodyAction(value) && _explainBodyMissing(body)) return;
               if (value == 'forward' && header != null) {
                 unawaited(_forward(context, header, body));
               } else if (value == 'move' && header != null) {
@@ -1607,10 +1742,26 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     required String to,
     required String cc,
   }) async {
+    // [header] was captured at the tap. Prev/Next since then (e.g. while the
+    // account was read) swapped in another mail: do not mix the two.
+    final emailId = header.id;
+    if (widget.emailId != emailId) return;
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
-    final quoted = await _quotedBody(header, body);
+    // Tapped while the body still loads: wait for it, so the reply quotes it.
+    final loaded =
+        _bodyMissing(body) ? await _awaitLoadingBody(emailId, body) : body;
+    if (!context.mounted || widget.emailId != emailId) return;
+    // Without the body there is nothing to quote: reply anyway, unquoted,
+    // and say so rather than quoting an empty text (#1330).
+    final quoted = _explainBodyMissing(
+      loaded,
+      message: 'The message body is not available, so the reply does not '
+          'quote it.',
+    )
+        ? ''
+        : await _quotedBody(header, loaded);
     if (!context.mounted) return;
     unawaited(
       context.push(
@@ -1619,7 +1770,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           // Answer from the account the mail arrived in. Without it Compose
           // only picks an account when there is exactly one.
           'accountId': header.accountId,
-          'replyToEmailId': widget.emailId,
+          'replyToEmailId': emailId,
           'prefillTo': to,
           'prefillSubject': subject,
           'prefillBody': quoted,
@@ -1743,23 +1894,27 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (context.mounted) _navigateTo(context, header, nextEmail);
   }
 
-  /// True while a Forward prepares Compose, so a second tap does not
-  /// start a second download loop and a second Compose.
-  bool _forwarding = false;
+  /// True while a Reply or Forward prepares Compose, so a second tap does
+  /// not start a second wait or download loop and a second Compose.
+  bool _composing = false;
+
+  /// Runs [prepare] unless a Reply/Forward or a dimmed action is running.
+  Future<void> _composeOnce(Future<void> Function() prepare) async {
+    if (_composing || _actionInFlight != null) return;
+    _composing = true;
+    try {
+      await prepare();
+    } finally {
+      _composing = false;
+    }
+  }
 
   Future<void> _forward(
     BuildContext context,
     Email header,
     EmailBody? body,
-  ) async {
-    if (_forwarding || _actionInFlight != null) return;
-    _forwarding = true;
-    try {
-      await _prepareForward(context, header, body);
-    } finally {
-      _forwarding = false;
-    }
-  }
+  ) =>
+      _composeOnce(() => _prepareForward(context, header, body));
 
   Future<void> _prepareForward(
     BuildContext context,
