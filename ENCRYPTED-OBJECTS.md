@@ -82,7 +82,7 @@ account key  (per mail account, random 256 bit, accountKeyId = 16 random bytes)
 
 - **Account key**: one per mail account (the key mail lives in that account;
   accounts may be used on different sets of devices). Local storage key
-  `e2e-account-key/<accountId>`.
+  `enc-account-key/<accountId>`.
 - **Collection**: the unit of encryption — and later of sharing. Every
   account has a default collection `personal`. A todo list, a journal, a
   notebook or a card deck *may* be its own collection; v1 UI only needs
@@ -354,7 +354,7 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
 ## 8. Test vectors
 
 The slice that implements the envelope (#1354) adds
-`test/fixtures/e2e/vectors.json`: fixed keys, nonces, plaintexts and the
+`test/fixtures/encrypted_objects/vectors.json`: fixed keys, nonces, plaintexts and the
 expected bytes for HKDF sub-keys, item HMAC, slot wrap, envelope, padding. Once
 merged, vectors are **frozen**: changing them requires a new magic
 (`SIE2`) or schema version and a migration.
