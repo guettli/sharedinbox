@@ -348,6 +348,91 @@ void main() {
     expect(pushWaitsBeforeSecondCycle, 0, reason: 'push wait was not entered');
   });
 
+  // #1386: the sync health check re-runs a failed check after a successful
+  // sync, so syncSucceeded must fire only for a cycle that really succeeded.
+  group('syncSucceeded', () {
+    Future<List<String>> collect(AccountSyncManager m) async {
+      final events = <String>[];
+      final sub = m.syncSucceeded.listen(events.add);
+      addTearDown(sub.cancel);
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      return events;
+    }
+
+    test('fires after a successful IMAP cycle', () async {
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        FakeMailboxRepositoryWithInbox(),
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        // Never connects: the loop waits here in place of a real IDLE.
+        imapConnect: (_, __, ___) => Completer<imap.ImapClient>().future,
+      );
+      addTearDown(m.dispose);
+
+      expect(await collect(m), ['1']);
+    });
+
+    test('fires after a successful JMAP cycle', () async {
+      final m = AccountSyncManager(
+        _OkAccountRepository(type: AccountType.jmap),
+        FakeMailboxRepositoryWithInbox(),
+        _PushCountingEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+      );
+      addTearDown(m.dispose);
+
+      expect(await collect(m), ['1']);
+    });
+
+    test('stays silent after a cycle where a folder failed', () async {
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _ThreeFolderMailboxRepository(),
+        _OneFolderFailsEmailRepository(failingPath: 'Archive'),
+        syncLog: _RecordingSyncLog(),
+      );
+      addTearDown(m.dispose);
+
+      expect(await collect(m), isEmpty);
+    });
+
+    test('stays silent after a cycle cut short by removing the account',
+        () async {
+      final accounts = StreamController<List<Account>>();
+      addTearDown(accounts.close);
+      final release = Completer<void>();
+      final mailboxes = _BlockingMailboxRepository(release.future);
+      final repo = _OkAccountRepository(accounts: accounts.stream);
+      final m = AccountSyncManager(
+        repo,
+        mailboxes,
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        imapConnect: (_, __, ___) => Completer<imap.ImapClient>().future,
+      );
+      addTearDown(m.dispose);
+      final events = <String>[];
+      final sub = m.syncSucceeded.listen(events.add);
+      addTearDown(sub.cancel);
+
+      m.start();
+      accounts.add([await repo.getAccount('1') as Account]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mailboxes.calls, 1, reason: 'first cycle is in flight');
+
+      // The account is removed mid-cycle: its loop stops, and the folder
+      // loop skips every folder it has not reached.
+      accounts.add(const []);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      release.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(events, isEmpty);
+    });
+  });
+
   // Regression test for issue #501: pressing Retry on a queued message used to
   // pop a "Retrying send…" snackbar even when the account's sync loop had
   // already stopped on a permanent error — so nothing ran and no log entry
@@ -633,7 +718,7 @@ class _AccountRepositoryWithMissingPlugin implements AccountRepository {
 /// sync fails. Implemented via [noSuchMethod] so it carries no repository
 /// boilerplate to duplicate.
 class _OkAccountRepository implements AccountRepository {
-  _OkAccountRepository({AccountType type = AccountType.imap})
+  _OkAccountRepository({AccountType type = AccountType.imap, this.accounts})
       : _account = Account(
           id: '1',
           displayName: 'Test',
@@ -644,11 +729,15 @@ class _OkAccountRepository implements AccountRepository {
 
   final Account _account;
 
+  /// When set, what [observeAccounts] reports instead of the one account, so
+  /// a test can remove the account mid-cycle.
+  final Stream<List<Account>>? accounts;
+
   @override
   dynamic noSuchMethod(Invocation invocation) {
     switch (invocation.memberName) {
       case #observeAccounts:
-        return Stream.value([_account]);
+        return accounts ?? Stream.value([_account]);
       case #getAccount:
         return Future.value(_account);
       case #getPassword:

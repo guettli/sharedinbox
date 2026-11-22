@@ -970,7 +970,10 @@ class _AccountSync with _KickableWait {
           ),
         );
         _backoffSeconds = 5;
-        _onSyncEnd?.call(success: true);
+        // A loop stopped mid-cycle (account removed, force resync, dispose)
+        // skips the folders it did not reach and returns normally; that is
+        // not a successful sync.
+        _onSyncEnd?.call(success: _running);
         await _idle();
       } catch (e, st) {
         _onSyncEnd?.call(success: false);
@@ -1484,7 +1487,10 @@ class _JmapAccountSync with _KickableWait {
           ),
         );
         _backoffSeconds = 5;
-        _onSyncEnd?.call(success: true);
+        // A loop stopped mid-cycle (account removed, force resync, dispose)
+        // skips the folders it did not reach and returns normally; that is
+        // not a successful sync.
+        _onSyncEnd?.call(success: _running);
         await _wait();
       } catch (e, st) {
         _onSyncEnd?.call(success: false);

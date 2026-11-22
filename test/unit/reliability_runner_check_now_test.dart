@@ -276,6 +276,10 @@ void main() {
     // Lets a sync event's re-check (DB reads/writes, App Log) run to the end.
     Future<void> settle() => pumpEventQueue(times: 200);
 
+    Future<int> recheckLogCount() async => (await db.select(db.appLogs).get())
+        .where((l) => l.message.contains('Sync succeeded after a failed'))
+        .length;
+
     Future<void> failCheck() async {
       emails.error = Exception('server unreachable');
       await runner.checkAccountNow('test-account');
@@ -334,12 +338,56 @@ void main() {
       await settle();
 
       expect(emails.verifyCallCount, callsBefore + 1);
+      expect(await recheckLogCount(), 1);
 
       // Once the throttle window has passed, the next sync checks again.
       now = now.add(ReliabilityRunner.recheckThrottle);
       syncs.add('test-account');
       await settle();
       expect(emails.verifyCallCount, callsBefore + 2);
+    });
+
+    test('a check that keeps failing is re-checked less and less often',
+        () async {
+      await failCheck();
+      final callsBefore = emails.verifyCallCount;
+
+      // First re-check at once, then waits of 5 and 10 minutes.
+      syncs.add('test-account');
+      await settle();
+      now = now.add(const Duration(minutes: 5));
+      syncs.add('test-account');
+      await settle();
+      expect(emails.verifyCallCount, callsBefore + 2);
+
+      now = now.add(const Duration(minutes: 9));
+      syncs.add('test-account');
+      await settle();
+      expect(emails.verifyCallCount, callsBefore + 2, reason: 'still waiting');
+
+      now = now.add(const Duration(minutes: 1));
+      syncs.add('test-account');
+      await settle();
+      expect(emails.verifyCallCount, callsBefore + 3);
+    });
+
+    test('a completed check resets the re-check delay', () async {
+      await failCheck();
+      syncs.add('test-account');
+      await settle();
+      now = now.add(const Duration(minutes: 5));
+      syncs.add('test-account');
+      await settle(); // Second re-check: the next delay is now 10 minutes.
+
+      emails.error = null;
+      await runner.checkAccountNow('test-account');
+      await failCheck();
+      final callsBefore = emails.verifyCallCount;
+
+      // A new failure is re-checked by the very next sync again.
+      syncs.add('test-account');
+      await settle();
+      expect(emails.verifyCallCount, callsBefore + 1);
     });
 
     test('does not start a second check while one is running', () async {
@@ -358,6 +406,37 @@ void main() {
       await settle();
 
       expect(emails.verifyCallCount, callsBefore);
+      expect(await recheckLogCount(), 0, reason: 'no re-check was started');
+    });
+
+    test('a re-check stopped part-way stores no result', () async {
+      // Only this runner may react to the syncs below.
+      runner.stop();
+      final twoFolders = ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        _TwoMailboxes(),
+        emails,
+        AppLogger(AppLogRepositoryImpl(db)),
+        clock: () => now,
+      )..start(syncSucceeded: syncs.stream);
+      emails.error = Exception('server unreachable');
+      await twoFolders.checkAccountNow('test-account');
+
+      emails
+        ..error = null
+        ..gate = Completer<void>();
+      final callsBefore = emails.verifyCallCount;
+      syncs.add('test-account');
+      await settle(); // Held in the first of the two folders.
+      expect(emails.verifyCallCount, callsBefore + 1, reason: 'precondition');
+      twoFolders.stop();
+      emails.gate!.complete();
+      await settle();
+
+      final row = await healthRow();
+      expect(row.lastError, contains('server unreachable'));
+      expect(row.isHealthy, isFalse);
     });
 
     test('stores the failure time of a failed check', () async {
@@ -378,6 +457,22 @@ class _JmapMailboxes extends _FakeMailboxes {
           path: 'a',
           name: '2026',
           displayPath: 'Archive/2026',
+          unreadCount: 0,
+          totalCount: 0,
+        ),
+      ]);
+}
+
+/// Two folders, so a check stopped while in the first one is cut short.
+class _TwoMailboxes extends _FakeMailboxes {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        _kMailbox,
+        const Mailbox(
+          id: 'test-account:Sent',
+          accountId: 'test-account',
+          path: 'Sent',
+          name: 'Sent',
           unreadCount: 0,
           totalCount: 0,
         ),
