@@ -31,7 +31,7 @@ with other people.
 | Adversary | Protected? | Notes |
 | --- | --- | --- |
 | Mail provider / server admin reading the mailbox | **Yes**: content, titles, dates, type of object, done-state | Sees: the two folder names, number of mails, padded sizes, INTERNALDATE (≈ when something was written), how often an item is rewritten, which objects share a collection key (key id). |
-| Server tampering (modify, swap, replay old mails, delete) | **Detect** modification and swapping (AEAD + item HMAC + AAD). Replay of old versions is limited by the rollback guard (5.4). | **Deletion cannot be prevented** — the server can always delete data. Mitigation: local copy on every device + export (#1356). |
+| Server tampering (modify, swap, replay old mails, delete) | **Detect** modification and swapping (AEAD + item HMAC + AAD + collection check). Replay of old versions is blocked by the rollback guard (5.4). A mail vanishing without a tombstone never deletes local data (5.4). | **Deletion on the server cannot be prevented.** Mitigation: user deletes are explicit tombstones, so other devices keep and re-upload vanished objects; plus export (#1356). |
 | Malicious server planting a key mail | **Yes** — slot lists are MAC'd; a device that already wrote objects never switches to a foreign key (4.3). | |
 | Stolen, locked phone | As strong as the OS keystore (Android Keystore / iOS Keychain) and the optional SQLCipher DB encryption (`db_encryption_service.dart`). | The data key is readable without biometrics so background sync works (4.2). |
 | Stolen, unlocked phone / malware on the device | **No.** | Out of scope. |
@@ -57,8 +57,12 @@ and the personal NAMESPACE prefix (e.g. `INBOX.`); JMAP creates `SharedInbox`
 and its children via `Mailbox/set` with `parentId`.
 
 App folders are **hidden from the mailbox list and excluded from every
-mail-sync loop** via `isAppDataFolder(mailbox)` (`lib/core/models/mailbox.dart`),
-which matches the mailbox id/path recorded by the store, never a display name.
+mail-sync loop** via a new `isAppDataFolder(mailbox)`
+(`lib/core/models/mailbox.dart`), which matches the mailbox id/path recorded
+by the store, never a display name. Apply it at every call site of
+`isDuplicateOfOtherFolders` (`account_sync_manager.dart`, `sync_jmap.dart`),
+in `reliability_runner.dart`, and in the mailbox list, search scope and
+move-target picker.
 
 Sync checkpoints live in `SyncStates` with `resourceType` `mos:keys` and
 `mos:data` (never an `IMAP:`/`JMAP:` prefix — those belong to mail sync).
@@ -68,11 +72,12 @@ Sync checkpoints live in `SyncStates` with `resourceType` `mos:keys` and
 ### 4.1 Hierarchy
 
 ```text
-account key  (per mail account, random 256 bit)
-  └─ wraps ─> collection key  (per collection, random 256 bit, has keyId)
-                 └─ HKDF ─> k_obj   (object AEAD)
+account key  (per mail account, random 256 bit, accountKeyId = 16 random bytes)
+  ├─ HKDF ─> k_slots (MAC over the slot list)
+  ├─ HKDF ─> k_wrap  (wraps collection keys)
+  └─ wraps ─> collection key  (per collection, random 256 bit, keyId = 16 random bytes)
+                 ├─ HKDF ─> k_obj   (object AEAD)
                  └─ HKDF ─> k_item  (item-id HMAC)
-account key ── HKDF ─> k_slots (MAC over the slot list)
 ```
 
 - **Account key**: one per mail account (the key mail lives in that account;
@@ -85,46 +90,73 @@ account key ── HKDF ─> k_slots (MAC over the slot list)
 - **Review logs always use the `personal` collection**, even for cards of
   another (later possibly shared) deck — one's own study history is never
   shared.
-- HKDF-SHA256 info strings: `sharedinbox-obj-v1`, `sharedinbox-itemid-hmac-v1`,
-  `sharedinbox-slots-mac-v1`, `sharedinbox-kek-recovery-v1`,
+- HKDF-SHA256 with **empty salt** and these info strings: `sharedinbox-obj-v1`,
+  `sharedinbox-itemid-hmac-v1`, `sharedinbox-slots-mac-v1`,
+  `sharedinbox-collection-wrap-v1`, `sharedinbox-kek-recovery-v1`,
   `sharedinbox-kek-passphrase-v1`, `sharedinbox-kek-passkey-v1`,
   `sharedinbox-pairing-v1`. Never use a root key directly.
+- Collection keys are wrapped under the derived wrap key (same AEAD as the
+  slots), AAD =
+  `"SICK1" ‖ accountKeyId ‖ collectionId ‖ keyId ‖ wrapType`, so the server
+  cannot relabel a key (e.g. a deck key as `personal`).
+- A reader **rejects an object whose head `collectionId` differs from the
+  collection that `keyId` belongs to.**
+- A blob belongs to the collection of the object that references it;
+  `si-img:` resolves only within the same collection. Moving an item to
+  another collection = a new itemId in the target + a tombstone of the old one.
 
 ### 4.2 Unlock slots (key mail)
 
-The key mail in `SharedInbox/Keys` holds the account key wrapped in **slots**
-(like LUKS), plus `slotListVersion` (monotonic), all under a MAC with
-`k_slots`. Slot AEAD: XChaCha20-Poly1305, fresh random 24-byte nonce,
-AAD = `keyId ‖ slotId ‖ type`.
+The key mail in `SharedInbox/Keys` holds `accountKeyId`, the account key
+wrapped in **slots** (like LUKS) and `slotListVersion` (monotonic), as one
+`application/json` part; the MAC (HMAC-SHA256 with `k_slots`) covers **the
+exact stored bytes of that part** and is carried next to it. Slot AEAD:
+XChaCha20-Poly1305, fresh random 24-byte nonce,
+AAD = `accountKeyId ‖ slotId ‖ type`.
+
+**Key-mail lifecycle:** changing slots appends a new key mail with
+`slotListVersion + 1`, then deletes the old one. Key mails are grouped by
+`accountKeyId`; within a group the highest valid `slotListVersion` wins;
+equal versions with different slots merge (union) into version N+1.
+**Removing a slot is not revocation** — old key mails may persist on the
+server or in backups. A compromised slot needs account-key rotation
+(new account key, re-wrap all collection keys; 4.5).
 
 | Slot | KEK | Notes |
 | --- | --- | --- |
-| `recovery` (mandatory, created first) | HKDF(recovery key) | Recovery key = 128 bit random + 16 bit SHA-256 checksum, Crockford base32 in groups of 4; shown once, printable, QR. |
-| `passphrase` (optional) | Argon2id(passphrase) | Defaults m=64 MiB, t=3, p=1 (pure-Dart `cryptography`, run in an isolate); the params used are stored in the slot. Minimum strength + warning. |
+| `recovery` (mandatory, created first) | HKDF(recovery key) | Recovery key = 128 bit random + 32 bit SHA-256 checksum = 160 bit = 32 Crockford base32 chars, shown as 8 groups of 4; shown once, printable, QR. |
+| `passphrase` (optional) | Argon2id(passphrase, salt) | Salt = 16 random bytes stored in the slot. Defaults m=64 MiB, t=3, p=1 (pure-Dart `cryptography`, run in an isolate); the params used are stored in the slot. Minimum strength + warning. |
 | `passkey-prf` (optional, #1360) | HKDF(WebAuthn PRF output) | One slot per ecosystem (Google / Apple). |
 
 Not slots, but ways to get the key onto a device:
 
 - **Device storage**: the unwrapped account key in `flutter_secure_storage`,
-  **without a biometric gate** (iOS accessibility `first_unlock_this_device`),
-  so the background isolate can decrypt like it reads account passwords. A
-  biometric app lock may come later as a UI-only feature.
+  **without a biometric gate**, so the background isolate can decrypt. On iOS
+  this needs per-key `IOSOptions(accessibility: first_unlock_this_device)` —
+  new in the storage wrapper (`lib/data/storage/flutter_secure_storage_impl.dart`
+  uses the package default today). A biometric app lock may come later as a
+  UI-only feature.
 - **Pairing**: an unlocked device sends the account key to a new device via
   X25519/ECIES (`ShareEncryptionService.encryptBytes`, info
-  `sharedinbox-pairing-v1`). Linux cannot scan QR codes (`mobile_scanner`), so
-  the reply goes as a pairing mail in `SharedInbox/Keys` encrypted to the new
-  device's ephemeral public key (fallback: paste). The receiver verifies the key
-  against the slot-list MAC, matches the account by server + username, deletes
-  the pairing mail; it expires after `ShareKeyMaterial.lifetime` (20 min).
+  `sharedinbox-pairing-v1`). The new device's ephemeral **public key travels
+  only out-of-band** (QR shown by the new device, or paste) — never via the
+  server, which could otherwise sit in the middle. Linux cannot scan QR codes
+  (`mobile_scanner`), so the *reply* goes as a pairing mail in
+  `SharedInbox/Keys` encrypted to that public key (fallback: paste). The
+  pairing plaintext includes `accountKeyId`; the receiver checks the key
+  against the slot-list MAC of the **winning** key mail (4.3), matches the
+  account by server + username, deletes the pairing mail; it expires after
+  `ShareKeyMaterial.lifetime` (20 min).
 
 Only an unlocked device may add or remove slots.
 
 ### 4.3 Key creation race and missing key folder
 
 - Two devices creating a key at the same time: after APPEND, re-list the
-  folder. Winner = lowest IMAP UID (JMAP: earliest `receivedAt`, tie → lowest
-  keyId). The recovery key is shown **only after** the re-list confirmed the
-  win.
+  folder. Winner = the `accountKeyId` group whose **first** key mail has the
+  lowest IMAP UID (JMAP: earliest `receivedAt`, tie → lowest accountKeyId).
+  Later key mails of the same group (slot changes) do not affect the race. The
+  recovery key is shown **only after** the re-list confirmed the win.
 - A device that has already written objects with its key **never yields**; a
   foreign key mail appearing later only raises a warning. Unlock tries every
   key mail in the folder.
@@ -142,7 +174,9 @@ copying between mailboxes) is undecided and out of scope.
 
 ### 4.5 Rotation (not implemented, path defined)
 
-A new collection key gets a new `keyId`; new writes use it; old objects are
+Account-key rotation: new account key and key mail (new `accountKeyId`),
+all collection keys re-wrapped, old key mails deleted. Collection-key
+rotation: a new collection key gets a new `keyId`; new writes use it; old objects are
 re-encrypted lazily on their next edit or by a background job; the old key
 is kept until no object references it. Rotation does not protect data that a
 lost device already had.
@@ -151,8 +185,11 @@ lost device already had.
 
 ### 5.1 Outer mail (RFC 5322)
 
-- `Subject: SharedInbox item`, random `Message-ID` (no hostname; chosen
-  **before** upload and persisted, it identifies this *version*), `\Seen`.
+- `Subject: SharedInbox item`, `Message-ID:
+  <base32(16 random bytes)@sharedinbox.invalid>` (valid RFC 5322, no real
+  hostname; chosen **before** upload and persisted, it identifies this
+  *version*), `\Seen`. Mails with the same item HMAC and versionId are one
+  version; expunge duplicates.
 - Header `X-SharedInbox-Schema: 1`.
 - Header `X-SharedInbox-Item: base64url(HMAC-SHA256(k_item, itemId))`.
 - `multipart/mixed`: a short `text/plain` "encrypted SharedInbox data, do not
@@ -163,33 +200,41 @@ lost device already had.
 AAD = "SIE1" ‖ keyId ‖ itemHmac (raw 32 bytes)     -- built from parsed values, never raw header bytes
 ```
 
-- **Padding**: plaintext length rounded up to the next power of two ≥ 1 KiB
-  up to 64 KiB, then to multiples of 64 KiB.
+- **Padding**: with `P = 4 + len(innerMIME)`, the padded length is
+  `max(1024, nextPow2(P))` if `P ≤ 64 KiB`, else `ceil(P / 64 KiB) · 64 KiB`.
 - **Size limit**: ciphertext ≤ 8 MiB per mail (≈ 11 MB after base64; below
   Gmail / M365 limits) and ≤ JMAP `maxSizeUpload`. Larger blobs are rejected
   with a user-visible error (chunking is a later issue).
 - After decrypting, check `HMAC(k_item, itemId) == X-SharedInbox-Item`.
 - JMAP uploads the **same RFC 5322 bytes** via the upload endpoint +
-  `Email/import` (one format, one parser).
+  `Email/import` (one format, one parser; omit `receivedAt`).
 
 ### 5.2 Inner MIME
 
 `multipart/related`:
 
 1. `application/json` head:
-   `{v: 1, kind, itemId, collectionId, versionId, parents: [versionId…], ...kind fields}`
+   `{v: 1, itemId, collectionId, versionId, parents: [versionId…], deleted?, kind, ...kind fields}`.
+   `itemId`, `collectionId`, `versionId`, `parents` and `deleted` are a
+   **`v`-independent prefix** every future version must keep, so every reader
+   can always build the version graph.
 2. content parts, e.g. `text/markdown`, small images (< 50 KiB) as `cid:`.
 
 **Forward compatibility:** readers ignore unknown `kind`s and unknown fields,
-and **preserve unknown fields when rewriting** an object. A newer `v` that a
-reader cannot parse is kept untouched and shown as "needs a newer app".
+and **preserve unknown fields when rewriting** an object. An item whose head
+has a `v` the reader cannot parse is kept untouched, shown as "needs a newer
+app" and **never edited** by that reader (editing would fork history).
 
 ### 5.3 Identity and clocks (used by all features)
 
-- **deviceId**: random per install per account; stored in the DB *and* bound to
-  a secure-storage marker. If the marker is missing (e.g. a DB restored onto a
-  new device by Android auto backup), generate a new deviceId.
-- **HLC**: `(wallMs, counter, deviceId)`, encoded as a sortable string;
+- **deviceId**: 16 random bytes per install per account (22 chars
+  base64url); stored in the DB *and* in a secure-storage marker that also
+  holds the HLC and `seq` high-water marks. Marker missing or not matching the
+  DB (DB restored by Android auto backup; iOS keychain surviving a reinstall
+  with a rolled-back DB) → **new deviceId**. Before the first write, advance
+  HLC and `seq` past everything with this deviceId seen locally or on the server.
+- **HLC**: `(wallMs, counter, deviceId)`, encoded as a sortable string
+  `wallMs` (13 decimal digits) `-` counter (4 hex digits) `-` deviceId;
   standard HLC send/receive rules; a remote timestamp > now + 5 min is not
   used to advance the local clock.
 - **versionId** = the HLC of the write (it contains the deviceId).
@@ -199,17 +244,25 @@ reader cannot parse is kept untouched and shown as "needs a newer app".
 1. **Document** — one mail per object; an edit writes a new version and,
    **only after the server confirmed it** (IMAP APPEND OK / APPENDUID; JMAP
    `created`), deletes the old one (IMAP `UID EXPUNGE` via
-   `deleteAndExpungeUids`; JMAP a **separate** `Email/set` destroy — never
-   create and destroy in one call).
+   `deleteAndExpungeUids`, Gmail via a new MOVE-to-Trash helper (5.5); JMAP a
+   **separate** `Email/set` destroy — never create and destroy in one call).
+   - **User delete = a tombstone version** `{deleted: true, parents: [heads]}`;
+     superseded versions are expunged, the tombstone stays (small).
+   - **A mail that vanishes from the server without a tombstone never deletes
+     local data**: the device re-uploads its head and logs a warning
+     (OFFLINE-FIRST rule: the server is not trusted to delete).
    - **Superseded**: a version whose versionId appears in another version's
      `parents` → deleted silently (foreground only).
    - **Heads**: the rest. One head = normal. Several heads = **conflict**: the
      newest HLC is shown, all heads are listed in the conflict view, never
      silently deleted. Heads with identical content resolve automatically.
      Resolving writes a version with `parents = [all heads]`.
-   - **Rollback guard**: a version older than the locally known head is only
-     accepted if it is a new head (i.e. not an ancestor of the local head).
-   - Edit-after-delete on another device resurrects the object (documented).
+   - **Rollback guard**: per item a local version vector
+     `deviceId → max HLC seen`. A device's versions of one item are linear, so
+     a version V is accepted only if `V.hlc > vv[V.deviceId]`; otherwise it is
+     a replay and ignored.
+   - Edit on one device and delete on another → two heads (an edit and a
+     tombstone) → a normal conflict.
    - **Idempotent upload** checks the version's `Message-ID`
      (`messageIdSearchCriteria`, JMAP `header` filter), **not** the item HMAC
      (all versions share it).
@@ -217,12 +270,16 @@ reader cannot parse is kept untouched and shown as "needs a newer app".
    `(deviceId, seq)` per event; only the **owning device** compacts its own
    segments into a pack (APPEND pack → confirm → expunge covered segments;
    without UIDPLUS confirm by re-fetching the pack's `Message-ID`). Readers
-   ignore segments covered by a pack. A deleted segment never means its
-   events are gone.
+   ignore segments covered by a pack and **always dedupe events by
+   `(deviceId, seq)`**, so overlapping packs after a crash are harmless. A
+   pack may cover segments and older packs of the same open month (`covers`
+   lists `(deviceId, seqFrom, seqTo)` ranges). Segments of a deviceId not seen
+   for 90 days may be compacted by any device. A deleted segment never means
+   its events are gone.
 3. **Blob** — immutable document (image), referenced by its itemId.
 4. **Device-state** — one document per device (a key → value map with an HLC
    per key); the effective value of a key is the one with the highest HLC
-   across all devices' docs.
+   across all devices' docs; a value `null` means unset.
 
 ### 5.5 Provider specifics
 
@@ -270,10 +327,12 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
 ## 7. Flash cards
 
 - **Card** documents (`kind: card`): front/back Markdown, tags, `collectionId`
-  = the deck. **Card batches** (`kind: card-batch`, ≤ 500 cards) for imports; a
-  later edit of one card writes a `card` doc with a higher HLC; deleting a
-  batch member writes a `card` tombstone. Concurrent rewrites of the same batch
-  merge **per card by HLC automatically** (never via the conflict view).
+  = the deck. **Card batches** (`kind: card-batch`, ≤ 500 cards) for imports;
+  **each batch member carries its own `h` (HLC)**. A later edit of one card
+  writes a `card` doc that overrides the member if its `h` is higher; deleting
+  a member writes a `card` tombstone. Batch merge = per cardId, max `h` — an
+  explicit **exception to the conflict view of 5.4**: concurrent rewrites of
+  the same batch merge automatically.
 - **Reviews**: log segments (`kind: review-seg` / `review-pack`) in the
   `personal` collection. Event union:
   - `{op: "review", c: cardId, s: seq, h: hlc, t: wallMs, r: rating, ms: durationMs}`
