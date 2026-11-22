@@ -13,47 +13,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/repositories/account_repository.dart';
-import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
+import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import 'stalwart_harness.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// In-memory SecureStorage backed by a plain map — no flutter_secure_storage.
-class _MemSecureStorage implements SecureStorage {
-  final _map = <String, String>{};
-
-  @override
-  Future<String?> read({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      _map[key];
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {
-    if (value == null) {
-      _map.remove(key);
-    } else {
-      _map[key] = value;
-    }
-  }
-
-  @override
-  Future<void> delete({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      _map.remove(key);
-}
 
 /// Plain-text IMAP connect for the local Stalwart dev server (no TLS).
 Future<enough_mail.ImapClient> _connectImapPlaintext(
@@ -111,7 +79,7 @@ void main() {
 
   setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
-    accounts = AccountRepositoryImpl(db, _MemSecureStorage());
+    accounts = AccountRepositoryImpl(db, MapSecureStorage());
     // Reset per-user INBOXes so counts reflect this test only.
     await clearStandardMailboxes(env: env, user: alice);
     await clearStandardMailboxes(env: env, user: bob);

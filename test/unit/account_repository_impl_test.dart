@@ -5,44 +5,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'helpers/fake_secure_storage.dart';
 
 // ── Fake ──────────────────────────────────────────────────────────────────────
 
-class MapSecureStorage implements SecureStorage {
-  final _map = <String, String>{};
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {
-    if (value == null) {
-      _map.remove(key);
-    } else {
-      _map[key] = value;
-    }
-  }
-
-  @override
-  Future<String?> read({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      _map[key];
-
-  @override
-  Future<void> delete({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      _map.remove(key);
-}
+/// Kept as the name the other suites import; see [FakeSecureStorage].
+typedef MapSecureStorage = FakeSecureStorage;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

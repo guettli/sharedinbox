@@ -9,9 +9,8 @@ import 'package:test/test.dart';
 import 'test_helpers.dart';
 
 void main() {
-  final accountKey = AccountKey(seqBytes(0xa0, 16), seqBytes(0x00, 32));
-  final deckKey =
-      CollectionKey('deck-1', seqBytes(0xb0, 16), seqBytes(0x20, 32));
+  final accountKey = testAccountKey;
+  final deckKey = testDeckKey;
 
   Map<String, Object?> jsonOf(CollectionKeyMail m) =>
       jsonDecode(utf8.decode(m.bytes)) as Map<String, Object?>;

@@ -10,32 +10,6 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 import 'helpers/fake_secure_storage.dart';
 
-/// SecureStorage that throws on write. Used to exercise the failure branch
-/// of [processPendingDbEncryptionChange] without touching sqlite.
-class _ThrowingSecureStorage implements SecureStorage {
-  @override
-  Future<String?> read({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      null;
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {
-    throw const FileSystemException('storage write refused');
-  }
-
-  @override
-  Future<void> delete({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {}
-}
-
 /// SecureStorage whose write silently no-ops and whose read always returns
 /// null — mimicking libsecret with no running keyring daemon. Used to prove
 /// the key round-trip check aborts before the DB is rewritten, so we never end
@@ -60,6 +34,19 @@ class _NoOpWriteSecureStorage implements SecureStorage {
     required String key,
     SecureStorageAccess access = SecureStorageAccess.defaultAccess,
   }) async {}
+}
+
+/// SecureStorage that throws on write. Used to exercise the failure branch
+/// of [processPendingDbEncryptionChange] without touching sqlite.
+class _ThrowingSecureStorage extends _NoOpWriteSecureStorage {
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
+    throw const FileSystemException('storage write refused');
+  }
 }
 
 /// The 16-byte plaintext SQLite header — the ASCII string "SQLite format 3"

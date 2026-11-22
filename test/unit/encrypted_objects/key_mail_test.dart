@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
-import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:test/test.dart';
@@ -10,7 +9,7 @@ import 'package:test/test.dart';
 import 'test_helpers.dart';
 
 void main() {
-  final accountKey = AccountKey(seqBytes(0xa0, 16), seqBytes(0x00, 32));
+  final accountKey = testAccountKey;
   final recoveryKey = RecoveryKey(seqBytes(0x40, 16));
 
   Future<UnlockSlot> slot(int seed, {String type = 'recovery'}) async =>

@@ -17,7 +17,6 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/models/account.dart' as model;
-import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -26,40 +25,9 @@ import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
+import '../unit/account_repository_impl_test.dart' show MapSecureStorage;
 import 'localhost_mapping_client.dart';
 import 'stalwart_harness.dart';
-
-class MapSecureStorage implements SecureStorage {
-  final _map = <String, String>{};
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {
-    if (value == null) {
-      _map.remove(key);
-    } else {
-      _map[key] = value;
-    }
-  }
-
-  @override
-  Future<String?> read({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async =>
-      _map[key];
-
-  @override
-  Future<void> delete({
-    required String key,
-    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async {
-    _map.remove(key);
-  }
-}
 
 Future<void> _clearMailbox(
   imap.ImapClient client, {

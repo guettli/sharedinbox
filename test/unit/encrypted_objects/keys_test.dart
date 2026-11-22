@@ -8,9 +8,8 @@ import 'package:test/test.dart';
 import 'test_helpers.dart';
 
 void main() {
-  final accountKey = AccountKey(seqBytes(0xa0, 16), seqBytes(0x00, 32));
-  final deckKey =
-      CollectionKey('deck-1', seqBytes(0xb0, 16), seqBytes(0x20, 32));
+  final accountKey = testAccountKey;
+  final deckKey = testDeckKey;
 
   group('deriveSubKey', () {
     test('the 8 sub-keys are pairwise distinct and differ from the root',
