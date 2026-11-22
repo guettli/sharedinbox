@@ -974,7 +974,7 @@ void main() {
       });
 
       group('after stepping to a mail whose body does not load', () {
-        final first =
+        final flaggedFirst =
             testEmail(id: 'acc-1:1', subject: 'First', isFlagged: true);
         final second = Email(
           id: 'acc-1:2',
@@ -995,9 +995,16 @@ void main() {
         );
 
         // The first mail's body is cached, the second's is not (offline).
-        Future<_OfflineEmailRepository> step(WidgetTester tester) async {
+        Future<_OfflineEmailRepository> step(
+          WidgetTester tester, {
+          Email? firstMail,
+          Completer<void>? flagGate,
+          Future<void> Function()? beforeStep,
+        }) async {
+          final first = firstMail ?? flaggedFirst;
           final repo = _OfflineEmailRepository(
             emails: [first, second],
+            flagGate: flagGate,
             loadBody: (id) => id != first.id
                 ? null
                 : Future.value(
@@ -1016,6 +1023,7 @@ void main() {
           );
           await tester.pumpAndSettle();
           expect(find.text('first body'), findsOneWidget);
+          await beforeStep?.call();
           await tester.tap(find.byIcon(Icons.chevron_right));
           await tester.pumpAndSettle();
           await dismissLoadFailed(tester);
@@ -1062,6 +1070,96 @@ void main() {
             expect(_editableWithText('Re: Second'), findsOneWidget);
           }),
         );
+
+        testWidgets(
+          'a star tapped before the step does not change the next mail\'s',
+          (tester) => onDesktop(() async {
+            final gate = Completer<void>();
+            final repo = await step(
+              tester,
+              firstMail: flaggedFirst.copyWith(isFlagged: false),
+              flagGate: gate,
+              beforeStep: () async {
+                // setFlag is still running when the user steps on.
+                await tester.tap(button('Flag'));
+                await tester.pump();
+              },
+            );
+            gate.complete();
+            await tester.pumpAndSettle();
+            expect(
+              repo.setFlagCalls.where((c) => c.flagged != null).single,
+              (emailId: 'acc-1:1', seen: null, flagged: true),
+            );
+            // The second mail is not flagged and its star says so.
+            expect(button('Flag'), findsOneWidget);
+            expect(button('Unflag'), findsNothing);
+          }),
+        );
+      });
+
+      group('Reply while the body still loads', () {
+        Future<void> tapReplyWhileLoading(WidgetTester tester) async {
+          await pumpScreen(
+            tester,
+            _OfflineEmailRepository(
+              loadBody: (_) => Completer<EmailBody>().future,
+            ),
+          );
+          for (var i = 0; i < 5; i++) {
+            await tester.pump();
+          }
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          expect(find.text('Loading message…'), findsOneWidget);
+        }
+
+        testWidgets('a second tap does not open a second Compose', (
+          tester,
+        ) async {
+          final gate = Completer<EmailBody>();
+          await pumpScreen(
+            tester,
+            _OfflineEmailRepository(loadBody: (_) => gate.future),
+          );
+          for (var i = 0; i < 5; i++) {
+            await tester.pump();
+          }
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          await tester.tap(button('Reply'));
+          await tester.pump();
+          gate.complete(
+            const EmailBody(
+              emailId: 'acc-1:42',
+              textBody: 'the original text',
+              attachments: [],
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byType(ComposeScreen, skipOffstage: false),
+            findsOneWidget,
+          );
+        });
+
+        testWidgets('gives up after the timeout and replies unquoted', (
+          tester,
+        ) async {
+          await tapReplyWhileLoading(tester);
+          await tester.pump(const Duration(seconds: 11));
+          for (var i = 0; i < 10; i++) {
+            await tester.pump(const Duration(milliseconds: 100));
+          }
+          expect(find.text('Loading message…'), findsNothing);
+          expect(find.byType(ComposeScreen), findsOneWidget);
+          expect(composeTextContaining('wrote:'), findsNothing);
+          expect(
+            find.text('The message body is not available, so the reply '
+                'does not quote it.'),
+            findsOneWidget,
+          );
+        });
       });
     });
 
@@ -3474,11 +3572,24 @@ class _FailingEmailRepository extends FakeEmailRepository {
 /// unless [loadBody] serves that mail. Records the moves and snoozes the
 /// detail view queues (#1330).
 class _OfflineEmailRepository extends FakeEmailRepository {
-  _OfflineEmailRepository({super.emails, Email? detail, this.loadBody})
-      : super(emailDetail: detail ?? (emails == null ? testEmail() : null));
+  _OfflineEmailRepository({
+    super.emails,
+    Email? detail,
+    this.loadBody,
+    this.flagGate,
+  }) : super(emailDetail: detail ?? (emails == null ? testEmail() : null));
 
   /// Body of a mail that is served; null means offline for it.
   final Future<EmailBody>? Function(String emailId)? loadBody;
+
+  /// When set, a star change only completes once this completes.
+  final Completer<void>? flagGate;
+
+  @override
+  Future<void> setFlag(String emailId, {bool? seen, bool? flagged}) async {
+    await super.setFlag(emailId, seen: seen, flagged: flagged);
+    if (flagged != null) await flagGate?.future;
+  }
 
   final List<(String, String)> moves = [];
   final List<String> snoozed = [];

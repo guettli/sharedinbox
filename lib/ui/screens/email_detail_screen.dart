@@ -212,10 +212,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// Reached by prev/next or after an action it stays here. Without a local
   /// draft yet it stays here too, with "Edit draft" in place of Reply.
   Future<void> _checkForDraft() async {
+    // A notification tap can swap in another mail while this runs.
+    final emailId = widget.emailId;
     Email? header;
     String? role;
     try {
-      (header, role) = await _readCachedRow(widget.emailId);
+      (header, role) = await _readCachedRow(emailId);
       if (header != null &&
           role == 'drafts' &&
           !(widget.nav?.steppedTo ?? false) &&
@@ -229,9 +231,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (!mounted) return;
     setState(() {
       _draftChecked = true;
+      // Another mail is on screen: its own row read is in flight.
+      if (widget.emailId != emailId) return;
       _checkedHeader = header;
       _checkedRole = role;
-      if (header != null) _isFlagged = header.isFlagged;
+      if (header != null && !_flagTouched) _isFlagged = header.isFlagged;
     });
   }
 
@@ -376,11 +380,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         body.attachments.isEmpty;
   }
 
-  /// While the body is still loading, waits for it (at most a few seconds,
-  /// under a scrim) so Reply can quote it. Returns [body] when the load is
-  /// not running or fails.
-  Future<EmailBody?> _awaitLoadingBody(EmailBody? body) async {
-    final provider = emailDetailProvider(widget.emailId);
+  /// While the body of [emailId] is still loading, waits for it (at most a
+  /// few seconds, under a scrim that also stops Prev/Next) so Reply can
+  /// quote it. Returns [body] when the load is not running or fails.
+  Future<EmailBody?> _awaitLoadingBody(String emailId, EmailBody? body) async {
+    final provider = emailDetailProvider(emailId);
     if (!ref.read(provider).isLoading) return body;
     try {
       final (_, loaded) = await _runDimmed(
@@ -489,8 +493,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         defaultTargetPlatform == TargetPlatform.iOS;
 
     final activeNav = _activeNav(header);
-    final prevItem = activeNav?.prevOf(widget.emailId);
-    final nextItem = activeNav?.nextOf(widget.emailId);
+    // No stepping while an action runs on this mail under its scrim (a
+    // Reply waiting for the body, a delete): it would land on the next one.
+    final canStep = _actionInFlight == null;
+    final prevItem = canStep ? activeNav?.prevOf(widget.emailId) : null;
+    final nextItem = canStep ? activeNav?.nextOf(widget.emailId) : null;
 
     // Role of the folder the open message lives in. When it is the Junk or
     // Trash folder the destructive action turns into its inverse (un-junk /
@@ -539,11 +546,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               tooltip: 'Reply',
               onPressed: header == null
                   ? null
-                  : () {
-                      unawaited(
-                        _replyWithRecipientDialog(context, header, body),
-                      );
-                    },
+                  : () => unawaited(
+                        _composeOnce(
+                          () =>
+                              _replyWithRecipientDialog(context, header, body),
+                        ),
+                      ),
             ),
           _ActionMorphButton(
             icon: Icons.archive,
@@ -617,9 +625,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             tooltip: _isFlagged ? 'Unflag' : 'Flag',
             onPressed: () async {
               final next = !_isFlagged;
+              final emailId = widget.emailId;
               _flagTouched = true;
-              await repo.setFlag(widget.emailId, flagged: next);
-              if (mounted) setState(() => _isFlagged = next);
+              await repo.setFlag(emailId, flagged: next);
+              // Prev/Next during the await: the star now shows another mail.
+              if (!mounted || widget.emailId != emailId) return;
+              setState(() => _isFlagged = next);
             },
           ),
           if (folderRole == 'junk')
@@ -1731,13 +1742,16 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     required String to,
     required String cc,
   }) async {
-    // Captured once: Prev/Next can swap in another mail while we wait.
-    final emailId = widget.emailId;
+    // [header] was captured at the tap. Prev/Next since then (e.g. while the
+    // account was read) swapped in another mail: do not mix the two.
+    final emailId = header.id;
+    if (widget.emailId != emailId) return;
     final subject = (header.subject?.startsWith('Re:') ?? false)
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
     // Tapped while the body still loads: wait for it, so the reply quotes it.
-    final loaded = _bodyMissing(body) ? await _awaitLoadingBody(body) : body;
+    final loaded =
+        _bodyMissing(body) ? await _awaitLoadingBody(emailId, body) : body;
     if (!context.mounted || widget.emailId != emailId) return;
     // Without the body there is nothing to quote: reply anyway, unquoted,
     // and say so rather than quoting an empty text (#1330).
@@ -1880,23 +1894,27 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (context.mounted) _navigateTo(context, header, nextEmail);
   }
 
-  /// True while a Forward prepares Compose, so a second tap does not
-  /// start a second download loop and a second Compose.
-  bool _forwarding = false;
+  /// True while a Reply or Forward prepares Compose, so a second tap does
+  /// not start a second wait or download loop and a second Compose.
+  bool _composing = false;
+
+  /// Runs [prepare] unless a Reply/Forward or a dimmed action is running.
+  Future<void> _composeOnce(Future<void> Function() prepare) async {
+    if (_composing || _actionInFlight != null) return;
+    _composing = true;
+    try {
+      await prepare();
+    } finally {
+      _composing = false;
+    }
+  }
 
   Future<void> _forward(
     BuildContext context,
     Email header,
     EmailBody? body,
-  ) async {
-    if (_forwarding || _actionInFlight != null) return;
-    _forwarding = true;
-    try {
-      await _prepareForward(context, header, body);
-    } finally {
-      _forwarding = false;
-    }
-  }
+  ) =>
+      _composeOnce(() => _prepareForward(context, header, body));
 
   Future<void> _prepareForward(
     BuildContext context,
