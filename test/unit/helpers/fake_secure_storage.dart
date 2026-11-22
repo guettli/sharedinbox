@@ -6,11 +6,28 @@ import 'package:sharedinbox/core/storage/secure_storage.dart';
 class FakeSecureStorage implements SecureStorage {
   final Map<String, String> _data = {};
 
-  @override
-  Future<String?> read({required String key}) async => _data[key];
+  /// The [SecureStorageAccess] of every call, per key, in call order.
+  final Map<String, List<SecureStorageAccess>> accessLog = {};
+
+  void _log(String key, SecureStorageAccess access) =>
+      accessLog.putIfAbsent(key, () => []).add(access);
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
+    _log(key, access);
+    return _data[key];
+  }
+
+  @override
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
+    _log(key, access);
     if (value == null) {
       _data.remove(key);
       return;
@@ -19,7 +36,11 @@ class FakeSecureStorage implements SecureStorage {
   }
 
   @override
-  Future<void> delete({required String key}) async {
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
+    _log(key, access);
     _data.remove(key);
   }
 }

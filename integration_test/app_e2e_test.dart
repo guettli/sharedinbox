@@ -60,7 +60,11 @@ class _InMemorySecureStorage implements SecureStorage {
   final _store = <String, String>{};
 
   @override
-  Future<void> write({required String key, required String? value}) async {
+  Future<void> write({
+    required String key,
+    required String? value,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async {
     if (value == null) {
       _store.remove(key);
     } else {
@@ -69,10 +73,16 @@ class _InMemorySecureStorage implements SecureStorage {
   }
 
   @override
-  Future<String?> read({required String key}) async => _store[key];
+  Future<String?> read({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async => _store[key];
 
   @override
-  Future<void> delete({required String key}) async => _store.remove(key);
+  Future<void> delete({
+    required String key,
+    SecureStorageAccess access = SecureStorageAccess.defaultAccess,
+  }) async => _store.remove(key);
 }
 
 final _sw = Stopwatch()..start();
