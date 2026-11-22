@@ -23,6 +23,7 @@ import 'package:sharedinbox/core/utils/recipient_check.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
+import 'package:sharedinbox/ui/utils/send_briefly.dart';
 import 'package:sharedinbox/ui/widgets/accessible_dropdown.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
@@ -42,12 +43,6 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.inReplyTo,
     this.references = const [],
   });
-
-  /// How long Send waits for the first delivery attempt before it closes
-  /// and lets the send finish in the background (#1331). Long enough for a
-  /// healthy server to accept the message or reject a recipient, short
-  /// enough that a dead link does not hold the screen.
-  static const sendResultWait = Duration(seconds: 2);
 
   /// Builds the screen from a `/compose` route's `extra` map. Shared by the
   /// app router and the widget-test router so the two cannot drift.
@@ -820,42 +815,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       // Sent Queue. A quick answer (sent, or rejected outright) is reported
       // as before.
       final accountId = _accountId!;
-      final sending = ref
-          .read(emailRepositoryProvider)
-          .sendNow(accountId, outboxRowId: rowId)
-          .then<SendNowResult?>((r) => r);
-      final result = await sending.timeout(
-        ComposeScreen.sendResultWait,
-        onTimeout: () => null,
+      final result = await sendNowBriefly(
+        ref.read(emailRepositoryProvider),
+        _appLogger,
+        accountId: accountId,
+        outboxRowId: rowId,
+        unshownEvent: 'compose.send_result_unshown',
+        onLate: (r) => _showSendResult(messenger, accountId, r),
+        onLateError: (e, stack) =>
+            _showQueuedAfterError(messenger, accountId, e, stack),
       );
       if (result == null) {
-        final logger = _appLogger;
-        // The screen is gone by then. Should the app's messenger be gone too
-        // (the app is closing), the outcome still reaches the App Log.
-        void report(void Function() show) {
-          try {
-            show();
-          } catch (e, stack) {
-            unawaited(
-              logger.warn(
-                'compose.send_result_unshown',
-                'Could not show how a background send ended: $e',
-                accountId: accountId,
-                error: e,
-                stack: stack,
-              ),
-            );
-          }
-        }
-
-        unawaited(
-          sending.then(
-            (r) => report(() => _showSendResult(messenger, accountId, r!)),
-            onError: (Object e, StackTrace stack) => report(
-              () => _showQueuedAfterError(messenger, accountId, e, stack),
-            ),
-          ),
-        );
         messenger.show(
           'Sending in the background',
           event: 'compose.sending_background',

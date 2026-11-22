@@ -32,6 +32,7 @@ import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/utils/save_file_as.dart';
+import 'package:sharedinbox/ui/utils/send_briefly.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -2695,6 +2696,18 @@ class _UnsubscribeChip extends ConsumerStatefulWidget {
 class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   bool _sending = false;
 
+  /// Set once an unsubscribe mail is in the outbox, which sends (and
+  /// retries) it even after Send stopped waiting: a second tap must not
+  /// queue a second one (#1351). Cleared when the server refused it.
+  bool _requested = false;
+
+  @override
+  void didUpdateWidget(covariant _UnsubscribeChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Prev/Next reuses this State for another mail.
+    if (oldWidget.email.id != widget.email.id) _requested = false;
+  }
+
   Future<void> _onTap(BuildContext context, List<Uri> uris) async {
     final chosen = uris.length == 1
         ? await _confirmSingle(context, uris.single)
@@ -2787,8 +2800,11 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   static IconData _iconFor(Uri uri) =>
       uri.scheme == 'mailto' ? Icons.email_outlined : Icons.open_in_new;
 
-  void _showUnsubscribeQueued(
+  /// Static, like [_showUnsubscribeResult]: also called once the send ended
+  /// in the background, when this chip may be gone.
+  static void _showUnsubscribeQueued(
     AppMessenger messenger,
+    Email email,
     String? reason, {
     Object? error,
     StackTrace? stack,
@@ -2799,19 +2815,57 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
           : 'Unsubscribe email queued, will retry: $reason',
       level: AppLogLevel.warn,
       event: 'email.unsubscribe.queued',
-      accountId: widget.email.accountId,
-      emailId: widget.email.id,
+      accountId: email.accountId,
+      emailId: email.id,
       error: error,
       stack: stack,
     );
   }
 
+  /// Reports how the unsubscribe send to [email]'s list ended. Uses only
+  /// [messenger] (the app's), so it also works once the send finished in the
+  /// background and this chip is gone (#1351).
+  static void _showUnsubscribeResult(
+    AppMessenger messenger,
+    Email email,
+    SendNowResult result,
+  ) {
+    switch (result.outcome) {
+      case SendNowOutcome.sent:
+        final warning = result.warning;
+        messenger.show(
+          warning == null
+              ? 'Unsubscribe email sent'
+              : 'Unsubscribe email sent. $warning',
+          level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
+          event: 'email.unsubscribe.sent',
+          accountId: email.accountId,
+          emailId: email.id,
+        );
+      case SendNowOutcome.queued:
+      case SendNowOutcome.transientFailed:
+        _showUnsubscribeQueued(messenger, email, result.message);
+      case SendNowOutcome.permanentlyFailed:
+        messenger.show(
+          'Failed to send unsubscribe: '
+          '${result.message ?? 'rejected by the server'}',
+          level: AppLogLevel.error,
+          event: 'email.unsubscribe.send_failed',
+          accountId: email.accountId,
+          emailId: email.id,
+        );
+    }
+  }
+
   Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
     final messenger = context.appMessenger();
+    final logger = ref.read(appLoggerProvider);
+    final email = widget.email;
     setState(() => _sending = true);
     var queued = false;
+    var refused = false;
     try {
-      final accountId = widget.email.accountId;
+      final accountId = email.accountId;
       final account =
           await ref.read(accountRepositoryProvider).getAccount(accountId);
       if (account == null) {
@@ -2820,7 +2874,7 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
           level: AppLogLevel.warn,
           event: 'email.unsubscribe.account_missing',
           accountId: accountId,
-          emailId: widget.email.id,
+          emailId: email.id,
         );
         return;
       }
@@ -2839,42 +2893,45 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
       );
       // Queue first, like compose: the request is durable even offline and
       // the outbox retries it on every sync cycle (#1240). Then try to send
-      // right away so the user sees the outcome.
+      // right away so the user sees the outcome, but as in Compose wait only
+      // briefly for it: on a dead link the SMTP connect hangs for about 50 s
+      // (#1351). A later outcome still shows up as a SnackBar.
       final repo = ref.read(emailRepositoryProvider);
       final rowId = await repo.enqueueSend(accountId, draft);
       queued = true;
-      final result = await repo.sendNow(accountId, outboxRowId: rowId);
-      if (!mounted) return;
-      switch (result.outcome) {
-        case SendNowOutcome.sent:
-          final warning = result.warning;
-          messenger.show(
-            warning == null
-                ? 'Unsubscribe email sent'
-                : 'Unsubscribe email sent. $warning',
-            level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
-            event: 'email.unsubscribe.sent',
-            accountId: accountId,
-            emailId: widget.email.id,
-          );
-        case SendNowOutcome.queued:
-        case SendNowOutcome.transientFailed:
-          _showUnsubscribeQueued(messenger, result.message);
-        case SendNowOutcome.permanentlyFailed:
-          messenger.show(
-            'Failed to send unsubscribe: '
-            '${result.message ?? 'rejected by the server'}',
-            level: AppLogLevel.error,
-            event: 'email.unsubscribe.send_failed',
-            accountId: accountId,
-            emailId: widget.email.id,
-          );
+      final result = await sendNowBriefly(
+        repo,
+        logger,
+        accountId: accountId,
+        outboxRowId: rowId,
+        unshownEvent: 'email.unsubscribe.result_unshown',
+        onLate: (r) => _showUnsubscribeResult(messenger, email, r),
+        onLateError: (e, stack) => _showUnsubscribeQueued(
+          messenger,
+          email,
+          userErrorMessage(e),
+          error: e,
+          stack: stack,
+        ),
+      );
+      // The messenger is the app's: report even if the chip is gone now.
+      if (result == null) {
+        messenger.show(
+          'Sending the unsubscribe email in the background',
+          event: 'email.unsubscribe.sending_background',
+          accountId: accountId,
+          emailId: email.id,
+          duration: const Duration(seconds: 3),
+        );
+        return;
       }
+      refused = result.outcome == SendNowOutcome.permanentlyFailed;
+      _showUnsubscribeResult(messenger, email, result);
     } catch (e, stack) {
-      if (!mounted) return;
       if (queued) {
         _showUnsubscribeQueued(
           messenger,
+          email,
           userErrorMessage(e),
           error: e,
           stack: stack,
@@ -2885,13 +2942,19 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
         'Failed to send unsubscribe: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.unsubscribe.send_failed',
-        accountId: widget.email.accountId,
-        emailId: widget.email.id,
+        accountId: email.accountId,
+        emailId: email.id,
         error: e,
         stack: stack,
       );
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          // Prev/Next may have swapped in another mail meanwhile.
+          if (widget.email.id == email.id) _requested = queued && !refused;
+        });
+      }
     }
   }
 
@@ -2908,9 +2971,12 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
                 height: AppIconSize.sm,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
+            : Icon(
+                _requested ? Icons.check : Icons.unsubscribe_outlined,
+                size: AppIconSize.sm,
+              ),
         label: const Text('Unsubscribe'),
-        onPressed: _sending ? null : () => _onTap(context, uris),
+        onPressed: _sending || _requested ? null : () => _onTap(context, uris),
       ),
     );
   }
