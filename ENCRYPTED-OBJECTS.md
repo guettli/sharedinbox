@@ -290,8 +290,11 @@ app" and **never edited** by that reader (editing would fork history).
      `parents` → deleted silently (foreground only).
    - **Heads**: the rest. One head = normal. Several heads = **conflict**: the
      newest HLC is shown, all heads are listed in the conflict view, never
-     silently deleted. Heads with identical content resolve automatically.
-     Resolving writes a version with `parents = [all heads]`.
+     silently deleted. Heads with identical content resolve automatically:
+     they count as **one logical head** (no conflict badge) and nothing is
+     written for them; the next real edit collapses them with
+     `parents = [all heads]`. Resolving writes a version with
+     `parents = [all heads]`.
    - **Rollback guard**: per item a local version vector
      `deviceId → max HLC seen`. A device's versions of one item are linear, so
      a version V is accepted only if `V.hlc > vv[V.deviceId]`; otherwise it is
@@ -326,6 +329,48 @@ app" and **never edited** by that reader (editing would fork history).
 - Sync fetches headers + `RFC822.SIZE`; bodies ≤ 256 KiB eagerly, larger ones
   (blobs) on demand.
 - The background isolate only pulls and **never deletes on the server**.
+
+### 5.6 Wire details
+
+Implemented in `lib/core/encrypted_objects/` (`envelope.dart`,
+`inner_mime.dart`, `object_mail.dart`, `hlc.dart`, `device_identity.dart`,
+`merge.dart`; pure Dart).
+
+- **itemId**: any string; new ones are base64url (no padding) of 16 random
+  bytes (22 chars). The item HMAC is `HMAC-SHA256(k_item, utf8(itemId))`.
+- **Message-ID**: `<` + RFC 4648 base32 of 16 random bytes, lowercase,
+  without padding (26 chars) + `@sharedinbox.invalid>`.
+- **Outer mail**: `Date`, `Subject`, `Message-ID`, `MIME-Version`,
+  `X-SharedInbox-Schema`, `X-SharedInbox-Item`, then `multipart/mixed` with a
+  `7bit` `text/plain` notice and the blob as a `base64`
+  `application/octet-stream` part (76-char lines, CRLF). A reader rejects a
+  missing header, a schema other than `1` and a mail without that part.
+- **Inner MIME**: `multipart/related; type="application/json"`, CRLF line
+  endings, boundary `si-` + base64url of 12 random bytes (redrawn if a part
+  contains it). The JSON head (`application/json; charset=utf-8`) is the
+  first part; every part is written with `Content-Transfer-Encoding: binary`
+  (it is inside the ciphertext); readers also accept `8bit`, `7bit` and
+  `base64`. Unknown parts are kept.
+- **Size limit**: the 8 MiB rule applies to the whole envelope blob (the
+  decoded `application/octet-stream` part, header and tag included); a
+  smaller JMAP `maxSizeUpload` lowers it.
+- **Open order**: magic and minimum length, size, `keyId` known, AEAD,
+  `len ≤ plaintext − 4`; then the inner MIME is parsed and
+  `HMAC(k_item, head.itemId)` must equal the item header and
+  `head.collectionId` the collection of `keyId`.
+- **HLC**: fields are read at fixed positions (`deviceId` may contain `-`).
+  If the counter would pass `ffff`, `wallMs` goes up by 1 and the counter
+  restarts at 0.
+- **deviceId marker**: secure-storage key `enc-device-marker/<accountId>`
+  (`first_unlock_this_device`), JSON `{deviceId, hlcHigh, seqHigh}`. A new
+  deviceId is created if the marker is missing or corrupt, the DB has no
+  record, the deviceIds differ, or a marker high-water mark is above the
+  DB's (DB rolled back). The DB is written before the marker, so a marker
+  that lags behind the DB is harmless.
+- **contentDigest** (identical-content check of 5.4): SHA-256 over
+  `u32be(len) ‖ bytes` of the canonical JSON of the head without `versionId`
+  and `parents`, then of every part's content type, Content-ID (empty if
+  none) and bytes.
 
 ## 6. Entries (notes, todos, journal)
 
@@ -396,8 +441,8 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
 plaintexts and the expected bytes, with **one top-level section per slice**.
 The key-hierarchy slice (#1365) created it with `hkdf`, `recoveryKey`,
 `slotWrap`, `collectionWrap` and `keyMailMac`, computed independently by
-`scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1354) adds
-sections for item HMAC, envelope and padding. Once merged, a section is
+`scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1369) added
+`itemHmac`, `padding`, `envelope`, `hlc` and `messageId`. Once merged, a section is
 **frozen**: changing it requires a new magic (`SIE2`) or schema version and a
 migration. New slices add sections; they never edit existing ones.
 

@@ -1,5 +1,9 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 
@@ -40,3 +44,49 @@ Uint8List hexBytes(String hex) => Uint8List.fromList([
 
 String toHex(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+/// In-memory [DeviceIdentityDb].
+class FakeDeviceIdentityDb implements DeviceIdentityDb {
+  final records = <String, DeviceIdentity>{};
+
+  @override
+  Future<DeviceIdentity?> load(String accountId) async => records[accountId];
+
+  @override
+  Future<void> save(String accountId, DeviceIdentity identity) async =>
+      records[accountId] = identity;
+}
+
+/// An HLC of [deviceId] at [wallMs].
+Hlc hlcAt(int wallMs, [String deviceId = 'devA', int counter = 0]) =>
+    Hlc(wallMs, counter, deviceId);
+
+/// A v1 `entry` object of the deck collection with a markdown body.
+InnerObject testObject({
+  String itemId = 'item-1',
+  String collectionId = 'deck-1',
+  Hlc? versionId,
+  List<Hlc> parents = const [],
+  bool deleted = false,
+  int v = objectHeadVersion,
+  Map<String, Object?> extra = const {'title': 'Hello'},
+  String body = '# Hello',
+}) =>
+    InnerObject(
+      head: ObjectHead(
+        v: v,
+        itemId: itemId,
+        collectionId: collectionId,
+        versionId: versionId ?? hlcAt(1000),
+        parents: parents,
+        deleted: deleted,
+        kind: 'entry',
+        extra: extra,
+      ),
+      parts: [
+        ObjectPart(
+          contentType: 'text/markdown; charset=utf-8',
+          bytes: Uint8List.fromList(utf8.encode(body)),
+        ),
+      ],
+    );
