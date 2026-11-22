@@ -3,6 +3,7 @@
 // checkNow() silently did nothing because it delegated to _runAll(), which
 // checked the _running flag (only true after start() is called).
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -237,6 +238,133 @@ void main() {
       expect(emails.verifyCallCount, 2);
     });
   });
+
+  // #1386: a failed check used to stay on the account tile until the next
+  // hourly check, even while syncs succeeded again.
+  group('ReliabilityRunner re-check after a successful sync', () {
+    late AppDatabase db;
+    late _FlakyEmails emails;
+    late StreamController<String> syncs;
+    late ReliabilityRunner runner;
+    late DateTime now;
+
+    setUp(() async {
+      db = await openTestDatabaseWithAccounts(const ['test-account']);
+      emails = _FlakyEmails();
+      syncs = StreamController<String>.broadcast();
+      now = DateTime(2026, 11, 22, 14, 2);
+      runner = ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        _FakeMailboxes(),
+        emails,
+        AppLogger(AppLogRepositoryImpl(db)),
+        clock: () => now,
+      )..start(syncSucceeded: syncs.stream);
+    });
+
+    tearDown(() async {
+      runner.stop();
+      await syncs.close();
+      await db.close();
+    });
+
+    Future<SyncHealthRow> healthRow() => (db.select(db.syncHealth)
+          ..where((t) => t.accountId.equals('test-account')))
+        .getSingle();
+
+    // Lets a sync event's re-check (DB reads/writes, App Log) run to the end.
+    Future<void> settle() => pumpEventQueue(times: 200);
+
+    Future<void> failCheck() async {
+      emails.error = Exception('server unreachable');
+      await runner.checkAccountNow('test-account');
+      expect((await healthRow()).lastError, contains('server unreachable'));
+    }
+
+    test('a successful sync re-runs a failed check and clears the error',
+        () async {
+      await failCheck();
+      emails.error = null;
+      final callsBefore = emails.verifyCallCount;
+
+      syncs.add('test-account');
+      await settle();
+
+      expect(emails.verifyCallCount, callsBefore + 1);
+      final row = await healthRow();
+      expect(row.lastError, isNull);
+      expect(row.isHealthy, isTrue);
+
+      final logs = await db.select(db.appLogs).get();
+      expect(
+        logs.any(
+          (l) =>
+              l.event == 'sync_health' &&
+              l.message.contains('Sync succeeded after a failed'),
+        ),
+        isTrue,
+        reason: 'the re-check must be explained in the App Log',
+      );
+    });
+
+    test('a successful sync does not re-run a check that did not fail',
+        () async {
+      await runner.checkAccountNow('test-account');
+      final callsBefore = emails.verifyCallCount;
+
+      syncs.add('test-account');
+      await settle();
+
+      expect(emails.verifyCallCount, callsBefore);
+    });
+
+    test('syncs in quick succession trigger only one re-check', () async {
+      await failCheck();
+      // The server is still flaky: the re-check fails again, so the stored
+      // error stays and only the throttle stops further re-checks.
+      final callsBefore = emails.verifyCallCount;
+
+      syncs
+        ..add('test-account')
+        ..add('test-account');
+      await settle();
+      now = now.add(const Duration(minutes: 1));
+      syncs.add('test-account');
+      await settle();
+
+      expect(emails.verifyCallCount, callsBefore + 1);
+
+      // Once the throttle window has passed, the next sync checks again.
+      now = now.add(ReliabilityRunner.recheckThrottle);
+      syncs.add('test-account');
+      await settle();
+      expect(emails.verifyCallCount, callsBefore + 2);
+    });
+
+    test('does not start a second check while one is running', () async {
+      await failCheck();
+      emails
+        ..error = null
+        ..gate = Completer<void>();
+      final manual = runner.checkAccountNow('test-account');
+      await settle();
+      final callsBefore = emails.verifyCallCount;
+
+      syncs.add('test-account');
+      await settle();
+      emails.gate!.complete();
+      await manual;
+      await settle();
+
+      expect(emails.verifyCallCount, callsBefore);
+    });
+
+    test('stores the failure time of a failed check', () async {
+      await failCheck();
+      expect((await healthRow()).lastVerifiedAt, DateTime(2026, 11, 22, 14, 2));
+    });
+  });
 }
 
 /// A mailbox repository returning a single JMAP mailbox whose [Mailbox.path]
@@ -278,5 +406,22 @@ class _ThrowingEmails extends _FakeEmails {
   @override
   Future<ReliabilityResult> verifySyncReliability(String a, String m) async {
     throw error;
+  }
+}
+
+/// A [_FakeEmails] that fails while [error] is set and, while [gate] is
+/// pending, holds each check open so a test can observe a running check.
+class _FlakyEmails extends _FakeEmails {
+  Object? error;
+  Completer<void>? gate;
+
+  @override
+  Future<ReliabilityResult> verifySyncReliability(String a, String m) async {
+    verifyCallCount++;
+    final pending = gate;
+    if (pending != null && !pending.isCompleted) await pending.future;
+    final e = error;
+    if (e != null) throw e;
+    return ReliabilityResult.healthy;
   }
 }

@@ -256,8 +256,11 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     // Trim retained app/sync log rows now and periodically while running.
     ref.read(logRetentionSchedulerProvider).start();
     // Start background IMAP sync once — runs for the lifetime of the app.
-    ref.read(syncManagerProvider).start();
-    ref.read(reliabilityRunnerProvider).start();
+    final syncManager = ref.read(syncManagerProvider)..start();
+    // A successful sync re-runs a failed sync health check (#1386).
+    ref
+        .read(reliabilityRunnerProvider)
+        .start(syncSucceeded: syncManager.syncSucceeded);
     // Resume any saved UnifiedPush distributor registration so push wake-ups
     // start arriving again as soon as possible after launch.
     unawaited(ref.read(unifiedPushServiceProvider).initialize());
