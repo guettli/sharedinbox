@@ -74,6 +74,9 @@ void main() {
         ],
       );
       addTearDown(container.dispose);
+      // Keeps the provider alive, as the open screen does: an unlistened
+      // provider may be disposed before its prefetch runs.
+      container.listen(emailDetailProvider('acc-1:42'), (_, __) {});
 
       final result =
           await container.read(emailDetailProvider('acc-1:42').future);

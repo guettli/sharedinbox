@@ -32,6 +32,7 @@ import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/utils/save_file_as.dart';
+import 'package:sharedinbox/ui/utils/send_briefly.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
@@ -382,8 +383,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   /// While the body of [emailId] is still loading, waits for it (at most a
   /// few seconds, under a scrim that also stops Prev/Next) so Reply can
-  /// quote it. Returns [body] when the load is not running or fails.
+  /// quote it and Forward can include it (#1346, #1347). Returns [body] when
+  /// it is there already, or the load is not running or fails.
   Future<EmailBody?> _awaitLoadingBody(String emailId, EmailBody? body) async {
+    if (!_bodyMissing(body)) return body;
     final provider = emailDetailProvider(emailId);
     if (!ref.read(provider).isLoading) return body;
     try {
@@ -707,7 +710,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 _explainHeaderMissing();
                 return;
               }
-              if (_isBodyAction(value) && _explainBodyMissing(body)) return;
+              // Forward waits for a body that is still loading, as Reply
+              // does, and explains a missing one itself (#1347).
+              if (_isBodyAction(value) &&
+                  value != 'forward' &&
+                  _explainBodyMissing(body)) {
+                return;
+              }
               if (value == 'forward' && header != null) {
                 unawaited(_forward(context, header, body));
               } else if (value == 'move' && header != null) {
@@ -726,7 +735,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 // Always back to the list, whatever "After mail action" says:
                 // opening the next mail would mark it read although the user
                 // never chose to open it.
-                await repo.setFlag(widget.emailId, seen: false);
+                await ref
+                    .read(emailDetailProvider(widget.emailId).notifier)
+                    .markUnread();
                 if (context.mounted) _navigateTo(context, header, null);
               } else if (value == 'headers' && body != null && header != null) {
                 unawaited(_showHeaders(context, body, header.accountId));
@@ -1750,8 +1761,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
     // Tapped while the body still loads: wait for it, so the reply quotes it.
-    final loaded =
-        _bodyMissing(body) ? await _awaitLoadingBody(emailId, body) : body;
+    final loaded = await _awaitLoadingBody(emailId, body);
     if (!context.mounted || widget.emailId != emailId) return;
     // Without the body there is nothing to quote: reply anyway, unquoted,
     // and say so rather than quoting an empty text (#1330).
@@ -1923,13 +1933,18 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   ) async {
     // Captured once: Prev/Next can swap in another mail (same State) while
     // the downloads run, and they must still come from this one.
-    final emailId = widget.emailId;
+    final emailId = header.id;
+    if (widget.emailId != emailId) return;
     final subject = (header.subject?.startsWith('Fwd:') ?? false)
         ? header.subject!
         : 'Fwd: ${header.subject ?? ''}';
-    final quoted = await _quotedBody(header, body);
+    // Tapped while the body still loads: wait for it, as Reply does (#1347).
+    final loaded = await _awaitLoadingBody(emailId, body);
+    if (!context.mounted || widget.emailId != emailId) return;
+    if (_explainBodyMissing(loaded)) return;
+    final quoted = await _quotedBody(header, loaded);
     if (!context.mounted) return;
-    final attachments = body?.attachments ?? const <EmailAttachment>[];
+    final attachments = loaded?.attachments ?? const <EmailAttachment>[];
     final downloaded = attachments.isEmpty
         ? (paths: const <String>[], failed: const <String>[])
         : await _runDimmed(
@@ -2681,6 +2696,18 @@ class _UnsubscribeChip extends ConsumerStatefulWidget {
 class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   bool _sending = false;
 
+  /// Set once an unsubscribe mail is in the outbox, which sends (and
+  /// retries) it even after Send stopped waiting: a second tap must not
+  /// queue a second one (#1351). Cleared when the server refused it.
+  bool _requested = false;
+
+  @override
+  void didUpdateWidget(covariant _UnsubscribeChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Prev/Next reuses this State for another mail.
+    if (oldWidget.email.id != widget.email.id) _requested = false;
+  }
+
   Future<void> _onTap(BuildContext context, List<Uri> uris) async {
     final chosen = uris.length == 1
         ? await _confirmSingle(context, uris.single)
@@ -2773,8 +2800,11 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
   static IconData _iconFor(Uri uri) =>
       uri.scheme == 'mailto' ? Icons.email_outlined : Icons.open_in_new;
 
-  void _showUnsubscribeQueued(
+  /// Static, like [_showUnsubscribeResult]: also called once the send ended
+  /// in the background, when this chip may be gone.
+  static void _showUnsubscribeQueued(
     AppMessenger messenger,
+    Email email,
     String? reason, {
     Object? error,
     StackTrace? stack,
@@ -2785,19 +2815,57 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
           : 'Unsubscribe email queued, will retry: $reason',
       level: AppLogLevel.warn,
       event: 'email.unsubscribe.queued',
-      accountId: widget.email.accountId,
-      emailId: widget.email.id,
+      accountId: email.accountId,
+      emailId: email.id,
       error: error,
       stack: stack,
     );
   }
 
+  /// Reports how the unsubscribe send to [email]'s list ended. Uses only
+  /// [messenger] (the app's), so it also works once the send finished in the
+  /// background and this chip is gone (#1351).
+  static void _showUnsubscribeResult(
+    AppMessenger messenger,
+    Email email,
+    SendNowResult result,
+  ) {
+    switch (result.outcome) {
+      case SendNowOutcome.sent:
+        final warning = result.warning;
+        messenger.show(
+          warning == null
+              ? 'Unsubscribe email sent'
+              : 'Unsubscribe email sent. $warning',
+          level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
+          event: 'email.unsubscribe.sent',
+          accountId: email.accountId,
+          emailId: email.id,
+        );
+      case SendNowOutcome.queued:
+      case SendNowOutcome.transientFailed:
+        _showUnsubscribeQueued(messenger, email, result.message);
+      case SendNowOutcome.permanentlyFailed:
+        messenger.show(
+          'Failed to send unsubscribe: '
+          '${result.message ?? 'rejected by the server'}',
+          level: AppLogLevel.error,
+          event: 'email.unsubscribe.send_failed',
+          accountId: email.accountId,
+          emailId: email.id,
+        );
+    }
+  }
+
   Future<void> _sendUnsubscribeEmail(BuildContext context, Uri uri) async {
     final messenger = context.appMessenger();
+    final logger = ref.read(appLoggerProvider);
+    final email = widget.email;
     setState(() => _sending = true);
     var queued = false;
+    var refused = false;
     try {
-      final accountId = widget.email.accountId;
+      final accountId = email.accountId;
       final account =
           await ref.read(accountRepositoryProvider).getAccount(accountId);
       if (account == null) {
@@ -2806,7 +2874,7 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
           level: AppLogLevel.warn,
           event: 'email.unsubscribe.account_missing',
           accountId: accountId,
-          emailId: widget.email.id,
+          emailId: email.id,
         );
         return;
       }
@@ -2825,42 +2893,45 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
       );
       // Queue first, like compose: the request is durable even offline and
       // the outbox retries it on every sync cycle (#1240). Then try to send
-      // right away so the user sees the outcome.
+      // right away so the user sees the outcome, but as in Compose wait only
+      // briefly for it: on a dead link the SMTP connect hangs for about 50 s
+      // (#1351). A later outcome still shows up as a SnackBar.
       final repo = ref.read(emailRepositoryProvider);
       final rowId = await repo.enqueueSend(accountId, draft);
       queued = true;
-      final result = await repo.sendNow(accountId, outboxRowId: rowId);
-      if (!mounted) return;
-      switch (result.outcome) {
-        case SendNowOutcome.sent:
-          final warning = result.warning;
-          messenger.show(
-            warning == null
-                ? 'Unsubscribe email sent'
-                : 'Unsubscribe email sent. $warning',
-            level: warning == null ? AppLogLevel.info : AppLogLevel.warn,
-            event: 'email.unsubscribe.sent',
-            accountId: accountId,
-            emailId: widget.email.id,
-          );
-        case SendNowOutcome.queued:
-        case SendNowOutcome.transientFailed:
-          _showUnsubscribeQueued(messenger, result.message);
-        case SendNowOutcome.permanentlyFailed:
-          messenger.show(
-            'Failed to send unsubscribe: '
-            '${result.message ?? 'rejected by the server'}',
-            level: AppLogLevel.error,
-            event: 'email.unsubscribe.send_failed',
-            accountId: accountId,
-            emailId: widget.email.id,
-          );
+      final result = await sendNowBriefly(
+        repo,
+        logger,
+        accountId: accountId,
+        outboxRowId: rowId,
+        unshownEvent: 'email.unsubscribe.result_unshown',
+        onLate: (r) => _showUnsubscribeResult(messenger, email, r),
+        onLateError: (e, stack) => _showUnsubscribeQueued(
+          messenger,
+          email,
+          userErrorMessage(e),
+          error: e,
+          stack: stack,
+        ),
+      );
+      // The messenger is the app's: report even if the chip is gone now.
+      if (result == null) {
+        messenger.show(
+          'Sending the unsubscribe email in the background',
+          event: 'email.unsubscribe.sending_background',
+          accountId: accountId,
+          emailId: email.id,
+          duration: const Duration(seconds: 3),
+        );
+        return;
       }
+      refused = result.outcome == SendNowOutcome.permanentlyFailed;
+      _showUnsubscribeResult(messenger, email, result);
     } catch (e, stack) {
-      if (!mounted) return;
       if (queued) {
         _showUnsubscribeQueued(
           messenger,
+          email,
           userErrorMessage(e),
           error: e,
           stack: stack,
@@ -2871,13 +2942,19 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
         'Failed to send unsubscribe: ${userErrorMessage(e)}',
         level: AppLogLevel.error,
         event: 'email.unsubscribe.send_failed',
-        accountId: widget.email.accountId,
-        emailId: widget.email.id,
+        accountId: email.accountId,
+        emailId: email.id,
         error: e,
         stack: stack,
       );
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          // Prev/Next may have swapped in another mail meanwhile.
+          if (widget.email.id == email.id) _requested = queued && !refused;
+        });
+      }
     }
   }
 
@@ -2894,9 +2971,12 @@ class _UnsubscribeChipState extends ConsumerState<_UnsubscribeChip> {
                 height: AppIconSize.sm,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            : const Icon(Icons.unsubscribe_outlined, size: AppIconSize.sm),
+            : Icon(
+                _requested ? Icons.check : Icons.unsubscribe_outlined,
+                size: AppIconSize.sm,
+              ),
         label: const Text('Unsubscribe'),
-        onPressed: _sending ? null : () => _onTap(context, uris),
+        onPressed: _sending || _requested ? null : () => _onTap(context, uris),
       ),
     );
   }

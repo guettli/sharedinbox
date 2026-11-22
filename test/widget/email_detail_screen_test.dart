@@ -23,6 +23,7 @@ import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
 import 'package:sharedinbox/ui/utils/save_file_as.dart';
+import 'package:sharedinbox/ui/utils/send_briefly.dart';
 
 import 'helpers.dart';
 
@@ -847,6 +848,40 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      // As [menu], while the spinner of a running load never settles.
+      Future<void> openMenuWhileLoading(WidgetTester tester) async {
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      Future<void> menuWhileLoading(WidgetTester tester, String entry) async {
+        await openMenuWhileLoading(tester);
+        await tester.tap(find.text(entry));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      // Opens the mail with its body load held by the returned gate.
+      Future<(_OfflineEmailRepository, Completer<EmailBody>)> openLoading(
+        WidgetTester tester,
+      ) async {
+        final gate = Completer<EmailBody>();
+        final repo = _OfflineEmailRepository(loadBody: (_) => gate.future);
+        await pumpScreen(tester, repo);
+        // The spinner never settles; a few pumps run the cached-row read.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        return (repo, gate);
+      }
+
+      const loadedBody = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'the original text',
+        attachments: [],
+      );
+
       testWidgets('Archive queues the move from the cached row', (
         tester,
       ) async {
@@ -902,23 +937,11 @@ void main() {
       testWidgets('Reply while the body still loads waits and quotes it', (
         tester,
       ) async {
-        final gate = Completer<EmailBody>();
-        final repo = _OfflineEmailRepository(loadBody: (_) => gate.future);
-        await pumpScreen(tester, repo);
-        // The spinner never settles; a few pumps run the cached-row read.
-        for (var i = 0; i < 5; i++) {
-          await tester.pump();
-        }
+        final (_, gate) = await openLoading(tester);
         await tester.tap(button('Reply'));
         await tester.pump();
         expect(find.byType(ComposeScreen), findsNothing);
-        gate.complete(
-          const EmailBody(
-            emailId: 'acc-1:42',
-            textBody: 'the original text',
-            attachments: [],
-          ),
-        );
+        gate.complete(loadedBody);
         await tester.pumpAndSettle();
         expect(find.byType(ComposeScreen), findsOneWidget);
         expect(composeTextContaining('> the original text'), findsOneWidget);
@@ -927,6 +950,46 @@ void main() {
               'not quote it.'),
           findsNothing,
         );
+      });
+
+      testWidgets('Forward while the body still loads waits and includes it', (
+        tester,
+      ) async {
+        final (_, gate) = await openLoading(tester);
+        await menuWhileLoading(tester, 'Forward');
+        expect(find.text('Loading message…'), findsOneWidget);
+        expect(
+          find.text('The message is still loading. Try again in a moment.'),
+          findsNothing,
+        );
+        expect(find.byType(ComposeScreen), findsNothing);
+        gate.complete(loadedBody);
+        await tester.pumpAndSettle();
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(composeTextContaining('the original text'), findsOneWidget);
+      });
+
+      testWidgets('Mark as unread while the body still loads keeps it unread', (
+        tester,
+      ) async {
+        // The load marked the mail read once it finished, after the user's
+        // Mark as unread (#1347).
+        final (repo, gate) = await openLoading(tester);
+        Iterable<bool?> seenCalls() => repo.setFlagCalls
+            .where((c) => c.emailId == 'acc-1:42')
+            .map((c) => c.seen);
+        await openMenuWhileLoading(tester);
+        await tester.tap(find.text('Mark as unread'));
+        await tester.pump();
+        expect(seenCalls(), [false]);
+        // The load finishes while the leaving screen still listens, so it is
+        // the user's choice that stops the mark-read, not the screen's
+        // disposal.
+        gate.complete(loadedBody);
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(seenCalls(), [false]);
       });
 
       testWidgets(
@@ -2721,8 +2784,9 @@ void main() {
     /// unsubscribe dialog.
     Future<void> confirmMailtoUnsubscribe(
       WidgetTester tester,
-      FakeEmailRepository repo,
-    ) async {
+      FakeEmailRepository repo, {
+      bool settle = true,
+    }) async {
       await tester.pumpWidget(
         buildApp(
           initialLocation: '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42',
@@ -2740,8 +2804,17 @@ void main() {
       await tester.tap(find.widgetWithText(ActionChip, 'Unsubscribe'));
       await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Unsubscribe'));
-      await tester.pumpAndSettle();
+      if (settle) {
+        await tester.pumpAndSettle();
+        return;
+      }
+      await tester.pump();
     }
+
+    ActionChip unsubscribeChip(WidgetTester tester) =>
+        tester.widget<ActionChip>(
+          find.widgetWithText(ActionChip, 'Unsubscribe'),
+        );
 
     FakeEmailRepository mailtoRepo() => FakeEmailRepository(
           emailDetail: testEmail(
@@ -2770,6 +2843,73 @@ void main() {
 
         // Confirmation snack bar is shown.
         expect(find.text('Unsubscribe email sent'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'mailto unsubscribe on a dead SMTP link does not spin (#1351)',
+      (tester) async {
+        // Blackholed SMTP: the connect never answers and times out after
+        // 50 s. The chip spun all that time.
+        final gate = Completer<SendNowResult>();
+        final repo = mailtoRepo()..sendNowGate = gate;
+        await confirmMailtoUnsubscribe(tester, repo, settle: false);
+        await tester.pump(sendResultWait);
+        await tester.pump();
+
+        // Queued, attempted, and done waiting while the attempt still runs.
+        expect(repo.sendNowRowIds, isNotEmpty);
+        expect(gate.isCompleted, isFalse);
+        // No spinner any more, but no second request either: the outbox
+        // still sends the queued one.
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(unsubscribeChip(tester).onPressed, isNull);
+        expect(
+          find.text('Sending the unsubscribe email in the background'),
+          findsOneWidget,
+        );
+
+        // The attempt's outcome is still reported once it ends.
+        gate.complete(
+          const SendNowResult(
+            SendNowOutcome.transientFailed,
+            message: 'SMTP connect/auth timed out',
+          ),
+        );
+        // It queues behind the "in the background" SnackBar.
+        final lateResult = find.text(
+          'Unsubscribe email queued, will retry: SMTP connect/auth timed out',
+        );
+        for (var i = 0; i < 100 && lateResult.evaluate().isEmpty; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(lateResult, findsOneWidget);
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'a second tap on unsubscribe does not queue a second mail (#1351)',
+      (tester) async {
+        final gate = Completer<SendNowResult>();
+        final repo = mailtoRepo()..sendNowGate = gate;
+        await confirmMailtoUnsubscribe(tester, repo, settle: false);
+        await tester.pump(sendResultWait);
+        await tester.pump();
+
+        await tester.tap(
+          find.widgetWithText(ActionChip, 'Unsubscribe'),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+        expect(find.text('Unsubscribe?'), findsNothing);
+        expect(repo.sendNowRowIds, hasLength(1));
+
+        gate.complete(const SendNowResult(SendNowOutcome.sent));
+        await tester.pump(const Duration(seconds: 10));
+        await tester.pumpAndSettle();
+        expect(unsubscribeChip(tester).onPressed, isNull);
       },
     );
 
@@ -2805,6 +2945,8 @@ void main() {
           findsOneWidget,
         );
         expect(find.textContaining('queued'), findsNothing);
+        // Nothing left in the outbox to wait for: it may be tried again.
+        expect(unsubscribeChip(tester).onPressed, isNotNull);
       },
     );
 

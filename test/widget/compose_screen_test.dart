@@ -15,6 +15,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
+import 'package:sharedinbox/ui/utils/send_briefly.dart';
 
 import 'helpers.dart';
 
@@ -899,7 +900,7 @@ void main() {
 
         await tester.tap(find.byIcon(Icons.send));
         await tester.pump();
-        await tester.pump(ComposeScreen.sendResultWait);
+        await tester.pump(sendResultWait);
         await tester.pumpAndSettle();
 
         // Queued, attempted, and closed while the attempt still runs.

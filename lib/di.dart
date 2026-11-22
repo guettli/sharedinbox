@@ -576,9 +576,27 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
   EmailDetailNotifier(this._emailId);
   final String _emailId;
 
+  /// Set once the user picked the read state on this screen (Mark as
+  /// unread). The load must not mark the mail read after that (#1347).
+  bool _readStateChosen = false;
+
+  /// Marks the mail unread at the user's request. Wins over the mark-as-read
+  /// that a still running load would queue when it finishes (#1347).
+  Future<void> markUnread() {
+    _readStateChosen = true;
+    return ref.read(emailRepositoryProvider).setFlag(_emailId, seen: false);
+  }
+
   @override
   Future<(Email?, EmailBody)> build() async {
+    // Riverpod hands each build its own Ref, and only the latest one stays
+    // mounted. Kept so an older build still loading after a Retry does not
+    // mark read or prefetch a second time.
+    final buildRef = ref;
     final repo = ref.read(emailRepositoryProvider);
+    // Read before the await: the screen may be left meanwhile, and a
+    // disposed ref can no longer be used to log the failure.
+    final logger = ref.read(appLoggerProvider);
     final List<Object?> results;
     try {
       results = await Future.wait([
@@ -590,13 +608,13 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
       // throw here means something else failed (network, DB, …). Record it so
       // the dead detail screen isn't silent in the App Log / "Show Logs" (#579).
       unawaited(
-        ref.read(appLoggerProvider).error(
-              'email.detail.load_failed',
-              'Could not open message',
-              emailId: _emailId,
-              error: e,
-              stack: stack,
-            ),
+        logger.error(
+          'email.detail.load_failed',
+          'Could not open message',
+          emailId: _emailId,
+          error: e,
+          stack: stack,
+        ),
       );
       rethrow;
     }
@@ -606,16 +624,22 @@ class EmailDetailNotifier extends AsyncNotifier<(Email?, EmailBody)> {
     if (header != null && (header.replyTo.isEmpty || header.bcc.isEmpty)) {
       header = await repo.getEmail(_emailId) ?? header;
     }
+    final body = results[1] as EmailBody;
+    // The screen was left (Back, Prev/Next) while the mail loaded: the user
+    // never saw it, so it stays unread, and nothing is prefetched (#1347).
+    // Same when a newer build (Retry) took over: that one does it.
+    if (!buildRef.mounted) return (header, body);
     // Only mark as read on the false→true transition. Re-opening an
     // already-read message must not re-enqueue a flag change or re-log it (#644;
     // setFlag itself also short-circuits, this just avoids the round-trip).
-    if (header?.isSeen == false) {
+    // "Mark as unread" tapped during the load wins over it (#1347).
+    if (header?.isSeen == false && !_readStateChosen) {
       unawaited(repo.setFlag(_emailId, seen: true));
     }
     if (header != null) {
       unawaited(_prefetchNextEmailBody(repo, header));
     }
-    return (header, results[1] as EmailBody);
+    return (header, body);
   }
 
   Future<void> _prefetchNextEmailBody(
