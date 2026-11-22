@@ -24,74 +24,131 @@ import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mailbox_state_writer.dart';
 import 'package:sharedinbox/data/repositories/thread_aggregate.dart';
 
-/// The change in a mailbox `m`'s unread count (SQL, correlated on `m`) that
-/// the stored server count `m.unread_count` does not reflect yet
-/// (SYNC-REDESIGN.md §7): over the rows of its account with a change that
-/// is queued, being sent, stuck, parked or a counterpart's shadow, or acked
-/// after the count was read (`ack_seq > m.unread_seq`), the unread rows the
-/// app shows in `m` minus the unread rows the server had in `m` when it
-/// counted. This covers read/unread changes, and moves, deletes and
-/// snoozes of unread mail, each once; a change the count already reflects
-/// is not counted again, so the number does not flicker back. Virtual rows
-/// (no server copy) are left out: the server's count never had them.
+/// The mailboxes (`m.*`, filtered and ordered by [where]) with the change
+/// in their unread and total counts that the stored server counts
+/// (`unread_count`, `total_count`, read at `unread_seq`) do not reflect
+/// yet, as `unread_delta` and `total_delta` (SYNC-REDESIGN.md §7).
 ///
-/// "Unread on the server when it counted" is `srv_is_seen`, unless the row
-/// has a read/unread change acked at or before the count's read (and not
-/// contradicted by then): the count reflects that change, while
-/// `srv_is_seen` waits for a read of the mail to confirm it. Without this,
-/// a mail marked read and then moved offline, whose read change reached
-/// the server before the count and whose move did not, was taken off its
-/// folder's count a second time (#1333).
+/// Over the rows with a change that is queued, being sent, stuck, parked
+/// or a counterpart's shadow, or acked after the count was read
+/// (`ack_seq > m.unread_seq`): the rows the app shows in `m` minus the
+/// rows the server had in `m` when it counted (the unread ones for the
+/// unread count). This covers read/unread changes, and moves, deletes and
+/// snoozes, each once; a change the count already reflects is not counted
+/// again, so the number does not flicker back. Virtual rows (no server
+/// copy) are left out: the server's counts never had them.
 ///
-/// Limits: `srv_*` is the server's state as last read, not as of the
-/// count's read. A row read again after the count (its change confirmed
-/// and dropped) adds nothing any more, so until the next count read the
-/// folder shows the older server count; a count read before a mail
-/// arrived can make the sum negative ([MailboxRepositoryImpl] shows 0 and
-/// logs it). The query is driven from the foldable ops
-/// (`pending_changes_resource_state`, then the `emails` primary key), so
-/// re-running it on every write costs one probe per queued change and
-/// mailbox.
-final unreadDeltaSql = _countDeltaSql(unreadOnly: true);
-
-/// The change in a mailbox `m`'s total count that `m.total_count` (read
-/// with the unread count, at `m.unread_seq`) does not reflect yet: the
-/// same rows as [unreadDeltaSql], read or not. A move or delete of a mail
-/// changes both counts of its folders at once, so a folder never shows
-/// more unread than total mail (#1333).
-final totalDeltaSql = _countDeltaSql(unreadOnly: false);
-
-/// [unreadDeltaSql] ([unreadOnly]) or [totalDeltaSql].
-String _countDeltaSql({required bool unreadOnly}) =>
-    'COALESCE((SELECT SUM(c.n) FROM ('
-    'SELECT e.id, e.account_id, e.mailbox_path AS path, 1 AS n, '
-    'NULL AS srv_seen '
-    'FROM emails e WHERE ${unreadOnly ? 'e.is_seen = 0 AND ' : ''}'
-    'e.is_local = 0 AND e.id IN ($_queuedRowsSql) '
+/// The server's state when it counted ([_srvSeenAtCountSql],
+/// [_srvPathAtCountSql]) is not always `srv_*`: an acked read/unread
+/// change waits for a read of the mail to confirm it (#1333), and an acked
+/// move or delete has written its new location already. An acked op keeps
+/// what a count read before its ack needs of an older acked op it dropped
+/// (`countPrev`, `EmailStateWriter.ack`).
+///
+/// One pass, grouped per folder and joined to the folders (not one scan
+/// per folder): the rows with a change some folder's count may not reflect
+/// (a row whose acked changes are older than every folder's count is
+/// skipped at once), as shown and as the server had them; the folders a
+/// location op acked after a count took a mail from come from those ops.
+/// Every lookup is one probe of `pending_changes_resource_state` or the
+/// `emails` primary key.
+///
+/// Limits: a row read again after the count (its change confirmed and
+/// dropped) adds nothing any more, so until the next count read the folder
+/// shows the older server count; a count read before a mail arrived can
+/// make a sum negative ([MailboxRepositoryImpl] shows 0 and logs it); an
+/// op keeps one dropped older op, not a chain of them, and of a row's
+/// acked read/unread changes only the newest is looked at (a twin row's
+/// shadows can have two).
+String mailboxesWithCountDeltasSql(String where) => 'WITH c AS ('
+    // As the app shows the row.
+    'SELECT m.id AS mid, 1 AS n, e.is_seen = 0 AS u FROM emails e '
+    'JOIN mailboxes m ON m.account_id = e.account_id '
+    'AND m.path = e.mailbox_path '
+    'WHERE e.id IN ($_queuedRowsSql) AND e.is_local = 0 '
+    'AND $_unreflectedSql '
     'UNION ALL '
-    'SELECT e.id, e.account_id, e.srv_mailbox_path AS path, -1 AS n, '
-    'e.srv_is_seen AS srv_seen '
-    'FROM emails e WHERE e.srv_gone = 0 AND e.is_local = 0 '
-    'AND e.id IN ($_queuedRowsSql)'
-    ') c WHERE c.account_id = m.account_id AND c.path = m.path '
-    '${unreadOnly ? 'AND (c.n = 1 OR $_srvSeenAtCountSql = 0) ' : ''}'
-    'AND EXISTS (SELECT 1 FROM pending_changes p WHERE p.resource_id = c.id '
-    "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
-    "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq)))), 0)";
+    // As the server had it, in the folder it has it in now.
+    'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM emails e '
+    'JOIN mailboxes m ON m.account_id = e.account_id '
+    'AND m.path = e.srv_mailbox_path '
+    'WHERE e.id IN ($_queuedRowsSql) AND e.is_local = 0 '
+    'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path '
+    'UNION ALL '
+    // As the server had it, in a folder an op acked after the count took
+    // it from.
+    'SELECT m.id, -1, $_srvSeenAtCountSql = 0 FROM ('
+    'SELECT o.resource_id AS id, $_opSourceSql AS src '
+    'FROM pending_changes o '
+    "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql "
+    'UNION '
+    r"SELECT o.resource_id, json_extract(o.payload, '$.countPrev.path') "
+    'FROM pending_changes o '
+    "WHERE o.state = 'acked' AND o.change_type IN $_locationOpTypesSql) l "
+    'JOIN emails e ON e.id = l.id '
+    'JOIN mailboxes m ON m.account_id = e.account_id AND m.path = l.src '
+    'WHERE e.is_local = 0 AND l.src IS NOT e.srv_mailbox_path '
+    'AND $_unreflectedSql AND $_srvPathAtCountSql = m.path), '
+    'd AS (SELECT mid, SUM(n) AS total_delta, SUM(n * u) AS unread_delta '
+    'FROM c GROUP BY mid) '
+    'SELECT m.*, COALESCE(d.unread_delta, 0) AS unread_delta, '
+    'COALESCE(d.total_delta, 0) AS total_delta '
+    'FROM mailboxes m LEFT JOIN d ON d.mid = m.id WHERE $where';
 
-/// Whether the server had row `c` read when it counted `m` (see
-/// [unreadDeltaSql]): the newest read/unread change of the row acked at or
-/// before `m.unread_seq` and not contradicted by then, else `srv_is_seen`.
-const _srvSeenAtCountSql = '(COALESCE((SELECT json_extract(s.payload, '
-    r"'$.seen') FROM pending_changes s WHERE s.resource_id = c.id "
-    "AND s.change_type = 'flag_seen' AND s.state = 'acked' "
-    'AND s.ack_seq <= m.unread_seq '
-    'AND (s.contradicted_seq IS NULL OR s.contradicted_seq > m.unread_seq) '
-    'ORDER BY s.id DESC LIMIT 1), c.srv_seen))';
-
+/// The rows with a change some folder's count may not reflect: one not
+/// acked, or acked after the oldest count.
 const _queuedRowsSql = 'SELECT resource_id FROM pending_changes '
-    "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow', "
-    "'acked')";
+    "WHERE state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
+    "OR (state = 'acked' "
+    'AND ack_seq > (SELECT MIN(unread_seq) FROM mailboxes))';
+
+/// Row `e` has a change folder `m`'s stored counts do not reflect.
+const _unreflectedSql = '(EXISTS (SELECT 1 FROM pending_changes p '
+    'WHERE p.resource_id = e.id '
+    "AND (p.state IN ('pending', 'inflight', 'stuck', 'parked', 'shadow') "
+    "OR (p.state = 'acked' AND p.ack_seq > m.unread_seq))))";
+
+/// Whether the server had row `e` read when it counted `m`: the state its
+/// newest acked read/unread change knows at or before `m.unread_seq` (its
+/// own, unless a read contradicted it by then, or that of the older op it
+/// dropped, `countPrev`), else `srv_is_seen`. A read change acked before
+/// the count is reflected by it, while `srv_is_seen` waits for a read of
+/// the mail; without this a mail marked read and then moved was taken off
+/// its folder's unread count twice (#1333).
+const _srvSeenAtCountSql = '(COALESCE((SELECT CASE '
+    'WHEN s.ack_seq <= m.unread_seq THEN CASE WHEN s.contradicted_seq IS NULL '
+    r"OR s.contradicted_seq > m.unread_seq THEN json_extract(s.payload, '$.seen') "
+    r"END WHEN json_extract(s.payload, '$.countPrev.seq') <= m.unread_seq "
+    r"THEN json_extract(s.payload, '$.countPrev.seen') END "
+    'FROM pending_changes s WHERE s.resource_id = e.id '
+    "AND s.state = 'acked' AND s.change_type = 'flag_seen' "
+    'ORDER BY s.id DESC LIMIT 1), e.srv_is_seen))';
+
+/// The folder the server had row `e` in when it counted `m` (NULL: in
+/// none). When its location was written after the count: the folder the
+/// oldest move, snooze or delete acked after the count took it from (the
+/// one of the older op it dropped, `countPrev`, when that was acked after
+/// the count too). Else `srv_mailbox_path`, unless gone. Without this a
+/// mail moved after the count was taken off the folder it went to, whose
+/// count never had it.
+const _srvPathAtCountSql = '(CASE WHEN e.srv_location_seq > m.unread_seq '
+    'THEN COALESCE((SELECT CASE '
+    r"WHEN json_extract(o.payload, '$.countPrev.seq') > m.unread_seq "
+    r"THEN json_extract(o.payload, '$.countPrev.path') "
+    'ELSE $_opSourceSql END '
+    'FROM pending_changes o WHERE o.resource_id = e.id '
+    "AND o.state = 'acked' AND o.change_type IN $_locationOpTypesSql "
+    'AND o.ack_seq > m.unread_seq ORDER BY o.ack_seq LIMIT 1), '
+    'CASE WHEN e.srv_gone = 0 THEN e.srv_mailbox_path END) '
+    'WHEN e.srv_gone = 0 THEN e.srv_mailbox_path END)';
+
+/// The folder location op `o` took its mail from (JMAP `src`, IMAP
+/// `mailboxPath`).
+const _opSourceSql = r"COALESCE(json_extract(o.payload, '$.src'), "
+    r"json_extract(o.payload, '$.mailboxPath'))";
+
+/// The ops that write a row's location (`locationColumnsOf`).
+const _locationOpTypesSql = "('move', 'snooze', 'unsnooze', 'delete')";
 
 /// `sync_states` key (per account) of the folders a listing that was not
 /// trusted left out (#1312): a JSON list of paths (JMAP: mailbox ids). The
@@ -171,16 +228,16 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   /// The mailboxes, each with the unread and total counts the UI shows:
   /// the server's counts plus the effect of the user's changes they do not
-  /// reflect yet (SYNC-REDESIGN.md §7, [unreadDeltaSql], [totalDeltaSql]).
+  /// reflect yet (SYNC-REDESIGN.md §7, [mailboxesWithCountDeltasSql]).
   @override
   Stream<List<model.Mailbox>> observeMailboxes(String? accountId) {
     return _db
         .customSelect(
-          'SELECT m.*, ($unreadDeltaSql) AS unread_delta, '
-          '($totalDeltaSql) AS total_delta FROM mailboxes m '
-          'WHERE ${mailboxShownSql('m')}'
-          '${accountId == null ? '' : ' AND m.account_id = ?1'} '
-          'ORDER BY m.path',
+          mailboxesWithCountDeltasSql(
+            '${mailboxShownSql('m')}'
+            '${accountId == null ? '' : ' AND m.account_id = ?1'} '
+            'ORDER BY m.path',
+          ),
           variables: [if (accountId != null) Variable.withString(accountId)],
           readsFrom: {_db.mailboxes, _db.emails, _db.pendingChanges},
         )
@@ -208,14 +265,15 @@ class MailboxRepositoryImpl implements MailboxRepository {
           )
           .distinct((a, b) => a.length == b.length && a.containsAll(b));
 
-  /// Folders whose shown unread or total count came out negative, logged
-  /// once each (keys `unread:<id>`, `total:<id>`).
-  final _negativeLogged = <String>{};
+  /// Folders whose shown unread or total count came out negative (keys
+  /// `unread:<id>`, `total:<id>`), with the `unread_seq` of the count that
+  /// was logged: logged once per count read.
+  final _negativeLogged = <String, int>{};
 
   /// [row] with the counts the UI shows (server counts plus [unreadDelta]
   /// and [totalDelta]); a negative sum (a count read before mail it now
-  /// has, see [unreadDeltaSql]) shows as 0 and is logged once per folder
-  /// and count.
+  /// has, see [mailboxesWithCountDeltasSql]) shows as 0 and is logged once
+  /// per folder, count and count read.
   model.Mailbox _shownCounts(
     MailboxRow row, {
     required int unreadDelta,
@@ -228,7 +286,10 @@ class MailboxRepositoryImpl implements MailboxRepository {
 
   void _logNegative(MailboxRow row, String count, int server, int delta) {
     final shown = server + delta;
-    if (shown >= 0 || !_negativeLogged.add('$count:${row.id}')) return;
+    if (shown >= 0) return;
+    final key = '$count:${row.id}';
+    if (_negativeLogged[key] == row.unreadSeq) return;
+    _negativeLogged[key] = row.unreadSeq;
     unawaited(
       _appLogger?.warn(
         'mailbox.${count}_negative',
@@ -237,7 +298,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
             'count read',
         accountId: row.accountId,
         mailboxPath: row.path,
-        data: {'server': server, 'delta': delta},
+        data: {'server': server, 'delta': delta, 'countSeq': row.unreadSeq},
       ),
     );
   }

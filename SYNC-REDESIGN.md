@@ -1229,26 +1229,35 @@ As implemented, phase 4 is two PRs:
      UID in the destination.
    - **Unread-count delta** (§7). The IMAP `STATUS` loop and the JMAP
      `Mailbox/get` paths store the read sequence taken before the read in
-     `unread_seq`; `observeMailboxes` adds `unreadDeltaSql`: over the rows
-     with a pending/inflight/stuck/parked/shadow op or one acked after
-     `unread_seq`, unread rows shown in the folder minus unread rows the
-     server had there when it counted (`srv_*`, not gone; read where the
-     row's newest `flag_seen` acked at or before `unread_seq` says so,
-     #1333), virtual rows excluded. It covers read/unread changes and
-     moves, deletes and snoozes of unread mail. The total count gets the
-     same delta over all such rows (`totalDeltaSql`), and the total shown
-     is at least the unread count. The v74 migration stamps the stored counts with the current
-     read sequence, so changes acked before the upgrade are not counted
-     on top of counts that reflect them. Limits: `srv_*` is the server's
-     state as last read, not as of the count; a row read again after the
-     count (its change confirmed and dropped) no longer adjusts it, so the
-     folder shows the older count until the next count read (once per sync
-     cycle). A negative sum (a count read before mail it now has) shows 0
-     and logs `mailbox.unread_negative` once per folder.
-     `EXPLAIN QUERY PLAN`: the delta is driven from the foldable ops
-     (covering index `pending_changes_resource_state`, then the `emails`
-     primary key), one probe per queued change and mailbox when it reruns
-     on a write; no new index.
+     `unread_seq`; `observeMailboxes` adds the deltas of
+     `mailboxesWithCountDeltasSql`: over the rows with a
+     pending/inflight/stuck/parked/shadow op or one acked after
+     `unread_seq`, rows shown in the folder minus rows the server had there
+     when it counted (unread ones for the unread count), virtual rows
+     excluded. "When it counted" (#1333): the read state from the newest
+     acked `flag_seen` at or before `unread_seq` (not contradicted by
+     then), else `srv_is_seen`; the folder, when `srv_location_seq` is
+     after `unread_seq`, from the source of the oldest location op acked
+     after it, else `srv_mailbox_path` unless gone. An ack that drops an
+     older acked op stores `countPrev` (its `ack_seq` and read state or
+     source) in its payload, and `_settleAcked` drops a shadowed acked op
+     only once the read covers its group. The total shown is at least the
+     unread count. The v74 migration stamps the stored counts with the
+     current read sequence, so changes acked before the upgrade are not
+     counted on top of counts that reflect them. Limits: a row read again
+     after the count (its change confirmed and dropped) no longer adjusts
+     it, so the folder shows the older count until the next count read
+     (once per sync cycle); one `countPrev` per op. A negative sum (a count
+     read before mail it now has) shows 0 and logs
+     `mailbox.unread_negative` / `mailbox.total_negative` once per folder
+     and count read. `EXPLAIN QUERY PLAN`: one pass, the sums grouped per
+     folder; per row one probe each of the `emails` primary key, the
+     folders (automatic index) and `pending_changes_resource_state` (the
+     newest acked `flag_seen` in index order, no sort); no new index.
+     50k mails, 10k acked read changes, 400 moves, 50 folders: 15 ms when
+     the counts are newer than the acks (the per-folder query of phase 4b:
+     63 ms), 61 ms when every ack is newer than the counts, until the next
+     count read (phase 4b, unread only: 34 ms).
    - **Enforcement.** The allow-list of `check_email_writes.sh` loses the
      two `local_rows.dart` members (3 left: the new-row inserts of the
      IMAP fetch and the JMAP upsert, and Undo's restore); fixtures for an
@@ -2273,7 +2282,7 @@ What remains after phase 6, with where it is handled today:
   (`OverlayConsistencySampler`, repaired and logged), not refused at
   compile time.
 - **Unread counts** are `server + delta` (§7); the delta shows the older
-  count until the next count read for a row read or moved after the count.
+  count until the next count read for a row read again after the count.
 - **Not measured:** the v72/v73 copy `UPDATE`s and the location index on a
   50k-row database (WAL growth at upgrade), and the fold cost of
   `markAllAsRead` and large Sieve runs.

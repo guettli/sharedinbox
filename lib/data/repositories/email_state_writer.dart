@@ -343,18 +343,65 @@ class EmailStateWriter {
             ))
           .get();
       var dropped = false;
+      Map<String, Object?>? countPrev;
       for (final o in older) {
         if (!columns
             .containsAll(overlayColumnsOf(o.changeType, _payloadOf(o)))) {
           continue;
         }
+        countPrev = _countPrevOf(op, o, countPrev);
         await (_db.delete(_db.pendingChanges)..where((t) => t.id.equals(o.id)))
             .go();
         dropped = true;
       }
+      if (countPrev != null) {
+        await (_db.update(_db.pendingChanges)..where((t) => t.id.equals(op.id)))
+            .write(
+          PendingChangesCompanion(
+            payload: Value(
+              jsonEncode({...?_payloadOf(op), countPrevKey: countPrev}),
+            ),
+          ),
+        );
+      }
       if (dropped) await refold(op.resourceId);
       return true;
     });
+  }
+
+  /// Payload key of an acked op: what a folder count read before its ack
+  /// needs of the older acked op the ack dropped (`seq`: that op's
+  /// `ack_seq`; `seen`: the read state it set, for a read/unread change;
+  /// `path`: the folder it took the mail from, for a move, snooze or
+  /// delete). Read only by `mailboxesWithCountDeltasSql` (#1333).
+  static const countPrevKey = 'countPrev';
+
+  /// The [countPrevKey] value [op] keeps of [o], an older acked op of the
+  /// row its ack drops, given the one kept so far ([kept]): of read/unread
+  /// changes the newest (a count read after it reflects its state), of
+  /// location changes the oldest (a count read before it had the mail in
+  /// its source). A read/unread change a read contradicted is not kept:
+  /// that read's `srv_is_seen` is the server's state.
+  Map<String, Object?>? _countPrevOf(
+    PendingChangeRow op,
+    PendingChangeRow o,
+    Map<String, Object?>? kept,
+  ) {
+    final seq = o.ackSeq;
+    if (seq == null) return kept;
+    final payload = _payloadOf(o);
+    final keptSeq = kept?['seq'] as int?;
+    if (op.changeType == 'flag_seen' && o.changeType == 'flag_seen') {
+      final seen = payload?['seen'];
+      if (seen is! bool || o.contradictedSeq != null) return kept;
+      if (keptSeq != null && keptSeq > seq) return kept;
+      return {'seq': seq, 'seen': seen};
+    }
+    if (locationColumnsOf(o.changeType, payload).isEmpty) return kept;
+    final path = payload?['src'] ?? payload?['mailboxPath'];
+    if (path is! String) return kept;
+    if (keptSeq != null && keptSeq < seq) return kept;
+    return {'seq': seq, 'path': path};
   }
 
   // ── Shadow ops (counterpart accounts, SYNC-REDESIGN.md §6) ──────────────
@@ -2083,12 +2130,20 @@ class EmailStateWriter {
             o.id > op.id &&
             overlayColumnsOf(o.changeType, _payloadOf(o)).containsAll(columns),
       );
+      final hasLocation = locationColumnsOf(op.changeType, payload).isNotEmpty;
+      final hasKeywords = keywordColumnsOf(op.changeType, payload).isNotEmpty;
       if (shadowed) {
+        // Kept until a read covers what it wrote: until then a folder count
+        // read after its ack reflects its state, which `srv_*` does not
+        // have yet (`mailboxesWithCountDeltasSql`, #1333).
+        if ((hasKeywords && keywordsSeq <= ackSeq) ||
+            (hasLocation && locationSeq <= ackSeq)) {
+          continue;
+        }
         await _dropOp(op);
         dropped = true;
         continue;
       }
-      final hasLocation = locationColumnsOf(op.changeType, payload).isNotEmpty;
       if (gone && locationSeq > ackSeq) {
         // An acked move whose new location the server never named: that
         // its source no longer has the mail is expected. It keeps showing
@@ -2131,7 +2186,6 @@ class EmailStateWriter {
         }
         continue;
       }
-      final hasKeywords = keywordColumnsOf(op.changeType, payload).isNotEmpty;
       // Not every group the op writes was read after its ack yet.
       if (hasKeywords && keywordsSeq <= ackSeq) continue;
       if (hasLocation && locationSeq <= ackSeq) continue;
