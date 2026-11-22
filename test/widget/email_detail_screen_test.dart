@@ -847,6 +847,40 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      // As [menu], while the spinner of a running load never settles.
+      Future<void> openMenuWhileLoading(WidgetTester tester) async {
+        await tester.tap(find.byType(PopupMenuButton<String>));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      Future<void> menuWhileLoading(WidgetTester tester, String entry) async {
+        await openMenuWhileLoading(tester);
+        await tester.tap(find.text(entry));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+      }
+
+      // Opens the mail with its body load held by the returned gate.
+      Future<(_OfflineEmailRepository, Completer<EmailBody>)> openLoading(
+        WidgetTester tester,
+      ) async {
+        final gate = Completer<EmailBody>();
+        final repo = _OfflineEmailRepository(loadBody: (_) => gate.future);
+        await pumpScreen(tester, repo);
+        // The spinner never settles; a few pumps run the cached-row read.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump();
+        }
+        return (repo, gate);
+      }
+
+      const loadedBody = EmailBody(
+        emailId: 'acc-1:42',
+        textBody: 'the original text',
+        attachments: [],
+      );
+
       testWidgets('Archive queues the move from the cached row', (
         tester,
       ) async {
@@ -902,23 +936,11 @@ void main() {
       testWidgets('Reply while the body still loads waits and quotes it', (
         tester,
       ) async {
-        final gate = Completer<EmailBody>();
-        final repo = _OfflineEmailRepository(loadBody: (_) => gate.future);
-        await pumpScreen(tester, repo);
-        // The spinner never settles; a few pumps run the cached-row read.
-        for (var i = 0; i < 5; i++) {
-          await tester.pump();
-        }
+        final (_, gate) = await openLoading(tester);
         await tester.tap(button('Reply'));
         await tester.pump();
         expect(find.byType(ComposeScreen), findsNothing);
-        gate.complete(
-          const EmailBody(
-            emailId: 'acc-1:42',
-            textBody: 'the original text',
-            attachments: [],
-          ),
-        );
+        gate.complete(loadedBody);
         await tester.pumpAndSettle();
         expect(find.byType(ComposeScreen), findsOneWidget);
         expect(composeTextContaining('> the original text'), findsOneWidget);
@@ -927,6 +949,46 @@ void main() {
               'not quote it.'),
           findsNothing,
         );
+      });
+
+      testWidgets('Forward while the body still loads waits and includes it', (
+        tester,
+      ) async {
+        final (_, gate) = await openLoading(tester);
+        await menuWhileLoading(tester, 'Forward');
+        expect(find.text('Loading message…'), findsOneWidget);
+        expect(
+          find.text('The message is still loading. Try again in a moment.'),
+          findsNothing,
+        );
+        expect(find.byType(ComposeScreen), findsNothing);
+        gate.complete(loadedBody);
+        await tester.pumpAndSettle();
+        expect(find.byType(ComposeScreen), findsOneWidget);
+        expect(composeTextContaining('the original text'), findsOneWidget);
+      });
+
+      testWidgets('Mark as unread while the body still loads keeps it unread', (
+        tester,
+      ) async {
+        // The load marked the mail read once it finished, after the user's
+        // Mark as unread (#1347).
+        final (repo, gate) = await openLoading(tester);
+        Iterable<bool?> seenCalls() => repo.setFlagCalls
+            .where((c) => c.emailId == 'acc-1:42')
+            .map((c) => c.seen);
+        await openMenuWhileLoading(tester);
+        await tester.tap(find.text('Mark as unread'));
+        await tester.pump();
+        expect(seenCalls(), [false]);
+        // The load finishes while the leaving screen still listens, so it is
+        // the user's choice that stops the mark-read, not the screen's
+        // disposal.
+        gate.complete(loadedBody);
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(seenCalls(), [false]);
       });
 
       testWidgets(

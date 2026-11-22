@@ -382,8 +382,10 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
 
   /// While the body of [emailId] is still loading, waits for it (at most a
   /// few seconds, under a scrim that also stops Prev/Next) so Reply can
-  /// quote it. Returns [body] when the load is not running or fails.
+  /// quote it and Forward can include it (#1346, #1347). Returns [body] when
+  /// it is there already, or the load is not running or fails.
   Future<EmailBody?> _awaitLoadingBody(String emailId, EmailBody? body) async {
+    if (!_bodyMissing(body)) return body;
     final provider = emailDetailProvider(emailId);
     if (!ref.read(provider).isLoading) return body;
     try {
@@ -707,7 +709,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 _explainHeaderMissing();
                 return;
               }
-              if (_isBodyAction(value) && _explainBodyMissing(body)) return;
+              // Forward waits for a body that is still loading, as Reply
+              // does, and explains a missing one itself (#1347).
+              if (_isBodyAction(value) &&
+                  value != 'forward' &&
+                  _explainBodyMissing(body)) {
+                return;
+              }
               if (value == 'forward' && header != null) {
                 unawaited(_forward(context, header, body));
               } else if (value == 'move' && header != null) {
@@ -726,7 +734,9 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 // Always back to the list, whatever "After mail action" says:
                 // opening the next mail would mark it read although the user
                 // never chose to open it.
-                await repo.setFlag(widget.emailId, seen: false);
+                await ref
+                    .read(emailDetailProvider(widget.emailId).notifier)
+                    .markUnread();
                 if (context.mounted) _navigateTo(context, header, null);
               } else if (value == 'headers' && body != null && header != null) {
                 unawaited(_showHeaders(context, body, header.accountId));
@@ -1750,8 +1760,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ? header.subject!
         : 'Re: ${header.subject ?? ''}';
     // Tapped while the body still loads: wait for it, so the reply quotes it.
-    final loaded =
-        _bodyMissing(body) ? await _awaitLoadingBody(emailId, body) : body;
+    final loaded = await _awaitLoadingBody(emailId, body);
     if (!context.mounted || widget.emailId != emailId) return;
     // Without the body there is nothing to quote: reply anyway, unquoted,
     // and say so rather than quoting an empty text (#1330).
@@ -1923,13 +1932,18 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   ) async {
     // Captured once: Prev/Next can swap in another mail (same State) while
     // the downloads run, and they must still come from this one.
-    final emailId = widget.emailId;
+    final emailId = header.id;
+    if (widget.emailId != emailId) return;
     final subject = (header.subject?.startsWith('Fwd:') ?? false)
         ? header.subject!
         : 'Fwd: ${header.subject ?? ''}';
-    final quoted = await _quotedBody(header, body);
+    // Tapped while the body still loads: wait for it, as Reply does (#1347).
+    final loaded = await _awaitLoadingBody(emailId, body);
+    if (!context.mounted || widget.emailId != emailId) return;
+    if (_explainBodyMissing(loaded)) return;
+    final quoted = await _quotedBody(header, loaded);
     if (!context.mounted) return;
-    final attachments = body?.attachments ?? const <EmailAttachment>[];
+    final attachments = loaded?.attachments ?? const <EmailAttachment>[];
     final downloaded = attachments.isEmpty
         ? (paths: const <String>[], failed: const <String>[])
         : await _runDimmed(
