@@ -17,18 +17,11 @@ import 'package:sharedinbox/data/repositories/sync_state_repository_impl.dart';
 import 'account_repository_impl_test.dart' show MapSecureStorage;
 import 'db_test_helper.dart';
 import 'fake_imap.dart' show SnoozeSpyImapClient;
+import 'helpers/test_accounts.dart';
 
 // The app's own data folders (`SharedInbox`, `SharedInbox/Keys`,
 // `SharedInbox/Data`) are recorded by the folder listing, hidden everywhere
 // and never mail-synced (#1364).
-
-const _imapAccount = Account(
-  id: 'acc-1',
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
-);
 
 const _jmapAccount = Account(
   id: 'jmap-1',
@@ -139,7 +132,7 @@ void main() {
     setUp(() async {
       db = openTestDatabase();
       accounts = AccountRepositoryImpl(db, MapSecureStorage());
-      await accounts.addAccount(_imapAccount, 'pw');
+      await accounts.addAccount(testImapAccount, 'pw');
     });
     tearDown(() => db.close());
 

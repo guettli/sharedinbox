@@ -260,7 +260,7 @@ class MailboxRepositoryImpl implements MailboxRepository {
           variables: [if (accountId != null) Variable.withString(accountId)],
           readsFrom: {
             _db.mailboxes,
-            _db.emails,
+            _db.emails, // not an emails write
             _db.pendingChanges,
             _db.appDataFolders,
           },
