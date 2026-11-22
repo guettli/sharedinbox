@@ -49,6 +49,7 @@ import 'package:sharedinbox/core/sync/desktop_prefetch_scheduler.dart';
 import 'package:sharedinbox/core/sync/log_retention_scheduler.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/sync/message_probe.dart';
+import 'package:sharedinbox/core/sync/outbox_retry_scheduler.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart'
@@ -467,6 +468,20 @@ final reconnectFlushProvider = Provider<StreamSubscription<void>>((ref) {
   });
   ref.onDispose(sub.cancel);
   return sub;
+});
+
+/// Sends a queued message again once its retry time comes, also while the
+/// sync loops wait in IDLE or push (#1331). Reading the provider and calling
+/// `start()` installs the schedule.
+final outboxRetrySchedulerProvider = Provider<OutboxRetryScheduler>((ref) {
+  final emails = ref.watch(emailRepositoryProvider);
+  final scheduler = OutboxRetryScheduler(
+    outbox: ref.watch(outboxRepositoryProvider).observeAllOutbox(),
+    drain: (accountId) => emails.sendNow(accountId),
+    logger: ref.watch(appLoggerProvider),
+  );
+  ref.onDispose(scheduler.dispose);
+  return scheduler;
 });
 
 final accountDiscoveryServiceProvider = Provider<AccountDiscoveryService>((

@@ -248,6 +248,40 @@ void main() {
     );
 
     test(
+      'the retry time counts from the failure, so it is after now (#1331)',
+      () async {
+        // A send on a dead link hangs until its 50 s timeout. The backoff
+        // used to count from the start of the flush, so the row was due
+        // again 20 s before the failure was even logged.
+        final db = openTestDatabase();
+        await _seedAccount(db);
+        var clock = DateTime(2026, 1, 1, 12);
+        final repo = OutboxRepositoryImpl(db, clock: () => clock);
+        await repo.enqueue(_accountId, _makeDraft());
+
+        DateTime? logged;
+        late DateTime failedAt;
+        await repo.flush(
+          _accountId,
+          (job) async {
+            clock = clock.add(const Duration(seconds: 50));
+            failedAt = clock;
+            throw TimeoutException('SMTP connect/auth timed out');
+          },
+          observer: OutboxFlushObserver(
+            onTransient: (job, error, stack, nextAttemptAt) =>
+                logged = nextAttemptAt,
+          ),
+        );
+
+        expect(logged, failedAt.add(const Duration(seconds: 30)));
+        expect(logged!.isAfter(failedAt), isTrue);
+        final row = (await db.select(db.outbox).get()).single;
+        expect(row.nextAttemptAt, logged);
+      },
+    );
+
+    test(
       'permanent failure marks row failed and does not schedule a retry',
       () async {
         final db = openTestDatabase();

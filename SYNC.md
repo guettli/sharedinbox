@@ -507,6 +507,27 @@ on the next successful cycle.
 The last error message is written to `sync_log` and surfaced in the UI via
 `syncLastErrorProvider` (the red `MaterialBanner` in the email list).
 
+### Outbox retries
+
+The outbox has its own backoff per row: 30 s, 2 min, 10 min, then 1 h, counted from
+the moment the attempt **failed**, not from when the flush started (a send that hung
+until its 50 s timeout was otherwise due again in the past, #1331).
+
+- **Send** (Compose) queues the message, then gives the first attempt
+  `ComposeScreen.sendResultWait` (2 s). A quick answer (sent, rejected) is shown as
+  before; otherwise Compose closes and the attempt finishes in the background, its
+  outcome shown as a SnackBar and logged to the App Log.
+- **Due retries** are sent by `OutboxRetryScheduler`: it watches the outbox and arms
+  one timer for the earliest `nextAttemptAt` of a pending row, then drains that
+  account through `sendNow`. It does not wake the sync loops, so an IMAP loop stays
+  in IDLE. Each drain logs `outbox.retry.due`; one account is drained at most every
+  30 s by it.
+- **Also drained** at the start of every sync cycle, on reconnect (backoff cleared)
+  and by "Retry now" in the Sent Queue.
+- **No double send**: every flush goes through `OutboxRepository.flush`, which
+  serialises flushes per account and claims a row while it is sent; a flush that
+  waited re-reads each row before sending it.
+
 ---
 
 ## 5a. Two writers: SQLITE_BUSY

@@ -3,7 +3,8 @@ import 'package:sharedinbox/core/models/outbox_message.dart';
 
 /// Persistent send queue. Sits between the compose UI and the live SMTP / JMAP
 /// network calls so that "Send" always returns immediately and the actual
-/// transmission is retried on the next sync cycle once the device is online.
+/// transmission is retried on the next sync cycle once the device is online,
+/// or when a failed row's retry time comes (`OutboxRetryScheduler`, #1331).
 abstract class OutboxRepository {
   /// Persists [draft] for later sending and returns the new outbox row id.
   /// Always returns immediately — does not touch the network.
