@@ -13,11 +13,21 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
 
   @override
   Future<List<MailboxSyncState>> statesForAccount(String accountId) async {
+    // Not one of the app's own data folders (#1364): it shows nowhere.
+    final appDataPaths = {
+      for (final r in await (_db.select(_db.appDataFolders)
+            ..where((t) => t.accountId.equals(accountId)))
+          .get())
+        r.path,
+    };
     // Not a folder being deleted (phase 5b): it shows nowhere.
-    final mailboxRows = await (_db.select(
-      _db.mailboxes,
-    )..where((t) => t.accountId.equals(accountId) & t.localHidden.not()))
-        .get();
+    final mailboxRows = [
+      for (final mb in await (_db.select(
+        _db.mailboxes,
+      )..where((t) => t.accountId.equals(accountId) & t.localHidden.not()))
+          .get())
+        if (!appDataPaths.contains(mb.path)) mb,
+    ];
 
     // Not the hidden rows (deleted for good, or gone on the server, waiting
     // for their changes to settle): their `mailbox_path` is '' and would
@@ -54,6 +64,7 @@ class SyncStateRepositoryImpl implements SyncStateRepository {
     }
 
     for (final e in emailRows) {
+      if (appDataPaths.contains(e.mailboxPath)) continue;
       final bucket = buckets.putIfAbsent(e.mailboxPath, _MailboxBucket.new);
       final body = bodyByEmailId[e.id];
       if (body == null) {

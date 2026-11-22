@@ -505,6 +505,22 @@ void main() {
       expect(message, contains('Archive'));
     });
 
+    test('never mail-syncs an app data folder (#1364)', () async {
+      final emails = _OneFolderFailsEmailRepository(failingPath: 'none');
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        _AppDataFolderMailboxRepository(),
+        emails,
+        syncLog: _RecordingSyncLog(),
+      );
+      m.start();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      m.dispose();
+
+      expect(emails.attempted, contains('INBOX'));
+      expect(emails.attempted, isNot(contains('SharedInbox/Data')));
+    });
+
     test('a cycle where every folder fails still reports what landed',
         () async {
       final syncLog = _RecordingSyncLog();
@@ -855,6 +871,31 @@ class _ThreeFolderMailboxRepository extends FakeMailboxRepositoryWithInbox {
 
   @override
   Future<int> syncMailboxes(String id) async => _paths.length;
+}
+
+/// The inbox and an app data folder (#1364).
+class _AppDataFolderMailboxRepository extends FakeMailboxRepositoryWithInbox {
+  @override
+  Stream<List<Mailbox>> observeMailboxes(String? accountId) => Stream.value([
+        const Mailbox(
+          id: '1:INBOX',
+          accountId: '1',
+          path: 'INBOX',
+          name: 'INBOX',
+          unreadCount: 0,
+          totalCount: 0,
+          role: 'inbox',
+        ),
+        const Mailbox(
+          id: '1:SharedInbox/Data',
+          accountId: '1',
+          path: 'SharedInbox/Data',
+          name: 'Data',
+          unreadCount: 0,
+          totalCount: 0,
+          isAppData: true,
+        ),
+      ]);
 }
 
 /// Fails [failingPath] and succeeds elsewhere, recording the order in which

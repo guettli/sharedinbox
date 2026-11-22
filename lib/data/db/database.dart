@@ -617,6 +617,23 @@ class NotifiedEmails extends Table {
   Set<Column> get primaryKey => {accountId, emailId};
 }
 
+/// The folders the app keeps its own data in (ENCRYPTED-OBJECTS.md §3,
+/// #1364): `SharedInbox` and its `Keys` and `Data` subfolders, as a folder
+/// listing found them on the server. They show nowhere (lists, pickers,
+/// counts, search) and their mail is never synced. Recorded by path, never
+/// matched by a folder's name alone.
+// Added in schema v81.
+@DataClassName('AppDataFolderRow')
+class AppDataFolders extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // `Mailbox.path`: the IMAP path, or the JMAP mailbox id.
+  TextColumn get path => text()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, path};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -805,6 +822,7 @@ class UserPreferences extends Table {
     AttachmentFiles,
     NotificationRules,
     NotifiedEmails,
+    AppDataFolders,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -2276,6 +2294,10 @@ class AppDatabase extends _$AppDatabase {
       // Only the v18 upgrade created it: installs since scanned the folder
       // on every thread refresh (#1328).
       await _createThreadIndex();
+    }
+    if (from < 81 && !await _tableExists(this, 'app_data_folders')) {
+      // The app's own data folders, hidden and not mail-synced (#1364).
+      await m.createTable(appDataFolders);
     }
   }
 

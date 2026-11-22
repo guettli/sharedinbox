@@ -62,11 +62,20 @@ enum MailboxUndo {
 /// SQL (correlated on the `mailboxes` alias [m]): whether the mailbox shows.
 /// A mailbox created offline shows only while its `create_mailbox` op folds
 /// ([localMailboxShown]); a mailbox with a queued delete shows nowhere
-/// (`local_hidden`, [foldMailboxHidden]).
+/// (`local_hidden`, [foldMailboxHidden]); nor does one of the app's own
+/// data folders ([appDataFolderSql], #1364).
 String mailboxShownSql(String m) => 'NOT $m.local_hidden AND '
     'NOT ($m.is_local AND NOT EXISTS (SELECT 1 FROM pending_changes p '
     "WHERE p.resource_id = $m.id AND p.change_type = '$createMailboxOp' "
-    'AND p.state IN ($_foldableSql)))';
+    'AND p.state IN ($_foldableSql))) '
+    'AND NOT ${appDataFolderSql(m)}';
+
+/// SQL (correlated on an alias [m] with `account_id` and `path` columns):
+/// the folder is one of the app's own data folders, recorded in
+/// `app_data_folders` by the folder listing (#1364).
+String appDataFolderSql(String m) =>
+    'EXISTS (SELECT 1 FROM app_data_folders adf '
+    'WHERE adf.account_id = $m.account_id AND adf.path = $m.path)';
 
 final _foldableSql = foldableOpStates.map((s) => "'$s'").join(', ');
 
@@ -129,6 +138,14 @@ class MailboxStateWriter {
             ..where((t) => t.accountId.equals(accountId) & t.path.equals(path))
             ..limit(1))
           .getSingleOrNull();
+
+  /// Whether [path] of [accountId] is one of the app's own data folders
+  /// (`app_data_folders`, #1364).
+  Future<bool> isAppDataPath(String accountId, String path) async =>
+      await (_db.select(_db.appDataFolders)
+            ..where((t) => t.accountId.equals(accountId) & t.path.equals(path)))
+          .getSingleOrNull() !=
+      null;
 
   Future<List<MailboxRow>> _rowsOf(String accountId) =>
       (_db.select(_db.mailboxes)..where((t) => t.accountId.equals(accountId)))

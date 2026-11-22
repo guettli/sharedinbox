@@ -557,7 +557,7 @@ extension _SyncJmap on EmailRepositoryImpl {
       // interval is 15 minutes *per successful sync of that mailbox*, so on a
       // device syncing in the background the real window is longer, and a
       // mailbox the sync loop skips entirely (`isDuplicateOfOtherFolders`,
-      // i.e. role `all`) is never reconciled at all. Worth it for a stale
+      // i.e. role `all`, or `isAppDataFolder`) is never reconciled at all. Worth it for a stale
       // row; it would not be worth it for lost mail, which is the trade.
       final rawNotFound = result['notFound'];
       final notFound = rawNotFound is List

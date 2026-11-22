@@ -198,10 +198,12 @@ List<({FolderNode node, int depth})> _flattenTree(List<FolderNode> roots) {
 }
 
 /// Folders the app or the server depends on: any special-use role (Inbox,
-/// Sent, Drafts, Junk, Trash, Archive, Snoozed) plus the top-level folders
-/// the app manages by name (IMAP `INBOX`, `Notes`, `Snoozed`).
+/// Sent, Drafts, Junk, Trash, Archive, Snoozed), the app's own data folders
+/// ([isAppDataFolder], #1364), plus the top-level folders the app manages
+/// by name (IMAP `INBOX`, `Notes`, `Snoozed`).
 bool _isAppManagedFolder(Mailbox mailbox) {
   if (mailbox.role != null) return true;
+  if (isAppDataFolder(mailbox)) return true;
   final top = mailbox.displayPath;
   return top.toUpperCase() == 'INBOX' || top == 'Notes' || top == 'Snoozed';
 }

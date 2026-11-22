@@ -843,4 +843,96 @@ void main() {
       await drop();
     }
   });
+
+  test(
+      'the SharedInbox app data folders are recorded, hidden and not '
+      'mail-synced; a user folder W1364/SharedInbox is (#1364)', () async {
+    final r = makeRepo();
+    final emails = emailsOf(r);
+    await r.accounts.addAccount(account, user.password);
+
+    // Raw IMAP: the app folders show nowhere in the app, so the app cannot
+    // delete them; subfolders first.
+    Future<void> dropRaw() async {
+      final client = await connectImap(env: env, user: user);
+      try {
+        final doomed = (await client.listMailboxes(recursive: true))
+            .where(
+              (b) =>
+                  b.path == 'SharedInbox' ||
+                  b.path.startsWith('SharedInbox${b.pathSeparator}') ||
+                  b.path == 'W1364' ||
+                  b.path.startsWith('W1364${b.pathSeparator}'),
+            )
+            .toList()
+          ..sort((a, b) => b.path.length.compareTo(a.path.length));
+        for (final box in doomed) {
+          await client.deleteMailbox(box);
+        }
+      } finally {
+        await client.logout();
+      }
+    }
+
+    await dropRaw();
+    try {
+      final client = await connectImap(env: env, user: user);
+      final String sep;
+      try {
+        sep = await imapPathSeparator(client);
+        for (final path in [
+          'SharedInbox',
+          'SharedInbox${sep}Data',
+          'W1364',
+          'W1364${sep}SharedInbox',
+        ]) {
+          await client.createMailbox(path);
+        }
+        await appendMessage(
+          client,
+          subject: 's1364-app',
+          userEmail: user.email,
+          mailboxPath: 'SharedInbox${sep}Data',
+        );
+        await appendMessage(
+          client,
+          subject: 's1364-user',
+          userEmail: user.email,
+          mailboxPath: 'W1364${sep}SharedInbox',
+        );
+      } finally {
+        await client.logout();
+      }
+      final data = 'SharedInbox${sep}Data';
+      final userFolder = 'W1364${sep}SharedInbox';
+
+      await r.mailboxes.syncMailboxes('test');
+
+      final app = [
+        for (final m in await r.mailboxes.observeAppDataFolders('test').first)
+          m.path,
+      ];
+      expect(app, containsAll(['SharedInbox', data]));
+      final shown = [
+        for (final m in await r.mailboxes.observeMailboxes('test').first)
+          m.path,
+      ];
+      expect(shown, isNot(contains(data)));
+      expect(shown, isNot(contains('SharedInbox')));
+      expect(shown, contains(userFolder));
+
+      final appResult = await emails.syncEmails('test', data);
+      expect(appResult.fetched, 0);
+      final userResult = await emails.syncEmails('test', userFolder);
+      expect(userResult.fetched, 1);
+      final stored = await r.db.select(r.db.emails).get();
+      expect(stored.where((e) => e.mailboxPath == data), isEmpty);
+      expect(
+        stored.where((e) => e.mailboxPath == userFolder).map((e) => e.subject),
+        ['s1364-user'],
+      );
+    } finally {
+      await dropRaw();
+    }
+  });
 }

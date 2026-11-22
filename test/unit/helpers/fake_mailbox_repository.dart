@@ -19,6 +19,14 @@ class FakeMailboxRepositoryBase implements MailboxRepository {
   @override
   Future<int> syncMailboxes(String accountId) async => 0;
   @override
+  Stream<List<Mailbox>> observeAppDataFolders(String accountId) =>
+      Stream.value(const []);
+  @override
+  Future<void> registerAppDataFolders(
+    String accountId,
+    Iterable<String> paths,
+  ) async {}
+  @override
   Future<Mailbox?> findMailboxByRole(String accountId, String role) async =>
       null;
   @override

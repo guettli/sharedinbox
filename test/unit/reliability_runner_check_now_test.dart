@@ -114,6 +114,30 @@ void main() {
       );
     });
 
+    test('skips an app data folder (#1364)', () async {
+      runner = ReliabilityRunner(
+        db,
+        _FakeAccounts(),
+        FakeMailboxRepositoryBase([
+          _kMailbox,
+          const Mailbox(
+            id: 'test-account:SharedInbox/Data',
+            accountId: 'test-account',
+            path: 'SharedInbox/Data',
+            name: 'Data',
+            unreadCount: 0,
+            totalCount: 0,
+            isAppData: true,
+          ),
+        ]),
+        emails,
+        AppLogger(AppLogRepositoryImpl(db)),
+      );
+      await runner.checkNow();
+
+      expect(emails.verifyCallCount, 1);
+    });
+
     test('also works when start() was called beforehand', () async {
       runner.start();
       await runner.checkNow();

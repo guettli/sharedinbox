@@ -38,6 +38,12 @@ class Mailbox {
   /// queued): no mail of it can be synced.
   final bool isLocal;
 
+  /// One of the folders the app keeps its own data in (`SharedInbox`,
+  /// `SharedInbox/Keys`, `SharedInbox/Data`), as recorded per account when
+  /// a folder listing found them: hidden, and never mail-synced
+  /// ([isAppDataFolder]).
+  final bool isAppData;
+
   const Mailbox({
     required this.id,
     required this.accountId,
@@ -49,6 +55,7 @@ class Mailbox {
     this.parentId,
     this.role,
     this.isLocal = false,
+    this.isAppData = false,
   }) : displayPath = displayPath ?? path;
 
   Mailbox copyWith({
@@ -62,6 +69,7 @@ class Mailbox {
     int? totalCount,
     String? role,
     bool? isLocal,
+    bool? isAppData,
   }) {
     return Mailbox(
       id: id ?? this.id,
@@ -74,6 +82,7 @@ class Mailbox {
       totalCount: totalCount ?? this.totalCount,
       role: role ?? this.role,
       isLocal: isLocal ?? this.isLocal,
+      isAppData: isAppData ?? this.isAppData,
     );
   }
 
@@ -89,6 +98,7 @@ class Mailbox {
       totalCount: json['totalCount'] as int,
       role: json['role'] as String?,
       isLocal: json['isLocal'] as bool? ?? false,
+      isAppData: json['isAppData'] as bool? ?? false,
     );
   }
 
@@ -104,6 +114,7 @@ class Mailbox {
       'totalCount': totalCount,
       'role': role,
       'isLocal': isLocal,
+      'isAppData': isAppData,
     };
   }
 }
@@ -130,6 +141,13 @@ String resolveMailboxDisplayPath(List<Mailbox> mailboxes, String rawPath) {
 /// every message in every other folder. Such folders are excluded from
 /// automatic email sync (#691).
 bool isDuplicateOfOtherFolders(Mailbox mailbox) => mailbox.role == 'all';
+
+/// True for the folders the app keeps its own data in (ENCRYPTED-OBJECTS.md
+/// §3): they show nowhere and their mail is never synced (#1364). The flag
+/// comes from the per-account registry the folder listing fills (by path,
+/// or JMAP mailbox id), never from a folder's name: a user folder
+/// `Work/SharedInbox` is an ordinary folder.
+bool isAppDataFolder(Mailbox mailbox) => mailbox.isAppData;
 
 /// Sorts mailboxes by role priority (Inbox first, etc) then alphabetically by
 /// [Mailbox.displayPath], so JMAP mailboxes sort by their human-readable path
