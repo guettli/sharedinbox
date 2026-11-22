@@ -490,5 +490,20 @@ void main() {
       expect(find.text('0'), findsOneWidget);
       expect(find.textContaining('/', findRichText: true), findsNothing);
     });
+
+    testWidgets(
+        'shows the unread count when the total from the server is 0 '
+        '(#1333)', (tester) async {
+      // A mail archived offline: the unread count has it already, the
+      // server's total of the folder not yet.
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: MailboxCountLabel(unread: 1, total: 0)),
+        ),
+      );
+
+      expect(find.text('1 / 1', findRichText: true), findsOneWidget);
+      expect(find.text('0'), findsNothing);
+    });
   });
 }

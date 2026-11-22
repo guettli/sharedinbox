@@ -982,19 +982,38 @@ the same statement and never rewrites the whole row.
   for the destination copy like an own one, so an IMAP twin keeps its id. Changes
   mirrored before v74 are real changes and flush as before; an Undo stored before
   the upgrade whose twin change was sent no longer reverses the twin.
-- **Unread counts** (phase 4b, §7 of SYNC-REDESIGN.md). The stored count is the
-  server's (IMAP `STATUS`, JMAP `unreadEmails`), with the read sequence taken before
-  that read (`mailboxes.unread_seq`, v74). The count shown (`observeMailboxes`) adds
-  the change the count does not reflect: over the rows with a pending, in-flight,
-  stuck, parked or shadow change, or one acked after `unread_seq`, the unread rows
-  shown in the folder minus the unread rows the server has there as last read
-  (`srv_*`; virtual rows left out). A read/unread change, and a move, delete or
-  snooze of unread mail, count at once and once; a count read after the ack does
-  not count them again. The v74 upgrade stamps the stored counts with the current
-  read sequence. Limits: `srv_*` is the server's state as last read, not as of the
-  count, so a row read again after the count no longer adjusts it until the next
-  count read; a row with changes on both sides of the count's read can be off by
-  one. A negative sum shows 0 and logs `mailbox.unread_negative` once per folder.
+- **Unread counts** (phase 4b, §7 of SYNC-REDESIGN.md). The stored counts are the
+  server's (IMAP `STATUS`, JMAP `unreadEmails`/`totalEmails`), with the read sequence
+  taken before that read (`mailboxes.unread_seq`, v74). The counts shown
+  (`observeMailboxes`, `mailboxesWithCountDeltasSql`) add the changes the counts do not
+  reflect: over the rows with a pending, in-flight, stuck, parked or shadow change, or
+  one acked after `unread_seq`, the rows shown in the folder minus the rows the server
+  had there when it counted (the unread ones for the unread count; virtual rows left
+  out). A read/unread change, and a move, delete or snooze, count at once and once; a
+  count read after the ack does not count them again, and a count read before it does
+  not lose them (#1333):
+  - *Read state when counted:* an acked read/unread change waits for a read of the mail
+    before `srv_is_seen` has it, so the row's newest acked `flag_seen` at or before
+    `unread_seq` (unless a read contradicted it by then) gives it; else `srv_is_seen`.
+  - *Folder when counted:* an acked move or delete writes its new location at the ack
+    (IMAP: just before), so when `srv_location_seq` is after `unread_seq`, the source of
+    the oldest move, snooze or delete acked after the count (payload `src`, IMAP
+    `mailboxPath`) gives it; else `srv_mailbox_path` unless gone. An Undo of an online
+    move counted before it no longer takes the mail off the folder it went to.
+  - An ack that drops an older acked op of the row keeps what a count read before it
+    needs in its payload (`countPrev`: that op's `ack_seq` and read state or source
+    folder), and a read drops a shadowed acked op only once it read the group it wrote.
+  The total shown is never below the unread count. Computed in one pass, the sums
+  grouped per folder (not one scan per folder), only over the account asked for; rows
+  whose acked changes are older than every count of a shown server folder of their
+  account are skipped. A shadowed acked op of a mail the server no longer has is
+  dropped at once (no read of it comes), and a folder rename rewrites `countPrev`
+  too. The v74 upgrade stamps the stored counts with the current read sequence.
+  Limits: a row read again after the count (its change confirmed and dropped) no
+  longer adjusts it until the next count read; an op keeps one dropped older op, not
+  a chain (three acked changes of a mail before a read of it can be off by one). A
+  negative sum shows 0 and logs `mailbox.unread_negative` or `mailbox.total_negative`
+  once per folder and count read.
 
 - **Email state writer.** The writer of the `emails` table (phase 3b): besides the
   overlays it deletes rows (`deleteRow`, `cleanUpGone`), inserts and updates the rows of
