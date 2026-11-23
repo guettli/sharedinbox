@@ -50,10 +50,7 @@ Stream<R> combineLatest<A, B, R>(
     },
     // Both at once: a source slow to cancel must not keep the other one
     // listening.
-    onCancel: () => Future.wait([
-      if (subA case final s?) s.cancel(),
-      if (subB case final s?) s.cancel(),
-    ]),
+    onCancel: () => Future.wait([subA?.cancel(), subB?.cancel()].nonNulls),
   );
   return out.stream;
 }
