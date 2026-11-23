@@ -31,6 +31,24 @@ typedef KeepVanishedKeyMail = Future<bool> Function(
   MailObject row,
 );
 
+/// Keeps a projection table of one document [kind] (e.g. `Entries`) in step
+/// with the merge (#1373). The store calls it inside the transaction that
+/// writes an item's head columns, so the projection cannot diverge from the
+/// merge: on a local write, a pull and a reopen after an unlock.
+abstract interface class ObjectProjector {
+  String get kind;
+
+  /// Projects item [itemHmac]: [display] is its newest head that is not a
+  /// tombstone, or null when the item is deleted (the row goes).
+  /// [conflict]: it has several heads with different content.
+  Future<void> apply(
+    String accountId,
+    String itemHmac,
+    InnerObject? display, {
+    required bool conflict,
+  });
+}
+
 /// An item as the merge of its opened versions sees it.
 class MailObjectItem {
   const MailObjectItem({required this.merge, required this.display});

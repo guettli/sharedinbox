@@ -20,6 +20,7 @@ const _noCode = {
   'lib/core/repositories/account_repository.dart',
   'lib/core/repositories/draft_repository.dart',
   'lib/core/repositories/email_repository.dart',
+  'lib/core/repositories/entry_repository.dart',
   'lib/core/repositories/mailbox_repository.dart',
   'lib/core/repositories/share_key_repository.dart',
   'lib/core/repositories/sync_log_repository.dart',
@@ -100,6 +101,12 @@ const _excluded = <String, String>{
       'Widget-only email detail — WebView + navigation + prefetch',
   'lib/ui/screens/email_list_screen.dart':
       'Widget-only mailbox email list with selection-mode UI',
+  'lib/ui/screens/entries_screen.dart':
+      'Widget-only entries home (list, quick-add, search); the repository and '
+          'projection it reads are unit-tested in entry_repository_impl_test.dart',
+  'lib/ui/screens/entry_edit_screen.dart':
+      'Widget-only entry edit form; the edit it saves is unit-tested in '
+          'entry_object_test.dart and entry_repository_impl_test.dart',
   'lib/ui/screens/force_resync_screen.dart':
       'Widget-only progress UI wrapping AccountSyncManager.forceResync (unit-tested)',
   'lib/ui/screens/mail_debug_markdown_screen.dart':

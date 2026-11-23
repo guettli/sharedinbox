@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
+import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
@@ -21,6 +22,10 @@ final testAccountKey = AccountKey(seqBytes(0xa0, 16), seqBytes(0x00, 32));
 /// Fixed non-personal collection key shared by the unit tests.
 final testDeckKey =
     CollectionKey('deck-1', seqBytes(0xb0, 16), seqBytes(0x20, 32));
+
+/// Fixed key of the personal collection (entries) shared by the unit tests.
+final testPersonalKey =
+    CollectionKey(personalCollectionId, seqBytes(0xc0, 16), seqBytes(0x40, 32));
 
 /// Deterministic [RandomBytes]: each call returns the next counter value
 /// repeated, so every draw differs.
@@ -114,3 +119,33 @@ Future<({String messageId, Uint8List mail})> foreignKeyMailForTest() async {
     ),
   );
 }
+
+/// An entry as another device writes it (#1373): title "Plan", body "old"
+/// and the fields the UI does not edit yet, plus [extra] ones.
+InnerObject plannedEntryObject(
+  String itemId,
+  Hlc versionId, {
+  Map<String, Object?> extra = const {},
+}) =>
+    InnerObject(
+      head: ObjectHead(
+        itemId: itemId,
+        collectionId: personalCollectionId,
+        versionId: versionId,
+        kind: entryKind,
+        extra: {
+          'title': 'Plan',
+          'tags': ['work'],
+          'date': '2026-11-23',
+          'task': {'done': false, 'due': '2026-12-01'},
+          'links': ['<m1@example.com>'],
+          ...extra,
+        },
+      ),
+      parts: [
+        ObjectPart(
+          contentType: 'text/markdown; charset=utf-8',
+          bytes: Uint8List.fromList(utf8.encode('old')),
+        ),
+      ],
+    );

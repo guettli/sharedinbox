@@ -561,6 +561,17 @@ local decrypted blob cache, downloaded on demand.
 
 An entry may be several at once (a journal entry with a task).
 
+Implemented in `lib/core/encrypted_objects/entry_object.dart` (the kind:
+new entry, read, edit keeping unknown fields and parts),
+`lib/data/repositories/entry_projector.dart` (the `Entries` projection) and
+`lib/data/repositories/entry_repository_impl.dart` (reads the projection,
+writes through the store). **A projection is written only by the store's
+merge**: the store calls the `ObjectProjector` of the item's kind inside the
+transaction that writes the item's head columns, on a local write, a pull and
+a reopen after an unlock (which also re-projects every item of the kind). It
+gets the newest head that is not a tombstone (so an edit racing a delete
+stays visible as a conflict), or none once every head is a tombstone.
+
 Legacy plaintext notes (`Notes` folder, `X-SharedInbox-Note-*` headers) are
 migrated into entries with `links: [messageId]` (#1355). Only mails with
 `X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too.

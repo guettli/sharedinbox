@@ -16,6 +16,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_drawer.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
 import 'package:sharedinbox/ui/widgets/folder_tree_picker.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_count_label.dart';
 import 'package:sharedinbox/ui/widgets/mailbox_role.dart';
@@ -411,27 +412,12 @@ Future<void> _promptDelete(
       : 'Delete "${mailbox.displayPath}"? It contains '
           '$count ${count == 1 ? 'mail' : 'mails'}, which '
           '${count == 1 ? 'is' : 'are'} deleted with it.';
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Delete folder?'),
-      content: Text(content),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: Theme.of(ctx).colorScheme.error,
-          ),
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Delete'),
-        ),
-      ],
-    ),
+  final confirmed = await showConfirmDelete(
+    context,
+    title: 'Delete folder?',
+    content: content,
   );
-  if (confirmed != true || !context.mounted) return;
+  if (!confirmed || !context.mounted) return;
   try {
     // Only a folder the dialog called non-empty may take its mail with it: a
     // stale count of 0 must not silently delete mail that arrived since.

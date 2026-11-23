@@ -57,6 +57,8 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/entries_screen.dart';
+import 'package:sharedinbox/ui/screens/entry_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/folder_diagnostics_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
@@ -984,6 +986,19 @@ Widget buildApp({
             path: ':accountId/personal-data',
             builder: (ctx, state) => PersonalDataScreen(
               accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/entries',
+            builder: (ctx, state) => EntriesScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/entries/:itemId',
+            builder: (ctx, state) => EntryEditScreen(
+              accountId: state.pathParameters['accountId']!,
+              itemId: state.pathParameters['itemId']!,
             ),
           ),
           GoRoute(

@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
@@ -21,6 +22,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/entry_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
@@ -67,12 +69,11 @@ import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_factory.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -826,31 +827,34 @@ final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
   final mailboxes = ref.watch(mailboxRepositoryProvider);
   final storage = ref.watch(secureStorageProvider);
   final appLogger = ref.watch(appLoggerProvider);
-  return MailObjectStoreRouter(
+  return buildMailObjectStore(
+    db,
     accounts,
-    imap: MailObjectStoreImap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      imapConnect: ref.watch(imapConnectProvider),
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: appLogger,
-    ),
-    jmap: MailObjectStoreJmap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      httpClient: ref.watch(httpClientProvider),
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: appLogger,
-    ),
+    mailboxes,
+    storage,
+    ring: ring,
+    imapConnect: ref.watch(imapConnectProvider),
+    httpClient: ref.watch(httpClientProvider),
+    appLogger: appLogger,
   );
+});
+
+/// The entries of the encrypted personal data (#1373).
+final entryRepositoryProvider = Provider<EntryRepository>(
+  (ref) => EntryRepositoryImpl(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// The entries of an account, newest first, filtered by a search query
+/// (empty: all).
+final entriesProvider = StreamProvider.autoDispose
+    .family<List<Entry>, (String accountId, String query)>((ref, args) {
+  final (accountId, query) = args;
+  return ref
+      .watch(entryRepositoryProvider)
+      .observeEntries(accountId, query: query);
 });
 
 /// Log segments and packs of the encrypted-object store (#1372).

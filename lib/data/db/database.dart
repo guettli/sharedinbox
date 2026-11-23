@@ -786,6 +786,36 @@ class MailObjectDeviceStates extends Table {
   Set<Column> get primaryKey => {accountId, key, deviceId};
 }
 
+/// The projection of the `entry` documents (ENCRYPTED-OBJECTS.md §6,
+/// #1373): what lists and search read. Written only by the store's merge
+/// (`EntryProjector`), never by the UI; no sync columns.
+// Added in schema v85.
+@DataClassName('EntryRow')
+class Entries extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get itemId => text()();
+  TextColumn get itemHmac => text()();
+  TextColumn get title => text().nullable()();
+  TextColumn get body => text()();
+  // JSON list of strings.
+  TextColumn get tagsJson => text().withDefault(const Constant('[]'))();
+  // `YYYY-MM-DD`.
+  TextColumn get date => text().nullable()();
+  // JSON `{due?, priority?, done, doneAt?}`.
+  TextColumn get taskJson => text().nullable()();
+  // JSON list of Message-IDs.
+  TextColumn get linksJson => text().withDefault(const Constant('[]'))();
+  // The encoded HLC of the version shown.
+  TextColumn get versionId => text()();
+  // Its wall clock, ms since the epoch.
+  IntColumn get updatedAt => integer()();
+  BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, itemId};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -985,6 +1015,7 @@ class UserPreferences extends Table {
     MailObjectLogEvents,
     MailObjectBlobs,
     MailObjectDeviceStates,
+    Entries,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1479,6 +1510,7 @@ class AppDatabase extends _$AppDatabase {
           await _createThreadIndex();
           await _createMailObjectsIndex();
           await _createMailObjectLogIndexes();
+          await _createEntriesIndex();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2502,7 +2534,20 @@ class AppDatabase extends _$AppDatabase {
       }
       await _createMailObjectLogIndexes();
     }
+    if (from < 85) {
+      // The entries projection (#1373). Each step re-runnable (#1084).
+      if (!await _tableExists(this, 'entries')) {
+        await m.createTable(entries);
+      }
+      await _createEntriesIndex();
+    }
   }
+
+  /// Schema v85: entries newest first, which every entry list reads.
+  Future<void> _createEntriesIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS entries_updated ON entries '
+        '(account_id, updated_at);',
+      );
 
   /// Schema v84: events in display order, and the blob cache by age.
   Future<void> _createMailObjectLogIndexes() async {

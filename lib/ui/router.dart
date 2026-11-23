@@ -25,6 +25,8 @@ import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
 import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/screens/entries_screen.dart';
+import 'package:sharedinbox/ui/screens/entry_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/folder_diagnostics_screen.dart';
 import 'package:sharedinbox/ui/screens/force_resync_screen.dart';
 import 'package:sharedinbox/ui/screens/mail_debug_markdown_screen.dart';
@@ -185,6 +187,19 @@ final router = GoRouter(
               path: ':accountId/personal-data',
               builder: (ctx, state) => PersonalDataScreen(
                 accountId: state.pathParameters['accountId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/entries',
+              builder: (ctx, state) => EntriesScreen(
+                accountId: state.pathParameters['accountId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/entries/:itemId',
+              builder: (ctx, state) => EntryEditScreen(
+                accountId: state.pathParameters['accountId']!,
+                itemId: state.pathParameters['itemId']!,
               ),
             ),
             GoRoute(

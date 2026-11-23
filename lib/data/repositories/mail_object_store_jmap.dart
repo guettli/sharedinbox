@@ -114,6 +114,7 @@ class MailObjectStoreJmap extends MailObjectStoreBase {
     super.pushPending,
     super.now,
     @visibleForTesting super.onStep,
+    super.projectors,
   }) : _http = httpClient ?? http.Client();
 
   final http.Client _http;

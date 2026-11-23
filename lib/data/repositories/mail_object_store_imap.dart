@@ -80,6 +80,7 @@ class MailObjectStoreImap extends MailObjectStoreBase {
     super.pushPending,
     super.now,
     @visibleForTesting super.onStep,
+    super.projectors,
   })  : _imapConnect = imapConnect,
         _namespace = namespace;
 
