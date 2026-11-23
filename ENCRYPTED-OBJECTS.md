@@ -224,6 +224,20 @@ Not slots, but ways to get the key onto a device:
   against the slot-list MAC of the **winning** key mail (4.3), matches the
   account by server + username, deletes the pairing mail; it expires after
   `ShareKeyMaterial.lifetime` (20 min).
+  - The request carries `keyId ‖ publicKey` plus the server and username of
+    the account (server: the lowercased IMAP host, or the host of the JMAP
+    URL; username: the login username, or the email if it is empty, also
+    lowercased). The **sender refuses** a request of another account before
+    it encrypts anything.
+  - The receiver's key pair is stored with a 20-min expiry (it survives an
+    app restart). The receiver rejects a payload whose key pair is unknown or
+    expired, whose `issuedAt` is older than 20 min or more than 5 min in the
+    future, of another account, that does not authenticate, or whose key is
+    not the winning group's or fails its slot-list MAC.
+  - A pairing mail is never uploaded again when it vanishes. Every device
+    with the beta switch on deletes pairing mails whose `Date` is older than
+    20 + 5 min in its **foreground** keys-folder sync; pairing mails of other
+    devices are otherwise left alone.
 
 Only an unlocked device may add or remove slots.
 
@@ -309,6 +323,19 @@ Implemented in `lib/core/encrypted_objects/` (pure Dart).
   `X-SharedInbox-Key-Mac: base64url(mac)`; it covers the **decoded** part
   bytes. A reader rejects a missing or duplicate MAC header, another schema
   or kind, and any other mail (e.g. a pairing mail).
+- **Pairing** (`pairing.dart`):
+  - Request: `sharedinbox.de:pair:v1:<base64url(keyId (16) ‖ publicKey (32)
+    ‖ enc(server) ‖ enc(username))>`; its own prefix, so an account-transfer
+    code is rejected.
+  - Plaintext (JSON, encrypted with `ShareEncryptionService.encryptBytes`,
+    info `sharedinbox-pairing-v1`, to the request's key):
+    `{"v": 1, "kind": "pairing", "accountKeyId", "accountKey", "server",
+    "username", "issuedAt"}`; `issuedAt` is ISO 8601 UTC.
+  - Pairing mail: `Date`, `Subject: SharedInbox pairing`, `Message-ID`,
+    `MIME-Version`, `X-SharedInbox-Schema: 1`, `X-SharedInbox-Key-Kind:
+    pairing`, and one `base64` `application/octet-stream` body with the
+    ECIES bytes `keyId ‖ ephPub ‖ nonce ‖ ciphertext ‖ mac`.
+  - Paste fallback: `sharedinbox.de:pairing:v1:<base64url(ECIES bytes)>`.
 - **Recovery key**: checksum = the first 4 bytes of SHA-256 of the raw 16
   bytes; `raw ‖ checksum` (160 bit) is written MSB-first in Crockford base32
   (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`) as 8 groups of 4 joined by `-`.
@@ -576,6 +603,18 @@ until the format review (section 2) is done; then opt-in per account.
 
 **New device**: key mail found but no local key → "Unlock: [Pair with another
 device] [Enter recovery key] [Passphrase] [Passkey]".
+
+**Pairing** (4.2):
+
+```text
+New device:  [Pair with another device] → shows the request as QR + text,
+             a 20-min countdown, checks SharedInbox/Keys every ~10 s,
+             a paste field for the fallback code → unlocks by itself
+Old device:  [Pair a new device] → scan (Android/iOS) or paste the request
+             → refused if it is for another account
+             → pairing mail appended (offline first) → "Sent — the new
+               device unlocks on its next sync" + the paste code (text + QR)
+```
 
 **Entries home**: tabs Notes | Todos | Journal | Cards, quick-add field,
 search (local). Conflict badge → conflict view (pick a version or keep both).

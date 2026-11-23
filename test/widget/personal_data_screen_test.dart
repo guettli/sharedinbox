@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
@@ -19,6 +20,9 @@ class _FakeKeyService implements EncryptedKeyService {
   CreateKeyResult? createResult;
   UnlockFailure? unlockFailure;
   final unlockInputs = <String>[];
+  final pairingCodes = <String>[];
+  final pairingRequests = <String>[];
+  int pairingChecks = 0;
 
   void setStatus(PersonalDataStatus s) {
     _status = s;
@@ -43,6 +47,35 @@ class _FakeKeyService implements EncryptedKeyService {
     final failure = unlockFailure;
     if (failure != null) throw UnlockFailed(failure);
     setStatus(PersonalDataStatus.unlocked);
+  }
+
+  @override
+  Future<PairingStart> startPairing(String accountId) async => (
+        request: '${pairingRequestPrefix}request',
+        expiresAt: DateTime.now().add(const Duration(minutes: 20)),
+      );
+
+  @override
+  Future<void> checkPairing(String accountId) async {
+    pairingChecks++;
+  }
+
+  @override
+  Future<void> acceptPairingCode(String accountId, String text) async {
+    pairingCodes.add(text);
+    if (text != 'good') {
+      throw const PairingRejected(PairingRejection.tampered);
+    }
+    setStatus(PersonalDataStatus.unlocked);
+  }
+
+  @override
+  Future<String> sendPairing(String accountId, String requestText) async {
+    pairingRequests.add(requestText);
+    if (requestText != 'mine') {
+      throw const PairingRejected(PairingRejection.wrongAccount);
+    }
+    return '${pairingCodePrefix}reply';
   }
 
   @override
@@ -108,7 +141,7 @@ void main() {
   testWidgets('unlock shows the reason it failed, then unlocks',
       (tester) async {
     final service = await _pump(tester, PersonalDataStatus.locked);
-    expect(find.text('Pair with another device (coming soon)'), findsOneWidget);
+    expect(find.byKey(const Key('pairReceiveStart')), findsOneWidget);
 
     service.unlockFailure = UnlockFailure.badChecksum;
     await tester.enterText(find.byKey(const Key('recoveryKeyField')), 'abc');
@@ -126,6 +159,61 @@ void main() {
     await tester.pumpAndSettle();
     expect(service.unlockInputs, ['abc', 'abc', 'abc']);
     expect(find.text('Unlocked on this device'), findsOneWidget);
+  });
+
+  testWidgets('pairing: the request as QR code, then a pasted code unlocks',
+      (tester) async {
+    final service = await _pump(tester, PersonalDataStatus.locked);
+    await tester.tap(find.byKey(const Key('pairReceiveStart')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('pairRequestQrCode')), findsOneWidget);
+    expect(find.text('${pairingRequestPrefix}request'), findsOneWidget);
+    expect(find.byKey(const Key('pairCountdown')), findsOneWidget);
+
+    // The keys folder is checked while the view waits.
+    await tester.pump(const Duration(seconds: 10));
+    expect(service.pairingChecks, 1);
+
+    final field = find.byKey(const Key('pairingCodeField'));
+    await tester.scrollUntilVisible(
+      field,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.enterText(field, 'bad');
+    await tester.tap(find.byKey(const Key('pairingCodeAccept')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('could not be decrypted'), findsOneWidget);
+
+    await tester.enterText(field, 'good');
+    await tester.tap(find.byKey(const Key('pairingCodeAccept')));
+    await tester.pumpAndSettle();
+    expect(service.pairingCodes, ['bad', 'good']);
+    expect(find.text('Unlocked on this device'), findsOneWidget);
+  });
+
+  testWidgets('pair a new device: another account is refused, then sent',
+      (tester) async {
+    final service = await _pump(tester, PersonalDataStatus.unlocked);
+    await tester.tap(find.byKey(const Key('pairSendStart')));
+    await tester.pumpAndSettle();
+
+    // No camera in tests: the paste form.
+    final field = find.byKey(const Key('pairingRequestField'));
+    await tester.enterText(field, 'other');
+    await tester.tap(find.byKey(const Key('pairingSend')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('for another account'), findsOneWidget);
+    expect(find.byKey(const Key('pairingSent')), findsNothing);
+
+    await tester.enterText(field, 'mine');
+    await tester.tap(find.byKey(const Key('pairingSend')));
+    await tester.pumpAndSettle();
+    expect(service.pairingRequests, ['other', 'mine']);
+    expect(find.byKey(const Key('pairingSent')), findsOneWidget);
+    expect(find.byKey(const Key('pairingCodeQrCode')), findsOneWidget);
+    expect(find.text('${pairingCodePrefix}reply'), findsOneWidget);
   });
 
   testWidgets('a lost race asks for the other device’s recovery key',
