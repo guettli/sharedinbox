@@ -12,10 +12,10 @@ import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/models/linked_note.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
-import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/notification_rule.dart';
 import 'package:sharedinbox/core/models/outbox_message.dart';
 import 'package:sharedinbox/core/models/pending_change.dart';
@@ -28,6 +28,7 @@ import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
+import 'package:sharedinbox/core/repositories/legacy_note_migration.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
@@ -64,6 +65,7 @@ import 'package:sharedinbox/core/sync/message_probe.dart';
 import 'package:sharedinbox/core/sync/outbox_retry_scheduler.dart';
 import 'package:sharedinbox/core/sync/reliability_runner.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
+import 'package:sharedinbox/core/utils/stream_utils.dart';
 import 'package:sharedinbox/data/db/database.dart'
     hide Email, EmailBody, UserPreferences;
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
@@ -77,6 +79,7 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/legacy_note_migrator.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
@@ -441,6 +444,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     drafts: ref.watch(draftRepositoryProvider),
     notes: ref.watch(noteRepositoryProvider),
     objects: ref.watch(mailObjectStoreProvider),
+    legacyNotes: ref.watch(legacyNoteMigrationProvider),
     onObjectsSynced: (accountId) => ref
         .read(encryptedKeyServiceProvider)
         .afterSync(accountId, foreground: true),
@@ -811,13 +815,52 @@ final trustedImageSendersProvider =
       .observeTrustedImageSenders();
 });
 
-final noteRepositoryProvider = Provider<NoteRepository>((ref) {
+final noteRepositoryImplProvider = Provider<NoteRepositoryImpl>((ref) {
   return NoteRepositoryImpl(
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
     imapConnect: ref.watch(imapConnectProvider),
     appLogger: ref.watch(appLoggerProvider),
+    notesMode: (accountId) =>
+        ref.read(encryptedKeyServiceProvider).notesMode(accountId),
   );
+});
+
+final noteRepositoryProvider = Provider<NoteRepository>(
+  (ref) => ref.watch(noteRepositoryImplProvider),
+);
+
+/// Moves the legacy plaintext notes of encrypted accounts into entries
+/// (#1375); run by the foreground sync.
+final legacyNoteMigrationProvider = Provider<LegacyNoteMigration>(
+  (ref) => LegacyNoteMigrator(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+    ref.watch(noteRepositoryImplProvider),
+    notesMode: (accountId) =>
+        ref.read(encryptedKeyServiceProvider).notesMode(accountId),
+    appLogger: ref.watch(appLoggerProvider),
+  ),
+);
+
+/// The synced legacy notes of an account waiting for the user's
+/// confirmation to move into entries (#1375); 0 once confirmed.
+final legacyNotesAwaitingConfirmationProvider =
+    StreamProvider.autoDispose.family<int, String>(
+  (ref, accountId) => ref
+      .watch(legacyNoteMigrationProvider)
+      .watchAwaitingConfirmation(accountId),
+);
+
+/// How notes on the mails of an account work (#1375); null while not known
+/// yet.
+final notesModeProvider =
+    Provider.autoDispose.family<NotesMode?, String>((ref, accountId) {
+  final beta = ref.watch(userPreferencesProvider).value?.personalDataBeta;
+  if (beta == null) return null;
+  if (!beta) return NotesMode.legacy;
+  final status = ref.watch(personalDataStatusProvider(accountId)).value;
+  return status == null ? null : notesModeOf(status);
 });
 
 /// The unlocked keys of this device, shared by the object store and the
@@ -1048,12 +1091,40 @@ class _ConversationNoteIds {
 /// Notes of every mail in the conversation of one email, so a note added to
 /// the Sent copy shows up when reading the reply (#870). Key is
 /// `(accountId, messageId, threadId)`; without a thread only the mail's own
-/// notes are returned.
+/// notes are returned. For an encrypted account the entries linked to those
+/// mails show too, next to the legacy notes not migrated yet (#1375).
 final conversationNotesProvider = StreamProvider.autoDispose
-    .family<List<EmailNote>, (String, String, String?)>((ref, key) {
+    .family<List<LinkedNote>, (String, String, String?)>((ref, key) {
   final (accountId, messageId, threadId) = key;
-  final repo = ref.watch(noteRepositoryProvider);
-  if (threadId == null) return repo.observeNotes(accountId, messageId);
+  final ids = threadId == null
+      ? [messageId]
+      : _conversationNoteIds(ref, accountId, messageId, threadId);
+  final notes =
+      ref.watch(noteRepositoryProvider).observeNotesForMessages(accountId, ids);
+  // Only a switch between legacy and encrypted resubscribes, not the mode
+  // becoming known (#1056).
+  final withEntries = ref.watch(
+    notesModeProvider(accountId).select(
+      (m) => m == NotesMode.entries || m == NotesMode.locked,
+    ),
+  );
+  if (!withEntries) {
+    return notes.map((list) => [for (final n in list) linkedNoteOf(n)]);
+  }
+  final entries = ref
+      .watch(entryRepositoryProvider)
+      .observeEntriesForMessages(accountId, ids);
+  return combineLatest(entries, notes, (e, n) => (e, n)).asyncMap(
+    (both) => mergeLinkedNotes(messageId, ids, both.$1, both.$2),
+  );
+});
+
+List<String> _conversationNoteIds(
+  Ref ref,
+  String accountId,
+  String messageId,
+  String threadId,
+) {
   // threadEmailsProvider is a drift .watch() that re-emits a fresh list on
   // every write to the emails table — constant while a sync runs. Only the
   // *set* of message IDs feeds the notes query, so select a value-comparable
@@ -1068,5 +1139,5 @@ final conversationNotesProvider = StreamProvider.autoDispose
       ]),
     ),
   );
-  return repo.observeNotesForMessages(accountId, idSet.ids);
-});
+  return idSet.ids;
+}

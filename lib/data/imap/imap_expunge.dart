@@ -67,8 +67,10 @@ bool isGmailImap(imap.ImapClient client) =>
 /// Deletes [uids] of the selected folder [sourcePath] for good on Gmail:
 /// `UID MOVE` to the `\Trash` special-use folder, then `UID EXPUNGE` of the
 /// copies there ([deleteAndExpungeUids]). The copies are named by the MOVE's
-/// `COPYUID`; without one they are found in Trash by [messageIds]. Selects
-/// [sourcePath] again before it returns.
+/// `COPYUID`; without one they are found in Trash by [messageIds], or by
+/// the [header] `(name, value)` for mail whose Message-ID is not known
+/// (e.g. legacy notes, `X-SharedInbox-Note-Id`). Selects [sourcePath] again
+/// before it returns.
 ///
 /// Returns false, and changes nothing, when the account has no `\Trash`
 /// folder.
@@ -77,6 +79,7 @@ Future<bool> moveToTrashAndExpunge(
   List<int> uids, {
   required String sourcePath,
   Iterable<String> messageIds = const [],
+  (String, String)? header,
 }) async {
   final trash = (await client.listMailboxes(recursive: true))
       .where((m) => m.isTrash)
@@ -103,6 +106,12 @@ Future<bool> moveToTrashAndExpunge(
           copies.addAll(hits);
           if (hits.isNotEmpty) break;
         }
+      }
+      if (header case (final name, final value)) {
+        final found = await client.uidSearchMessages(
+          searchCriteria: 'HEADER $name "$value"',
+        );
+        copies.addAll(found.matchingSequence?.toList() ?? const <int>[]);
       }
     }
     if (copies.isNotEmpty) await deleteAndExpungeUids(client, copies.toList());

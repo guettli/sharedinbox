@@ -1,16 +1,19 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
+
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
+import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 
 /// The kind of an entry (ENCRYPTED-OBJECTS.md §6): a note, todo or journal
-/// entry. Fields `title`, `tags`, `date`, `task`, `links` in the head, the
-/// body as a `text/markdown` part.
+/// entry. Fields `title`, `tags`, `date`, `task`, `links`, `createdAt` in
+/// the head, the body as a `text/markdown` part.
 const entryKind = 'entry';
 
 const _markdownType = 'text/markdown; charset=utf-8';
@@ -25,16 +28,20 @@ ObjectPart _markdownPart(String body) => ObjectPart(
 
 /// A new entry in the personal collection; an empty [title] is left out.
 /// A [task] makes it a todo; [links] are the Message-IDs of its mails.
+/// [itemId] defaults to a random one; [createdAt] (e.g. of a migrated
+/// note) is written as the `createdAt` field.
 InnerObject newEntryObject({
   String? title,
   required String body,
   required HlcClock clock,
   EntryTask? task,
   List<String> links = const [],
+  String? itemId,
+  DateTime? createdAt,
 }) =>
     InnerObject(
       head: ObjectHead(
-        itemId: newItemId(),
+        itemId: itemId ?? newItemId(),
         collectionId: personalCollectionId,
         versionId: clock.send(),
         kind: entryKind,
@@ -43,9 +50,40 @@ InnerObject newEntryObject({
           'tags': const <String>[],
           'links': links,
           if (task != null) 'task': task.toJson(),
+          if (createdAt != null) 'createdAt': createdAt.toUtc().toIso8601String(),
         },
       ),
       parts: [_markdownPart(body)],
+    );
+
+/// The itemId of the entry a legacy plaintext note [noteId] migrates into
+/// (#1375): base64url of the first 16 bytes of
+/// `SHA-256("sharedinbox-legacy-note:" + noteId)`. Two devices migrating
+/// the same note write the same item with the same content.
+Future<String> legacyNoteItemId(String noteId) async {
+  final hash = await Sha256().hash(utf8.encode('$_legacyNotePrefix$noteId'));
+  return b64url(hash.bytes.sublist(0, idLength));
+}
+
+const _legacyNotePrefix = 'sharedinbox-legacy-note:';
+
+/// The entry a legacy plaintext note migrates into (#1375): its text as the
+/// body, linked to its mail, its date as `createdAt`, no title and no tags.
+/// The content depends on the note only, so two devices migrating it at
+/// once write versions with the same content digest: one head, no conflict.
+Future<InnerObject> legacyNoteEntryObject({
+  required String noteId,
+  required String messageId,
+  required String text,
+  required DateTime createdAt,
+  required HlcClock clock,
+}) async =>
+    newEntryObject(
+      body: text,
+      clock: clock,
+      links: [messageId],
+      itemId: await legacyNoteItemId(noteId),
+      createdAt: createdAt,
     );
 
 /// The entry [object] shows, or null for a tombstone or another kind.
@@ -61,6 +99,7 @@ Entry? entryFromObject(
   final extra = head.extra;
   final title = extra['title'];
   final date = extra['date'];
+  final createdAt = extra['createdAt'];
   final body = object.parts.where(_isMarkdown).firstOrNull;
   return Entry(
     accountId: accountId,
@@ -72,6 +111,7 @@ Entry? entryFromObject(
     date: date is String ? date : null,
     task: EntryTask.fromJson(extra['task']),
     links: _strings(extra['links']),
+    createdAt: createdAt is String ? DateTime.tryParse(createdAt)?.toUtc() : null,
     versionId: head.versionId.encode(),
     updatedAt: DateTime.fromMillisecondsSinceEpoch(
       head.versionId.wallMs,

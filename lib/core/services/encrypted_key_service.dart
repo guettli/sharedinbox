@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
@@ -60,6 +61,19 @@ enum PersonalDataStatus {
   /// The setup was interrupted before the race was decided.
   setupInterrupted,
 }
+
+/// The [NotesMode] an account in status [s] has, with "Personal data
+/// (beta)" on (#1375): a key mail makes it an encrypted account.
+NotesMode notesModeOf(PersonalDataStatus s) => switch (s) {
+      PersonalDataStatus.notSetUp => NotesMode.legacy,
+      PersonalDataStatus.unlocked ||
+      PersonalDataStatus.foreignKeyWarning =>
+        NotesMode.entries,
+      PersonalDataStatus.locked ||
+      PersonalDataStatus.lostRace ||
+      PersonalDataStatus.setupInterrupted =>
+        NotesMode.locked,
+    };
 
 sealed class CreateKeyResult {
   const CreateKeyResult();
@@ -264,6 +278,13 @@ class EncryptedKeyService {
     return _foreignCount(mails, key) > 0
         ? PersonalDataStatus.foreignKeyWarning
         : PersonalDataStatus.unlocked;
+  }
+
+  /// How notes on mails of [accountId] work ([notesModeOf]); legacy while
+  /// the beta switch is off.
+  Future<NotesMode> notesMode(String accountId) async {
+    if (!await _betaEnabled()) return NotesMode.legacy;
+    return notesModeOf(await status(accountId));
   }
 
   /// [status], again on every change of the keys folder or of this

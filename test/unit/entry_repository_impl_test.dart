@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
+import 'package:sharedinbox/data/db/database.dart' show EntryLinkRow;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
@@ -532,6 +533,78 @@ void main() {
       // Newest first.
       expect(await todos(a, TodoFilter.done), ['done 2', 'done 1']);
       expect(await todos(a, TodoFilter.open, accounts: {'other'}), isEmpty);
+    });
+  });
+
+  group('links and createdAt (#1375)', () {
+    Future<List<String>> linked(_Device d, List<String> ids) async => [
+          for (final e
+              in await d.repo.observeEntriesForMessages(_acc, ids).first)
+            e.body,
+        ];
+
+    Future<List<EntryLinkRow>> linkRows(_Device d) =>
+        d.db.select(d.db.entryLinks).get();
+
+    test('the entries of mails, oldest first; links follow edits and deletes',
+        () async {
+      final a = await _Device.open(_server());
+      final clock = await a.store.clockFor(_acc);
+      // A migrated note: its createdAt is years before its version.
+      await a.store.put(
+        _acc,
+        newEntryObject(
+          body: 'old note',
+          clock: clock,
+          links: ['<m1@x>'],
+          createdAt: DateTime.utc(2020, 3, 4, 5, 6, 7),
+        ),
+      );
+      final both = await a.repo
+          .create(_acc, body: 'on both', links: ['<m1@x>', '<m2@x>']);
+      await a.repo.create(_acc, body: 'unlinked');
+      await a.store.waitForIdle();
+
+      expect(await linked(a, ['<m1@x>', '<m2@x>']), ['old note', 'on both']);
+      expect(await linked(a, ['<m2@x>']), ['on both']);
+      expect(await linked(a, ['<other@x>']), isEmpty);
+      expect(await linked(a, []), isEmpty);
+      final old = (await a.repo.observeEntriesForMessages(_acc, ['<m1@x>'])
+              .first)
+          .first;
+      expect(old.createdAt, DateTime.utc(2020, 3, 4, 5, 6, 7));
+      expect(old.sortDate, old.createdAt);
+      // The list is newest first by createdAt, else by the last edit.
+      expect(
+        [for (final e in await a.entries()) e.body],
+        ['unlinked', 'on both', 'old note'],
+      );
+      expect(await linkRows(a), hasLength(3));
+
+      // An edit keeps the links and the createdAt.
+      await a.update(old.itemId, 'old note, edited');
+      expect(await linked(a, ['<m1@x>']), ['old note, edited', 'on both']);
+      expect(
+        (await a.repo.entry(_acc, old.itemId))!.createdAt,
+        DateTime.utc(2020, 3, 4, 5, 6, 7),
+      );
+
+      // A delete removes its links.
+      await a.repo.delete(_acc, both.itemId);
+      await a.store.waitForIdle();
+      expect(await linked(a, ['<m2@x>']), isEmpty);
+      expect(await linkRows(a), hasLength(1));
+    });
+
+    test('the links of another device arrive with its entry', () async {
+      final server = _server();
+      final a = await _Device.open(server);
+      final b = await _Device.open(server);
+      await a.repo.create(_acc, body: 'shared', links: ['<m1@x>']);
+      await a.store.waitForIdle();
+      await a.sync();
+      await b.sync();
+      expect(await linked(b, ['<m1@x>']), ['shared']);
     });
   });
 }

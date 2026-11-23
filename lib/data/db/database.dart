@@ -66,6 +66,11 @@ class Accounts extends Table {
   // earlier schema version must see an absent column as null, not trip the
   // generated mapper's null-check.
   BoolColumn get notificationsEnabled => boolean().nullable()();
+  // Added in schema v88: when the user confirmed on this device that the
+  // account's legacy plaintext notes move into encrypted entries (#1375).
+  // Local only, never synced; null = not confirmed.
+  DateTimeColumn get legacyNotesMigrationConfirmedAt =>
+      dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -811,9 +816,28 @@ class Entries extends Table {
   // Its wall clock, ms since the epoch.
   IntColumn get updatedAt => integer()();
   BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
+  // Added in schema v88: the `createdAt` field, ms since the epoch (e.g.
+  // the date of a migrated note, #1375); lists sort by
+  // `COALESCE(created_at, updated_at)`.
+  IntColumn get createdAt => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {accountId, itemId};
+}
+
+/// The `links` of the [Entries], one row per Message-ID (#1375): how the
+/// mail detail screen and the note search find the entries of a mail.
+/// Written only by `EntryProjector`, with the entry. Added in schema v88.
+@DataClassName('EntryLinkRow')
+class EntryLinks extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get itemHmac => text()();
+  // An RFC 2822 Message-ID.
+  TextColumn get messageId => text()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, itemHmac, messageId};
 }
 
 /// The decks of the encrypted personal data (#1379): the projection of the
@@ -1091,6 +1115,7 @@ class UserPreferences extends Table {
     MailObjectBlobs,
     MailObjectDeviceStates,
     Entries,
+    EntryLinks,
     Decks,
     CardSources,
     Cards,
@@ -1589,6 +1614,7 @@ class AppDatabase extends _$AppDatabase {
           await _createMailObjectsIndex();
           await _createMailObjectLogIndexes();
           await _createEntriesIndex();
+          await _createEntryLinksIndex();
           await _createCardIndexes();
         },
         onUpgrade: _upgradeAtomically,
@@ -2641,7 +2667,37 @@ class AppDatabase extends _$AppDatabase {
         userPreferences.defaultItemsAccountId,
       );
     }
+    if (from < 88) {
+      // Legacy notes into entries (#1375). Each step re-runnable (#1084).
+      if (await _tableExists(this, 'accounts')) {
+        await _addColumnIfMissing(
+          m,
+          accounts,
+          accounts.legacyNotesMigrationConfirmedAt,
+        );
+      }
+      if (await _tableExists(this, 'entries')) {
+        await _addColumnIfMissing(m, entries, entries.createdAt);
+        if (!await _tableExists(this, 'entry_links')) {
+          await m.createTable(entryLinks);
+        }
+        await _createEntryLinksIndex();
+        // The links of the entries projected before v88.
+        await customStatement(
+          'INSERT OR IGNORE INTO entry_links (account_id, item_hmac, '
+          'message_id) SELECT e.account_id, e.item_hmac, j.value '
+          'FROM entries e, json_each(e.links_json) j '
+          "WHERE json_valid(e.links_json) AND j.type = 'text';",
+        );
+      }
+    }
   }
+
+  /// Schema v88: the entries of a mail, which the mail detail screen reads.
+  Future<void> _createEntryLinksIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS entry_links_message ON entry_links '
+        '(account_id, message_id);',
+      );
 
   /// Schema v86: the cards of a deck, which every deck view reads, and the
   /// sources of one item, which every card projection replaces.

@@ -14,7 +14,7 @@ import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/entry.dart';
-import 'package:sharedinbox/core/models/note.dart';
+import 'package:sharedinbox/core/models/linked_note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
@@ -22,6 +22,7 @@ import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart'
     show NoWriteKeyException;
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
@@ -1460,6 +1461,11 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ? const <Email>[]
         : ref.watch(threadEmailsProvider((header.accountId, threadId))).value ??
             const <Email>[];
+    final mode = ref.watch(notesModeProvider(header.accountId));
+    final locked = mode == NotesMode.locked;
+    final awaiting = legacyNotesAwaitingConfirmationProvider(header.accountId);
+    final awaitingMigration =
+        mode == NotesMode.entries ? ref.watch(awaiting).value ?? 0 : 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1475,12 +1481,32 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             ),
             const Spacer(),
             TextButton.icon(
+              key: const Key('notesAdd'),
               icon: const Icon(Icons.add, size: AppIconSize.sm),
               label: const Text('Add'),
-              onPressed: () => unawaited(_addNoteDialog(ctx, header)),
+              // An encrypted account gets no new plaintext note (#1375).
+              onPressed: locked
+                  ? null
+                  : () => unawaited(_addNoteDialog(ctx, header, mode)),
             ),
           ],
         ),
+        if (locked)
+          _notesHint(
+            ctx,
+            header.accountId,
+            key: const Key('notesLockedHint'),
+            text: 'Unlock personal data to add notes',
+            action: 'Unlock',
+          ),
+        if (awaitingMigration > 0)
+          _notesHint(
+            ctx,
+            header.accountId,
+            key: const Key('notesMigrationHint'),
+            text: 'Older notes are not encrypted yet',
+            action: 'Review',
+          ),
         notes.when(
           // conversationNotesProvider is fed by threadEmailsProvider, a drift
           // .watch() that re-emits on every write to the emails table — so it
@@ -1518,9 +1544,39 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     );
   }
 
+  /// A line under the notes header leading to the personal-data screen
+  /// (#1375).
+  Widget _notesHint(
+    BuildContext ctx,
+    String accountId, {
+    required Key key,
+    required String text,
+    required String action,
+  }) =>
+      Row(
+        key: key,
+        children: [
+          Icon(
+            Icons.lock_outline,
+            size: AppIconSize.sm,
+            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(text, style: Theme.of(ctx).textTheme.bodySmall),
+          ),
+          TextButton(
+            onPressed: () => unawaited(
+              GoRouter.of(ctx).push('/accounts/$accountId/personal-data'),
+            ),
+            child: Text(action),
+          ),
+        ],
+      );
+
   Widget _buildNoteRow(
     BuildContext ctx,
-    EmailNote note,
+    LinkedNote note,
     Email header,
     List<Email> threadEmails,
   ) {
@@ -1529,23 +1585,45 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ? created
         : '$created · ${_relatedMailLabel(note.messageId, threadEmails)}';
     // Saved locally; it goes to the server on the next successful sync.
-    final subtitle = note.pendingUpload ? '$base · not synced yet' : base;
+    final subtitle = switch (note) {
+      LinkedNote(pendingUpload: true) => '$base · not synced yet',
+      LinkedNote(hasConflict: true) => '$base · conflict',
+      _ => base,
+    };
     return ListTile(
+      key: Key('note-${note.id}'),
       dense: true,
       contentPadding: EdgeInsets.zero,
-      title: Text(note.noteText),
+      title: Text(note.text),
       subtitle: Text(
         subtitle,
         style: Theme.of(ctx).textTheme.bodySmall,
       ),
+      onTap: note.isEntry
+          ? () => unawaited(
+                GoRouter.of(ctx)
+                    .push('/accounts/${note.accountId}/entries/${note.id}'),
+              )
+          : null,
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline, size: AppIconSize.md),
         tooltip: 'Delete note',
-        onPressed: () {
-          unawaited(ref.read(noteRepositoryProvider).deleteNote(note.id));
-        },
+        onPressed: () => unawaited(_deleteNote(note)),
       ),
     );
+  }
+
+  Future<void> _deleteNote(LinkedNote note) async {
+    if (!note.isEntry) {
+      await ref.read(noteRepositoryProvider).deleteNote(note.id);
+      return;
+    }
+    try {
+      await ref.read(entryRepositoryProvider).delete(note.accountId, note.id);
+    } on NoWriteKeyException {
+      if (!mounted) return;
+      context.showAppSnackBar('Unlock personal data to delete this note');
+    }
   }
 
   /// Names the related mail of the conversation a note belongs to (#870),
@@ -1563,7 +1641,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     return 'on mail$sender, $sent';
   }
 
-  Future<void> _addNoteDialog(BuildContext context, Email header) async {
+  /// Adds a note to [header]: an encrypted entry linked to the mail when
+  /// the account's notes are entries, else a plaintext note (#1375).
+  Future<void> _addNoteDialog(
+    BuildContext context,
+    Email header,
+    NotesMode? mode,
+  ) async {
     final messageId = header.messageId;
     if (messageId == null) return;
 
@@ -1577,11 +1661,27 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     if (text == null) return;
     if (!context.mounted) return;
 
-    await ref.read(noteRepositoryProvider).addNote(
+    try {
+      if (mode == NotesMode.entries) {
+        await ref.read(entryRepositoryProvider).create(
           header.accountId,
-          messageId,
-          text,
+          body: text,
+          links: [messageId],
         );
+        return;
+      }
+      await ref.read(noteRepositoryProvider).addNote(
+            header.accountId,
+            messageId,
+            text,
+          );
+    } on NotesEncryptedException {
+      if (!context.mounted) return;
+      context.showAppSnackBar('Unlock personal data to add notes');
+    } on NoWriteKeyException {
+      if (!context.mounted) return;
+      context.showAppSnackBar('Unlock personal data to add notes');
+    }
   }
 
   /// One "To:"/"Cc:"/"Bcc:" header line. Capped so a mail to dozens of

@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/legacy_note_migration.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
@@ -254,6 +255,7 @@ class AccountSyncManager {
     DraftRepository? drafts,
     NoteRepository? notes,
     MailObjectStore? objects,
+    LegacyNoteMigration? legacyNotes,
     OnObjectsSyncedCallback? onObjectsSynced,
     OnNewMailCallback? onNewMail,
     ImapIdleTimings imapIdleTimings = const ImapIdleTimings(),
@@ -264,6 +266,7 @@ class AccountSyncManager {
         _drafts = drafts,
         _notes = notes,
         _objects = objects,
+        _legacyNotes = legacyNotes,
         _onObjectsSynced = onObjectsSynced,
         _onNewMail = onNewMail;
 
@@ -277,6 +280,7 @@ class AccountSyncManager {
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
   final MailObjectStore? _objects;
+  final LegacyNoteMigration? _legacyNotes;
   final OnObjectsSyncedCallback? _onObjectsSynced;
   final OnNewMailCallback? _onNewMail;
 
@@ -783,6 +787,7 @@ class AccountSyncManager {
           _notes,
           _objects,
           _onNewMail,
+          legacyNotes: _legacyNotes,
           onObjectsSynced: _onObjectsSynced,
           idleTimings: _imapIdleTimings,
           onSyncStart: () => _emitSyncing(id, syncing: true),
@@ -799,6 +804,7 @@ class AccountSyncManager {
           _notes,
           _objects,
           _onNewMail,
+          legacyNotes: _legacyNotes,
           onSyncStart: () => _emitSyncing(id, syncing: true),
           onSyncEnd: onSyncEnd,
         ),
@@ -807,15 +813,24 @@ class AccountSyncManager {
 }
 
 /// Syncs the encrypted-object store (#1370, #1371) of [account], then runs
-/// [onSynced] (the key lifecycle, #1366). Like notes, a failure there must
-/// not stop mail sync: logged and swallowed.
+/// [onSynced] (the key lifecycle, #1366). Around the sync, [legacyNotes]
+/// moves legacy notes into entries (#1375): before it the entries are
+/// written, so the sync uploads them; after it the plaintext copies of
+/// those on the server go. Like notes, a failure there must not stop mail
+/// sync: logged and swallowed.
 Future<void> _syncMailObjectsQuietly(
   MailObjectStore? objects,
   Account account,
   AppLogger appLogger, {
+  LegacyNoteMigration? legacyNotes,
   OnObjectsSyncedCallback? onSynced,
 }) async {
   if (objects == null) return;
+  await _migrateLegacyNotesQuietly(
+    () async => legacyNotes?.beforeObjectSync(account.id),
+    account,
+    appLogger,
+  );
   try {
     await objects.sync(account.id);
   } catch (e, st) {
@@ -836,6 +851,31 @@ Future<void> _syncMailObjectsQuietly(
       appLogger.warn(
         'sync.mos.keys_failed',
         'Encrypted-data key check failed: $e',
+        accountId: account.id,
+        error: e,
+        stack: st,
+      ),
+    );
+  }
+  await _migrateLegacyNotesQuietly(
+    () async => legacyNotes?.afterObjectSync(account.id),
+    account,
+    appLogger,
+  );
+}
+
+Future<void> _migrateLegacyNotesQuietly(
+  Future<void> Function() pass,
+  Account account,
+  AppLogger appLogger,
+) async {
+  try {
+    await pass();
+  } catch (e, st) {
+    unawaited(
+      appLogger.warn(
+        'sync.notes.migrate_failed',
+        'Moving notes into encrypted entries failed: $e',
         accountId: account.id,
         error: e,
         stack: st,
@@ -919,10 +959,12 @@ class _AccountSync with _KickableWait {
     this._objects,
     this._onNewMail, {
     required ImapIdleTimings idleTimings,
+    LegacyNoteMigration? legacyNotes,
     OnObjectsSyncedCallback? onObjectsSynced,
     void Function()? onSyncStart,
     void Function({required bool success})? onSyncEnd,
   })  : _idleTimings = idleTimings,
+        _legacyNotes = legacyNotes,
         _onObjectsSynced = onObjectsSynced,
         _onSyncStart = onSyncStart,
         _onSyncEnd = onSyncEnd;
@@ -938,6 +980,7 @@ class _AccountSync with _KickableWait {
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
   final MailObjectStore? _objects;
+  final LegacyNoteMigration? _legacyNotes;
   final OnNewMailCallback? _onNewMail;
   final OnObjectsSyncedCallback? _onObjectsSynced;
   final void Function()? _onSyncStart;
@@ -1203,6 +1246,7 @@ class _AccountSync with _KickableWait {
       _objects,
       account,
       _appLogger,
+      legacyNotes: _legacyNotes,
       onSynced: _onObjectsSynced,
     );
     final stats = _SyncStats(
@@ -1461,9 +1505,11 @@ class _JmapAccountSync with _KickableWait {
     this._notes,
     this._objects,
     this._onNewMail, {
+    LegacyNoteMigration? legacyNotes,
     void Function()? onSyncStart,
     void Function({required bool success})? onSyncEnd,
-  })  : _onSyncStart = onSyncStart,
+  })  : _legacyNotes = legacyNotes,
+        _onSyncStart = onSyncStart,
         _onSyncEnd = onSyncEnd;
 
   final Account account;
@@ -1475,6 +1521,7 @@ class _JmapAccountSync with _KickableWait {
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
   final MailObjectStore? _objects;
+  final LegacyNoteMigration? _legacyNotes;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
   final void Function({required bool success})? _onSyncEnd;
@@ -1715,7 +1762,12 @@ class _JmapAccountSync with _KickableWait {
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
-    await _syncMailObjectsQuietly(_objects, account, _appLogger);
+    await _syncMailObjectsQuietly(
+      _objects,
+      account,
+      _appLogger,
+      legacyNotes: _legacyNotes,
+    );
     final stats = _SyncStats(
       emailsFetched: folders.emailResult.fetched,
       emailsSkipped: folders.emailResult.skipped,

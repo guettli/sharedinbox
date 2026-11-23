@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
@@ -337,5 +338,77 @@ void main() {
     expect(under(TodoFilter.today), [false, true, true, false, false]);
     expect(under(TodoFilter.done), [false, false, false, false, true]);
     expect(isoDate(DateTime(2026, 1, 5, 23, 59)), '2026-01-05');
+  });
+
+  group('legacy notes (#1375)', () {
+    test('legacyNoteItemId is stable, 16 bytes, and differs per note',
+        () async {
+      final id = await legacyNoteItemId('note-1');
+      expect(id, await legacyNoteItemId('note-1'));
+      expect(id, isNot(await legacyNoteItemId('note-2')));
+      expect(b64urlDecode(id), hasLength(idLength));
+      expect(id.length, newItemId().length);
+    });
+
+    Future<InnerObject> migrated(HlcClock clock) => legacyNoteEntryObject(
+          noteId: 'note-1',
+          messageId: '<m1@example.com>',
+          text: 'call back',
+          createdAt: DateTime.utc(2024, 6, 2, 10, 15),
+          clock: clock,
+        );
+
+    test('two devices migrating the same note write the same content',
+        () async {
+      final a = await migrated(clockAt(1700000000000));
+      final b = await migrated(clockAt(1700000005000, 'devB'));
+      expect(a.head.itemId, b.head.itemId);
+      expect(a.head.versionId, isNot(b.head.versionId));
+      expect(await contentDigestOf(a), await contentDigestOf(b));
+      final merge = await mergeOf([a, b]);
+      expect(merge.state, MergeState.live);
+      expect(merge.distinctHeads, hasLength(1));
+    });
+
+    test('the migrated entry has the note text, link and date', () async {
+      final object = await migrated(clockAt(1700000000000));
+      final entry = entryFromObject(object, accountId: 'acc', itemHmac: 'h')!;
+      expect(entry.itemId, await legacyNoteItemId('note-1'));
+      expect(entry.title, isNull);
+      expect(entry.body, 'call back');
+      expect(entry.links, ['<m1@example.com>']);
+      expect(entry.tags, isEmpty);
+      expect(entry.createdAt, DateTime.utc(2024, 6, 2, 10, 15));
+      expect(entry.sortDate, entry.createdAt);
+    });
+
+    test('createdAt survives an edit; an invalid one reads as null',
+        () async {
+      final object = await migrated(clockAt(1700000000000));
+      final edited = editEntryObject(
+        base: object,
+        merge: await mergeOf([object]),
+        clock: clockAt(1700000009000),
+        body: 'edited',
+      );
+      expect(
+        entryFromObject(edited, accountId: 'acc', itemHmac: 'h')!.createdAt,
+        DateTime.utc(2024, 6, 2, 10, 15),
+      );
+      final bad = newEntryObject(body: 'x', clock: clockAt(1700000000000));
+      final withBad = InnerObject(
+        head: ObjectHead(
+          itemId: bad.head.itemId,
+          collectionId: bad.head.collectionId,
+          versionId: bad.head.versionId,
+          kind: bad.head.kind,
+          extra: {...bad.head.extra, 'createdAt': 'yesterday'},
+        ),
+        parts: bad.parts,
+      );
+      final entry = entryFromObject(withBad, accountId: 'acc', itemHmac: 'h')!;
+      expect(entry.createdAt, isNull);
+      expect(entry.sortDate, entry.updatedAt);
+    });
   });
 }

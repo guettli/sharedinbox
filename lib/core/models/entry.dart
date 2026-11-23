@@ -90,6 +90,7 @@ class Entry {
     this.date,
     this.task,
     this.links = const [],
+    this.createdAt,
     required this.versionId,
     required this.updatedAt,
     this.hasConflict = false,
@@ -112,6 +113,13 @@ class Entry {
 
   /// RFC 2822 Message-IDs of the mails it belongs to.
   final List<String> links;
+
+  /// When it was created, if it says (`createdAt`, e.g. the date of a
+  /// migrated note); UTC.
+  final DateTime? createdAt;
+
+  /// [createdAt], else [updatedAt]: what lists sort by.
+  DateTime get sortDate => createdAt ?? updatedAt;
 
   /// The encoded HLC of the version shown.
   final String versionId;

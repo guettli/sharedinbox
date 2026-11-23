@@ -4,9 +4,17 @@ import 'package:sharedinbox/core/models/entry.dart';
 /// #1373). Reads come from the local projection; writes go through the
 /// encrypted-object store, work offline and are uploaded by its sync.
 abstract class EntryRepository {
-  /// The entries of [accountId], newest first; [query] filters title and
-  /// body (case-insensitive substring).
+  /// The entries of [accountId], newest first (by `createdAt`, else by the
+  /// last edit); [query] filters title and body (case-insensitive
+  /// substring).
   Stream<List<Entry>> observeEntries(String accountId, {String query = ''});
+
+  /// The entries of [accountId] linked to any of [messageIds], oldest
+  /// first like the notes of a mail (#1375).
+  Stream<List<Entry>> observeEntriesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  );
 
   Future<Entry?> entry(String accountId, String itemId);
 
