@@ -573,6 +573,7 @@ One kind `entry`. Fields in the JSON head:
 | `date` (optional, `YYYY-MM-DD`) | makes it a **journal** entry |
 | `task` (optional) `{due?, priority?, done, doneAt?}` | makes it a **todo** |
 | `links` | list of RFC 2822 Message-IDs of mails it belongs to (former "email notes") |
+| `createdAt` (optional, ISO 8601) | when it was created, e.g. the date of a migrated note; lists sort by it, else by the version's wall clock |
 
 Body: a `text/markdown` part. Markdown task lists (`- [ ]`) are rendered and
 toggling one is an edit. Images: `![](si-img:<blobItemId>)`, resolved from the
@@ -636,8 +637,33 @@ otherwise to the first unlocked one. "Create todo" on a mail creates the todo
 in that mail's account, with `links: [messageId]`.
 
 Legacy plaintext notes (`Notes` folder, `X-SharedInbox-Note-*` headers) are
-migrated into entries with `links: [messageId]` (#1355). Only mails with
-`X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too.
+migrated into entries with `links: [messageId]` (#1375). Only mails with
+`X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too;
+the folder itself is never deleted or renamed.
+
+- **No plaintext once a key mail exists.** An account with a key mail is an
+  encrypted account: this device never writes or uploads a new plaintext note
+  for it. Locked, adding a note is disabled ("Unlock personal data to add
+  notes") and notes still pending upload stay on the device. Unlocked, a new
+  note is an entry. Accounts without a key mail keep plaintext notes.
+- **Deterministic itemId**: base64url of the first 16 bytes of
+  `SHA-256("sharedinbox-legacy-note:" + noteId)`. The content depends on the
+  note only (body = text, `links: [messageId]`, no title, no tags,
+  `createdAt` = the note's date), so two devices migrating the same note
+  write the same content digest: one head, no conflict, no duplicate.
+- **Passes** (foreground sync only, `LegacyNoteMigrator`):
+  - **A0** before the object sync, no confirmation needed: a note pending
+    upload becomes an entry and its local row goes; it never reaches the
+    server.
+  - **A** before the object sync, once the user confirmed on this device: each
+    synced note becomes an entry unless any version of its item exists here
+    (a tombstone too, so a delete is never undone).
+  - **B** after the object sync, once confirmed: a note whose entry has a
+    version confirmed on the server is deleted from `Notes` (on Gmail through
+    Trash). An interrupted migration resumes from this state alone.
+- The mail detail screen shows the entries linked to the mail and its related
+  mails (`entry_links`) next to the notes not migrated yet; note search
+  covers both.
 
 ## 7. Flash cards
 
@@ -755,6 +781,14 @@ Old device:  [Pair a new device] → scan (Android/iOS) or paste the request
              → pairing mail appended (offline first) → "Sent — the new
                device unlocks on its next sync" + the paste code (text + QR)
 ```
+
+**Legacy notes** (#1375): once unlocked, the personal-data screen offers
+"Move N email notes into encrypted entries". The dialog warns that older
+SharedInbox versions on other devices no longer see these notes, that the
+provider may keep copies of the deleted plaintext (Gmail All Mail / Trash,
+Exchange Recoverable Items), and that the `Notes` folder and other mail in it
+stay. Confirming is stored per account on this device and starts a sync; until
+then the mail detail screen shows a hint leading there.
 
 **Entries home**: tabs Notes | Todos | Journal | Cards, quick-add field,
 search (local). Conflict badge → conflict list → conflict view: one card
