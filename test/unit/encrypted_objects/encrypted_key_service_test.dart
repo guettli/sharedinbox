@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -44,6 +45,7 @@ class _Device {
       shareKeys: ShareKeyRepositoryImpl(db),
       findAccount: (id) async => id == _acc ? account : null,
       appLogger: AppLogger(logs),
+      deriver: _cheapArgon2id,
     );
     store.keepVanished = (row) => ring.keepVanishedKeyMail(_acc, row);
   }
@@ -63,6 +65,20 @@ class _Device {
 
   List<String> get events => [for (final r in logs.rows) r.event];
 }
+
+/// Argon2id with tiny params, whatever the slot says.
+Future<Uint8List> _cheapArgon2id(
+  Uint8List passphrase,
+  Uint8List salt,
+  Argon2idParams params,
+) =>
+    argon2id(
+      passphrase,
+      salt,
+      const Argon2idParams(memoryKiB: 64, iterations: 1),
+    );
+
+const _passphrase = 'violet tractor sings beneath copper rain';
 
 List<AccountKeyMailMsg> _accountKeyMails(FakeKeysServer server) => [
       for (final m in server.mails.values)
@@ -494,6 +510,199 @@ void main() {
         expect(line, isNot(contains(secret)));
       }
     }
+  });
+
+  group('passphrase', () {
+    List<String> slotTypes() => [
+          for (final s in _accountKeyMails(server).single.mail.payload.slots)
+            s.type,
+        ];
+
+    Future<_Device> unlocked() async {
+      final a = await device();
+      await a.service.createKey(_acc);
+      return a;
+    }
+
+    test('adding writes version + 1 and deletes the old key mail', () async {
+      final a = await unlocked();
+      final before = _accountKeyMails(server).single;
+      expect(await a.service.hasPassphraseSlot(_acc), isFalse);
+
+      await a.service.addPassphraseSlot(_acc, _passphrase);
+
+      final after = _accountKeyMails(server).single;
+      expect(
+        after.mail.payload.slotListVersion,
+        before.mail.payload.slotListVersion + 1,
+      );
+      expect(slotTypes(), [UnlockSlotType.recovery, UnlockSlotType.passphrase]);
+      expect(
+        await after.mail.verify(await (await a.keys.load(_acc))!.kSlots()),
+        isTrue,
+      );
+      expect(await a.service.hasPassphraseSlot(_acc), isTrue);
+      expect(a.events, contains('mos.passphrase_slot_added'));
+    });
+
+    test('changing replaces the slot: still exactly one', () async {
+      final a = await unlocked();
+      await a.service.addPassphraseSlot(_acc, _passphrase);
+      await a.service.addPassphraseSlot(_acc, 'gravel orbit maple lantern');
+
+      expect(slotTypes(), [UnlockSlotType.recovery, UnlockSlotType.passphrase]);
+      final b = await device();
+      await expectLater(
+        b.service.unlockWithPassphrase(_acc, _passphrase),
+        throwsA(isA<UnlockFailed>()),
+      );
+      await b.service.unlockWithPassphrase(_acc, 'gravel orbit maple lantern');
+      expect(await b.status(), PersonalDataStatus.unlocked);
+    });
+
+    test('a fresh device unlocks with it; a wrong one fails', () async {
+      final a = await unlocked();
+      await a.service.addPassphraseSlot(_acc, _passphrase);
+      final b = await device();
+      await b.store.sync(_acc);
+      expect(await b.status(), PersonalDataStatus.locked);
+      expect(await b.service.hasPassphraseSlot(_acc), isTrue);
+
+      await expectLater(
+        b.service.unlockWithPassphrase(_acc, '$_passphrase!'),
+        throwsA(
+          isA<UnlockFailed>()
+              .having((e) => e.reason, 'reason', UnlockFailure.noSlotOpens),
+        ),
+      );
+      expect(await b.keys.load(_acc), isNull);
+
+      await b.service.unlockWithPassphrase(_acc, _passphrase);
+
+      final ka = (await a.keys.load(_acc))!;
+      final kb = (await b.keys.load(_acc))!;
+      expect(kb.accountKeyId, ka.accountKeyId);
+      expect(kb.key.bytes, ka.key.bytes);
+      expect(await b.status(), PersonalDataStatus.unlocked);
+      expect(
+        b.logs.rows.where((r) => r.event == 'mos.key_unlocked').single.dataJson,
+        contains('passphrase'),
+      );
+      // Never the passphrase in the logs.
+      for (final d in [a, b]) {
+        for (final r in d.logs.rows) {
+          expect('${r.message} ${r.dataJson ?? ''}', isNot(contains('violet')));
+        }
+      }
+    });
+
+    test('a weak passphrase is refused; nothing is written', () async {
+      final a = await unlocked();
+      final ids = server.messageIds;
+      final syncs = a.store.syncs;
+
+      for (final (weak, reason) in [
+        ('short', PassphraseWeakness.tooShort),
+        ('password1234', PassphraseWeakness.common),
+        ('alice@example.com rocks', PassphraseWeakness.containsAccountName),
+      ]) {
+        await expectLater(
+          a.service.addPassphraseSlot(_acc, weak),
+          throwsA(
+            isA<WeakPassphrase>().having((e) => e.weakness, 'weakness', reason),
+          ),
+        );
+      }
+      expect(server.messageIds, ids);
+      expect(a.store.syncs, syncs);
+      expect(a.store.rows.where((r) => r.pendingUpload), isEmpty);
+    });
+
+    test('removing keeps the recovery slot', () async {
+      final a = await unlocked();
+      await a.service.addPassphraseSlot(_acc, _passphrase);
+
+      await a.service.removePassphraseSlot(_acc);
+
+      expect(slotTypes(), [UnlockSlotType.recovery]);
+      expect(_accountKeyMails(server).single.mail.payload.slotListVersion, 3);
+      expect(await a.service.hasPassphraseSlot(_acc), isFalse);
+      expect(a.events, contains('mos.passphrase_slot_removed'));
+    });
+
+    test('a locked device cannot change slots', () async {
+      await unlocked();
+      final b = await device();
+      await b.store.sync(_acc);
+      await expectLater(
+        b.service.addPassphraseSlot(_acc, _passphrase),
+        throwsA(isA<KeySetupException>()),
+      );
+      await expectLater(
+        b.service.removePassphraseSlot(_acc),
+        throwsA(isA<KeySetupException>()),
+      );
+    });
+
+    test('offline: nothing is appended', () async {
+      final a = await unlocked();
+      final rows = a.store.rows.length;
+      a.store.offline = true;
+
+      await expectLater(
+        a.service.addPassphraseSlot(_acc, _passphrase),
+        throwsA(isA<KeyMailOfflineException>()),
+      );
+      expect(a.store.rows, hasLength(rows));
+      expect(a.store.rows.where((r) => r.pendingUpload), isEmpty);
+    });
+
+    test('the server not taking the new mail keeps the old one', () async {
+      final a = await unlocked();
+      final old = _accountKeyMails(server).single.messageId;
+      var syncs = 0;
+      a.store.betweenPullAndPush = () {
+        // The first sync pulls; the one after the append fails.
+        if (++syncs == 2) throw const SocketException('offline');
+      };
+
+      await expectLater(
+        a.service.addPassphraseSlot(_acc, _passphrase),
+        throwsA(isA<KeyMailOfflineException>()),
+      );
+      expect(server.messageIds, contains(old));
+      expect(a.store.rows.map((r) => r.messageId), contains(old));
+      expect(a.store.rows.where((r) => r.pendingDelete), isEmpty);
+    });
+
+    test('a slot with params above the caps is skipped', () async {
+      final a = await unlocked();
+      final key = (await a.keys.load(_acc))!;
+      final current = _accountKeyMails(server).single;
+      final slot = await wrapPassphraseSlot(
+        key,
+        _passphrase,
+        params: const Argon2idParams(memoryKiB: 1 << 22),
+        deriver: _cheapArgon2id,
+      );
+      final payload = current.mail.payload.withSlotAdded(slot);
+      final messageId = newMessageId();
+      server.append(
+        messageId,
+        buildKeyMail(
+          messageId: messageId,
+          mail: await payload.serialize(await key.kSlots()),
+          date: DateTime.now(),
+        ),
+      );
+      final b = await device();
+
+      await expectLater(
+        b.service.unlockWithPassphrase(_acc, _passphrase),
+        throwsA(isA<UnlockFailed>()),
+      );
+      expect(b.events, contains('mos.unlock_slot_skipped'));
+    });
   });
 
   group('pairing', () {

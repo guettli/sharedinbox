@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
@@ -11,6 +12,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -101,6 +103,27 @@ class KeySetupException implements Exception {
   String toString() => 'KeySetupException: $message';
 }
 
+/// Changing the slots needs the server: it was not reachable before the
+/// key mail was rewritten, or did not take the new key mail.
+class KeyMailOfflineException implements Exception {
+  const KeyMailOfflineException(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => 'KeyMailOfflineException: $cause';
+}
+
+/// The passphrase does not meet the minimum strength; nothing was written.
+class WeakPassphrase implements Exception {
+  const WeakPassphrase(this.weakness);
+
+  final PassphraseWeakness weakness;
+
+  @override
+  String toString() => 'WeakPassphrase: ${weakness.name}';
+}
+
 /// One account-key mail of the keys folder and its UID (null until the
 /// server confirmed it).
 typedef KeyMailEntry = ({String messageId, SignedKeyMail mail, int? uid});
@@ -132,6 +155,14 @@ int _compareBytes(Uint8List a, Uint8List b) {
   return a.length - b.length;
 }
 
+/// What a passphrase of [account] must not contain: the email address, its
+/// local part and the username.
+List<String> passphraseContext(Account account) => [
+      account.email,
+      account.email.split('@').first,
+      account.username,
+    ];
+
 /// A pairing request this device shows, and when its key pair expires.
 typedef PairingStart = ({String request, DateTime expiresAt});
 
@@ -141,11 +172,12 @@ const _noState = (phase: KeyPhase.none, ownMessageId: null, committed: false);
 
 /// Key lifecycle of the encrypted personal data (`ENCRYPTED-OBJECTS.md`
 /// 4.2, 4.3, 9): key mail and collection-key mails in `SharedInbox/Keys`
-/// via the [MailObjectStore], the key-creation race and unlocking with the
-/// recovery key. Fills the shared [KeyRing].
+/// via the [MailObjectStore], the key-creation race, the passphrase slot
+/// and unlocking with the recovery key or the passphrase. Fills the shared
+/// [KeyRing].
 ///
 /// Logs event names, counts and Message-IDs only — never slots, MACs,
-/// keys, the recovery key or `accountKeyId`s.
+/// keys, the recovery key, the passphrase or `accountKeyId`s.
 class EncryptedKeyService {
   EncryptedKeyService({
     required AppDatabase db,
@@ -158,6 +190,7 @@ class EncryptedKeyService {
     Future<Account?> Function(String accountId)? findAccount,
     AppLogger? appLogger,
     DateTime Function()? now,
+    PassphraseDeriver deriver = argon2idInIsolate,
   })  : _db = db,
         _store = store,
         _keys = keys,
@@ -167,7 +200,8 @@ class EncryptedKeyService {
         _shareKeys = shareKeys,
         _findAccount = findAccount,
         _appLogger = appLogger,
-        _now = now ?? DateTime.now {
+        _now = now ?? DateTime.now,
+        _deriver = deriver {
     ring.onWriteKeyUsed = (accountId) {
       unawaited(_markCommitted(accountId));
     };
@@ -187,6 +221,9 @@ class EncryptedKeyService {
   final Future<Account?> Function(String accountId)? _findAccount;
   final AppLogger? _appLogger;
   final DateTime Function() _now;
+
+  /// Argon2id of the passphrase slot; tests inject cheap params or a spy.
+  final PassphraseDeriver _deriver;
 
   final _changes = StreamController<String>.broadcast();
 
@@ -459,15 +496,8 @@ class EncryptedKeyService {
         data: {'messageId': ownMessageId},
       ),
     );
-    final shown = recoveryKey ??
-        await _replaceRecoverySlot(
-          accountId,
-          accountKey,
-          [
-            for (final e in entries)
-              if (b64url(e.mail.payload.accountKeyId) == groupId) e,
-          ],
-        );
+    final shown =
+        recoveryKey ?? await _replaceRecoverySlot(accountId, accountKey);
     await _ensurePersonalCollection(accountId, accountKey);
     await _saveState(
       accountId,
@@ -476,27 +506,60 @@ class EncryptedKeyService {
     return KeyCreated(shown, await shown.format());
   }
 
-  /// A new key mail at `slotListVersion + 1` with a fresh recovery slot in
-  /// place of the old ones (whose recovery key was never shown); the old
-  /// mails go once the new one is on the server.
+  /// A fresh recovery slot in place of the old ones (whose recovery key
+  /// was never shown).
   Future<RecoveryKey> _replaceRecoverySlot(
     String accountId,
     AccountKey accountKey,
-    List<KeyMailEntry> group,
   ) async {
+    final recoveryKey = RecoveryKey.generate();
+    final slot = await wrapRecoverySlot(accountKey, recoveryKey);
+    await _rewriteKeyMail(
+      accountId,
+      accountKey,
+      (slots) => [
+        for (final s in slots)
+          if (s.type != UnlockSlotType.recovery) s,
+        slot,
+      ],
+    );
+    return recoveryKey;
+  }
+
+  /// Changes the slots (4.2): pulls the keys folder, appends a key mail at
+  /// `slotListVersion + 1` with the slots [edit] returns (unknown fields
+  /// kept), and deletes the group's old mails once the server has the new
+  /// one. Throws [KeyMailOfflineException] if the server cannot be reached
+  /// first — nothing is written then — or did not take the new mail; the
+  /// old mails stay in that case (the highest version wins, and the next
+  /// rewrite cleans up).
+  Future<void> _rewriteKeyMail(
+    String accountId,
+    AccountKey accountKey,
+    List<UnlockSlot> Function(List<UnlockSlot> slots) edit,
+  ) async {
+    try {
+      await _listFolders?.call(accountId);
+      await _store.sync(accountId);
+    } catch (e) {
+      throw KeyMailOfflineException(e);
+    }
+    final group = [
+      for (final e in await _accountKeyMails(accountId))
+        if (constantTimeEquals(
+          e.mail.payload.accountKeyId,
+          accountKey.accountKeyId,
+        ))
+          e,
+    ];
     final current = await selectWinner(group.map((e) => e.mail), accountKey);
     if (current == null) {
       throw const KeySetupException('the own key mail does not verify');
     }
-    final recoveryKey = RecoveryKey.generate();
     final payload = KeyMailPayload(
       accountKeyId: accountKey.accountKeyId,
       slotListVersion: current.payload.slotListVersion + 1,
-      slots: [
-        for (final s in current.payload.slots)
-          if (s.type != UnlockSlotType.recovery) s,
-        await wrapRecoverySlot(accountKey, recoveryKey),
-      ],
+      slots: edit(current.payload.slots),
       extra: current.payload.extra,
     );
     final messageId = newMessageId();
@@ -508,12 +571,19 @@ class EncryptedKeyService {
         date: _now(),
       ),
     );
-    await _store.sync(accountId);
+    try {
+      await _store.sync(accountId);
+    } catch (e) {
+      throw KeyMailOfflineException(e);
+    }
     for (final e in group) {
       await _store.deleteRaw(accountId, e.messageId);
     }
-    await _store.sync(accountId);
-    return recoveryKey;
+    try {
+      await _store.sync(accountId);
+    } catch (_) {
+      // Offline: the next foreground sync deletes them.
+    }
   }
 
   /// The `personal` collection key: created by the race winner only.
@@ -573,13 +643,55 @@ class EncryptedKeyService {
     try {
       recoveryKey = await RecoveryKey.parse(input);
     } on RecoveryKeyFormatException catch (e) {
-      _logUnlockFailed(accountId, e.reason.name);
+      _logUnlockFailed(accountId, e.reason.name, via: 'recovery');
       throw UnlockFailed(
         e.reason == RecoveryKeyFormatError.checksumMismatch
             ? UnlockFailure.badChecksum
             : UnlockFailure.badFormat,
       );
     }
+    await _unlock(
+      accountId,
+      UnlockSlotType.recovery,
+      (slot, accountKeyId) =>
+          unwrapRecoverySlot(slot, recoveryKey, accountKeyId),
+      via: 'recovery',
+    );
+  }
+
+  /// Unlocks with the passphrase as typed (exact bytes): tries the
+  /// passphrase slot of every key mail, with the salt and params stored in
+  /// it. Throws [UnlockFailed].
+  Future<void> unlockWithPassphrase(String accountId, String passphrase) {
+    // Old key mails of a group repeat the slot: derive each KEK once.
+    final keks = <String, Future<SecretKeyData>>{};
+    return _unlock(
+      accountId,
+      UnlockSlotType.passphrase,
+      (slot, accountKeyId) async {
+        final kdf = passphraseSlotKdf(slot);
+        final kek = keks.putIfAbsent(
+          '${b64url(kdf.salt)} ${canonicalJson(kdf.params.toJson())}',
+          () => derivePassphraseKek(
+            passphrase,
+            kdf.salt,
+            kdf.params,
+            deriver: _deriver,
+          ),
+        );
+        return unwrapSlot(slot, await kek, accountKeyId);
+      },
+      via: 'passphrase',
+    );
+  }
+
+  Future<void> _unlock(
+    String accountId,
+    String slotType,
+    Future<AccountKey> Function(UnlockSlot slot, Uint8List accountKeyId)
+        unwrap, {
+    required String via,
+  }) async {
     await _exclusive(accountId, () async {
       try {
         await _listFolders?.call(accountId);
@@ -588,12 +700,12 @@ class EncryptedKeyService {
         // Offline first: the key mails seen before are enough.
       }
       final entries = await _accountKeyMails(accountId);
-      final accountKey = await _openWith(entries, recoveryKey);
+      final accountKey = await _openWith(accountId, entries, slotType, unwrap);
       if (accountKey == null) {
-        _logUnlockFailed(accountId, UnlockFailure.noSlotOpens.name);
+        _logUnlockFailed(accountId, UnlockFailure.noSlotOpens.name, via: via);
         throw const UnlockFailed(UnlockFailure.noSlotOpens);
       }
-      await _adopt(accountId, accountKey, via: 'recovery');
+      await _adopt(accountId, accountKey, via: via);
     });
     _changed(accountId);
   }
@@ -623,21 +735,33 @@ class EncryptedKeyService {
   }
 
   Future<AccountKey?> _openWith(
+    String accountId,
     List<KeyMailEntry> entries,
-    RecoveryKey recoveryKey,
+    String slotType,
+    Future<AccountKey> Function(UnlockSlot slot, Uint8List accountKeyId) unwrap,
   ) async {
     for (final e in entries) {
       final payload = e.mail.payload;
       for (final slot in payload.slots) {
-        if (slot.type != UnlockSlotType.recovery) continue;
+        if (slot.type != slotType) continue;
         final AccountKey key;
         try {
-          key = await unwrapRecoverySlot(
-            slot,
-            recoveryKey,
-            payload.accountKeyId,
-          );
+          key = await unwrap(slot, payload.accountKeyId);
         } on KeyUnwrapException {
+          continue;
+        } on FormatException catch (err) {
+          unawaited(
+            _appLogger?.warn(
+              'mos.unlock_slot_skipped',
+              'Skipped a malformed unlock slot',
+              accountId: accountId,
+              data: {
+                'type': slotType,
+                'messageId': e.messageId,
+                'error': err.message,
+              },
+            ),
+          );
           continue;
         }
         final group = [
@@ -654,14 +778,115 @@ class EncryptedKeyService {
     return null;
   }
 
-  void _logUnlockFailed(String accountId, String reason) => unawaited(
+  void _logUnlockFailed(
+    String accountId,
+    String reason, {
+    required String via,
+  }) =>
+      unawaited(
         _appLogger?.info(
           'mos.key_unlock_failed',
-          'The recovery key did not unlock the encrypted data',
+          'The recovery key or passphrase did not unlock the encrypted data',
           accountId: accountId,
-          data: {'reason': reason},
+          data: {'reason': reason, 'via': via},
         ),
       );
+
+  // ── Passphrase slot ───────────────────────────────────────────────────────
+
+  /// Adds a passphrase slot, or replaces the one there is: at most one per
+  /// account. Needs an unlocked device and the server. Throws
+  /// [WeakPassphrase] before anything is derived or written,
+  /// [KeySetupException] on a locked device and [KeyMailOfflineException].
+  Future<void> addPassphraseSlot(String accountId, String passphrase) async {
+    final account = await _findAccount?.call(accountId);
+    final weakness = checkPassphraseStrength(
+      passphrase,
+      context: account == null ? const [] : passphraseContext(account),
+    );
+    if (weakness != null) throw WeakPassphrase(weakness);
+    await _exclusive(accountId, () async {
+      final key = await _requireLocalKey(accountId);
+      final slot = await wrapPassphraseSlot(
+        key,
+        passphrase,
+        deriver: _deriver,
+      );
+      await _rewriteKeyMail(
+        accountId,
+        key,
+        (slots) => [
+          for (final s in slots)
+            if (s.type != UnlockSlotType.passphrase) s,
+          slot,
+        ],
+      );
+      unawaited(
+        _appLogger?.info(
+          'mos.passphrase_slot_added',
+          'Added a passphrase to unlock the encrypted data',
+          accountId: accountId,
+        ),
+      );
+    });
+    _changed(accountId);
+  }
+
+  /// Removes the passphrase slot; the recovery slot always stays. Removing
+  /// is not revocation (4.2). Throws like [addPassphraseSlot].
+  Future<void> removePassphraseSlot(String accountId) async {
+    await _exclusive(accountId, () async {
+      final key = await _requireLocalKey(accountId);
+      await _rewriteKeyMail(
+        accountId,
+        key,
+        (slots) => [
+          for (final s in slots)
+            if (s.type != UnlockSlotType.passphrase) s,
+        ],
+      );
+      unawaited(
+        _appLogger?.info(
+          'mos.passphrase_slot_removed',
+          'Removed the passphrase of the encrypted data',
+          accountId: accountId,
+        ),
+      );
+    });
+    _changed(accountId);
+  }
+
+  /// Whether the account has a passphrase slot: in the current key mail of
+  /// this device's key, or — while locked — in any key mail (slot types
+  /// are plaintext).
+  Future<bool> hasPassphraseSlot(String accountId) async {
+    final entries = await _accountKeyMails(accountId);
+    final key = await _localKey(accountId);
+    if (key == null) {
+      return entries.any(
+        (e) => e.mail.payload.slots
+            .any((s) => s.type == UnlockSlotType.passphrase),
+      );
+    }
+    final current = await selectWinner(
+      [
+        for (final e in entries)
+          if (constantTimeEquals(
+            e.mail.payload.accountKeyId,
+            key.accountKeyId,
+          ))
+            e.mail,
+      ],
+      key,
+    );
+    if (current == null) return false;
+    return current.payload.slots
+        .any((s) => s.type == UnlockSlotType.passphrase);
+  }
+
+  Future<AccountKey> _requireLocalKey(String accountId) async =>
+      await _localKey(accountId) ??
+      (throw const KeySetupException('this device is locked'));
 
   // ── Pairing ───────────────────────────────────────────────────────────────
 

@@ -241,6 +241,29 @@ Not slots, but ways to get the key onto a device:
 
 Only an unlocked device may add or remove slots.
 
+**Passphrase slot** (`lib/core/encrypted_objects/passphrase.dart`):
+
+- KEK = HKDF(Argon2id(passphrase, salt), `sharedinbox-kek-passphrase-v1`);
+  Argon2id gives 32 bytes, the passphrase is its exact UTF-8 bytes (no
+  trimming, no normalization).
+- Slot fields next to the known ones: `salt` (16 random bytes, base64url)
+  and `kdf: {"alg": "argon2id", "v": 19, "m": <KiB>, "t": <iterations>,
+  "p": <parallelism>}`. Unlock always reads them from the slot. The slot MAC
+  can only be checked after the unwrap, so params above the caps
+  `m ≤ 262144` (256 MiB), `t ≤ 10`, `p ≤ 4` (or another `alg`/`v`) make the
+  slot invalid; it is skipped.
+- Minimum strength: at least 12 characters; not on the bundled list of
+  common passwords (also not a common word with a few digits or symbols);
+  no single character or short unit repeated, at most 3 distinct
+  characters, no runs along the alphabet, the digits or a keyboard row; not
+  containing the email address, its local part or the username (3+
+  characters, case-insensitive).
+- At most one passphrase slot per account: changing it replaces the slot in
+  the same key-mail rewrite.
+- Changing slots needs the server: the keys folder is pulled first and,
+  offline, nothing is written. The old key mails are deleted only after the
+  server took the new one.
+
 ### 4.3 Key creation race and missing key folder
 
 - Two devices creating a key at the same time: after APPEND, re-list the

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
@@ -418,11 +419,7 @@ class _UnlockViewState extends ConsumerState<_UnlockView> with _TextInput {
           onPressed: busy ? null : () => setState(() => _pairing = true),
           child: const Text('Pair with another device'),
         ),
-        const SizedBox(height: AppSpacing.sm),
-        const OutlinedButton(
-          onPressed: null,
-          child: Text('Passphrase (coming soon)'),
-        ),
+        _PassphraseUnlock(accountId: widget.accountId, enabled: !busy),
       ],
     );
   }
@@ -451,18 +448,166 @@ class _UnlockViewState extends ConsumerState<_UnlockView> with _TextInput {
   }
 }
 
-class _UnlockedView extends StatefulWidget {
+/// The text of a passphrase [checkPassphraseStrength] refused.
+String _weaknessText(PassphraseWeakness weakness) => switch (weakness) {
+      PassphraseWeakness.tooShort =>
+        'Use at least $minPassphraseLength characters.',
+      PassphraseWeakness.common => 'This is a common password.',
+      PassphraseWeakness.repetitive =>
+        'Avoid repeats and sequences like 1234 or qwerty.',
+      PassphraseWeakness.containsAccountName =>
+        'Do not use your email address or username.',
+    };
+
+const _needsConnection =
+    'Changing the passphrase needs a connection to the mail server.';
+
+/// Locked device: unlock with the passphrase, shown only if the account
+/// has a passphrase slot.
+class _PassphraseUnlock extends ConsumerStatefulWidget {
+  const _PassphraseUnlock({required this.accountId, required this.enabled});
+
+  final String accountId;
+  final bool enabled;
+
+  @override
+  ConsumerState<_PassphraseUnlock> createState() => _PassphraseUnlockState();
+}
+
+class _PassphraseUnlockState extends ConsumerState<_PassphraseUnlock>
+    with _TextInput {
+  late final Future<bool> _hasSlot =
+      ref.read(encryptedKeyServiceProvider).hasPassphraseSlot(widget.accountId);
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<bool>(
+        future: _hasSlot,
+        builder: (context, snapshot) {
+          if (snapshot.data != true) return const SizedBox.shrink();
+          final enabled = widget.enabled && !busy;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: AppSpacing.xl),
+              TextField(
+                key: const Key('passphraseField'),
+                controller: controller,
+                autocorrect: false,
+                enableSuggestions: false,
+                obscureText: true,
+                enabled: enabled,
+                decoration: InputDecoration(
+                  labelText: 'Passphrase',
+                  errorText: error,
+                ),
+                onSubmitted: (_) => _unlock(),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              OutlinedButton(
+                key: const Key('passphraseUnlock'),
+                onPressed: enabled ? _unlock : null,
+                child: const Text('Unlock with passphrase'),
+              ),
+              if (busy) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const Center(child: CircularProgressIndicator()),
+              ],
+            ],
+          );
+        },
+      );
+
+  Future<void> _unlock() async {
+    await runBusy(() async {
+      try {
+        await ref
+            .read(encryptedKeyServiceProvider)
+            .unlockWithPassphrase(widget.accountId, controller.text);
+        return null;
+      } on UnlockFailed {
+        return 'This passphrase does not unlock the data of this account.';
+      } catch (e) {
+        return 'Could not unlock: ${userErrorMessage(e)}';
+      }
+    });
+  }
+}
+
+class _UnlockedView extends ConsumerStatefulWidget {
   const _UnlockedView({required this.accountId, required this.foreign});
 
   final String accountId;
   final bool foreign;
 
   @override
-  State<_UnlockedView> createState() => _UnlockedViewState();
+  ConsumerState<_UnlockedView> createState() => _UnlockedViewState();
 }
 
-class _UnlockedViewState extends State<_UnlockedView> {
+class _UnlockedViewState extends ConsumerState<_UnlockedView> {
   bool _sending = false;
+  late Future<bool> _hasPassphrase = _loadHasPassphrase();
+
+  EncryptedKeyService get _service => ref.read(encryptedKeyServiceProvider);
+
+  Future<bool> _loadHasPassphrase() =>
+      _service.hasPassphraseSlot(widget.accountId);
+
+  void _reload() => setState(() => _hasPassphrase = _loadHasPassphrase());
+
+  Future<void> _setPassphrase({required bool change}) async {
+    final account = ref.read(accountByIdProvider(widget.accountId)).value;
+    final done = await showDialog<bool>(
+      context: context,
+      builder: (_) => _PassphraseDialog(
+        accountId: widget.accountId,
+        change: change,
+        accountNames: account == null ? const [] : passphraseContext(account),
+      ),
+    );
+    if (!mounted || done != true) return;
+    _reload();
+    context.showAppSnackBar(change ? 'Passphrase changed' : 'Passphrase added');
+  }
+
+  Future<void> _removePassphrase() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove the passphrase?'),
+        content: const Text(
+          'This device and the recovery key keep working. Removing the '
+          'passphrase does not revoke it: old copies of the key mail may '
+          'stay on the server or in backups and still open with it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('passphraseRemoveConfirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _service.removePassphraseSlot(widget.accountId);
+      if (!mounted) return;
+      _reload();
+      context.showAppSnackBar('Passphrase removed');
+    } on KeyMailOfflineException {
+      if (!mounted) return;
+      context.showAppSnackBar(_needsConnection);
+    } catch (e) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Could not remove the passphrase: ${userErrorMessage(e)}',
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -505,6 +650,194 @@ class _UnlockedViewState extends State<_UnlockedView> {
           icon: const Icon(Icons.devices),
           label: const Text('Pair a new device'),
           onPressed: () => setState(() => _sending = true),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+        FutureBuilder<bool>(
+          future: _hasPassphrase,
+          builder: (context, snapshot) {
+            final has = snapshot.data;
+            if (has == null) return const SizedBox.shrink();
+            return ListTile(
+              key: const Key('passphraseTile'),
+              leading: const Icon(Icons.password),
+              title: const Text('Passphrase'),
+              subtitle: Text(
+                has
+                    ? 'Other devices can unlock with the passphrase.'
+                    : 'Optional: unlock other devices with a passphrase.',
+              ),
+              trailing: has
+                  ? Wrap(
+                      children: [
+                        TextButton(
+                          key: const Key('passphraseChange'),
+                          onPressed: () => _setPassphrase(change: true),
+                          child: const Text('Change'),
+                        ),
+                        TextButton(
+                          key: const Key('passphraseRemove'),
+                          onPressed: _removePassphrase,
+                          child: const Text('Remove'),
+                        ),
+                      ],
+                    )
+                  : TextButton(
+                      key: const Key('passphraseAdd'),
+                      onPressed: () => _setPassphrase(change: false),
+                      child: const Text('Add a passphrase'),
+                    ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// Add or change the passphrase slot: the brute-force warning, the
+/// strength check and a confirm field.
+class _PassphraseDialog extends ConsumerStatefulWidget {
+  const _PassphraseDialog({
+    required this.accountId,
+    required this.change,
+    required this.accountNames,
+  });
+
+  final String accountId;
+  final bool change;
+
+  /// What the passphrase must not contain ([passphraseContext]).
+  final List<String> accountNames;
+
+  @override
+  ConsumerState<_PassphraseDialog> createState() => _PassphraseDialogState();
+}
+
+class _PassphraseDialogState extends ConsumerState<_PassphraseDialog>
+    with _TextInput {
+  final _confirm = TextEditingController();
+
+  @override
+  void dispose() {
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  PassphraseWeakness? get _weakness =>
+      checkPassphraseStrength(controller.text, context: widget.accountNames);
+
+  bool get _matches => controller.text == _confirm.text;
+
+  Future<void> _save() async {
+    final failure = await runBusy(() async {
+      try {
+        await ref
+            .read(encryptedKeyServiceProvider)
+            .addPassphraseSlot(widget.accountId, controller.text);
+        return null;
+      } on WeakPassphrase catch (e) {
+        return _weaknessText(e.weakness);
+      } on KeyMailOfflineException {
+        return _needsConnection;
+      } catch (e) {
+        return 'Could not save the passphrase: ${userErrorMessage(e)}';
+      }
+    });
+    if (failure != null || !mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final weakness = controller.text.isEmpty ? null : _weakness;
+    final mismatch = _confirm.text.isNotEmpty && !_matches;
+    final canSave =
+        !busy && controller.text.isNotEmpty && _weakness == null && _matches;
+    return AlertDialog(
+      title: Text(widget.change ? 'Change the passphrase' : 'Add a passphrase'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              key: const Key('passphraseBruteForceWarning'),
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              color: theme.colorScheme.errorContainer,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    color: theme.colorScheme.onErrorContainer,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      'Your mail provider stores this slot and can try '
+                      'passphrases offline without limit. Use a long, unique '
+                      'passphrase — 4 or more random words. The recovery key '
+                      'stays the safer way.',
+                      style: TextStyle(
+                        color: theme.colorScheme.onErrorContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            TextField(
+              key: const Key('passphraseNewField'),
+              controller: controller,
+              autocorrect: false,
+              enableSuggestions: false,
+              obscureText: true,
+              enabled: !busy,
+              decoration: InputDecoration(
+                labelText: 'Passphrase',
+                errorText: weakness == null ? null : _weaknessText(weakness),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              key: const Key('passphraseConfirmField'),
+              controller: _confirm,
+              autocorrect: false,
+              enableSuggestions: false,
+              obscureText: true,
+              enabled: !busy,
+              decoration: InputDecoration(
+                labelText: 'Repeat the passphrase',
+                errorText: mismatch ? 'The passphrases differ.' : null,
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => canSave ? _save() : null,
+            ),
+            if (busy) ...[
+              const SizedBox(height: AppSpacing.lg),
+              const Center(child: CircularProgressIndicator()),
+              const SizedBox(height: AppSpacing.sm),
+              const Text(
+                'Deriving the key from the passphrase…',
+                textAlign: TextAlign.center,
+              ),
+            ],
+            if (error != null) _ErrorText(error!),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: busy ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('passphraseSave'),
+          onPressed: canSave ? _save : null,
+          child: const Text('Save'),
         ),
       ],
     );
