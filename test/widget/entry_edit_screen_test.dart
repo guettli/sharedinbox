@@ -1,39 +1,47 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/di.dart';
-
 import 'entries_fakes.dart';
-import 'helpers.dart';
 
 Future<FakeEntryRepository> _pump(
   WidgetTester tester, {
   String body = 'old body',
+  FakeConflictStore? store,
 }) async {
   final repo = FakeEntryRepository([
     testEntry('e1', title: 'Old title', body: body, conflict: true),
   ]);
-  await tester.pumpWidget(
-    buildApp(
-      initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
-      overrides: [
-        ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
-        entryRepositoryProvider.overrideWithValue(repo),
-      ],
-    ),
+  await pumpEntriesApp(
+    tester,
+    repo: repo,
+    store: store ?? FakeConflictStore({}),
   );
-  await tester.pumpAndSettle();
   await tester.tap(find.text('Old title'));
   await tester.pumpAndSettle();
   return repo;
 }
 
 void main() {
+  testWidgets('"Resolve…" opens the conflict view, then reloads',
+      (tester) async {
+    final store = FakeConflictStore({
+      'hmac-e1': conflictItemOf([
+        entryVersion('devA', 1, body: 'mine'),
+        entryVersion('devB', 2, body: 'theirs'),
+      ]),
+    });
+    await _pump(tester, store: store);
+    await tester.tap(find.byKey(const Key('entryEditResolve')));
+    await tester.pumpAndSettle();
+    expect(find.text('Resolve conflict'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('conflictKeep_0')));
+    await tester.pumpAndSettle();
+    expect(store.resolved.single.itemHmac, 'hmac-e1');
+    expect(find.text('Entry'), findsOneWidget);
+    expect(find.byKey(const Key('entryEditConflict')), findsOneWidget);
+  });
+
   testWidgets('edit saves title and body and goes back', (tester) async {
     final repo = await _pump(tester);
     expect(find.byKey(const Key('entryEditConflict')), findsOneWidget);

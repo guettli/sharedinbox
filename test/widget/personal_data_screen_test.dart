@@ -176,6 +176,7 @@ Future<_FakeKeyService> _pump(
         ...baseOverrides(accounts: [kTestAccount]),
         encryptedKeyServiceProvider.overrideWithValue(service),
         entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
+        mailObjectStoreProvider.overrideWithValue(FakeConflictStore({})),
       ],
     ),
   );

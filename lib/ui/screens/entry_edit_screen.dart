@@ -110,11 +110,17 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         if (entry.hasConflict)
-          const ListTile(
-            key: Key('entryEditConflict'),
-            leading: Icon(Icons.call_split),
-            title: Text('Edited on several devices at once'),
-            subtitle: Text('This shows the newest version; saving keeps it.'),
+          ListTile(
+            key: const Key('entryEditConflict'),
+            leading: const Icon(Icons.call_split),
+            title: const Text('Edited on several devices at once'),
+            subtitle:
+                const Text('This shows the newest version; saving keeps it.'),
+            trailing: TextButton(
+              key: const Key('entryEditResolve'),
+              onPressed: () => _resolve(entry),
+              child: const Text('Resolve…'),
+            ),
           ),
         TextField(
           key: const Key('entryEditTitle'),
@@ -142,6 +148,15 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
           ),
       ],
     );
+  }
+
+  /// Opens the conflict view; the entry is loaded again on return.
+  Future<void> _resolve(Entry entry) async {
+    await context.push(
+      '/accounts/${widget.accountId}/conflicts/${entry.itemHmac}',
+    );
+    if (!mounted) return;
+    await _load();
   }
 
   Future<void> _save() async {

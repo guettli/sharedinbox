@@ -9,9 +9,9 @@ import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/sync/account_comparison.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
-import 'package:sharedinbox/core/utils/text_diff.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/widgets/text_diff_view.dart';
 
 final _dateFmt = DateFormat('yyyy-MM-dd HH:mm:ss');
 
@@ -299,7 +299,10 @@ class _BodyDiffTile extends StatelessWidget {
           label: 'Body diff',
           value: 'A ($labelA) = −, B ($labelB) = +',
         ),
-        _BodyDiffView(lines: diff.diffLines),
+        TextDiffView(
+          lines: diff.diffLines,
+          emptyText: '(bodies differ only in whitespace)',
+        ),
         _OpenButtons(a: diff.a, b: diff.b),
       ],
     );
@@ -423,76 +426,6 @@ class _OpenButtons extends StatelessWidget {
 }
 
 /// Renders a short context diff between two cached bodies as a monospace block.
-class _BodyDiffView extends StatelessWidget {
-  const _BodyDiffView({required this.lines});
-
-  final List<DiffLine> lines;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if (lines.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Text(
-          '(bodies differ only in whitespace)',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontStyle: FontStyle.italic,
-          ),
-        ),
-      );
-    }
-    final mono = theme.textTheme.bodySmall?.copyWith(
-      fontFamily: 'monospace',
-      height: 1.3,
-    );
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final line in lines)
-            SelectableText(
-              _prefixed(line),
-              style: mono?.copyWith(color: _colorFor(line.kind, theme)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  String _prefixed(DiffLine line) {
-    switch (line.kind) {
-      case DiffLineKind.added:
-        return '+ ${line.text}';
-      case DiffLineKind.removed:
-        return '- ${line.text}';
-      case DiffLineKind.gap:
-        return line.text;
-      case DiffLineKind.context:
-        return '  ${line.text}';
-    }
-  }
-
-  Color? _colorFor(DiffLineKind kind, ThemeData theme) {
-    switch (kind) {
-      case DiffLineKind.added:
-        return Colors.green.shade700;
-      case DiffLineKind.removed:
-        return theme.colorScheme.error;
-      case DiffLineKind.gap:
-      case DiffLineKind.context:
-        return theme.colorScheme.onSurfaceVariant;
-    }
-  }
-}
 
 void _openEmail(BuildContext context, Email e) {
   unawaited(

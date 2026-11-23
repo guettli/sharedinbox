@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
@@ -241,6 +242,26 @@ InnerObject edit({
       parts: parts ?? base.parts,
       fields: fields,
     );
+
+/// A copy of [source] as a new item ("keep both" in the conflict view): a
+/// new itemId and versionId, no parents; collection, kind, fields and parts
+/// are kept. Works for any kind.
+InnerObject forkObject(InnerObject source, HlcClock clock) {
+  final head = source.head;
+  if (!head.isParseable) {
+    throw const NotEditableException('a head needs a newer app');
+  }
+  return InnerObject(
+    head: ObjectHead(
+      itemId: newItemId(),
+      collectionId: head.collectionId,
+      versionId: clock.send(),
+      kind: head.kind,
+      extra: head.extra,
+    ),
+    parts: source.parts,
+  );
+}
 
 InnerObject _next(
   InnerObject base,

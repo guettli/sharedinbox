@@ -40,7 +40,10 @@ class _EntriesScreenState extends ConsumerState<EntriesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Entries')),
+      appBar: AppBar(
+        title: const Text('Entries'),
+        actions: [_conflictsBadge()],
+      ),
       body: PersonalDataGate(
         accountId: widget.accountId,
         child: Column(
@@ -96,6 +99,19 @@ class _EntriesScreenState extends ConsumerState<EntriesScreen> {
     );
   }
 
+  /// Opens the conflict list; only while some object is in conflict.
+  Widget _conflictsBadge() {
+    final count =
+        ref.watch(conflictsProvider(widget.accountId)).value?.length ?? 0;
+    if (count == 0) return const SizedBox.shrink();
+    return IconButton(
+      key: const Key('entriesConflictsBadge'),
+      tooltip: 'Conflicts',
+      icon: Badge(label: Text('$count'), child: const Icon(Icons.call_split)),
+      onPressed: () => context.push('/accounts/${widget.accountId}/conflicts'),
+    );
+  }
+
   Widget _list() {
     final entries = ref.watch(entriesProvider((widget.accountId, _query)));
     return entries.when(
@@ -116,6 +132,9 @@ class _EntriesScreenState extends ConsumerState<EntriesScreen> {
               '/accounts/${widget.accountId}/entries/${list[i].itemId}',
             ),
             onDelete: () => _delete(list[i]),
+            onResolve: () => context.push(
+              '/accounts/${widget.accountId}/conflicts/${list[i].itemHmac}',
+            ),
           ),
         );
       },
@@ -155,11 +174,13 @@ class _EntryTile extends StatelessWidget {
     required this.entry,
     required this.onTap,
     required this.onDelete,
+    required this.onResolve,
   });
 
   final Entry entry;
   final VoidCallback onTap;
   final VoidCallback onDelete;
+  final VoidCallback onResolve;
 
   @override
   Widget build(BuildContext context) {
@@ -184,13 +205,14 @@ class _EntryTile extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (entry.hasConflict)
-            Tooltip(
-              message: 'Edited on several devices at once; saving resolves it',
-              child: Icon(
+            IconButton(
+              key: Key('entryConflict_${entry.itemId}'),
+              tooltip: 'Edited on several devices — resolve',
+              icon: Icon(
                 Icons.call_split,
-                key: Key('entryConflict_${entry.itemId}'),
                 color: Theme.of(context).colorScheme.error,
               ),
+              onPressed: onResolve,
             ),
           PopupMenuButton<String>(
             key: Key('entryMenu_${entry.itemId}'),

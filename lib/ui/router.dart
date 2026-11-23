@@ -21,6 +21,8 @@ import 'package:sharedinbox/ui/screens/bug_report_screen.dart';
 import 'package:sharedinbox/ui/screens/changelog_screen.dart';
 import 'package:sharedinbox/ui/screens/combined_inbox_screen.dart';
 import 'package:sharedinbox/ui/screens/compose_screen.dart';
+import 'package:sharedinbox/ui/screens/conflict_screen.dart';
+import 'package:sharedinbox/ui/screens/conflicts_screen.dart';
 import 'package:sharedinbox/ui/screens/edit_account_screen.dart';
 import 'package:sharedinbox/ui/screens/email_detail_nav.dart';
 import 'package:sharedinbox/ui/screens/email_detail_screen.dart';
@@ -200,6 +202,19 @@ final router = GoRouter(
               builder: (ctx, state) => EntryEditScreen(
                 accountId: state.pathParameters['accountId']!,
                 itemId: state.pathParameters['itemId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/conflicts',
+              builder: (ctx, state) => ConflictsScreen(
+                accountId: state.pathParameters['accountId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/conflicts/:itemHmac',
+              builder: (ctx, state) => ConflictScreen(
+                accountId: state.pathParameters['accountId']!,
+                itemHmac: state.pathParameters['itemHmac']!,
               ),
             ),
             GoRoute(

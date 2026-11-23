@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/models/mailbox_sync_state.dart';
 import 'package:sharedinbox/core/models/note.dart';
@@ -858,6 +859,20 @@ final entriesProvider = StreamProvider.autoDispose
   return ref
       .watch(entryRepositoryProvider)
       .observeEntries(accountId, query: query);
+});
+
+/// The encrypted objects of an account in conflict, any kind (#1374).
+final conflictsProvider =
+    StreamProvider.autoDispose.family<List<ConflictItem>, String>(
+  (ref, accountId) =>
+      ref.watch(mailObjectStoreProvider).observeConflicts(accountId),
+);
+
+/// One encrypted object with its opened versions, or null (#1374).
+final conflictItemProvider = FutureProvider.autoDispose
+    .family<MailObjectItem?, (String accountId, String itemHmac)>((ref, args) {
+  final (accountId, itemHmac) = args;
+  return ref.watch(mailObjectStoreProvider).item(accountId, itemHmac);
 });
 
 /// Log segments and packs of the encrypted-object store (#1372).

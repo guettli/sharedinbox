@@ -197,7 +197,104 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     final merge = mergeItem(known: versions, incoming: const [], vv: const {});
     final display = merge.display;
     if (display == null) return null;
-    return MailObjectItem(merge: merge, display: objects[display.ref]!);
+    return MailObjectItem(
+      merge: merge,
+      display: objects[display.ref]!,
+      versions: [for (final h in merge.distinctHeads) objects[h.ref]!],
+    );
+  }
+
+  @override
+  Stream<List<ConflictItem>> observeConflicts(String accountId) =>
+      (db.select(db.mailObjects)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.folder.equals(MailObjectFolder.data.name) &
+                  t.conflictOf.isNotNull() &
+                  t.pendingDelete.equals(false) &
+                  t.coveredBy.isNull(),
+            )
+            ..orderBy([(t) => OrderingTerm.desc(t.conflictOf)]))
+          .watch()
+          .map((rows) {
+        final byItem = <String, ConflictItem>{};
+        for (final r in rows) {
+          final hmac = r.itemHmac;
+          if (hmac == null) continue;
+          byItem.putIfAbsent(
+            hmac,
+            () => ConflictItem(
+              accountId: accountId,
+              itemHmac: hmac,
+              kind: r.kind,
+              displayVersionId: r.conflictOf!,
+            ),
+          );
+        }
+        return byItem.values.toList();
+      });
+
+  @override
+  Future<MailObject> resolve(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) =>
+      _exclusive(accountId, () => _resolve(accountId, itemHmac, keep));
+
+  @override
+  Future<void> keepAll(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) =>
+      _exclusive(accountId, () async {
+        final (current, kept) = await _conflictHead(accountId, itemHmac, keep);
+        if (kept.head.deleted) {
+          throw const ConflictChangedException(
+            'a deletion cannot be kept next to an edit',
+          );
+        }
+        final clock = await clockFor(accountId);
+        for (final v in current.versions) {
+          if (identical(v, kept) || v.head.deleted) continue;
+          await put(accountId, forkObject(v, clock));
+        }
+        await _resolve(accountId, itemHmac, keep);
+      });
+
+  Future<MailObject> _resolve(
+    String accountId,
+    String itemHmac,
+    Hlc keep,
+  ) async {
+    final (current, kept) = await _conflictHead(accountId, itemHmac, keep);
+    final clock = await clockFor(accountId);
+    final next = kept.head.deleted
+        ? tombstone(base: kept, merge: current.merge, clock: clock)
+        : edit(base: kept, merge: current.merge, clock: clock);
+    return put(accountId, next);
+  }
+
+  /// Item [itemHmac] and its opened distinct head [keep];
+  /// [ConflictChangedException] when the item is not in conflict (any more) or [keep] is not one of
+  /// its distinct heads.
+  Future<(MailObjectItem, InnerObject)> _conflictHead(
+    String accountId,
+    String itemHmac,
+    Hlc keep,
+  ) async {
+    final current = await item(accountId, itemHmac);
+    if (current == null || current.merge.state != MergeState.conflict) {
+      throw const ConflictChangedException('the item is not in conflict');
+    }
+    final i =
+        current.merge.distinctHeads.indexWhere((h) => h.versionId == keep);
+    if (i < 0) {
+      throw ConflictChangedException('$keep is not a head of the item');
+    }
+    return (current, current.versions[i]);
   }
 
   // ── Clock and writes ──────────────────────────────────────────────────────

@@ -51,13 +51,21 @@ abstract interface class ObjectProjector {
 
 /// An item as the merge of its opened versions sees it.
 class MailObjectItem {
-  const MailObjectItem({required this.merge, required this.display});
+  const MailObjectItem({
+    required this.merge,
+    required this.display,
+    required this.versions,
+  });
 
   final MergeResult merge;
 
   /// The opened head the UI shows ([MergeResult.display]); the base of the
   /// next `edit()` / `tombstone()`.
   final InnerObject display;
+
+  /// One opened head per [MergeResult.distinctHeads], in the same order
+  /// (oldest first): the versions of the conflict view.
+  final List<InnerObject> versions;
 }
 
 /// Thrown by [MailObjectStore.put] when no write key for the collection is
@@ -69,6 +77,19 @@ class NoWriteKeyException implements Exception {
 
   @override
   String toString() => 'NoWriteKeyException: no key for "$collectionId"';
+}
+
+/// Thrown by [MailObjectStore.resolve] and [MailObjectStore.keepAll] when
+/// the item is no longer in conflict or the kept version is no longer one of
+/// its heads (a sync or another device got there first), and when a
+/// deletion is to be kept next to an edit.
+class ConflictChangedException implements Exception {
+  const ConflictChangedException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'ConflictChangedException: $message';
 }
 
 /// The encrypted-object store on the mail server (ENCRYPTED-OBJECTS.md §3,
@@ -130,6 +151,26 @@ abstract class MailObjectStore {
   /// Writes a tombstone over all heads of [itemHmac]. Throws [StateError]
   /// when the item is unknown.
   Future<MailObject> delete(String accountId, String itemHmac);
+
+  /// The items in conflict of any kind (#1374), one per item.
+  Stream<List<ConflictItem>> observeConflicts(String accountId);
+
+  /// Resolves the conflict of [itemHmac] by keeping its distinct head
+  /// [keep]: an edit of it (a tombstone if it is one) with
+  /// `parents = all heads`. Throws [ConflictChangedException] when [keep] is
+  /// no longer a distinct head of an item in conflict (another device
+  /// resolved it).
+  Future<MailObject> resolve(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  });
+
+  /// "Keep both": every other distinct head that is not a tombstone is
+  /// copied into a new item ([forkObject]), then the conflict is resolved
+  /// with [keep]. Throws [ConflictChangedException] when [keep] is a
+  /// tombstone or no longer a distinct head.
+  Future<void> keepAll(String accountId, String itemHmac, {required Hlc keep});
 
   /// Stores [mail] (an RFC 5322 mail with a Message-ID) in the keys folder,
   /// to be uploaded; idempotent by Message-ID.

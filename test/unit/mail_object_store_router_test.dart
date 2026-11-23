@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
@@ -19,6 +20,9 @@ class _Recording implements MailObjectStore {
   dynamic noSuchMethod(Invocation invocation) {
     final name = invocation.memberName.toString();
     calls.add(name.substring(8, name.length - 2));
+    if (invocation.memberName == #observeConflicts) {
+      return const Stream<List<ConflictItem>>.empty();
+    }
     if (invocation.memberName == #observe) {
       return const Stream<List<MailObject>>.empty();
     }
@@ -71,6 +75,8 @@ void main() {
       await swallow(() => router.appendRaw(id, Uint8List(0)));
       await swallow(() => router.deleteRaw(id, '<m@x>'));
       await swallow(() => router.itemHmacOf(id, 'c', 'i'));
+      await swallow(() => router.resolve(id, 'h', keep: Hlc(1, 0, 'd')));
+      await swallow(() => router.keepAll(id, 'h', keep: Hlc(1, 0, 'd')));
     }
     await swallow(() => router.open(_object));
     await swallow(() => router.fetchBody(_object));
@@ -79,6 +85,7 @@ void main() {
       () => router.putCovering('j', testObject(), covered: const []),
     );
     router.observe('j', MailObjectFolder.data);
+    router.observeConflicts('j');
     await swallow(() => router.rowsOfKind('j', 'blob'));
 
     const perAccount = [
@@ -90,10 +97,18 @@ void main() {
       'appendRaw',
       'deleteRaw',
       'itemHmacOf',
+      'resolve',
+      'keepAll',
     ];
     expect(
       imap.calls,
-      [...perAccount, ...perAccount, 'observe', 'rowsOfKind'],
+      [
+        ...perAccount,
+        ...perAccount,
+        'observe',
+        'observeConflicts',
+        'rowsOfKind',
+      ],
     );
     expect(
       jmap.calls,

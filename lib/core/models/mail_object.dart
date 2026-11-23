@@ -9,6 +9,24 @@ enum MailObjectFolder {
   data,
 }
 
+/// An item with several heads of different content (#1374): a row of the
+/// conflict list. Any kind.
+class ConflictItem {
+  const ConflictItem({
+    required this.accountId,
+    required this.itemHmac,
+    required this.kind,
+    required this.displayVersionId,
+  });
+
+  final String accountId;
+  final String itemHmac;
+  final String? kind;
+
+  /// The encoded HLC of the version shown today (the newest head).
+  final String displayVersionId;
+}
+
 /// One mail of the encrypted-object store: a version of a document, or a
 /// raw key mail. [payload] is the outer RFC 5322 mail (ciphertext); the
 /// head fields are null until a key could open it.

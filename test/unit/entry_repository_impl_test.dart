@@ -1,6 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
@@ -249,6 +252,146 @@ void main() {
       expect(e.hasConflict, isTrue);
       expect(e.body, 'edited');
     }
+  });
+
+  /// A and B edit [created] at once: a conflict on both. Returns the
+  /// versions of A and of B.
+  Future<(Hlc, Hlc)> conflict(_Device a, _Device b, Entry created) async {
+    await a.update(created.itemId, 'from A');
+    await b.update(created.itemId, 'from B');
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    final item = (await a.store.item(_acc, created.itemHmac))!;
+    final aId = (await a.store.clockFor(_acc)).deviceId;
+    final mine = item.merge.distinctHeads
+        .firstWhere((h) => h.versionId.deviceId == aId)
+        .versionId;
+    final theirs = item.merge.distinctHeads
+        .firstWhere((h) => h.versionId.deviceId != aId)
+        .versionId;
+    return (mine, theirs);
+  }
+
+  test('resolve keeps one version with parents = all heads', () async {
+    final server = _server();
+    final a = await _Device.open(server);
+    final b = await _Device.open(server);
+    final created = await a.create('base');
+    await a.sync();
+    await b.sync();
+    final (fromA, fromB) = await conflict(a, b, created);
+    final listed = await a.store.observeConflicts(_acc).first;
+    expect(listed.single.itemHmac, created.itemHmac);
+    expect(listed.single.kind, entryKind);
+    final before = (await a.store.item(_acc, created.itemHmac))!;
+    expect(before.versions, hasLength(2));
+    expect(
+      [for (final v in before.versions) v.head.versionId],
+      [for (final h in before.merge.distinctHeads) h.versionId],
+    );
+
+    final written = await a.store.resolve(_acc, created.itemHmac, keep: fromB);
+    expect(
+      written.parents,
+      unorderedEquals([fromA.encode(), fromB.encode()]),
+    );
+    final after = (await a.store.item(_acc, created.itemHmac))!;
+    expect(after.merge.state, MergeState.live);
+    expect(after.merge.heads, hasLength(1));
+    expect(await a.store.observeConflicts(_acc).first, isEmpty);
+    final onA = (await a.entries()).single;
+    expect(onA.body, 'from B');
+    expect(onA.hasConflict, isFalse);
+    // A second resolve finds no conflict any more.
+    await expectLater(
+      a.store.resolve(_acc, created.itemHmac, keep: fromA),
+      throwsA(isA<ConflictChangedException>()),
+    );
+
+    await a.store.waitForIdle();
+    await a.sync();
+    await b.sync();
+    final onB = (await b.entries()).single;
+    expect(onB.body, 'from B');
+    expect(onB.hasConflict, isFalse);
+  });
+
+  test('resolving with the deletion deletes the item', () async {
+    final server = _server();
+    final a = await _Device.open(server);
+    final b = await _Device.open(server);
+    final created = await a.create('base');
+    await a.sync();
+    await b.sync();
+    await a.update(created.itemId, 'edited');
+    await b.repo.delete(_acc, created.itemId);
+    await b.store.waitForIdle();
+    await a.sync();
+    await b.sync();
+    await a.sync();
+    final item = (await a.store.item(_acc, created.itemHmac))!;
+    final deletion =
+        item.merge.distinctHeads.firstWhere((h) => h.deleted).versionId;
+    await expectLater(
+      a.store.keepAll(_acc, created.itemHmac, keep: deletion),
+      throwsA(isA<ConflictChangedException>()),
+    );
+
+    await a.store.resolve(_acc, created.itemHmac, keep: deletion);
+    expect(await a.entries(), isEmpty);
+    expect(await a.store.observeConflicts(_acc).first, isEmpty);
+    final after = (await a.store.item(_acc, created.itemHmac))!;
+    expect(after.merge.state, MergeState.deleted);
+  });
+
+  test('keepAll forks every other live version, never a deletion', () async {
+    final server = _server();
+    final a = await _Device.open(server);
+    final b = await _Device.open(server);
+    final c = await _Device.open(server);
+    final created = await a.create('base');
+    for (final d in [a, b, c]) {
+      await d.sync();
+    }
+    await a.update(created.itemId, 'from A');
+    await b.update(created.itemId, 'from B');
+    await c.repo.delete(_acc, created.itemId);
+    await c.store.waitForIdle();
+    for (final d in [a, b, c, a]) {
+      await d.sync();
+    }
+    final item = (await a.store.item(_acc, created.itemHmac))!;
+    expect(item.versions, hasLength(3));
+    final aId = (await a.store.clockFor(_acc)).deviceId;
+    final fromA = item.merge.distinctHeads
+        .firstWhere((h) => h.versionId.deviceId == aId)
+        .versionId;
+    await expectLater(
+      a.store.keepAll(_acc, created.itemHmac, keep: hlcAt(1)),
+      throwsA(isA<ConflictChangedException>()),
+    );
+
+    await a.store.keepAll(_acc, created.itemHmac, keep: fromA);
+    final entries = await a.entries();
+    expect(
+      [for (final e in entries) e.body],
+      unorderedEquals(['from A', 'from B']),
+    );
+    expect(entries.where((e) => e.hasConflict), isEmpty);
+    expect(
+      entries.firstWhere((e) => e.body == 'from A').itemId,
+      created.itemId,
+    );
+    expect(await a.store.observeConflicts(_acc).first, isEmpty);
+
+    await a.store.waitForIdle();
+    await a.sync();
+    await b.sync();
+    expect(
+      [for (final e in await b.entries()) e.body],
+      unorderedEquals(['from A', 'from B']),
+    );
   });
 
   test('a pulled tombstone removes the row', () async {

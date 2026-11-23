@@ -14,6 +14,7 @@ Future<FakeEntryRepository> _pump(
   bool beta = true,
   PersonalDataStatus status = PersonalDataStatus.unlocked,
   String location = '/accounts/acc-1/entries',
+  FakeConflictStore? store,
 }) async {
   final repo = FakeEntryRepository(entries);
   await tester.pumpWidget(
@@ -25,6 +26,8 @@ Future<FakeEntryRepository> _pump(
         encryptedKeyServiceProvider
             .overrideWithValue(FixedStatusKeyService(status)),
         entryRepositoryProvider.overrideWithValue(repo),
+        mailObjectStoreProvider
+            .overrideWithValue(store ?? FakeConflictStore({})),
       ],
     ),
   );
@@ -105,6 +108,64 @@ void main() {
     );
     expect(find.byKey(const Key('entryConflict_c')), findsOneWidget);
     expect(find.byKey(const Key('entryConflict_d')), findsNothing);
+    // No conflict in the store: no badge.
+    expect(find.byKey(const Key('entriesConflictsBadge')), findsNothing);
+  });
+
+  testWidgets('the conflict icon opens the conflict view of the entry',
+      (tester) async {
+    await _pump(
+      tester,
+      entries: [testEntry('c', body: 'clash', conflict: true)],
+      store: FakeConflictStore({
+        'hmac-c': conflictItemOf([
+          entryVersion('devA', 1, body: 'mine'),
+          entryVersion('devB', 2, body: 'theirs'),
+        ]),
+      }),
+    );
+    await tester.tap(find.byKey(const Key('entryConflict_c')));
+    await tester.pumpAndSettle();
+    expect(find.text('Resolve conflict'), findsOneWidget);
+    expect(find.byKey(const Key('conflictVersion_1')), findsOneWidget);
+  });
+
+  testWidgets('the badge shows the conflicts and opens their list',
+      (tester) async {
+    await _pump(
+      tester,
+      entries: [testEntry('c', body: 'clash', conflict: true)],
+      store: FakeConflictStore({
+        'hmac-c': conflictItemOf([
+          entryVersion('devA', 1, title: 'Mine', body: 'a'),
+          entryVersion('devB', 2, title: 'Theirs', body: 'b'),
+        ]),
+      }),
+    );
+    final badge = find.byKey(const Key('entriesConflictsBadge'));
+    expect(badge, findsOneWidget);
+    expect(
+      find.descendant(of: badge, matching: find.text('1')),
+      findsOneWidget,
+    );
+
+    await tester.tap(badge);
+    await tester.pumpAndSettle();
+    expect(find.text('Conflicts'), findsOneWidget);
+    final row = find.byKey(const Key('conflict_hmac-c'));
+    expect(row, findsOneWidget);
+    expect(
+      find.descendant(of: row, matching: find.text('Theirs')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: row, matching: find.textContaining('2 versions')),
+      findsOneWidget,
+    );
+
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(find.text('Resolve conflict'), findsOneWidget);
   });
 
   testWidgets('delete asks first', (tester) async {
