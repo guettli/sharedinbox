@@ -48,10 +48,12 @@ Stream<R> combineLatest<A, B, R>(
       subA?.resume();
       subB?.resume();
     },
-    onCancel: () async {
-      await subA?.cancel();
-      await subB?.cancel();
-    },
+    // Both at once: a source slow to cancel must not keep the other one
+    // listening.
+    onCancel: () => Future.wait([
+      if (subA case final s?) s.cancel(),
+      if (subB case final s?) s.cancel(),
+    ]),
   );
   return out.stream;
 }
