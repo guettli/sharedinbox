@@ -271,6 +271,10 @@ class _SharedInboxAppState extends ConsumerState<SharedInboxApp> {
     ref.read(reconnectFlushProvider);
     // Retry a failed send when its retry time comes, even while IDLE.
     ref.read(outboxRetrySchedulerProvider);
+    // Upload the pending flash card reviews when the app goes to the
+    // background, and replay them after a params change (#1380).
+    ref.read(reviewUploadSchedulerProvider);
+    ref.read(reviewParamsWatchProvider);
     // Attachment copies of drafts and queued messages that no longer exist
     // (the app stopped between deleting a row and its files, #955).
     unawaited(ref.read(draftRepositoryProvider).deleteOrphanedAttachments());

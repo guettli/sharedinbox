@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
+import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -34,6 +35,7 @@ import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/core/repositories/outbox_repository.dart';
+import 'package:sharedinbox/core/repositories/review_repository.dart';
 import 'package:sharedinbox/core/repositories/search_history_repository.dart';
 import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -75,6 +77,7 @@ import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/card_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/card_schedule_writer.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
@@ -88,6 +91,8 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/review_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/review_uploader.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/sync_log_repository_impl.dart';
@@ -445,9 +450,13 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     notes: ref.watch(noteRepositoryProvider),
     objects: ref.watch(mailObjectStoreProvider),
     legacyNotes: ref.watch(legacyNoteMigrationProvider),
-    onObjectsSynced: (accountId) => ref
-        .read(encryptedKeyServiceProvider)
-        .afterSync(accountId, foreground: true),
+    onObjectsSynced: (accountId) {
+      // A regular sync cycle is an upload trigger of the reviews (#1380).
+      ref.read(reviewUploadSchedulerProvider).synced(accountId);
+      return ref
+          .read(encryptedKeyServiceProvider)
+          .afterSync(accountId, foreground: true);
+    },
     onNewMail: dispatcher.dispatchForAccount,
   );
   ref.onDispose(manager.dispose);
@@ -1002,6 +1011,59 @@ final deviceStateStoreProvider = Provider<DeviceStateStore>(
   (ref) => DeviceStateStore(
     ref.watch(dbProvider),
     ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// The schedule cache of the flash card reviews (#1380).
+final cardScheduleWriterProvider = Provider<CardScheduleWriter>(
+  (ref) => CardScheduleWriter(
+    ref.watch(dbProvider),
+    appLogger: ref.watch(appLoggerProvider),
+  ),
+);
+
+/// Replays the reviews of the decks whose params (device state) change
+/// (#1380). Reading the provider installs the watch.
+final reviewParamsWatchProvider = Provider<StreamSubscription<void>>((ref) {
+  final sub = ref.watch(cardScheduleWriterProvider).watchParams();
+  ref.onDispose(sub.cancel);
+  return sub;
+});
+
+/// Writes the pending reviews as log segments (#1380).
+final reviewUploaderProvider = Provider<ReviewUploader>(
+  (ref) => ReviewUploader(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectLogProvider),
+  ),
+);
+
+/// When the pending reviews are written for upload (#1380): app to the
+/// background, session end, 5 min idle, 300 pending, a sync cycle.
+final reviewUploadSchedulerProvider = Provider<ReviewUploadScheduler>((ref) {
+  final uploader = ref.watch(reviewUploaderProvider);
+  final scheduler = ReviewUploadScheduler(
+    flush: uploader.flush,
+    pendingAccounts: uploader.pendingAccounts,
+    appLogger: ref.watch(appLoggerProvider),
+  );
+  void paused() => unawaited(scheduler.appPaused());
+  final lifecycle = AppLifecycleListener(onPause: paused, onHide: paused);
+  ref.onDispose(() {
+    lifecycle.dispose();
+    scheduler.dispose();
+  });
+  return scheduler;
+});
+
+/// The flash card reviews and their schedules (#1380).
+final reviewRepositoryProvider = Provider<ReviewRepository>(
+  (ref) => ReviewRepositoryImpl(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+    deviceState: ref.watch(deviceStateStoreProvider),
+    schedules: ref.watch(cardScheduleWriterProvider),
+    uploads: ref.watch(reviewUploadSchedulerProvider),
   ),
 );
 

@@ -20,7 +20,7 @@ void main() {
   group('Migration', () {
     test('schemaVersion matches expected value', () async {
       final db = AppDatabase(NativeDatabase.memory());
-      expect(db.schemaVersion, 88);
+      expect(db.schemaVersion, 89);
       await db.close();
     });
 
@@ -438,7 +438,7 @@ void main() {
       final db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('reply_to_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -479,7 +479,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'emails'), contains('bcc_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -510,7 +510,7 @@ void main() {
           .getSingle();
       expect(row.read<int?>('size_bytes'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -548,7 +548,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('bcc_text'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -589,7 +589,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'drafts'), contains('attachments_json'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -637,7 +637,7 @@ void main() {
         containsAll(['pending_upload', 'pending_delete']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -685,7 +685,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       expect(await _tableColumns(db, 'pending_changes'), contains('state'));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -735,7 +735,7 @@ void main() {
         containsAll(['lease_until', 'claim_token']),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -777,7 +777,7 @@ void main() {
           await db.customSelect('SELECT email_id FROM attachment_files').get();
       expect(files.map((r) => r.read<String>('email_id')), ['acc-x:~kept']);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -813,7 +813,7 @@ void main() {
       expect(row.read<int?>('foreign_move_wait_seq'), isNull);
       expect(row.read<int?>('foreign_move_wait_since'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -846,7 +846,7 @@ void main() {
       expect(row.read<String>('path'), 'Work');
       expect(row.read<String?>('srv_mailbox_id'), isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -982,7 +982,7 @@ void main() {
         throwsA(anything),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1182,7 +1182,7 @@ void main() {
       expect(action.originalEmails[0].srvUidValidity, 55);
 
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1355,7 +1355,7 @@ void main() {
           .get();
       expect(index, hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1523,7 +1523,7 @@ void main() {
           .get();
       expect(index, hasLength(2));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1612,7 +1612,7 @@ void main() {
         expect(jsonDecode(c.payload), {'name': 'Snoozed', 'role': 'snoozed'});
       }
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1683,7 +1683,7 @@ void main() {
           .get();
       expect(logged.map((r) => r.read<String>('account_id')), ['acc-i']);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
       await db.close();
     });
 
@@ -1738,7 +1738,7 @@ void main() {
         contains('emails_thread_id'),
       );
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test('v81→v82 adds the encrypted-object tables; the step re-runs',
@@ -1802,7 +1802,7 @@ void main() {
       expect(await present(db), containsAll(tables));
       expect(await db.select(db.mailObjects).get(), hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test('v82→v83 adds user_preferences.personal_data_beta, off', () async {
@@ -1837,7 +1837,7 @@ void main() {
       expect(row.menuPosition, 'top');
       expect(row.personalDataBeta, isFalse);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test(
@@ -1924,7 +1924,7 @@ void main() {
       expect(await db.select(db.mailObjects).get(), hasLength(1));
       expect(await db.select(db.mailObjectLogEvents).get(), hasLength(1));
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test(
@@ -1971,7 +1971,7 @@ void main() {
       rawDb.close();
       var db = AppDatabase(NativeDatabase(dbFile));
       expect(await present(db), {'entries', 'entries_updated'});
-      expect(await version(db), 88);
+      expect(await version(db), 89);
       await addEntry(db, 'e1');
       await db.close();
 
@@ -1998,7 +1998,7 @@ void main() {
       expect(await present(db), {'entries', 'entries_updated'});
       expect(await _tableColumns(db, 'mail_objects'), contains('covered_by'));
       expect(await _tableColumns(db, 'mail_object_blobs'), isNotEmpty);
-      expect(await version(db), 88);
+      expect(await version(db), 89);
 
       // Deleting the account takes its entries with it.
       await addEntry(db, 'e2');
@@ -2026,7 +2026,8 @@ void main() {
                 .customSelect(
                   "SELECT name FROM sqlite_master WHERE type IN ('table', "
                   "'index') AND (name LIKE 'card%' OR name = 'decks') "
-                  "AND name NOT LIKE 'sqlite_%'",
+                  "AND name NOT LIKE 'sqlite_%' "
+                  "AND name NOT LIKE 'card_schedule%'",
                 )
                 .get())
               r.read<String>('name'),
@@ -2082,7 +2083,7 @@ void main() {
       rawDb.close();
       var db = AppDatabase(NativeDatabase(dbFile));
       expect(await present(db), expected);
-      expect(await version(db), 88);
+      expect(await version(db), 89);
       await addCard(db, 'c1');
       await db.close();
 
@@ -2096,7 +2097,7 @@ void main() {
       db = AppDatabase(NativeDatabase(dbFile));
       addTearDown(db.close);
       expect(await present(db), expected);
-      expect(await version(db), 88);
+      expect(await version(db), 89);
       expect(await db.select(db.cards).get(), hasLength(1));
       expect(await db.select(db.cardSources).get(), hasLength(1));
 
@@ -2142,7 +2143,7 @@ void main() {
       expect(row.personalDataBeta, isTrue);
       expect(row.defaultItemsAccountId, isNull);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test(
@@ -2206,7 +2207,7 @@ void main() {
       );
       final account = await db.select(db.accounts).getSingle();
       expect(account.legacyNotesMigrationConfirmedAt, isNull);
-      expect(await version(db), 88);
+      expect(await version(db), 89);
       await db.close();
 
       // Again on the upgraded database: nothing changes.
@@ -2238,11 +2239,116 @@ void main() {
         contains('legacy_notes_migration_confirmed_at'),
       );
       expect(await links(db), {('h1', '<m1@x>'), ('h1', '<m2@x>')});
-      expect(await version(db), 88);
+      expect(await version(db), 89);
 
       // Deleting the account takes its links with it.
       await db.customStatement("DELETE FROM accounts WHERE id = 'acc-x'");
       expect(await links(db), isEmpty);
+    });
+
+    test(
+        'v88→v89 adds review_log and card_schedule with their indexes; the '
+        'step re-runs and keeps the rows', () async {
+      final dbFile = File('test_migration_v88_review_log.db');
+      if (dbFile.existsSync()) dbFile.deleteSync();
+      addTearDown(() {
+        if (dbFile.existsSync()) dbFile.deleteSync();
+      });
+      const schema = {
+        'review_log',
+        'review_log_card',
+        'review_log_pending',
+        'card_schedule',
+        'card_schedule_due',
+      };
+      Future<Set<String>> present(AppDatabase db) async => {
+            for (final r in await db
+                .customSelect(
+                  "SELECT name FROM sqlite_master WHERE type IN ('table', "
+                  "'index') AND (name LIKE 'review_log%' OR name LIKE "
+                  "'card_schedule%')",
+                )
+                .get())
+              r.read<String>('name'),
+          };
+      Future<int> version(AppDatabase db) async =>
+          (await db.customSelect('PRAGMA user_version').getSingle())
+              .read<int>('user_version');
+      Future<void> addReview(AppDatabase db, int seq) =>
+          db.into(db.reviewLog).insert(
+                ReviewLogCompanion.insert(
+                  accountId: 'acc-x',
+                  deviceId: 'dev',
+                  seq: seq,
+                  cardId: const Value('c1'),
+                  op: 'review',
+                  h: '0000000000001-0000-dev',
+                  t: const Value(1),
+                  rating: const Value(3),
+                ),
+              );
+
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await seedAccountRow(fresh, 'acc-x'); // creates the schema
+      expect(await present(fresh), schema);
+      await fresh.close();
+
+      // A v88 database with existing data, without the new schema.
+      var rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('DROP TABLE review_log;')
+        ..execute('DROP TABLE card_schedule;')
+        ..execute(
+          'INSERT INTO cards (account_id, card_id, collection_id, '
+          "source_item_hmac, source_kind, h) VALUES ('acc-x', 'c1', 'deck-1', "
+          "'hm', 'doc', 'h');",
+        )
+        ..execute('PRAGMA user_version = 88;');
+      rawDb.close();
+      var db = AppDatabase(NativeDatabase(dbFile));
+      expect(await present(db), schema);
+      expect(await db.select(db.cards).get(), hasLength(1));
+      expect(await version(db), 89);
+      await addReview(db, 1);
+      await db.close();
+
+      // Again on the upgraded database: nothing changes.
+      rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('PRAGMA user_version = 88;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      expect(await present(db), schema);
+      expect(await db.select(db.reviewLog).get(), hasLength(1));
+      await db.close();
+
+      // An upgrade that ran halfway (#1084): review_log and no index, no
+      // card_schedule; the step finishes, keeping the rows.
+      rawDb = sqlite.sqlite3.open(dbFile.path)
+        ..execute('DROP INDEX review_log_card;')
+        ..execute('DROP INDEX review_log_pending;')
+        ..execute('DROP TABLE card_schedule;')
+        ..execute('PRAGMA user_version = 88;');
+      rawDb.close();
+      db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      expect(await present(db), schema);
+      expect(await db.select(db.reviewLog).get(), hasLength(1));
+      expect(await version(db), 89);
+
+      // Deleting the account takes its events and schedules with it.
+      await db.into(db.cardSchedules).insert(
+            CardSchedulesCompanion.insert(
+              accountId: 'acc-x',
+              cardId: 'c1',
+              state: 'review',
+              dueMs: 1,
+              reps: 1,
+              lapses: 0,
+              paramsKey: 'k',
+            ),
+          );
+      await db.customStatement("DELETE FROM accounts WHERE id = 'acc-x'");
+      expect(await db.select(db.reviewLog).get(), isEmpty);
+      expect(await db.select(db.cardSchedules).get(), isEmpty);
     });
 
     test('a fresh database has the server-location indexes', () async {
@@ -2352,7 +2458,7 @@ void main() {
           .getSingle();
       expect(row.read<int>('latest_uid'), 9);
       final version = await db.customSelect('PRAGMA user_version').getSingle();
-      expect(version.read<int>('user_version'), 88);
+      expect(version.read<int>('user_version'), 89);
     });
 
     test(

@@ -71,6 +71,7 @@ void main() {
       await swallow(() => router.reopen(id));
       await swallow(() => router.item(id, 'h'));
       await swallow(() => router.clockFor(id));
+      await swallow(() => router.recordHighWater(id));
       await swallow(() => router.delete(id, 'h'));
       await swallow(() => router.appendRaw(id, Uint8List(0)));
       await swallow(() => router.deleteRaw(id, '<m@x>'));
@@ -93,6 +94,7 @@ void main() {
       'reopen',
       'item',
       'clockFor',
+      'recordHighWater',
       'delete',
       'appendRaw',
       'deleteRaw',

@@ -36,6 +36,7 @@ const _noCode = {
   'lib/core/models/mail_object.dart',
   'lib/core/repositories/legacy_note_migration.dart',
   'lib/core/repositories/note_repository.dart',
+  'lib/core/repositories/review_repository.dart',
   'lib/core/storage/secure_storage.dart',
   'lib/core/sync/push_status.dart',
   'lib/ui/theme/spacing.dart',

@@ -50,7 +50,8 @@ class KeyDevice {
   /// database.
   KeyDevice(
     this.account, {
-    List<ObjectProjector> Function(AppDatabase db) projectors = _noProjectors,
+    List<MailObjectProjector> Function(AppDatabase db) projectors =
+        _noProjectors,
     PrfProvider? prf,
   }) {
     accounts = AccountRepositoryImpl(db, storage);
@@ -112,9 +113,9 @@ class KeyDevice {
       store.observe(id, MailObjectFolder.keys).first;
 }
 
-List<ObjectProjector> _noProjectors(AppDatabase db) => const [];
+List<MailObjectProjector> _noProjectors(AppDatabase db) => const [];
 
-/// A [KeyDevice] whose store writes projections (#1373, #1379): its
+/// A [KeyDevice] whose store writes projections (#1373, #1379, #1380): its
 /// [listAndSync] also runs the key lifecycle after the sync, as the app
 /// does, so collection keys that arrived open the new objects.
 class ProjectingKeyDevice extends KeyDevice {

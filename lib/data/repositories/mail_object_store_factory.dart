@@ -13,10 +13,11 @@ import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
+import 'package:sharedinbox/data/repositories/review_log_projector.dart';
 
 /// The [MailObjectStore] of the app: a [MailObjectStoreRouter] over an IMAP
 /// and a JMAP store that open and write with the keys of [ring] and write
-/// the same projections (#1373, #1379). The app and the WorkManager isolate
+/// the same projections (#1373, #1379, #1380). The app and the WorkManager isolate
 /// both build their store here, so the two cannot diverge.
 MailObjectStore buildMailObjectStore(
   AppDatabase db,
@@ -29,11 +30,12 @@ MailObjectStore buildMailObjectStore(
   AppLogger? appLogger,
   bool pushPending = true,
 }) {
-  final projectors = [
+  final projectors = <MailObjectProjector>[
     EntryProjector(db),
     CardDocProjector(db),
     CardBatchProjector(db),
     DeckProjector(db),
+    ReviewLogProjector(db),
   ];
   return MailObjectStoreRouter(
     accounts,

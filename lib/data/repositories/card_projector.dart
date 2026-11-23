@@ -6,13 +6,18 @@ import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/repositories/card_schedule_writer.dart';
 
 /// Writes the `CardSources` rows of the `card` docs (#1379): one row per
-/// doc. Runs inside the store's merge transaction ([ObjectProjector]).
+/// doc. Runs inside the store's merge transaction ([ObjectProjector]). A
+/// card whose deck changes (e.g. it arrives after its reviews) gets its
+/// schedule recomputed with the params of the deck (#1380).
 class CardDocProjector extends ObjectProjector {
-  CardDocProjector(this.db);
+  CardDocProjector(this.db, {CardScheduleWriter? schedules})
+      : schedules = schedules ?? CardScheduleWriter(db);
 
   final AppDatabase db;
+  final CardScheduleWriter schedules;
 
   @override
   String get kind => cardKind;
@@ -29,7 +34,7 @@ class CardDocProjector extends ObjectProjector {
     final display = item.display;
     final shown = display ?? item.heads.lastOrNull;
     final content = shown == null ? null : cardContentOf(shown);
-    await replaceCardSources(db, accountId, itemHmac, [
+    final moved = await replaceCardSources(db, accountId, itemHmac, [
       if (shown != null)
         CardSourcesCompanion.insert(
           accountId: accountId,
@@ -45,16 +50,20 @@ class CardDocProjector extends ObjectProjector {
           hasConflict: Value(item.conflict),
         ),
     ]);
+    await schedules.recompute(accountId, moved);
   }
 }
 
 /// Writes the `CardSources` rows of the `card-batch` docs (#1379): one row
 /// per member of [mergeBatchMembers] over all heads. Its heads merge by
-/// themselves ([mergesHeads]): never a conflict.
+/// themselves ([mergesHeads]): never a conflict. Like [CardDocProjector]
+/// it recomputes the schedules of cards whose deck changes.
 class CardBatchProjector extends ObjectProjector {
-  CardBatchProjector(this.db);
+  CardBatchProjector(this.db, {CardScheduleWriter? schedules})
+      : schedules = schedules ?? CardScheduleWriter(db);
 
   final AppDatabase db;
+  final CardScheduleWriter schedules;
 
   @override
   String get kind => cardBatchKind;
@@ -69,7 +78,7 @@ class CardBatchProjector extends ObjectProjector {
     ProjectedItem item,
   ) async {
     final collectionId = item.display?.head.collectionId;
-    await replaceCardSources(db, accountId, itemHmac, [
+    final moved = await replaceCardSources(db, accountId, itemHmac, [
       if (collectionId != null)
         for (final m in mergeBatchMembers(item.heads))
           CardSourcesCompanion.insert(
@@ -84,6 +93,7 @@ class CardBatchProjector extends ObjectProjector {
             tagsJson: Value(jsonEncode(m.content.tags)),
           ),
     ]);
+    await schedules.recompute(accountId, moved);
   }
 }
 
@@ -130,8 +140,10 @@ class DeckProjector extends ObjectProjector {
 
 /// Replaces the `CardSources` rows of [sourceItemHmac] by [rows], then sets
 /// the `Cards` row of every cardId they touch to its source with the
-/// highest `h`; a cardId without a source left loses its row.
-Future<void> replaceCardSources(
+/// highest `h`; a cardId without a source left loses its row. Returns the
+/// cardIds whose deck changed (a new, moved or removed row): their
+/// schedules depend on it.
+Future<Set<String>> replaceCardSources(
   AppDatabase db,
   String accountId,
   String sourceItemHmac,
@@ -153,7 +165,7 @@ Future<void> replaceCardSources(
         ))
       .go();
   await db.batch((b) => b.insertAll(db.cardSources, rows));
-  await _recomputeCards(db, accountId, {
+  return _recomputeCards(db, accountId, {
     ...old,
     for (final r in rows) r.cardId.value,
   });
@@ -162,14 +174,23 @@ Future<void> replaceCardSources(
 /// SQLite's default limit of host parameters is 999; stay well below.
 const _chunk = 400;
 
-Future<void> _recomputeCards(
+Future<Set<String>> _recomputeCards(
   AppDatabase db,
   String accountId,
   Set<String> cardIds,
 ) async {
   final ids = cardIds.toList();
+  final moved = <String>{};
   for (var i = 0; i < ids.length; i += _chunk) {
     final chunk = ids.sublist(i, (i + _chunk).clamp(0, ids.length));
+    final decks = {
+      for (final c in await (db.select(db.cards)
+            ..where(
+              (t) => t.accountId.equals(accountId) & t.cardId.isIn(chunk),
+            ))
+          .get())
+        c.cardId: c.collectionId,
+    };
     final sources = await (db.select(db.cardSources)
           ..where(
             (t) => t.accountId.equals(accountId) & t.cardId.isIn(chunk),
@@ -180,6 +201,10 @@ Future<void> _recomputeCards(
       final known = winners[s.cardId];
       if (known == null || _beats(s, known)) winners[s.cardId] = s;
     }
+    moved.addAll([
+      for (final id in chunk)
+        if (decks[id] != winners[id]?.collectionId) id,
+    ]);
     await db.batch((b) {
       for (final id in chunk) {
         final w = winners[id];
@@ -210,6 +235,7 @@ Future<void> _recomputeCards(
       }
     });
   }
+  return moved;
 }
 
 /// The highest `h` wins; on a tie a `card` doc beats a batch member, then

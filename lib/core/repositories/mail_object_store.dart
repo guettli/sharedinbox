@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 
@@ -31,11 +32,15 @@ typedef KeepVanishedKeyMail = Future<bool> Function(
   MailObject row,
 );
 
+/// A projection the store keeps in step with its merge: an
+/// [ObjectProjector] (one document kind) or a [LogProjector] (one log).
+abstract interface class MailObjectProjector {}
+
 /// Keeps a projection table of one document [kind] (e.g. `Entries`) in step
 /// with the merge (#1373). The store calls it inside the transaction that
 /// writes an item's head columns, so the projection cannot diverge from the
 /// merge: on a local write, a pull and a reopen after an unlock.
-abstract class ObjectProjector {
+abstract class ObjectProjector implements MailObjectProjector {
   String get kind;
 
   /// True for a kind whose heads merge by themselves (`card-batch`, #1379:
@@ -47,6 +52,21 @@ abstract class ObjectProjector {
 
   /// Projects item [itemHmac] as the merge sees it ([ProjectedItem]).
   Future<void> apply(String accountId, String itemHmac, ProjectedItem item);
+}
+
+/// Keeps a projection of the events of one [log] (e.g. `review`) in step
+/// with the merge (#1380). The store calls it inside the transaction that
+/// stores the events of a segment or pack head (`MailObjectLogEvents`): on
+/// a local write, a pull and a reopen after an unlock.
+abstract class LogProjector implements MailObjectProjector {
+  String get log;
+
+  /// Projects [events] of the segment or pack with itemId [segmentItemId].
+  Future<void> apply(
+    String accountId,
+    String segmentItemId,
+    List<LogEvent> events,
+  );
 }
 
 /// What the merge hands an [ObjectProjector] for one item.
@@ -143,6 +163,11 @@ abstract class MailObjectStore {
   /// The HLC of this device for [accountId], advanced past every own
   /// version seen; versions passed to [put] take their `versionId` from it.
   Future<HlcClock> clockFor(String accountId);
+
+  /// Stores the HLC and `seq` high-water marks of [clockFor] in the secure
+  /// storage marker (5.3), after events were stamped without a [put]. Local
+  /// only, never the network.
+  Future<void> recordHighWater(String accountId);
 
   /// Seals [object] (a new item, or an `edit()` of [item]) and stores it to
   /// be uploaded. Versions its `parents` name become superseded.
