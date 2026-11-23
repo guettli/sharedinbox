@@ -62,7 +62,8 @@ class CredentialManagerPrfProvider implements PrfProvider {
       'rpId': rpId,
       // evalByCredential only takes credentials of allowCredentials.
       'allowCredentials': [
-        for (final id in evalByCredential.keys) {'type': 'public-key', 'id': id},
+        for (final id in evalByCredential.keys)
+          {'type': 'public-key', 'id': id},
       ],
       'userVerification': 'required',
       'extensions': {

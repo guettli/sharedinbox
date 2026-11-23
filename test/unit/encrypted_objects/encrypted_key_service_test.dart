@@ -932,8 +932,7 @@ void main() {
       expect(b.prf!.evaluations.single.keys, [second.credentialIdB64]);
     });
 
-    test('removing the recovery slot is refused; nothing is written',
-        () async {
+    test('removing the recovery slot is refused; nothing is written', () async {
       final a = await unlocked();
       await a.service.addPasskeySlot(_acc);
       final ids = server.messageIds;
