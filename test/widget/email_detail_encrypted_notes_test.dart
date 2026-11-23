@@ -83,8 +83,6 @@ Future<(_Notes, FakeEntryRepository)> _open(
         ),
         noteRepositoryProvider.overrideWithValue(notes),
         entryRepositoryProvider.overrideWithValue(entries),
-        legacyNotesAwaitingConfirmationProvider
-            .overrideWith((ref, accountId) => Stream.value(0)),
       ],
     ),
   );
