@@ -2734,16 +2734,30 @@
     {
       "tool": "jscpd",
       "file": "lib/data/repositories/entry_repository_impl.dart",
-      "start_line": 79,
-      "end_line": 90,
-      "key": "d969c22d366c5913"
+      "start_line": 126,
+      "end_line": 138,
+      "key": "564bdab3c90207ab"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/entry_repository_impl.dart",
+      "start_line": 147,
+      "end_line": 157,
+      "key": "664338cc7aa886ab"
     },
     {
       "tool": "jscpd",
       "file": "test/widget/entries_fakes.dart",
-      "start_line": 82,
-      "end_line": 93,
-      "key": "d969c22d366c5913"
+      "start_line": 114,
+      "end_line": 126,
+      "key": "564bdab3c90207ab"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/entries_fakes.dart",
+      "start_line": 145,
+      "end_line": 155,
+      "key": "664338cc7aa886ab"
     }
   ]
 }

@@ -3,11 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
-import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/di.dart';
 
 import 'entries_fakes.dart';
-import 'helpers.dart';
 
 /// Opens the Journal tab of the entries home of acc-1 on 2026-11-23.
 Future<FakeEntryRepository> _pump(
@@ -15,22 +12,12 @@ Future<FakeEntryRepository> _pump(
   List<Entry> entries = const [],
 }) async {
   final repo = FakeEntryRepository(entries);
-  await tester.pumpWidget(
-    buildApp(
-      initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
-      overrides: [
-        ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
-        entryRepositoryProvider.overrideWithValue(repo),
-        mailObjectStoreProvider.overrideWithValue(FakeConflictStore({})),
-        todayProvider.overrideWithValue(() => DateTime(2026, 11, 23, 9)),
-      ],
-    ),
+  await pumpEntriesApp(
+    tester,
+    repo: repo,
+    store: FakeConflictStore({}),
+    today: () => DateTime(2026, 11, 23, 9),
   );
-  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('entriesTab_journal')));
   await tester.pumpAndSettle();
   return repo;

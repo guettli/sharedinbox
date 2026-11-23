@@ -363,11 +363,12 @@ MailObjectItem conflictItemOf(List<InnerObject> versions) {
 }
 
 /// Pumps the app on the entries screen with personal data unlocked, backed by
-/// [repo] and [store], and waits for it to settle.
+/// [repo] and [store] (and [today], if set), and waits for it to settle.
 Future<void> pumpEntriesApp(
   WidgetTester tester, {
   required EntryRepository repo,
   required MailObjectStore store,
+  DateTime Function()? today,
 }) async {
   await tester.pumpWidget(
     buildApp(
@@ -380,6 +381,7 @@ Future<void> pumpEntriesApp(
         ),
         entryRepositoryProvider.overrideWithValue(repo),
         mailObjectStoreProvider.overrideWithValue(store),
+        if (today != null) todayProvider.overrideWithValue(today),
       ],
     ),
   );
