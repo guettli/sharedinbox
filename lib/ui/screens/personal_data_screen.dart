@@ -203,6 +203,18 @@ class _SetupIntro extends StatelessWidget {
   }
 }
 
+/// The text field of a step and its inline error.
+mixin _TextInput<T extends StatefulWidget> on State<T> {
+  final controller = TextEditingController();
+  String? error;
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+}
+
 /// Steps 2 and 3 of the setup: show the recovery key, then confirm it by
 /// typing its last group.
 class _RecoveryKeyFlow extends StatefulWidget {
@@ -215,16 +227,8 @@ class _RecoveryKeyFlow extends StatefulWidget {
   State<_RecoveryKeyFlow> createState() => _RecoveryKeyFlowState();
 }
 
-class _RecoveryKeyFlowState extends State<_RecoveryKeyFlow> {
+class _RecoveryKeyFlowState extends State<_RecoveryKeyFlow> with _TextInput {
   bool _confirming = false;
-  String? _error;
-  final _controller = TextEditingController();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -240,11 +244,11 @@ class _RecoveryKeyFlowState extends State<_RecoveryKeyFlow> {
           const SizedBox(height: AppSpacing.lg),
           TextField(
             key: const Key('recoveryKeyConfirmField'),
-            controller: _controller,
+            controller: controller,
             autocorrect: false,
             decoration: InputDecoration(
               labelText: 'Last group',
-              errorText: _error,
+              errorText: error,
             ),
             onSubmitted: (_) => _confirm(),
           ),
@@ -257,7 +261,7 @@ class _RecoveryKeyFlowState extends State<_RecoveryKeyFlow> {
           TextButton(
             onPressed: () => setState(() {
               _confirming = false;
-              _error = null;
+              error = null;
             }),
             child: const Text('Show the recovery key again'),
           ),
@@ -320,8 +324,8 @@ class _RecoveryKeyFlowState extends State<_RecoveryKeyFlow> {
 
   void _confirm() {
     final lastGroup = widget.formatted.split('-').last;
-    if (normalizeRecoveryInput(_controller.text) != lastGroup) {
-      setState(() => _error = 'This does not match the last group.');
+    if (normalizeRecoveryInput(controller.text) != lastGroup) {
+      setState(() => error = 'This does not match the last group.');
       return;
     }
     widget.onDone();
@@ -339,16 +343,8 @@ class _UnlockView extends ConsumerStatefulWidget {
   ConsumerState<_UnlockView> createState() => _UnlockViewState();
 }
 
-class _UnlockViewState extends ConsumerState<_UnlockView> {
-  final _controller = TextEditingController();
+class _UnlockViewState extends ConsumerState<_UnlockView> with _TextInput {
   bool _busy = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -368,14 +364,14 @@ class _UnlockViewState extends ConsumerState<_UnlockView> {
         const SizedBox(height: AppSpacing.lg),
         TextField(
           key: const Key('recoveryKeyField'),
-          controller: _controller,
+          controller: controller,
           autocorrect: false,
           enabled: !_busy,
           style: const TextStyle(fontFamily: 'monospace'),
           decoration: InputDecoration(
             labelText: 'Recovery key',
             hintText: 'XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX',
-            errorText: _error,
+            errorText: error,
           ),
           onSubmitted: (_) => _unlock(),
         ),
@@ -406,15 +402,15 @@ class _UnlockViewState extends ConsumerState<_UnlockView> {
   Future<void> _unlock() async {
     setState(() {
       _busy = true;
-      _error = null;
+      error = null;
     });
-    String? error;
+    String? failure;
     try {
       await ref
           .read(encryptedKeyServiceProvider)
-          .unlockWithRecoveryKey(widget.accountId, _controller.text);
+          .unlockWithRecoveryKey(widget.accountId, controller.text);
     } on UnlockFailed catch (e) {
-      error = switch (e.reason) {
+      failure = switch (e.reason) {
         UnlockFailure.badFormat =>
           'This is not a recovery key: it has 32 characters in 8 groups '
               'of 4.',
@@ -424,12 +420,12 @@ class _UnlockViewState extends ConsumerState<_UnlockView> {
           'This recovery key does not unlock the data of this account.',
       };
     } catch (e) {
-      error = 'Could not unlock: ${userErrorMessage(e)}';
+      failure = 'Could not unlock: ${userErrorMessage(e)}';
     }
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _error = error;
+      error = failure;
     });
   }
 }
