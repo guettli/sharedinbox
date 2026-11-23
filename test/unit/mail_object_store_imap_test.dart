@@ -2,22 +2,19 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
-import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
-import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/imap/imap_namespace.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
-import 'encrypted_objects/test_helpers.dart';
 import 'helpers/fake_secure_storage.dart';
+import 'helpers/mail_object_device.dart';
 import 'helpers/stateful_fake_imap.dart';
 import 'recording_app_log_repository.dart';
 
@@ -35,7 +32,7 @@ const _account = Account(
 
 /// One install of the app: its own database, secure storage and store, all
 /// talking to the shared fake [server].
-class _Device {
+class _Device with MailObjectDeviceOps {
   _Device(this.server, {this.background = false, this.unlocked = true});
 
   final StatefulFakeImapServer server;
@@ -44,7 +41,10 @@ class _Device {
   /// Whether this device holds the collection key.
   bool unlocked;
   final logs = RecordingAppLogRepository();
+  @override
   final db = openTestDatabase();
+  @override
+  String get accountId => _acc;
   late final accounts = AccountRepositoryImpl(db, FakeSecureStorage());
   late final mailboxes = MailboxRepositoryImpl(
     db,
@@ -52,6 +52,8 @@ class _Device {
     imapConnect: (_, __, ___) async => server.connect(),
     namespace: _namespace,
   );
+  late final _keys = testDeckKeys(() => unlocked);
+  @override
   late final MailObjectStoreImap store = MailObjectStoreImap(
     db,
     accounts,
@@ -59,14 +61,8 @@ class _Device {
     FakeSecureStorage(),
     imapConnect: (_, __, ___) async => server.connect(),
     namespace: _namespace,
-    keyLookup: (_, keyId) =>
-        unlocked && constantTimeEquals(keyId, testDeckKey.keyId)
-            ? testDeckKey
-            : null,
-    writeKey: (_, collectionId) =>
-        unlocked && collectionId == testDeckKey.collectionId
-            ? testDeckKey
-            : null,
+    keyLookup: _keys.keyLookup,
+    writeKey: _keys.writeKey,
     appLogger: AppLogger(logs),
     pushPending: !background,
     onStep: (step) async => onStep?.call(step),
@@ -91,68 +87,8 @@ class _Device {
   /// A folder listing, as the mail sync does before the store runs.
   Future<void> list() => mailboxes.syncMailboxes(_acc);
 
-  Future<void> sync() async {
-    await store.sync(_acc);
-    await store.waitForIdle();
-  }
-
-  Future<MailObject> putNew({
-    String body = 'hello',
-    String itemId = 'i1',
-  }) async {
-    final clock = await store.clockFor(_acc);
-    final put = await store.put(
-      _acc,
-      testObject(itemId: itemId, versionId: clock.send(), body: body),
-    );
-    await store.waitForIdle();
-    return put;
-  }
-
-  Future<MailObject> putEdit(String itemHmac, String body) async {
-    final current = (await store.item(_acc, itemHmac))!;
-    final put = await store.put(
-      _acc,
-      edit(
-        base: current.display,
-        merge: current.merge,
-        clock: await store.clockFor(_acc),
-        parts: [_markdown(body)],
-      ),
-    );
-    await store.waitForIdle();
-    return put;
-  }
-
-  Future<List<MailObjectRow>> rows([
-    MailObjectFolder folder = MailObjectFolder.data,
-  ]) =>
-      (db.select(db.mailObjects)
-            ..where((t) => t.folder.equals(folder.name))
-            ..orderBy([(t) => OrderingTerm.asc(t.versionId)]))
-          .get();
-
-  Future<MailObjectRow?> row(String messageId) =>
-      (db.select(db.mailObjects)..where((t) => t.messageId.equals(messageId)))
-          .getSingleOrNull();
-
-  Future<Set<String>> appDataFolders() async =>
-      {for (final r in await db.select(db.appDataFolders).get()) r.path};
-
-  Future<String?> bodyOf(String itemHmac) async {
-    final item = await store.item(_acc, itemHmac);
-    if (item == null) return null;
-    final parts = item.display.parts;
-    return parts.isEmpty ? '' : utf8.decode(parts.first.bytes);
-  }
-
   List<String> events() => [for (final r in logs.rows) r.event];
 }
-
-ObjectPart _markdown(String body) => ObjectPart(
-      contentType: 'text/markdown; charset=utf-8',
-      bytes: Uint8List.fromList(utf8.encode(body)),
-    );
 
 StatefulFakeImapServer _server({
   bool uidPlus = true,
@@ -167,8 +103,6 @@ StatefulFakeImapServer _server({
       namespacePrefix: namespacePrefix,
       gmail: gmail,
     );
-
-String _bare(String messageId) => messageId.substring(1, messageId.length - 1);
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -187,7 +121,7 @@ void main() {
     final stored = server.messagesIn(_dataPath).single;
     expect(stored.flags, contains(r'\Seen'));
     expect(stored.raw, put.payload);
-    expect(stored.messageId, _bare(put.messageId));
+    expect(stored.messageId, bareMessageId(put.messageId));
     final row = (await a.row(put.messageId))!;
     expect(row.pendingUpload, isFalse);
     expect(row.serverId, '${stored.uid}');
@@ -249,7 +183,7 @@ void main() {
 
     expect(
       server.messagesIn(_dataPath).map((m) => m.messageId),
-      [_bare(v2.messageId)],
+      [bareMessageId(v2.messageId)],
     );
     expect((await a.rows()).map((r) => r.messageId), [v2.messageId]);
     expect(jsonDecode((await a.row(v2.messageId))!.parents!), [v1.versionId]);
@@ -262,7 +196,7 @@ void main() {
 
     expect(
       server.messagesIn(_dataPath).map((m) => m.messageId),
-      [_bare(gone.messageId)],
+      [bareMessageId(gone.messageId)],
     );
     await b.sync();
     final item = (await b.store.item(_acc, v1.itemHmac!))!;
@@ -349,7 +283,7 @@ void main() {
 
     expect(
       server.messagesIn(_dataPath).map((m) => m.messageId),
-      [_bare(v1.messageId)],
+      [bareMessageId(v1.messageId)],
     );
     expect((await a.row(v1.messageId))!.pendingDelete, isTrue);
     expect((await a.row(v2.messageId))!.pendingUpload, isTrue);
@@ -357,7 +291,7 @@ void main() {
     await a.sync();
     expect(
       server.messagesIn(_dataPath).map((m) => m.messageId),
-      [_bare(v2.messageId)],
+      [bareMessageId(v2.messageId)],
     );
   });
 
@@ -371,9 +305,9 @@ void main() {
 
       expect(
         server.messagesIn(_dataPath).map((m) => m.messageId),
-        [_bare(v2.messageId)],
+        [bareMessageId(v2.messageId)],
       );
-      expect(server.find(_bare(v1.messageId)), isNull);
+      expect(server.find(bareMessageId(v1.messageId)), isNull);
       expect(server.messagesIn('[Gmail]/Trash'), isEmpty);
       expect(server.messagesIn(StatefulFakeImapServer.gmailAllMail), isEmpty);
     });
@@ -387,7 +321,7 @@ void main() {
 
       await a.putEdit(v1.itemHmac!, 'two');
 
-      expect(server.find(_bare(v1.messageId)), isNull);
+      expect(server.find(bareMessageId(v1.messageId)), isNull);
     });
 
     test('without a Trash folder the old version stays and is logged',
@@ -463,11 +397,11 @@ void main() {
     // A local edit: neither uploaded nor is the old version expunged.
     final v2 = await bg.putEdit(v1.itemHmac!, 'two');
     await bg.sync();
-    expect(server.find(_bare(v1.messageId)), isNotNull);
+    expect(server.find(bareMessageId(v1.messageId)), isNotNull);
     expect((await bg.row(v2.messageId))!.pendingUpload, isTrue);
 
     // A head vanished without a tombstone is only marked for re-upload.
-    server.expungeElsewhere(_bare(kept.messageId));
+    server.expungeElsewhere(bareMessageId(kept.messageId));
     await bg.sync();
     final row = (await bg.row(kept.messageId))!;
     expect(row.pendingUpload, isTrue);
@@ -566,7 +500,7 @@ void main() {
     final server = _server();
     final a = await _Device.open(server);
     final put = await a.putNew();
-    server.expungeElsewhere(_bare(put.messageId));
+    server.expungeElsewhere(bareMessageId(put.messageId));
 
     await a.sync();
 

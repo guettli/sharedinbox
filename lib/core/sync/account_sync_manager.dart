@@ -789,11 +789,35 @@ class AccountSyncManager {
           _appLogger,
           _drafts,
           _notes,
+          _objects,
           _onNewMail,
           onSyncStart: () => _emitSyncing(id, syncing: true),
           onSyncEnd: onSyncEnd,
         ),
     };
+  }
+}
+
+/// Syncs the encrypted-object store (#1370, #1371) of [account]. Like notes,
+/// a failure there must not stop mail sync: logged and swallowed.
+Future<void> _syncMailObjectsQuietly(
+  MailObjectStore? objects,
+  Account account,
+  AppLogger appLogger,
+) async {
+  if (objects == null) return;
+  try {
+    await objects.sync(account.id);
+  } catch (e, st) {
+    unawaited(
+      appLogger.warn(
+        'sync.mos.failed',
+        'Encrypted-object sync failed: $e',
+        accountId: account.id,
+        error: e,
+        stack: st,
+      ),
+    );
   }
 }
 
@@ -1149,7 +1173,7 @@ class _AccountSync with _KickableWait {
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
-    await _syncObjectsQuietly();
+    await _syncMailObjectsQuietly(_objects, account, _appLogger);
     final stats = _SyncStats(
       emailsFetched: folders.emailResult.fetched,
       emailsSkipped: folders.emailResult.skipped,
@@ -1179,26 +1203,6 @@ class _AccountSync with _KickableWait {
         _appLogger.warn(
           'sync.notes.failed',
           'Note sync failed: $e',
-          accountId: account.id,
-          error: e,
-          stack: st,
-        ),
-      );
-    }
-  }
-
-  /// Syncs the encrypted-object store (#1370). Like notes, a failure there
-  /// must not stop mail sync: logged and swallowed.
-  Future<void> _syncObjectsQuietly() async {
-    final objects = _objects;
-    if (objects == null) return;
-    try {
-      await objects.sync(account.id);
-    } catch (e, st) {
-      unawaited(
-        _appLogger.warn(
-          'sync.mos.failed',
-          'Encrypted-object sync failed: $e',
           accountId: account.id,
           error: e,
           stack: st,
@@ -1424,6 +1428,7 @@ class _JmapAccountSync with _KickableWait {
     this._appLogger,
     this._drafts,
     this._notes,
+    this._objects,
     this._onNewMail, {
     void Function()? onSyncStart,
     void Function({required bool success})? onSyncEnd,
@@ -1438,6 +1443,7 @@ class _JmapAccountSync with _KickableWait {
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
+  final MailObjectStore? _objects;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
   final void Function({required bool success})? _onSyncEnd;
@@ -1678,6 +1684,7 @@ class _JmapAccountSync with _KickableWait {
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
+    await _syncMailObjectsQuietly(_objects, account, _appLogger);
     final stats = _SyncStats(
       emailsFetched: folders.emailResult.fetched,
       emailsSkipped: folders.emailResult.skipped,
