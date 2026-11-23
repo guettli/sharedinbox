@@ -52,7 +52,12 @@ void main() {
   // An earlier run's folders go, subfolders first.
   setUp(
     () => withClient((c) async {
-      for (final path in [_dataPath, 'SharedInbox/Keys', 'SharedInbox']) {
+      for (final path in [
+        _dataPath,
+        'SharedInbox/Keys',
+        'SharedInbox',
+        'SharedInboxMoved',
+      ]) {
         try {
           await c.deleteMailbox(
             imap.Mailbox(
@@ -233,8 +238,16 @@ void main() {
     await withClient((c) async {
       final box = (await c.listMailboxes(recursive: true))
           .firstWhere((m) => m.path == _dataPath);
-      final moved = await c.renameMailbox(box, 'SharedInbox/Moved');
-      await c.renameMailbox(moved, _dataPath);
+      await c.renameMailbox(box, 'SharedInboxMoved');
+      await c.renameMailbox(
+        imap.Mailbox(
+          encodedName: 'SharedInboxMoved',
+          encodedPath: 'SharedInboxMoved',
+          flags: const [],
+          pathSeparator: '/',
+        ),
+        _dataPath,
+      );
     });
     final after = await withClient(
       (c) async => (await c.selectMailboxByPath(_dataPath)).uidValidity,
@@ -281,7 +294,10 @@ void main() {
 class _Device {
   _Device(this.account, {this.appLogger, AppDatabase? db, this.storage})
       : db = db ?? openTestDatabase() {
-    accounts = AccountRepositoryImpl(this.db, FakeSecureStorage());
+    accounts = AccountRepositoryImpl(
+      this.db,
+      storage ??= FakeSecureStorage(),
+    );
     mailboxes = MailboxRepositoryImpl(
       this.db,
       accounts,
@@ -291,7 +307,7 @@ class _Device {
       this.db,
       accounts,
       mailboxes,
-      storage ?? (storage = FakeSecureStorage()),
+      storage!,
       imapConnect: (a, u, p) => offline
           ? Future.error(const SocketException('offline'))
           : testImapConnect(a, u, p),
