@@ -36,61 +36,18 @@ void main() {
     pool = PoolImapAccount();
   });
 
-  Future<T> withClient<T>(Future<T> Function(imap.ImapClient c) body) async {
-    final client = await pool.connect();
-    try {
-      return await body(client);
-    } finally {
-      await client.logout();
-    }
-  }
+  Future<T> withClient<T>(Future<T> Function(imap.ImapClient c) body) =>
+      pool.withClient(body);
 
   // An earlier run's folders go, subfolders first.
   setUp(
-    () => withClient((c) async {
-      for (final path in [
-        _dataPath,
-        'SharedInbox/Keys',
-        'SharedInbox',
-        'SharedInboxMoved',
-      ]) {
-        try {
-          await c.deleteMailbox(
-            imap.Mailbox(
-              encodedName: path,
-              encodedPath: path,
-              flags: const [],
-              pathSeparator: '/',
-            ),
-          );
-        } catch (_) {
-          // Not there.
-        }
-      }
-    }),
+    () => pool.deleteFolders(
+      [_dataPath, 'SharedInbox/Keys', 'SharedInbox', 'SharedInboxMoved'],
+    ),
   );
 
-  /// The Message-IDs and raw bytes in the Data folder, by UID.
-  Future<Map<String, Uint8List>> onServer() => withClient((c) async {
-        await c.selectMailboxByPath(_dataPath);
-        final uids = (await c.uidSearchMessages(searchCriteria: 'ALL'))
-                .matchingSequence
-                ?.toList() ??
-            const <int>[];
-        if (uids.isEmpty) return {};
-        final fetched = await c.uidFetchMessages(
-          imap.MessageSequence.fromIds(uids, isUid: true),
-          '(UID BODY.PEEK[])',
-        );
-        return {
-          for (final m in fetched.messages)
-            m.getHeaderValue('Message-ID')!.trim(): switch (m.mimeData) {
-              final imap.BinaryMimeData d => d.data,
-              final imap.TextMimeData t => utf8.encode(t.text),
-              _ => Uint8List(0),
-            },
-        };
-      });
+  /// The Message-IDs and raw bytes in the Data folder.
+  Future<Map<String, Uint8List>> onServer() => pool.rawMails(_dataPath);
 
   Future<_Device> device({AppLogger? appLogger}) async {
     final d = _Device(pool.account, appLogger: appLogger);

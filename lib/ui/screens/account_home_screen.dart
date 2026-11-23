@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -72,6 +73,8 @@ class _AccountHomeBody extends ConsumerWidget {
     final counterparts =
         ref.watch(comparableCounterpartsProvider(account.id)).value ??
             const <Account>[];
+    final prefs =
+        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
     return ListView(
       children: [
         Padding(
@@ -181,6 +184,13 @@ class _AccountHomeBody extends ConsumerWidget {
           subtitle: const Text('Choose which new mail pops up'),
           onTap: () => context.push('/accounts/${account.id}/notifications'),
         ),
+        if (prefs.personalDataBeta)
+          ListTile(
+            leading: const Icon(Icons.lock_outline),
+            title: const Text('Personal data (beta)'),
+            subtitle: const Text('End-to-end encrypted, stored on your server'),
+            onTap: () => context.push('/accounts/${account.id}/personal-data'),
+          ),
         ListTile(
           leading: const Icon(Icons.send),
           title: const Text('Send accounts'),

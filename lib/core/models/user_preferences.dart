@@ -21,9 +21,14 @@ class UserPreferences {
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
     this.prefetchMode = PrefetchMode.wifiOnly,
     this.bodyCacheLimitMb = 100,
+    this.personalDataBeta = false,
   });
   final MenuPosition menuPosition;
   final AfterMailViewAction afterMailViewAction;
   final PrefetchMode prefetchMode;
   final int bodyCacheLimitMb;
+
+  /// "Personal data (beta)": the encrypted personal-data UI and its key
+  /// sync (#1366). Turning it off never deletes keys.
+  final bool personalDataBeta;
 }

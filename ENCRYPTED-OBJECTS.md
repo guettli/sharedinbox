@@ -82,7 +82,19 @@ the beta switch, the store only pulls folders the listing recorded and
 creates folders only for a local row to upload. For the key lifecycle
 (#1366) it treats `SharedInbox/Keys` as opaque raw mails: `observe`,
 `appendRaw` (idempotent by Message-ID), `deleteRaw` (foreground) and
-`reopen` after an unlock. A key mail that vanishes is uploaded again.
+`reopen` after an unlock. A key mail that vanishes is uploaded again only
+if the key lifecycle keeps it (`KeepVanishedKeyMail`, 4.3).
+
+**Key lifecycle (#1366)**: `EncryptedKeyService`
+(`lib/core/services/encrypted_key_service.dart`) reads and writes the key
+mails through the store, runs the race of 4.3 and unlocks with the recovery
+key; it fills one in-memory `KeyRing` (`key_ring.dart`) that the store uses
+as its key lookups (also in the background isolate). Its state per account
+is the `SyncStates` row `mos:key-state`, JSON
+`{phase: none|pending|won|lost, ownMessageId, committed}` — never key
+material. It runs after each object sync (`afterSync`), only while the
+"Personal data (beta)" switch (`UserPreferences.personalDataBeta`, schema
+v83) is on; the background only reads.
 
 ## 4. Keys
 
@@ -180,6 +192,25 @@ Only an unlocked device may add or remove slots.
 - `SharedInbox/Keys` missing while this device holds the key: re-upload from
   the local copy of the key mail. **Never wipe a local key because a folder
   is missing.**
+- A device that lost the race never shows its recovery key and never keeps
+  its key; it deletes its own key mail in the **foreground only, after the
+  re-list** confirmed the loss, and offers the unlock. The re-list is a pull
+  after the own APPEND was confirmed, so every key mail with a lower UID is
+  seen.
+- A setup interrupted between APPEND and the decision (`phase: pending`;
+  the new key waits under `enc-account-key-pending/<accountId>`) is decided
+  from the listing by the next foreground run. A loss is cleaned up as
+  above; a win gets a **fresh recovery slot** (the first recovery key was
+  never shown): a new key mail at `slotListVersion + 1`, then the old one
+  is deleted.
+- A vanished keys-folder mail is uploaded again only when it is the own
+  pending key mail, the newest key mail of the key this device holds, or a
+  collection-key mail of that key. A race loser's mail, a replaced slot list
+  and mails of a key this device does not hold are dropped locally, so other
+  devices do not resurrect them.
+- The first write with a key marks the device `committed`; after that a
+  foreign `accountKeyId` group only raises a warning (`mos.foreign_key_mail`
+  with a count).
 
 ### 4.4 Prepared for sharing (not implemented)
 
@@ -221,6 +252,15 @@ Implemented in `lib/core/encrypted_objects/` (pure Dart).
   `{"v": 1, "kind": "collection-key", "accountKeyId", "collectionId", "keyId", "wraps": [{"type": "account", "nonce", "wrapped"}]}`.
 - Readers preserve unknown fields (top level, slots, wraps) and skip unknown
   wrap types.
+- **Outer key mail** (`key_mail_message.dart`): `Date`, `Subject:
+  SharedInbox key`, `Message-ID` (as in 5.6), `MIME-Version`,
+  `X-SharedInbox-Schema: 1`, `X-SharedInbox-Key-Kind: account-key |
+  collection-key`, then `multipart/mixed` with a `7bit` `text/plain` notice
+  and the JSON as a `base64` `application/json` part (76-char lines, CRLF).
+  An account-key mail carries its MAC as the part header
+  `X-SharedInbox-Key-Mac: base64url(mac)`; it covers the **decoded** part
+  bytes. A reader rejects a missing or duplicate MAC header, another schema
+  or kind, and any other mail (e.g. a pairing mail).
 - **Recovery key**: checksum = the first 4 bytes of SHA-256 of the raw 16
   bytes; `raw ‖ checksum` (160 bit) is written MSB-first in Crockford base32
   (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`) as 8 groups of 4 joined by `-`.

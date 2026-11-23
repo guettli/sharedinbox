@@ -67,12 +67,16 @@ class _Device {
         unlocked && collectionId == testDeckKey.collectionId
             ? testDeckKey
             : null,
+    keepVanishedKeyMail: (_, row) async => keepKeyMail?.call(row) ?? true,
     appLogger: AppLogger(logs),
     pushPending: !background,
     onStep: (step) async => onStep?.call(step),
   );
 
   void Function(String step)? onStep;
+
+  /// The key lifecycle's say on a vanished key mail; null keeps all.
+  bool Function(MailObject row)? keepKeyMail;
 
   static Future<String> _namespace(Object client) =>
       (client as StatefulFakeImapClient).namespace();
@@ -558,6 +562,44 @@ void main() {
     await expectLater(
       a.store.appendRaw(_acc, Uint8List.fromList(ascii.encode('x'))),
       throwsArgumentError,
+    );
+  });
+
+  test(
+      'a vanished key mail is uploaded again only if the key lifecycle '
+      'keeps it, also for a missing keys folder', () async {
+    final server = _server();
+    final a = await _Device.open(server);
+    Uint8List keyMail(String id) => Uint8List.fromList(
+          ascii.encode('Message-ID: <$id@sharedinbox.invalid>\r\n\r\nk\r\n'),
+        );
+    await a.store.appendRaw(_acc, keyMail('own'));
+    await a.store.appendRaw(_acc, keyMail('loser'));
+    await a.store.waitForIdle();
+    a.keepKeyMail = (row) => row.messageId == '<own@sharedinbox.invalid>';
+
+    server
+      ..expungeElsewhere('own@sharedinbox.invalid')
+      ..expungeElsewhere('loser@sharedinbox.invalid');
+    await a.sync();
+
+    expect(
+      server.messagesIn(_keysPath).map((m) => m.messageId),
+      ['own@sharedinbox.invalid'],
+    );
+    expect(
+      [for (final r in await a.rows(MailObjectFolder.keys)) r.messageId],
+      ['<own@sharedinbox.invalid>'],
+    );
+
+    await a.store.appendRaw(_acc, keyMail('loser'));
+    await a.store.waitForIdle();
+    server.deleteFolder(_keysPath);
+    await a.sync();
+
+    expect(
+      server.messagesIn(_keysPath).map((m) => m.messageId),
+      ['own@sharedinbox.invalid'],
     );
   });
 

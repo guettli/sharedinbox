@@ -873,6 +873,9 @@ class UserPreferences extends Table {
   // Added in schema v38: max cache size for offline email bodies, in megabytes.
   IntColumn get bodyCacheLimitMb =>
       integer().withDefault(const Constant(100))();
+  // Added in schema v83: the "Personal data (beta)" switch (#1366).
+  BoolColumn get personalDataBeta =>
+      boolean().withDefault(const Constant(false))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -2407,6 +2410,14 @@ class AppDatabase extends _$AppDatabase {
       if (!await _tableExists(this, 'mail_object_devices')) {
         await m.createTable(mailObjectDevices);
       }
+    }
+    if (from < 83 && await _tableExists(this, 'user_preferences')) {
+      // The "Personal data (beta)" switch (#1366).
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.personalDataBeta,
+      );
     }
   }
 

@@ -4,7 +4,11 @@ import 'dart:typed_data';
 import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
+import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 
 /// `start, start+1, …` as [length] bytes.
@@ -90,3 +94,23 @@ InnerObject testObject({
         ),
       ],
     );
+
+/// A key mail of a fresh account key, as a racing device (or a malicious
+/// server) would append it.
+Future<({String messageId, Uint8List mail})> foreignKeyMailForTest() async {
+  final key = AccountKey.generate();
+  final payload = KeyMailPayload(
+    accountKeyId: key.accountKeyId,
+    slotListVersion: 1,
+    slots: [await wrapRecoverySlot(key, RecoveryKey.generate())],
+  );
+  final messageId = newMessageId();
+  return (
+    messageId: messageId,
+    mail: buildKeyMail(
+      messageId: messageId,
+      mail: await payload.serialize(await key.kSlots()),
+      date: DateTime.utc(2026),
+    ),
+  );
+}

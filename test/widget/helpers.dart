@@ -61,6 +61,7 @@ import 'package:sharedinbox/ui/screens/folder_diagnostics_screen.dart';
 import 'package:sharedinbox/ui/screens/mailbox_list_screen.dart';
 import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
+import 'package:sharedinbox/ui/screens/personal_data_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
@@ -980,6 +981,12 @@ Widget buildApp({
             ),
           ),
           GoRoute(
+            path: ':accountId/personal-data',
+            builder: (ctx, state) => PersonalDataScreen(
+              accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
             path: ':accountId/edit',
             builder: (ctx, state) => EditAccountScreen(
               accountId: state.pathParameters['accountId']!,
@@ -1238,22 +1245,29 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
     this.menuPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
+    this.personalDataBeta = false,
     List<String>? trustedImageSenders,
   }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
   AfterMailViewAction afterMailViewAction;
+  bool personalDataBeta;
+  final _changes = StreamController<void>.broadcast();
   final List<String> _trustedImageSenders;
 
   List<String> get trustedImageSendersForTest =>
       List.unmodifiable(_trustedImageSenders);
 
   @override
-  Stream<UserPreferences> observePreferences() => Stream.value(
-        UserPreferences(
-          menuPosition: menuPosition,
-          afterMailViewAction: afterMailViewAction,
-        ),
+  Stream<UserPreferences> observePreferences() async* {
+    yield _current();
+    yield* _changes.stream.map((_) => _current());
+  }
+
+  UserPreferences _current() => UserPreferences(
+        menuPosition: menuPosition,
+        afterMailViewAction: afterMailViewAction,
+        personalDataBeta: personalDataBeta,
       );
 
   @override
@@ -1271,6 +1285,12 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
 
   @override
   Future<void> updateBodyCacheLimitMb(int mb) async {}
+
+  @override
+  Future<void> updatePersonalDataBeta({required bool enabled}) async {
+    personalDataBeta = enabled;
+    _changes.add(null);
+  }
 
   @override
   Stream<List<String>> observeTrustedImageSenders() =>

@@ -47,6 +47,7 @@ const _fetchChunk = 100;
 // No key until the key lifecycle (#1366) provides them.
 CollectionKey? _noKey(String _, Uint8List __) => null;
 CollectionKey? _noWriteKey(String _, String __) => null;
+Future<bool> _keepAll(String _, MailObject __) async => true;
 
 /// Where the store's folders live on the server of one account.
 class _Layout {
@@ -92,6 +93,7 @@ class MailObjectStoreImap implements MailObjectStore {
     ImapNamespaceFn namespace = imapNamespaceFromServer,
     CollectionKeyLookup keyLookup = _noKey,
     WriteKeyLookup writeKey = _noWriteKey,
+    KeepVanishedKeyMail keepVanishedKeyMail = _keepAll,
     AppLogger? appLogger,
     bool pushPending = true,
     DateTime Function()? now,
@@ -100,6 +102,7 @@ class MailObjectStoreImap implements MailObjectStore {
         _namespace = namespace,
         _keyLookup = keyLookup,
         _writeKey = writeKey,
+        _keepVanishedKey = keepVanishedKeyMail,
         _appLogger = appLogger,
         _pushEnabled = pushPending,
         _now = now ?? DateTime.now,
@@ -113,6 +116,7 @@ class MailObjectStoreImap implements MailObjectStore {
   final ImapNamespaceFn _namespace;
   final CollectionKeyLookup _keyLookup;
   final WriteKeyLookup _writeKey;
+  final KeepVanishedKeyMail _keepVanishedKey;
   final AppLogger? _appLogger;
   final bool _pushEnabled;
   final DateTime Function() _now;
@@ -754,7 +758,9 @@ class MailObjectStoreImap implements MailObjectStore {
     );
     for (final row in gone) {
       final keep = !row.pendingDelete &&
-          (folder == MailObjectFolder.keys || row.versionId != null);
+          (folder == MailObjectFolder.keys
+              ? await _keepVanishedKey(accountId, _toModel(row))
+              : row.versionId != null);
       if (!keep) {
         await _dropRow(accountId, row.messageId);
         continue;
@@ -797,7 +803,11 @@ class MailObjectStoreImap implements MailObjectStore {
     await _clearCheckpoint(accountId, folder);
     var reupload = 0;
     for (final row in await _rows(accountId, folder)) {
-      if (row.pendingDelete || row.payload == null) {
+      if (row.pendingDelete ||
+          row.payload == null ||
+          (folder == MailObjectFolder.keys &&
+              !row.pendingUpload &&
+              !await _keepVanishedKey(accountId, _toModel(row)))) {
         await _dropRow(accountId, row.messageId);
         continue;
       }
