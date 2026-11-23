@@ -457,4 +457,81 @@ void main() {
     expect(watch.elapsed, lessThan(const Duration(milliseconds: 100)));
     expect(await a.entries(), hasLength(2));
   });
+
+  group('todos (#1357)', () {
+    const today = '2026-11-23';
+
+    Future<List<String>> todos(
+      _Device d,
+      TodoFilter filter, {
+      Set<String> accounts = const {_acc},
+    }) async =>
+        [
+          for (final e in await d.repo
+              .observeTodos(accountIds: accounts, filter: filter, today: today)
+              .first)
+            e.body,
+        ];
+
+    test('create with a task and links; setTask ticks and keeps the rest',
+        () async {
+      final a = await _Device.open(_server());
+      final todo = await a.repo.create(
+        _acc,
+        title: 'Invoice',
+        body: 'pay it',
+        task: const EntryTask(due: '2026-12-01'),
+        links: ['<inv@x>'],
+      );
+      await a.store.waitForIdle();
+      expect(todo.task!.due, '2026-12-01');
+      expect(todo.task!.done, isFalse);
+      expect(todo.links, ['<inv@x>']);
+
+      await a.repo.setTask(_acc, todo.itemId, todo.task!.copyWith(done: true));
+      await a.store.waitForIdle();
+      final ticked = (await a.repo.entry(_acc, todo.itemId))!;
+      expect(ticked.task!.done, isTrue);
+      expect(ticked.task!.doneAt, isNull);
+      expect(ticked.task!.due, '2026-12-01');
+      expect(ticked.title, 'Invoice');
+      expect(ticked.body, 'pay it');
+      expect(ticked.links, ['<inv@x>']);
+
+      await a.repo.setTask(_acc, todo.itemId, null);
+      await a.store.waitForIdle();
+      expect((await a.repo.entry(_acc, todo.itemId))!.task, isNull);
+      expect(await todos(a, TodoFilter.open), isEmpty);
+      expect(await todos(a, TodoFilter.done), isEmpty);
+    });
+
+    test('the filters and their order', () async {
+      final a = await _Device.open(_server());
+      Future<void> add(String body, EntryTask? task) async {
+        await a.repo.create(_acc, body: body, task: task);
+        await a.store.waitForIdle();
+      }
+
+      await add('note', null);
+      await add('no due', const EntryTask());
+      await add('later', const EntryTask(due: '2026-12-01'));
+      await add('today p2', const EntryTask(due: today, priority: 2));
+      await add('today p1', const EntryTask(due: today, priority: 1));
+      await add('overdue', const EntryTask(due: '2026-11-01'));
+      await add('done 1', const EntryTask(done: true, due: '2026-11-01'));
+      await add('done 2', const EntryTask(done: true));
+
+      expect(
+        await todos(a, TodoFilter.open),
+        ['overdue', 'today p1', 'today p2', 'later', 'no due'],
+      );
+      expect(
+        await todos(a, TodoFilter.today),
+        ['overdue', 'today p1', 'today p2'],
+      );
+      // Newest first.
+      expect(await todos(a, TodoFilter.done), ['done 2', 'done 1']);
+      expect(await todos(a, TodoFilter.open, accounts: {'other'}), isEmpty);
+    });
+  });
 }

@@ -166,6 +166,10 @@ const _excluded = <String, String>{
   'lib/ui/widgets/snooze_picker.dart':
       'Widget-only date/time picker bottom sheet',
   'lib/ui/widgets/thread_tile.dart': 'Widget-only list tile',
+  'lib/ui/widgets/todos_view.dart':
+      'Widget-only Todos tab (filters, quick-add, tick); the todo query and '
+          'the tick edit are unit-tested in entry_repository_impl_test.dart '
+          'and entry_object_test.dart',
   'lib/ui/widgets/try_connection_button.dart':
       'Widget-only button wrapping async connection test',
   'lib/ui/widgets/undo_shell.dart':

@@ -616,6 +616,25 @@ gives the list title and the text each version is diffed by against the
 newest one (an entry: title, one line per field, the body); other kinds fall
 back to the head JSON plus the text parts.
 
+**Todos** (#1357): the entries home has the tabs Notes | Todos | Journal. The
+Todos tab lists the todos of **every unlocked account** together (Notes stays
+per account). Its filters are:
+
+- **open**: `!done`.
+- **today**: `!done` and `due <= today`, where today is the local
+  `YYYY-MM-DD`. So overdue todos show here too.
+- **done**: `done`.
+
+A tick or an untick is an edit of `task.done` (`editEntryTask`). Title, body,
+other fields and unknown `task` keys stay. A tick writes **no** `doneAt`, and an
+untick removes it. So two devices ticking the same version write identical
+content, which merges as one logical head, not a conflict.
+
+New todos (quick-add) go to the preference "Default account for new items"
+while that account is unlocked. Otherwise they go to the open account, and
+otherwise to the first unlocked one. "Create todo" on a mail creates the todo
+in that mail's account, with `links: [messageId]`.
+
 Legacy plaintext notes (`Notes` folder, `X-SharedInbox-Note-*` headers) are
 migrated into entries with `links: [messageId]` (#1355). Only mails with
 `X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too.

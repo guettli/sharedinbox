@@ -8,6 +8,9 @@ abstract class UserPreferencesRepository {
   Future<void> updateBodyCacheLimitMb(int mb);
   Future<void> updatePersonalDataBeta({required bool enabled});
 
+  /// Null: no preference.
+  Future<void> updateDefaultItemsAccountId(String? accountId);
+
   Stream<List<String>> observeTrustedImageSenders();
   Future<void> addTrustedImageSender(String senderEmail);
   Future<void> removeTrustedImageSender(String senderEmail);

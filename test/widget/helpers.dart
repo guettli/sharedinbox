@@ -1276,12 +1276,14 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
     this.menuPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
     this.personalDataBeta = false,
+    this.defaultItemsAccountId,
     List<String>? trustedImageSenders,
   }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
   AfterMailViewAction afterMailViewAction;
   bool personalDataBeta;
+  String? defaultItemsAccountId;
   final _changes = StreamController<void>.broadcast();
   final List<String> _trustedImageSenders;
 
@@ -1298,6 +1300,7 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
         menuPosition: menuPosition,
         afterMailViewAction: afterMailViewAction,
         personalDataBeta: personalDataBeta,
+        defaultItemsAccountId: defaultItemsAccountId,
       );
 
   @override
@@ -1319,6 +1322,12 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   @override
   Future<void> updatePersonalDataBeta({required bool enabled}) async {
     personalDataBeta = enabled;
+    _changes.add(null);
+  }
+
+  @override
+  Future<void> updateDefaultItemsAccountId(String? accountId) async {
+    defaultItemsAccountId = accountId;
     _changes.add(null);
   }
 

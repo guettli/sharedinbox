@@ -26,6 +26,13 @@ class FakeEntryRepository implements EntryRepository {
   final _changes = StreamController<void>.broadcast();
   int _next = 0;
   final updates = <({String itemId, String? title, String body})>[];
+  final taskUpdates = <({String accountId, String itemId, EntryTask? task})>[];
+
+  /// The accounts [create] was called for, in order.
+  final createdIn = <String>[];
+
+  /// Thrown by the next [create], if set.
+  Object? failCreateWith;
 
   List<Entry> get entries => List.unmodifiable(_entries);
 
@@ -50,6 +57,24 @@ class FakeEntryRepository implements EntryRepository {
   }
 
   @override
+  Stream<List<Entry>> observeTodos({
+    required Set<String> accountIds,
+    required TodoFilter filter,
+    required String today,
+  }) async* {
+    yield _todos(accountIds, filter, today);
+    yield* _changes.stream.map((_) => _todos(accountIds, filter, today));
+  }
+
+  List<Entry> _todos(Set<String> accountIds, TodoFilter filter, String today) =>
+      [
+        for (final e in _entries)
+          if (accountIds.contains(e.accountId) &&
+              (e.task?.matches(filter, today) ?? false))
+            e,
+      ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+  @override
   Future<Entry?> entry(String accountId, String itemId) async {
     for (final e in _entries) {
       if (e.itemId == itemId) return e;
@@ -62,7 +87,13 @@ class FakeEntryRepository implements EntryRepository {
     String accountId, {
     String? title,
     required String body,
+    EntryTask? task,
+    List<String> links = const [],
   }) async {
+    final fail = failCreateWith;
+    failCreateWith = null;
+    if (fail != null) throw fail;
+    createdIn.add(accountId);
     final n = _next++;
     final entry = Entry(
       accountId: accountId,
@@ -70,6 +101,8 @@ class FakeEntryRepository implements EntryRepository {
       itemHmac: 'hmac-new-$n',
       title: title,
       body: body,
+      task: task,
+      links: links,
       versionId: 'v-new-$n',
       updatedAt: DateTime.utc(2030).add(Duration(minutes: n)),
     );
@@ -95,6 +128,28 @@ class FakeEntryRepository implements EntryRepository {
       title: title,
       body: body,
       tags: old.tags,
+      task: old.task,
+      links: old.links,
+      versionId: '${old.versionId}+',
+      updatedAt: old.updatedAt,
+    );
+    _changes.add(null);
+  }
+
+  @override
+  Future<void> setTask(String accountId, String itemId, EntryTask? task) async {
+    taskUpdates.add((accountId: accountId, itemId: itemId, task: task));
+    final i = _entries.indexWhere((e) => e.itemId == itemId);
+    final old = _entries[i];
+    _entries[i] = Entry(
+      accountId: old.accountId,
+      itemId: old.itemId,
+      itemHmac: old.itemHmac,
+      title: old.title,
+      body: old.body,
+      tags: old.tags,
+      task: task,
+      links: old.links,
       versionId: '${old.versionId}+',
       updatedAt: old.updatedAt,
     );
@@ -108,15 +163,18 @@ class FakeEntryRepository implements EntryRepository {
   }
 }
 
-/// A key lifecycle that only reports a [fixed] status.
+/// A key lifecycle that only reports a [fixed] status (or one per account).
 class FixedStatusKeyService implements EncryptedKeyService {
-  FixedStatusKeyService(this.fixed);
+  FixedStatusKeyService(this.fixed, {this.byAccount = const {}});
 
   final PersonalDataStatus fixed;
 
+  /// Overrides [fixed] per account.
+  final Map<String, PersonalDataStatus> byAccount;
+
   @override
   Stream<PersonalDataStatus> watchStatus(String accountId) =>
-      Stream.value(fixed);
+      Stream.value(byAccount[accountId] ?? fixed);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -128,9 +186,11 @@ Entry testEntry(
   String body = '',
   bool conflict = false,
   int minute = 0,
+  EntryTask? task,
+  String accountId = 'acc-1',
 }) =>
     Entry(
-      accountId: 'acc-1',
+      accountId: accountId,
       itemId: itemId,
       itemHmac: 'hmac-$itemId',
       title: title,
@@ -138,6 +198,7 @@ Entry testEntry(
       versionId: 'v-$itemId',
       updatedAt: DateTime.utc(2026, 11, 23, 10, minute),
       hasConflict: conflict,
+      task: task,
     );
 
 /// A [MailObjectStore] serving the versions of items in conflict (#1374);

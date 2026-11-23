@@ -12,20 +12,100 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
+import 'package:sharedinbox/ui/widgets/quick_add_field.dart';
+import 'package:sharedinbox/ui/widgets/todos_view.dart';
 
-/// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): search, quick-add and
-/// the list of entries, newest first. Behind the "Personal data (beta)"
-/// switch, and only while the account is unlocked on this device.
-class EntriesScreen extends ConsumerStatefulWidget {
+/// One tab of the entries home: its label, key and content for an account.
+typedef EntriesTab = (
+  String label,
+  Key key,
+  Widget Function(String accountId) builder,
+);
+
+/// The tabs of the entries home (#1357); Journal (#1358) and Cards change a
+/// builder or add a record here.
+const entriesTabs = <EntriesTab>[
+  ('Notes', Key('entriesTab_notes'), _notesTab),
+  ('Todos', Key('entriesTab_todos'), _todosTab),
+  ('Journal', Key('entriesTab_journal'), _journalTab),
+];
+
+Widget _notesTab(String accountId) => _NotesTab(accountId: accountId);
+
+Widget _todosTab(String accountId) => TodosView(accountId: accountId);
+
+Widget _journalTab(String accountId) => const Center(
+      key: Key('journalTabPlaceholder'),
+      child: Text('Journal comes soon.'),
+    );
+
+/// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): tabs for notes (search,
+/// quick-add and the list, newest first), todos (#1357) and the journal.
+/// Behind the "Personal data (beta)" switch, and only while the account is
+/// unlocked on this device.
+class EntriesScreen extends ConsumerWidget {
   const EntriesScreen({super.key, required this.accountId});
 
   final String accountId;
 
   @override
-  ConsumerState<EntriesScreen> createState() => _EntriesScreenState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Entries'),
+        actions: [_conflictsBadge(context, ref)],
+      ),
+      body: PersonalDataGate(
+        accountId: accountId,
+        child: DefaultTabController(
+          length: entriesTabs.length,
+          child: Column(
+            children: [
+              TabBar(
+                tabs: [
+                  for (final (label, key, _) in entriesTabs)
+                    Tab(key: key, text: label),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    for (final (_, _, builder) in entriesTabs)
+                      builder(accountId),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the conflict list; only while some object is in conflict.
+  Widget _conflictsBadge(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(conflictsProvider(accountId)).value?.length ?? 0;
+    if (count == 0) return const SizedBox.shrink();
+    return IconButton(
+      key: const Key('entriesConflictsBadge'),
+      tooltip: 'Conflicts',
+      icon: Badge(label: Text('$count'), child: const Icon(Icons.call_split)),
+      onPressed: () => context.push('/accounts/$accountId/conflicts'),
+    );
+  }
 }
 
-class _EntriesScreenState extends ConsumerState<EntriesScreen> {
+/// Search, quick-add and the entries of one account, newest first.
+class _NotesTab extends ConsumerStatefulWidget {
+  const _NotesTab({required this.accountId});
+
+  final String accountId;
+
+  @override
+  ConsumerState<_NotesTab> createState() => _NotesTabState();
+}
+
+class _NotesTabState extends ConsumerState<_NotesTab> {
   final _search = TextEditingController();
   final _quickAdd = TextEditingController();
   String _query = '';
@@ -39,76 +119,34 @@ class _EntriesScreenState extends ConsumerState<EntriesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Entries'),
-        actions: [_conflictsBadge()],
-      ),
-      body: PersonalDataGate(
-        accountId: widget.accountId,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.sm,
-                AppSpacing.lg,
-                0,
-              ),
-              child: TextField(
-                key: const Key('entriesSearch'),
-                controller: _search,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Search entries',
-                ),
-                onChanged: (v) => setState(() => _query = v),
-              ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.sm,
+            AppSpacing.lg,
+            0,
+          ),
+          child: TextField(
+            key: const Key('entriesSearch'),
+            controller: _search,
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Search entries',
             ),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.lg,
-                vertical: AppSpacing.sm,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const Key('entriesQuickAdd'),
-                      controller: _quickAdd,
-                      decoration: const InputDecoration(
-                        hintText: 'Quick add',
-                      ),
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _add(),
-                    ),
-                  ),
-                  IconButton(
-                    key: const Key('entriesQuickAddSend'),
-                    icon: const Icon(Icons.send),
-                    tooltip: 'Add',
-                    onPressed: _add,
-                  ),
-                ],
-              ),
-            ),
-            Expanded(child: _list()),
-          ],
+            onChanged: (v) => setState(() => _query = v),
+          ),
         ),
-      ),
-    );
-  }
-
-  /// Opens the conflict list; only while some object is in conflict.
-  Widget _conflictsBadge() {
-    final count =
-        ref.watch(conflictsProvider(widget.accountId)).value?.length ?? 0;
-    if (count == 0) return const SizedBox.shrink();
-    return IconButton(
-      key: const Key('entriesConflictsBadge'),
-      tooltip: 'Conflicts',
-      icon: Badge(label: Text('$count'), child: const Icon(Icons.call_split)),
-      onPressed: () => context.push('/accounts/${widget.accountId}/conflicts'),
+        QuickAddField(
+          fieldKey: const Key('entriesQuickAdd'),
+          sendKey: const Key('entriesQuickAddSend'),
+          controller: _quickAdd,
+          hintText: 'Quick add',
+          onAdd: _add,
+        ),
+        Expanded(child: _list()),
+      ],
     );
   }
 
@@ -142,9 +180,8 @@ class _EntriesScreenState extends ConsumerState<EntriesScreen> {
   }
 
   Future<void> _add() async {
-    final body = _quickAdd.text;
-    if (body.trim().isEmpty) return;
-    _quickAdd.clear();
+    final body = takeQuickAddText(_quickAdd);
+    if (body == null) return;
     try {
       await ref
           .read(entryRepositoryProvider)

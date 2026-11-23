@@ -13,12 +13,15 @@ import 'package:share_plus/share_plus.dart';
 import 'package:sharedinbox/core/filter/filter_expression.dart';
 import 'package:sharedinbox/core/filter/similar_filter.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/models/note.dart';
 import 'package:sharedinbox/core/models/undo_action.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/platform/raw_email_downloader.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart'
+    show NoWriteKeyException;
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/glob_match.dart';
@@ -355,6 +358,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     'notify_sender',
     'headers',
     'debug_mail',
+    'create_todo',
   };
 
   /// Says why a menu entry that needs the message's row did nothing: the
@@ -491,6 +495,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final cached = _checkedHeader?.id == widget.emailId ? _checkedHeader : null;
     final header = detail.value?.$1 ?? cached;
     final body = detail.value?.$2;
+    final personalDataBeta =
+        ref.watch(userPreferencesProvider).value?.personalDataBeta ?? false;
 
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
@@ -681,6 +687,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
               ),
+              if (personalDataBeta && header?.messageId != null)
+                const PopupMenuItem(
+                  key: Key('emailCreateTodo'),
+                  value: 'create_todo',
+                  child: Text('Create todo'),
+                ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'headers',
@@ -729,6 +741,8 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 );
               } else if (value == 'notify_sender' && header != null) {
                 await _notifyForSender(context, header);
+              } else if (value == 'create_todo' && header != null) {
+                unawaited(_createTodo(context, header));
               } else if (value == 'select_text' && body != null) {
                 _showSelectText(context, body);
               } else if (value == 'mark_unread') {
@@ -2184,6 +2198,36 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
           .$2;
     });
     return ops;
+  }
+
+  /// Creates a todo for [header] in its account, titled by the subject and
+  /// linked by its Message-ID (#1357).
+  Future<void> _createTodo(BuildContext context, Email header) async {
+    final messageId = header.messageId;
+    if (messageId == null) return;
+    final router = GoRouter.of(context);
+    try {
+      final todo = await ref.read(entryRepositoryProvider).create(
+        header.accountId,
+        title: header.subject,
+        body: '',
+        task: const EntryTask(),
+        links: [messageId],
+      );
+      if (!context.mounted) return;
+      context.showAppSnackBar(
+        'Todo created',
+        action: SnackBarAction(
+          label: 'Open',
+          onPressed: () => unawaited(
+            router.push('/accounts/${header.accountId}/entries/${todo.itemId}'),
+          ),
+        ),
+      );
+    } on NoWriteKeyException {
+      if (!context.mounted) return;
+      context.showAppSnackBar('Unlock personal data to add todos.');
+    }
   }
 
   Future<void> _snooze(BuildContext context, Email header) async {

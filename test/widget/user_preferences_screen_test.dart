@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
@@ -9,11 +10,14 @@ import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 import 'helpers.dart';
 
 /// Opens the preferences screen with the default fakes.
-Future<void> _pumpPreferences(WidgetTester tester) async {
+Future<void> _pumpPreferences(
+  WidgetTester tester, {
+  List<Account>? accounts,
+}) async {
   await tester.pumpWidget(
     buildApp(
       initialLocation: '/accounts/preferences',
-      overrides: baseOverrides(),
+      overrides: baseOverrides(accounts: accounts),
     ),
   );
   await tester.pumpAndSettle();
@@ -130,6 +134,25 @@ void main() {
 
       expect(repo.personalDataBeta, isTrue);
       expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    });
+
+    testWidgets('the default account for new items shows with the beta on', (
+      tester,
+    ) async {
+      await _pumpPreferences(tester, accounts: [kTestAccount]);
+      await _scrollTo(tester, 'Personal data (beta)');
+      final dropdown = find.byKey(const Key('defaultItemsAccountDropdown'));
+      expect(dropdown, findsNothing);
+
+      final repo = await _tapAndGetRepo(tester, 'Personal data (beta)');
+      await _scrollTo(tester, 'Default account for new items');
+      expect(find.text('Open account'), findsOneWidget);
+
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('alice@example.com').last);
+      await tester.pumpAndSettle();
+      expect(repo.defaultItemsAccountId, 'acc-1');
     });
   });
 }
