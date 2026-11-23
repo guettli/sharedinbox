@@ -3,7 +3,6 @@ import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
-import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
@@ -134,37 +133,12 @@ class CardRepositoryImpl implements CardRepository {
     String accountId,
     String cardId,
     CardContent content,
-  ) async {
-    await _writeCardDoc(
-      accountId,
-      cardId,
-      (shown, doc, clock) => editCardObject(
-        deckId: shown.collectionId,
-        cardId: cardId,
-        content: content,
-        clock: clock,
-        base: doc?.display,
-        merge: doc?.merge,
-        above: Hlc.parse(shown.h),
-      ),
-    );
-  }
+  ) =>
+      _writeCardDoc(accountId, cardId, content);
 
   @override
-  Future<void> deleteCard(String accountId, String cardId) async {
-    await _writeCardDoc(
-      accountId,
-      cardId,
-      (shown, doc, clock) => deleteCardObject(
-        deckId: shown.collectionId,
-        cardId: cardId,
-        clock: clock,
-        base: doc?.display,
-        merge: doc?.merge,
-        above: Hlc.parse(shown.h),
-      ),
-    );
-  }
+  Future<void> deleteCard(String accountId, String cardId) =>
+      _writeCardDoc(accountId, cardId, null);
 
   @override
   Future<void> rewriteBatch(
@@ -201,14 +175,13 @@ class CardRepositoryImpl implements CardRepository {
     }
   }
 
-  /// Writes the next version of the `card` doc of [cardId] that [build]
-  /// makes from the `Cards` row shown and the doc (null when the card has
-  /// none yet, e.g. a batch member).
+  /// Writes the next version of the `card` doc of [cardId]
+  /// ([cardDocVersion]): [content], or a tombstone when null. A card without
+  /// a doc yet (a batch member) gets its first one.
   Future<void> _writeCardDoc(
     String accountId,
     String cardId,
-    InnerObject Function(CardRow shown, MailObjectItem? doc, HlcClock clock)
-        build,
+    CardContent? content,
   ) async {
     final shown = await _cardRow(accountId, cardId);
     if (shown == null) throw StateError('unknown card $cardId');
@@ -221,7 +194,15 @@ class CardRepositoryImpl implements CardRepository {
     final doc = await _store.item(accountId, hmac);
     await _store.put(
       accountId,
-      build(shown, doc, await _store.clockFor(accountId)),
+      cardDocVersion(
+        deckId: shown.collectionId,
+        cardId: cardId,
+        content: content,
+        clock: await _store.clockFor(accountId),
+        base: doc?.display,
+        merge: doc?.merge,
+        above: Hlc.parse(shown.h),
+      ),
     );
   }
 

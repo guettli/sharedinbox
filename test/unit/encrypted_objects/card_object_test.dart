@@ -105,7 +105,7 @@ void main() {
       ),
       parts: [...base.parts, image],
     );
-    final next = editCardObject(
+    final next = cardDocVersion(
       deckId: _deck,
       cardId: 'c1',
       content: const CardContent(front: 'F', back: 'B', tags: ['x']),
@@ -128,7 +128,7 @@ void main() {
       "member's, even from a clock far ahead", () {
     final ahead = Hlc(1700000000000 + 60 * 60 * 1000, 3, 'devB');
     final clock = _clockAt(1700000000000);
-    final edited = editCardObject(
+    final edited = cardDocVersion(
       deckId: _deck,
       cardId: 'c7',
       content: const CardContent(front: 'f', back: 'b'),
@@ -139,7 +139,7 @@ void main() {
     expect(edited.head.parents, isEmpty);
     expect(edited.head.versionId > ahead, isTrue);
 
-    final deleted = deleteCardObject(
+    final deleted = cardDocVersion(
       deckId: _deck,
       cardId: 'c8',
       clock: clock,
@@ -165,7 +165,7 @@ void main() {
       content: const CardContent(front: 'b', back: 'b'),
       clock: _clockAt(1001, 'devB'),
     );
-    final gone = deleteCardObject(
+    final gone = cardDocVersion(
       deckId: _deck,
       cardId: 'c1',
       clock: _clockAt(3000),

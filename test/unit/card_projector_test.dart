@@ -80,13 +80,13 @@ void main() {
 
   test('a lower-h member never beats a doc or a tombstone', () async {
     final batch = batchOf(['c1', 'c2'], _clockAt(1000));
-    final edit = editCardObject(
+    final edit = cardDocVersion(
       deckId: _deck,
       cardId: 'c1',
       content: const CardContent(front: 'edited', back: 'b'),
       clock: _clockAt(5000, 'devB'),
     );
-    final gone = deleteCardObject(
+    final gone = cardDocVersion(
       deckId: _deck,
       cardId: 'c2',
       clock: _clockAt(5000, 'devB'),
@@ -107,7 +107,7 @@ void main() {
   });
 
   test('a member with a higher h beats an older doc', () async {
-    final doc = editCardObject(
+    final doc = cardDocVersion(
       deckId: _deck,
       cardId: 'c1',
       content: const CardContent(front: 'doc', back: 'b'),
@@ -122,7 +122,7 @@ void main() {
   });
 
   test('an edit racing a delete stays visible as a conflict', () async {
-    final base = editCardObject(
+    final base = cardDocVersion(
       deckId: _deck,
       cardId: 'c1',
       content: const CardContent(front: 'v1', back: 'b'),
@@ -137,7 +137,7 @@ void main() {
         kind: cardKind,
         extra: const {'tags': <String>[]},
       ),
-      parts: editCardObject(
+      parts: cardDocVersion(
         deckId: _deck,
         cardId: 'c1',
         content: const CardContent(front: 'v2', back: 'b'),

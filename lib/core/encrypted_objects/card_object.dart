@@ -101,58 +101,46 @@ CardContent? cardContentOf(InnerObject object) {
   );
 }
 
-/// An edit of card [cardId] of deck [deckId] to [content]. With [base] (a
-/// head of [merge]) the doc gets a new version with `parents = all heads`,
-/// unknown fields and parts kept; without, it is the first `card` doc of a
-/// batch member (`parents: []`). The new `h` is above [above], the `h` of
-/// the version shown, so the edit always wins over it.
-InnerObject editCardObject({
+/// The next version of the `card` doc of card [cardId] in deck [deckId]:
+/// an edit to [content], or a tombstone when [content] is null. With [base]
+/// (a head of [merge]) the doc gets a new version with `parents = all
+/// heads`, unknown fields and parts kept; without, it is the first `card`
+/// doc of a batch member (`parents: []`). Its `h` is above [above], the `h`
+/// of the version shown, so it always wins over it.
+InnerObject cardDocVersion({
   required String deckId,
   required String cardId,
-  required CardContent content,
+  CardContent? content,
   required HlcClock clock,
   InnerObject? base,
   MergeResult? merge,
   Hlc? above,
 }) {
   _passAbove(clock, above);
-  if (base == null || merge == null) {
+  if (base != null && merge != null && content == null) {
+    return tombstone(base: base, merge: merge, clock: clock);
+  }
+  if (base != null && merge != null) {
+    return edit(
+      base: base,
+      merge: merge,
+      clock: clock,
+      fields: {'tags': content!.tags},
+      parts: [
+        _markdownPart(_frontId, content.front),
+        _markdownPart(_backId, content.back),
+        for (final p in base.parts)
+          if (!_isSide(p)) p,
+      ],
+    );
+  }
+  if (content != null) {
     return newCardObject(
       deckId: deckId,
       cardId: cardId,
       content: content,
       clock: clock,
     );
-  }
-  return edit(
-    base: base,
-    merge: merge,
-    clock: clock,
-    fields: {'tags': content.tags},
-    parts: [
-      _markdownPart(_frontId, content.front),
-      _markdownPart(_backId, content.back),
-      for (final p in base.parts)
-        if (!_isSide(p)) p,
-    ],
-  );
-}
-
-/// A delete of card [cardId] of deck [deckId]: with [base] (a head of
-/// [merge]) a tombstone over all heads of its doc; without, a first `card`
-/// doc that is a tombstone (`parents: []`), for a batch member. Its `h` is
-/// above [above], the `h` of the version shown.
-InnerObject deleteCardObject({
-  required String deckId,
-  required String cardId,
-  required HlcClock clock,
-  InnerObject? base,
-  MergeResult? merge,
-  Hlc? above,
-}) {
-  _passAbove(clock, above);
-  if (base != null && merge != null) {
-    return tombstone(base: base, merge: merge, clock: clock);
   }
   return InnerObject(
     head: ObjectHead(

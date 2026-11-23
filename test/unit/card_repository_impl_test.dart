@@ -157,7 +157,8 @@ void main() {
   test('an import of 1 000 cards is 2 batch mails; B sees every card',
       () async {
     final (a, b, deck) = await twoDevicesWithDeck();
-    final ids = await a.repo.importCards(_acc, deck.deckId, numberedCards(1000));
+    final ids =
+        await a.repo.importCards(_acc, deck.deckId, numberedCards(1000));
     await a.store.waitForIdle();
     expect(ids, hasLength(1000));
     expect(await a.heads(cardBatchKind), hasLength(2));
