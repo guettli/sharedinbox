@@ -2,6 +2,14 @@ import 'package:flutter/material.dart';
 
 import 'package:sharedinbox/ui/theme/spacing.dart';
 
+/// The text of a quick-add [controller], which is cleared; null when blank.
+String? takeQuickAddText(TextEditingController controller) {
+  final text = controller.text;
+  if (text.trim().isEmpty) return null;
+  controller.clear();
+  return text;
+}
+
 /// A one-line field with a send button that adds an item (entries, todos).
 class QuickAddField extends StatelessWidget {
   const QuickAddField({

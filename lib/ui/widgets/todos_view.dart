@@ -123,9 +123,8 @@ class _TodosViewState extends ConsumerState<TodosView> {
   }
 
   Future<void> _add() async {
-    final body = _quickAdd.text;
-    if (body.trim().isEmpty) return;
-    _quickAdd.clear();
+    final body = takeQuickAddText(_quickAdd);
+    if (body == null) return;
     final prefs = await ref
         .read(userPreferencesRepositoryProvider)
         .observePreferences()

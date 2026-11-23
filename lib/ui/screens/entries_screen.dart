@@ -180,9 +180,8 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
   }
 
   Future<void> _add() async {
-    final body = _quickAdd.text;
-    if (body.trim().isEmpty) return;
-    _quickAdd.clear();
+    final body = takeQuickAddText(_quickAdd);
+    if (body == null) return;
     try {
       await ref
           .read(entryRepositoryProvider)
