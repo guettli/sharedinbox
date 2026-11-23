@@ -70,5 +70,88 @@
     "kSlots": "e03b32561ba48159850579a7e79cc21573c8f1f70c1cbd29de35a3b330478296",
     "payload": "{\"v\":1,\"kind\":\"account-key\",\"accountKeyId\":\"oKGio6SlpqeoqaqrrK2urw\",\"slotListVersion\":1,\"slots\":[{\"slotId\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"type\":\"recovery\",\"nonce\":\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn\",\"wrapped\":\"5oH1wPBWAqLWFhQuPGB-kKacZkCEn261rtUuzjLl9ISmzUxPm1gXzvY3VYpeZefl\"}]}",
     "mac": "d6a81b6b607222a6aa3130a9652c381f2cce7ed40508f50a21aa84f99e4fe710"
+  },
+  "itemHmac": {
+    "collectionKey": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "kItem": "f3e42b5650c5412d415b622c24ee9e21c11ab1d67ec6a00d3d3d3de4779880be",
+    "itemId": "AAECAwQFBgcICQoLDA0ODw",
+    "itemHmac": "24c61584137220a856cf7f1e1181ef75d949fb11bea04c8efde59efd5c91263b"
+  },
+  "padding": [
+    {
+      "p": 0,
+      "padded": 1024
+    },
+    {
+      "p": 1,
+      "padded": 1024
+    },
+    {
+      "p": 1024,
+      "padded": 1024
+    },
+    {
+      "p": 1025,
+      "padded": 2048
+    },
+    {
+      "p": 2048,
+      "padded": 2048
+    },
+    {
+      "p": 2049,
+      "padded": 4096
+    },
+    {
+      "p": 65536,
+      "padded": 65536
+    },
+    {
+      "p": 65537,
+      "padded": 131072
+    },
+    {
+      "p": 131072,
+      "padded": 131072
+    },
+    {
+      "p": 131073,
+      "padded": 196608
+    }
+  ],
+  "envelope": {
+    "collectionKey": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+    "keyId": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "itemId": "AAECAwQFBgcICQoLDA0ODw",
+    "itemHmac": "24c61584137220a856cf7f1e1181ef75d949fb11bea04c8efde59efd5c91263b",
+    "nonce": "909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7",
+    "innerMime": "436f6e74656e742d547970653a206d756c7469706172742f72656c617465643b20626f756e646172793d2273692d74657374220d0a0d0a2d2d73692d746573740d0a436f6e74656e742d547970653a206170706c69636174696f6e2f6a736f6e3b20636861727365743d7574662d380d0a0d0a7b7d0d0a2d2d73692d746573742d2d0d0a",
+    "kObj": "ff8e34fb6a38e690260bac95ad3a2456cc3b08e50ebaba9b649098f498deee95",
+    "aad": "53494531b0b1b2b3b4b5b6b7b8b9babbbcbdbebf24c61584137220a856cf7f1e1181ef75d949fb11bea04c8efde59efd5c91263b",
+    "blob": "53494531b0b1b2b3b4b5b6b7b8b9babbbcbdbebf909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a73147c16f10f3e6cf4d18f392333e70548a64690f2efc2da35c4937318e97c39d6f9b1b695d6031ab1b3ebcd8d431b2c20ac4f88b61f702a32474cc641dc45d0a970daad54bdba65c470d418bc485c24c5c9b23ffbbeeaa5918861c93faaa61ebf462048bc9414fe9ef6fe6d5d82acb71a28abace61f3cde61ac298ae53650cd870cfe8e301752897d14b750928bf95b7af1f801b388efb0cf3dbd2dd5e04dbead907290851cdefbd48fa18705f1a58b493c9f6db285ca19ac874a9e9e5ea8ccf8993cec70cb7edf52dc5937389f872a294aad8ea12ddba86b1db929e22fc3962e816d6c2f0d6c911e89f5837046bb7d225578b1d38bf3418eafd64504f3674d2dd98f169ed69e8a88fbc9e1cfb22922fb7acb2680ab48fc6a03e326ab9fb8d804c4d46ae69832f84ed9c4f00ad8edbd2d956995c763d1b09894880552f7c92ba3abe1e929ce815a416847406f59bab66dedc6fbd1a30dbda3353105efb8be2df3f6e9bd7b2a6b5fc5aac3c30dfc35b128801941eb4d093eb3abd643f40b04aae68f4398583e61a06ad6c591ff2e6773df02ff23c94f5385e9861bb8127d22d31d9ab4cd8b6f916571c96711f622b93f2cfbd6163181dda95575705aa6e19361506e7575adee79f1a04be6211be00ae42619835adbf2a32ce624c70c9bb91434bd63afc4212b0e5a006933bb379f2992ec25c91f46f661399b60a0fdc868aabda4b2577bd9fe0ac877f8ad802786673336fb881febf1a34731f3c9de4a3b1aa94c36376370d2699e3ab5e1c4b6b31c05aba795465c319e6c340aee8453359a1027dfe8a8931a46afe320e706c6016af7eaffa6babf6244a532740928c97c7958e135853ef69f0b592c21fa77309d587b341fc485febb96aef40f6393351213868d827ea7105c67218d064455fc1c40ddde9d0ab287588eee3ad5303b1be132ec8d3d4e1e45cd22813d3ea537124ec92809ec21701a1e4c8ecdcb0ef4629918a6cdf0111fb2f0724ddc72e196b00c6b73452be1a340ba4883e80f4a0719837d2b501a1937cbf7f8aea86a7c479da0154378865b97639bc3c5e61a9ad4fafa06f58e969984a7f098d737e849aa9edc29a0654b474280d6ed350571979cda56cc15b6e13c4fed3ef11a80c045e85b62d090fb9b6396c023b9adac14c5b477e070c0735301c9b5d0a901a3730ebb055ae8678215918924a2065862c0576d541b9617342f82eb8753bc2992be2d865799220208394e85cf8df5894b3de212789f86209c57941cb4b6660815e02aebd84b519180ce4da8e4b2ef401bb6ec41ba7452e055dbf493dc33e73ec9f2684c2ac4389aa331a2e6f88b5cf227a3de2ee39906d1daebd839bdcf579dfdf6c17a2d3ecd6cd053dddf483dced8d9ef6ee4595427357c8af8355747dbb9621cf7a8db2be305fd17f8f16e8e18cd19be1d1c3cb0418e1afd44fab73bf79f3615d40d0ba4c7072"
+  },
+  "hlc": [
+    {
+      "wallMs": 0,
+      "counter": 0,
+      "deviceId": "8PHy8_T19vf4-fr7_P3-_w",
+      "encoded": "0000000000000-0000-8PHy8_T19vf4-fr7_P3-_w"
+    },
+    {
+      "wallMs": 1700000000000,
+      "counter": 1,
+      "deviceId": "8PHy8_T19vf4-fr7_P3-_w",
+      "encoded": "1700000000000-0001-8PHy8_T19vf4-fr7_P3-_w"
+    },
+    {
+      "wallMs": 1700000000000,
+      "counter": 65535,
+      "deviceId": "8PHy8_T19vf4-fr7_P3-_w",
+      "encoded": "1700000000000-ffff-8PHy8_T19vf4-fr7_P3-_w"
+    }
+  ],
+  "messageId": {
+    "random": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+    "messageId": "<4dq6fy7e4xtop2hj5lv6z3po54@sharedinbox.invalid>"
   }
 }

@@ -2,7 +2,7 @@
 """Independent oracle for test/fixtures/encrypted_objects/vectors.json.
 
 Computes the key-hierarchy vectors (ENCRYPTED-OBJECTS.md 4.1, 4.2, 4.6, 8)
-with the Python standard library only — no Dart and no `cryptography`
+and the envelope vectors (5.1, 5.3, 5.6) with the Python standard library only — no Dart and no `cryptography`
 package — so the Dart implementation is checked against a second one.
 XChaCha20-Poly1305 is implemented below from RFC 8439 and
 draft-irtf-cfrg-xchacha-03 and self-checked against the draft's test vector.
@@ -157,6 +157,74 @@ INFOS = {
 }
 
 
+def padded_length(p):
+    if p > 65536:
+        return -(-p // 65536) * 65536
+    bucket = 1024
+    while bucket < p:
+        bucket *= 2
+    return bucket
+
+
+def hlc(wall_ms, counter, device_id):
+    return "%013d-%04x-%s" % (wall_ms, counter, device_id)
+
+
+def message_id(raw):
+    return "<%s@sharedinbox.invalid>" % base64.b32encode(raw).decode().lower().rstrip("=")
+
+
+def envelope_sections(collection_key, key_id):
+    """The envelope slice (#1369): itemHmac, padding, envelope, hlc, messageId."""
+    item_id = b64url(bytes(range(0x00, 0x10)))
+    k_item = hkdf(collection_key, INFOS["itemIdHmac"])
+    item_hmac = hmac.new(k_item, item_id.encode(), hashlib.sha256).digest()
+
+    inner_mime = (
+        b"Content-Type: multipart/related; boundary=\"si-test\"\r\n\r\n"
+        b"--si-test\r\nContent-Type: application/json; charset=utf-8\r\n\r\n"
+        b"{}\r\n--si-test--\r\n"
+    )
+    nonce = bytes(range(0x90, 0xA8))
+    k_obj = hkdf(collection_key, INFOS["obj"])
+    aad = b"SIE1" + key_id + item_hmac
+    p = 4 + len(inner_mime)
+    plaintext = struct.pack(">I", len(inner_mime)) + inner_mime
+    plaintext += b"\x00" * (padded_length(p) - p)
+    blob = b"SIE1" + key_id + nonce + xchacha20poly1305_encrypt(k_obj, nonce, plaintext, aad)
+
+    device_id = b64url(bytes(range(0xF0, 0x100)))
+    message_raw = bytes(range(0xE0, 0xF0))
+    return {
+        "itemHmac": {
+            "collectionKey": collection_key.hex(),
+            "kItem": k_item.hex(),
+            "itemId": item_id,
+            "itemHmac": item_hmac.hex(),
+        },
+        "padding": [
+            {"p": n, "padded": padded_length(n)}
+            for n in [0, 1, 1024, 1025, 2048, 2049, 65536, 65537, 131072, 131073]
+        ],
+        "envelope": {
+            "collectionKey": collection_key.hex(),
+            "keyId": key_id.hex(),
+            "itemId": item_id,
+            "itemHmac": item_hmac.hex(),
+            "nonce": nonce.hex(),
+            "innerMime": inner_mime.hex(),
+            "kObj": k_obj.hex(),
+            "aad": aad.hex(),
+            "blob": blob.hex(),
+        },
+        "hlc": [
+            {"wallMs": w, "counter": c, "deviceId": device_id, "encoded": hlc(w, c, device_id)}
+            for w, c in [(0, 0), (1700000000000, 1), (1700000000000, 0xFFFF)]
+        ],
+        "messageId": {"random": message_raw.hex(), "messageId": message_id(message_raw)},
+    }
+
+
 def main():
     _self_check()
 
@@ -248,6 +316,7 @@ def main():
             "mac": mac.hex(),
         },
     }
+    vectors.update(envelope_sections(collection_key, key_id))
     json.dump(vectors, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

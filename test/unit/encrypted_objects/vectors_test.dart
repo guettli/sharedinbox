@@ -2,8 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:test/test.dart';
@@ -131,6 +134,70 @@ void main() {
     expect(
       b64url(parsed.payload.accountKeyId),
       b64url(accountKey.accountKeyId),
+    );
+  });
+
+  CollectionKey collectionKeyOf(Map<String, dynamic> v) => CollectionKey(
+        'deck-1',
+        hexBytes(v['keyId'] as String? ?? '00' * 16),
+        hexBytes(v['collectionKey'] as String),
+      );
+
+  test('itemHmac', () async {
+    final v = vectors['itemHmac'] as Map<String, dynamic>;
+    final key = collectionKeyOf(v);
+    expect(toHex((await key.kItem()).bytes), v['kItem']);
+    expect(
+      toHex(await itemHmac(key, v['itemId'] as String)),
+      v['itemHmac'],
+    );
+  });
+
+  test('padding', () {
+    for (final c in (vectors['padding'] as List).cast<Map<String, dynamic>>()) {
+      expect(paddedLength(c['p'] as int), c['padded'], reason: '${c['p']}');
+    }
+  });
+
+  test('envelope', () async {
+    final v = vectors['envelope'] as Map<String, dynamic>;
+    final key = collectionKeyOf(v);
+    final hmac = hexBytes(v['itemHmac'] as String);
+    expect(toHex(await itemHmac(key, v['itemId'] as String)), v['itemHmac']);
+    expect(toHex((await key.kObj()).bytes), v['kObj']);
+    expect(toHex(envelopeAad(key.keyId, hmac)), v['aad']);
+    final blob = await sealEnvelope(
+      key: key,
+      itemHmac: hmac,
+      innerMime: hexBytes(v['innerMime'] as String),
+      random: queuedRandom([hexBytes(v['nonce'] as String)]),
+    );
+    expect(toHex(blob), v['blob']);
+    final opened = await openEnvelope(
+      blob: hexBytes(v['blob'] as String),
+      itemHmacFromHeader: hmac,
+      keyLookup: (_) => key,
+    );
+    expect(toHex(opened.innerMime), v['innerMime']);
+  });
+
+  test('hlc', () {
+    for (final c in (vectors['hlc'] as List).cast<Map<String, dynamic>>()) {
+      final hlc = Hlc(
+        c['wallMs'] as int,
+        c['counter'] as int,
+        c['deviceId'] as String,
+      );
+      expect(hlc.encode(), c['encoded']);
+      expect(Hlc.parse(c['encoded'] as String), hlc);
+    }
+  });
+
+  test('messageId', () {
+    final v = vectors['messageId'] as Map<String, dynamic>;
+    expect(
+      newMessageId(random: queuedRandom([hexBytes(v['random'] as String)])),
+      v['messageId'],
     );
   });
 }
