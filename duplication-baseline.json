@@ -1018,6 +1018,20 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/backend/mail_object_store_imap_test.dart",
+      "start_line": 24,
+      "end_line": 34,
+      "key": "7838e029425024ce"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/backend/mail_object_store_jmap_test.dart",
+      "start_line": 24,
+      "end_line": 33,
+      "key": "7838e029425024ce"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/backend/outbox_offline_imap_test.dart",
       "start_line": 85,
       "end_line": 61,
@@ -1617,6 +1631,20 @@
       "start_line": 124,
       "end_line": 137,
       "key": "1c2cfcf333da0751"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/mail_object_store_imap_test.dart",
+      "start_line": 62,
+      "end_line": 72,
+      "key": "8e4fa074df72ab64"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/mail_object_store_jmap_test.dart",
+      "start_line": 51,
+      "end_line": 61,
+      "key": "8e4fa074df72ab64"
     },
     {
       "tool": "jscpd",
@@ -2674,6 +2702,20 @@
       "start_line": 161,
       "end_line": 173,
       "key": "1a375d39abb8b6e8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/core/sync/background_sync.dart",
+      "start_line": 131,
+      "end_line": 141,
+      "key": "d4dc9d597b2af015"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/core/sync/background_sync.dart",
+      "start_line": 141,
+      "end_line": 151,
+      "key": "d4dc9d597b2af015"
     }
   ]
 }

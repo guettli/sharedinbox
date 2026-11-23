@@ -26,6 +26,8 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -123,15 +125,29 @@ Future<void> _doBackgroundSync() async {
     // Pull only, for the same reason; it also never deletes on the server
     // (ENCRYPTED-OBJECTS.md 5.5).
     final ring = KeyRing();
-    final objectStore = MailObjectStoreImap(
-      db,
+    final mailboxRepo = MailboxRepositoryImpl(db, accountRepo);
+    final objectStore = MailObjectStoreRouter(
       accountRepo,
-      MailboxRepositoryImpl(db, accountRepo),
-      const FlutterSecureStorageImpl(),
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      pushPending: false,
+      imap: MailObjectStoreImap(
+        db,
+        accountRepo,
+        mailboxRepo,
+        const FlutterSecureStorageImpl(),
+        keyLookup: ring.lookup,
+        writeKey: ring.writeKey,
+        keepVanishedKeyMail: ring.keepVanishedKeyMail,
+        pushPending: false,
+      ),
+      jmap: MailObjectStoreJmap(
+        db,
+        accountRepo,
+        mailboxRepo,
+        const FlutterSecureStorageImpl(),
+        keyLookup: ring.lookup,
+        writeKey: ring.writeKey,
+        keepVanishedKeyMail: ring.keepVanishedKeyMail,
+        pushPending: false,
+      ),
     );
     final prefs = UserPreferencesRepositoryImpl(db);
     final keyService = EncryptedKeyService(
