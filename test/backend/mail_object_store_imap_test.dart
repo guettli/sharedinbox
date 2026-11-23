@@ -72,11 +72,10 @@ void main() {
   /// The Message-IDs and raw bytes in the Data folder, by UID.
   Future<Map<String, Uint8List>> onServer() => withClient((c) async {
         await c.selectMailboxByPath(_dataPath);
-        final uids =
-            (await c.uidSearchMessages(searchCriteria: 'ALL'))
-                    .matchingSequence
-                    ?.toList() ??
-                const <int>[];
+        final uids = (await c.uidSearchMessages(searchCriteria: 'ALL'))
+                .matchingSequence
+                ?.toList() ??
+            const <int>[];
         if (uids.isEmpty) return {};
         final fetched = await c.uidFetchMessages(
           imap.MessageSequence.fromIds(uids, isUid: true),
@@ -125,7 +124,8 @@ void main() {
     );
   });
 
-  test('an edit is uploaded although an older version of the item (same '
+  test(
+      'an edit is uploaded although an older version of the item (same '
       'item HMAC) is on the server', () async {
     final a = await device();
     final v1 = await a.putNew('one');
@@ -195,15 +195,16 @@ void main() {
     expect((await onServer()).keys, [v2.messageId]);
   });
 
-  test('an object deleted on the server without a tombstone is uploaded '
+  test(
+      'an object deleted on the server without a tombstone is uploaded '
       'again, byte for byte, with a warning', () async {
     final logs = RecordingAppLogRepository();
     final a = await device(appLogger: AppLogger(logs));
     final v1 = await a.putNew('one');
     await withClient((c) async {
       await c.selectMailboxByPath(_dataPath);
-      final uids = (await c.uidSearchMessages(searchCriteria: 'ALL'))
-          .matchingSequence!;
+      final uids =
+          (await c.uidSearchMessages(searchCriteria: 'ALL')).matchingSequence!;
       await c.uidMarkDeleted(uids);
       await c.uidExpunge(uids);
     });
@@ -243,7 +244,8 @@ void main() {
     await a.sync();
 
     expect((await onServer()).keys, [v1.messageId]);
-    expect(logs.rows.map((r) => r.event), isNot(contains('mos.vanished_reupload')));
+    expect(logs.rows.map((r) => r.event),
+        isNot(contains('mos.vanished_reupload')));
     final row = (await a.row(v1.messageId))!;
     expect(row.serverId, isNotNull);
     expect(row.pendingUpload, isFalse);
@@ -328,7 +330,8 @@ class _Device {
     final clock = await store.clockFor(account.id);
     final put = await store.put(
       account.id,
-      testObject(itemId: newItemIdForTest(), versionId: clock.send(), body: body),
+      testObject(
+          itemId: newItemIdForTest(), versionId: clock.send(), body: body),
     );
     await store.waitForIdle();
     return put;
@@ -364,9 +367,9 @@ class _Device {
         for (final r in await db.select(db.mailObjects).get()) r.messageId,
       ];
 
-  Future<MailObjectRow?> row(String messageId) => (db.select(db.mailObjects)
-        ..where((t) => t.messageId.equals(messageId)))
-      .getSingleOrNull();
+  Future<MailObjectRow?> row(String messageId) =>
+      (db.select(db.mailObjects)..where((t) => t.messageId.equals(messageId)))
+          .getSingleOrNull();
 }
 
 var _items = 0;
