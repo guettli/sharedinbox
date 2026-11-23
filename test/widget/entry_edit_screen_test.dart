@@ -7,9 +7,12 @@ import 'package:sharedinbox/di.dart';
 import 'entries_fakes.dart';
 import 'helpers.dart';
 
-Future<FakeEntryRepository> _pump(WidgetTester tester) async {
+Future<FakeEntryRepository> _pump(
+  WidgetTester tester, {
+  String body = 'old body',
+}) async {
   final repo = FakeEntryRepository([
-    testEntry('e1', title: 'Old title', body: 'old body', conflict: true),
+    testEntry('e1', title: 'Old title', body: body, conflict: true),
   ]);
   await tester.pumpWidget(
     buildApp(
@@ -34,8 +37,10 @@ void main() {
   testWidgets('edit saves title and body and goes back', (tester) async {
     final repo = await _pump(tester);
     expect(find.byKey(const Key('entryEditConflict')), findsOneWidget);
-    expect(find.text('old body'), findsOneWidget);
+    expect(find.textContaining('old body', findRichText: true), findsWidgets);
 
+    await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('entryEditTitle')), 'New');
     await tester.enterText(
       find.byKey(const Key('entryEditBody')),
@@ -62,5 +67,71 @@ void main() {
     await tester.pumpAndSettle();
     expect(repo.entries, isEmpty);
     expect(find.text('No entries yet.'), findsOneWidget);
+  });
+
+  testWidgets('a non-empty body opens in the preview, toggles to the editor',
+      (tester) async {
+    await _pump(tester, body: '**bold**');
+    expect(find.byKey(const Key('entryPreview')), findsOneWidget);
+    expect(find.byKey(const Key('entryEditBody')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entryPreview')), findsNothing);
+    await tester.enterText(find.byKey(const Key('entryEditBody')), '# Typed');
+
+    await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entryEditBody')), findsNothing);
+    final preview = find.byKey(const Key('entryPreview'));
+    expect(
+      find.descendant(
+        of: preview,
+        matching: find.textContaining('Typed', findRichText: true),
+      ),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(
+        of: preview,
+        matching: find.textContaining('# Typed', findRichText: true),
+      ),
+      findsNothing,
+    );
+  });
+
+  testWidgets('an empty body opens in the editor', (tester) async {
+    await _pump(tester, body: '');
+    expect(find.byKey(const Key('entryEditBody')), findsOneWidget);
+    expect(find.byKey(const Key('entryPreview')), findsNothing);
+  });
+
+  testWidgets('ticking a checkbox saves a new version and stays',
+      (tester) async {
+    final repo = await _pump(tester, body: '- [ ] a\n- [x] b');
+    final before = repo.entries.single.versionId;
+
+    await tester.tap(find.byKey(const Key('entryTask_0')));
+    await tester.pumpAndSettle();
+
+    expect(repo.updates.single.body, '- [x] a\n- [x] b');
+    expect(repo.updates.single.title, 'Old title');
+    expect(repo.entries.single.versionId, isNot(before));
+    expect(find.byKey(const Key('entryPreview')), findsOneWidget);
+    expect(
+      tester.widget<Checkbox>(find.byKey(const Key('entryTask_0'))).value,
+      isTrue,
+    );
+  });
+
+  testWidgets('a checkbox toggle includes pending edits', (tester) async {
+    final repo = await _pump(tester, body: '- [ ] a');
+    await tester.enterText(find.byKey(const Key('entryEditTitle')), 'Edited');
+    await tester.tap(find.byKey(const Key('entryTask_0')));
+    await tester.pumpAndSettle();
+    expect(
+      repo.updates.single,
+      (itemId: 'e1', title: 'Edited', body: '- [x] a'),
+    );
   });
 }

@@ -6,13 +6,17 @@ import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/markdown_tasks.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/entries_screen.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
 
-/// Edits the title and the plain-text body of one entry (#1373). Other
-/// fields are kept; saving also resolves a conflict.
+/// Edits the title and the Markdown body of one entry (#1373). Opens in a
+/// rendered preview when the body is not empty (#1376); ticking a task-list
+/// checkbox there saves at once. Other fields are kept; saving also resolves
+/// a conflict.
 class EntryEditScreen extends ConsumerStatefulWidget {
   const EntryEditScreen({
     super.key,
@@ -33,6 +37,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   Entry? _entry;
   bool _loaded = false;
   bool _busy = false;
+  bool _preview = false;
 
   @override
   void initState() {
@@ -50,6 +55,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       _loaded = true;
       _title.text = entry?.title ?? '';
       _body.text = entry?.body ?? '';
+      _preview = _body.text.trim().isNotEmpty;
     });
   }
 
@@ -67,6 +73,13 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       appBar: AppBar(
         title: const Text('Entry'),
         actions: [
+          if (entry != null)
+            IconButton(
+              key: const Key('entryEditPreviewToggle'),
+              icon: Icon(_preview ? Icons.edit : Icons.visibility),
+              tooltip: _preview ? 'Edit' : 'Preview',
+              onPressed: () => setState(() => _preview = !_preview),
+            ),
           if (entry != null)
             IconButton(
               key: const Key('entryEditDelete'),
@@ -109,17 +122,24 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
           decoration: const InputDecoration(labelText: 'Title'),
         ),
         const SizedBox(height: AppSpacing.lg),
-        TextField(
-          key: const Key('entryEditBody'),
-          controller: _body,
-          decoration: const InputDecoration(
-            labelText: 'Text',
-            alignLabelWithHint: true,
+        if (_preview)
+          EntryMarkdown(
+            key: const Key('entryPreview'),
+            body: _body.text,
+            onToggleTask: _toggleTask,
+          )
+        else
+          TextField(
+            key: const Key('entryEditBody'),
+            controller: _body,
+            decoration: const InputDecoration(
+              labelText: 'Text',
+              alignLabelWithHint: true,
+            ),
+            keyboardType: TextInputType.multiline,
+            minLines: 8,
+            maxLines: null,
           ),
-          keyboardType: TextInputType.multiline,
-          minLines: 8,
-          maxLines: null,
-        ),
       ],
     );
   }
@@ -139,6 +159,31 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
       context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
+    }
+  }
+
+  /// Ticks or unticks task [index] and saves it like [_save], with the
+  /// current title and any unsaved edits, but stays on the screen.
+  Future<void> _toggleTask(int index) async {
+    if (_busy) return;
+    final old = _body.text;
+    setState(() {
+      _body.text = toggleTask(old, index);
+      _busy = true;
+    });
+    try {
+      await ref.read(entryRepositoryProvider).update(
+            widget.accountId,
+            widget.itemId,
+            title: _title.text,
+            body: _body.text,
+          );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _body.text = old);
+      context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 

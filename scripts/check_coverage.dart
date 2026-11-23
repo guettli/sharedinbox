@@ -146,6 +146,9 @@ const _excluded = <String, String>{
   'lib/ui/screens/user_preferences_screen.dart': 'Widget-only preferences form',
   'lib/ui/widgets/app_drawer.dart': 'Widget-only navigation drawer',
   'lib/ui/widgets/email_headers_dialog.dart': 'Widget-only headers dialog',
+  'lib/ui/widgets/entry_markdown.dart':
+      'Widget-only Markdown renderer for entries; the task-list toggle it '
+          'drives is unit-tested in markdown_tasks_test.dart',
   'lib/ui/widgets/error_report_scaffold.dart':
       'Widget-only shared error-screen shell + Copy/Report buttons',
   'lib/ui/widgets/email_thread_list.dart':
