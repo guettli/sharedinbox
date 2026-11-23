@@ -35,6 +35,25 @@ void main() {
   List<Hlc> ids(Iterable<ObjectVersion> vs) =>
       [for (final v in vs) v.versionId];
 
+  test(
+      'an older version of a device is superseded by its newer one, also '
+      'without the version between them', () async {
+    final v1 = hlcAt(1000, 'devB');
+    final v3 = hlcAt(3000, 'devB');
+    final result = mergeItem(
+      known: const [],
+      incoming: [
+        await version(v1, body: 'one'),
+        // Its parent (devB at 2000) was collapsed before it was uploaded.
+        await version(v3, parents: [hlcAt(2000, 'devB')], body: 'three'),
+      ],
+      vv: const {},
+    );
+    expect(result.state, MergeState.live);
+    expect(ids(result.heads), [v3]);
+    expect(ids(result.superseded), [v1]);
+  });
+
   test('A←B←D plus an offline C(parent A) is a conflict of {C, D}', () async {
     final result = mergeItem(
       known: const [],

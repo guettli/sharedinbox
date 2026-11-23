@@ -129,7 +129,8 @@ class MergeResult {
 /// Incoming versions are taken in ascending HLC order: one named as a parent
 /// of any version is superseded; otherwise one with `hlc ≤ vv[deviceId]` is a
 /// replay and ignored; otherwise it is accepted. Heads are the accepted
-/// versions nobody names as a parent; heads with the same [contentDigest]
+/// versions nobody names as a parent and no newer version of the same device
+/// follows (its versions are linear); heads with the same [contentDigest]
 /// are one logical head.
 MergeResult mergeItem({
   required Iterable<ObjectVersion> known,
@@ -164,9 +165,16 @@ MergeResult mergeItem({
     accepted.add(v);
   }
   accepted.sort((a, b) => a.versionId.compareTo(b.versionId));
+  // A device's versions of one item are linear: an older one is an ancestor
+  // of its newer one even when the version between them (collapsed before
+  // it reached the server) is not known here.
+  final newest = <String, Hlc>{
+    for (final v in accepted) v.versionId.deviceId: v.versionId,
+  };
   final heads = <ObjectVersion>[];
   for (final v in accepted) {
-    if (named.contains(v.versionId)) {
+    if (named.contains(v.versionId) ||
+        newest[v.versionId.deviceId] != v.versionId) {
       superseded.add(v);
       continue;
     }

@@ -448,7 +448,7 @@ void mailObjectStoreScenarios({
       expect(await d.state.get(d.accountId, 'deck'), isNull);
     }
     // One doc per device on the server, one version each.
-    expect(await onServer(), hasLength(2));
+    expect((await onServer()).keys, hasLength(2));
   });
 }
 

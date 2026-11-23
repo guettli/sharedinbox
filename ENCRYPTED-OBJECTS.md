@@ -392,7 +392,10 @@ app" and **never edited** by that reader (editing would fork history).
      local data**: the device re-uploads its head and logs a warning
      (OFFLINE-FIRST rule: the server is not trusted to delete).
    - **Superseded**: a version whose versionId appears in another version's
-     `parents` → deleted silently (foreground only).
+     `parents`, or an older version of a device that has a newer accepted
+     version of the item (a device's versions are linear, so it is an
+     ancestor even when the version between them never reached this
+     device) → deleted silently (foreground only).
    - **Heads**: the rest. One head = normal. Several heads = **conflict**: the
      newest HLC is shown, all heads are listed in the conflict view, never
      silently deleted. Heads with identical content resolve automatically:
