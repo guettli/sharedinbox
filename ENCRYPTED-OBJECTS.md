@@ -594,7 +594,10 @@ Implemented in `lib/core/encrypted_objects/entry_object.dart` (the kind:
 new entry, read, edit keeping unknown fields and parts),
 `lib/data/repositories/entry_projector.dart` (the `Entries` projection) and
 `lib/data/repositories/entry_repository_impl.dart` (reads the projection,
-writes through the store). **A projection is written only by the store's
+writes through the store). The body is rendered by `lib/ui/widgets/entry_markdown.dart`;
+`lib/core/utils/markdown_tasks.dart` finds and toggles task-list items, and a
+toggle saves a new version. `si-img:` images show a placeholder until #1377;
+no image URL is ever fetched. **A projection is written only by the store's
 merge**: the store calls the `ObjectProjector` of the item's kind inside the
 transaction that writes the item's head columns, on a local write, a pull and
 a reopen after an unlock (which also re-projects every item of the kind). It
