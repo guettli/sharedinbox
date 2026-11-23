@@ -67,6 +67,9 @@ import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
+import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
+import 'package:sharedinbox/data/repositories/mail_object_log.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
@@ -849,6 +852,31 @@ final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
     ),
   );
 });
+
+/// Log segments and packs of the encrypted-object store (#1372).
+final mailObjectLogProvider = Provider<MailObjectLog>(
+  (ref) => MailObjectLog(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// Blobs (images) of the encrypted-object store and their decrypted cache
+/// (#1372).
+final mailObjectBlobStoreProvider = Provider<MailObjectBlobStore>(
+  (ref) => MailObjectBlobStore(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// The per-device state docs of the encrypted-object store (#1372).
+final deviceStateStoreProvider = Provider<DeviceStateStore>(
+  (ref) => DeviceStateStore(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+  ),
+);
 
 /// Key mail, key-creation race and unlock of the encrypted personal data
 /// (#1366), behind the "Personal data (beta)" switch.

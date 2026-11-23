@@ -121,6 +121,29 @@ after base64 and headers (`ObjectTooLargeException`), and a row too large
 for the server stays local (`mos.push.too_large`). The background isolate
 only pulls.
 
+**Logs, blobs, device-state (#1372)**: all three are ordinary documents in
+`SharedInbox/Data` (`log_segment.dart`, `device_state.dart`), and the merge
+projects their heads into tables (schema v84). `mail_object_log_events`
+holds every event of a `<log>-seg` / `<log>-pack`, keyed by
+`(accountId, log, deviceId, seq)`, so events are deduped by the key and
+outlive their segment. `mail_object_device_states` holds one row per key and
+device; the effective value of a key is the one with the highest HLC.
+`mail_object_blobs` is the decrypted blob cache. A segment or pack that a
+pack covers gets `mail_objects.coveredBy` (the pack's Message-ID) and is
+hidden from readers. If it vanishes from the server it is dropped, not
+uploaded again. Only rows of this device are also marked `pendingDelete`.
+Such a delete waits until the pack is confirmed (`deletableNow`): APPEND →
+confirm (APPENDUID, or by Message-ID) → expunge. `compact` writes the pack
+and marks the covered rows in one transaction, so a crash in between is
+repaired by the next sync. The services are `MailObjectLog` (`append`,
+`segments`, `events`, `compact`; owner-only through `CompactionAuthority`,
+which #1382 extends with the 90-day takeover), `MailObjectBlobStore`
+(`putBlob`, `blob`; blobs are immutable) and `DeviceStateStore`. The blob
+cache holds 100 MiB of decrypted bytes per account. Eviction drops the
+least recently used confirmed blobs, and for those over 256 KiB also the
+local ciphertext (the next read downloads it again). A pending blob is
+never evicted.
+
 ## 4. Keys
 
 ### 4.1 Hierarchy
@@ -369,7 +392,10 @@ app" and **never edited** by that reader (editing would fork history).
      local data**: the device re-uploads its head and logs a warning
      (OFFLINE-FIRST rule: the server is not trusted to delete).
    - **Superseded**: a version whose versionId appears in another version's
-     `parents` → deleted silently (foreground only).
+     `parents`, or an older version of a device that has a newer accepted
+     version of the item (a device's versions are linear, so it is an
+     ancestor even when the version between them never reached this
+     device) → deleted silently (foreground only).
    - **Heads**: the rest. One head = normal. Several heads = **conflict**: the
      newest HLC is shown, all heads are listed in the conflict view, never
      silently deleted. Heads with identical content resolve automatically:

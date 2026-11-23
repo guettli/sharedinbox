@@ -67,6 +67,27 @@ class MailObjectStoreRouter implements MailObjectStore {
       (await _for(accountId)).put(accountId, object);
 
   @override
+  Future<MailObject> putCovering(
+    String accountId,
+    InnerObject pack, {
+    required List<String> covered,
+  }) async =>
+      (await _for(accountId)).putCovering(accountId, pack, covered: covered);
+
+  /// Reads the local rows only, the same for both stores.
+  @override
+  Future<List<MailObject>> rowsOfKind(String accountId, String kind) =>
+      _imap.rowsOfKind(accountId, kind);
+
+  @override
+  Future<String?> itemHmacOf(
+    String accountId,
+    String collectionId,
+    String itemId,
+  ) async =>
+      (await _for(accountId)).itemHmacOf(accountId, collectionId, itemId);
+
+  @override
   Future<MailObject> delete(String accountId, String itemHmac) async =>
       (await _for(accountId)).delete(accountId, itemHmac);
 

@@ -16,6 +16,7 @@ their inputs or outputs, add new sections instead.
 """
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -225,6 +226,35 @@ def envelope_sections(collection_key, key_id):
     }
 
 
+def log_segment_section():
+    """The log-segment slice (#1372): gzip JSONL body and head fields."""
+    device_id = b64url(bytes(range(0xF0, 0x100)))
+    events = [
+        {"h": hlc(1700000000000, 0, device_id), "n": 1, "s": 1},
+        {"h": hlc(1700000000000, 1, device_id), "n": "two", "s": 2},
+        {"h": hlc(1700000000001, 0, device_id), "s": 3, "x": {"b": [1, 2], "a": None}},
+    ]
+    lines = "".join(
+        json.dumps(e, sort_keys=True, separators=(",", ":")) + "\n" for e in events
+    ).encode()
+    head = {
+        "device": device_id,
+        "seqFrom": 1,
+        "seqTo": 3,
+        "covers": [[device_id, 1, 3]],
+        "period": "2023-11",
+        "hlcMax": hlc(1700000000001, 0, device_id),
+    }
+    return {
+        "logSegment": {
+            "deviceId": device_id,
+            "jsonl": lines.decode(),
+            "gzip": gzip.compress(lines, compresslevel=9, mtime=0).hex(),
+            "head": head,
+        }
+    }
+
+
 def main():
     _self_check()
 
@@ -317,6 +347,7 @@ def main():
         },
     }
     vectors.update(envelope_sections(collection_key, key_id))
+    vectors.update(log_segment_section())
     json.dump(vectors, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

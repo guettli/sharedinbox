@@ -667,8 +667,13 @@ class MailObjects extends Table {
       boolean().withDefault(const Constant(false))();
   // For each head of an item in conflict: the versionId of the head shown.
   TextColumn get conflictOf => text().nullable()();
-  // Null: the body (over 256 KiB) was not fetched yet.
+  // Null: the body (over 256 KiB) was not fetched yet, or a confirmed blob
+  // was evicted from the cache.
   BlobColumn get payload => blob().nullable()();
+  // A log segment or pack replaced by a pack: the pack's Message-ID. Hidden
+  // from readers; its server copy goes only once the pack is confirmed.
+  // Added in schema v84 (#1372).
+  TextColumn get coveredBy => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {accountId, messageId};
@@ -720,6 +725,65 @@ class MailObjectDevices extends Table {
 
   @override
   Set<Column> get primaryKey => {accountId};
+}
+
+/// The events of the log segments and packs opened here
+/// (ENCRYPTED-OBJECTS.md 5.4 item 2): deduped by `(deviceId, seq)` through
+/// the key; an event outlives its segment.
+// Added in schema v84 (#1372).
+@DataClassName('MailObjectLogEventRow')
+class MailObjectLogEvents extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // The log name, e.g. `review` for `review-seg` / `review-pack`.
+  TextColumn get log => text()();
+  TextColumn get deviceId => text()();
+  IntColumn get seq => integer()();
+  // The encoded HLC `h` of the event.
+  TextColumn get hlc => text()();
+  // The whole event as JSON.
+  TextColumn get eventJson => text()();
+  // The Message-ID of the segment or pack it was first read from.
+  TextColumn get sourceMessageId => text()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, log, deviceId, seq};
+}
+
+/// The decrypted blob cache (ENCRYPTED-OBJECTS.md 5.4 item 3): plaintext of
+/// blobs read here, evicted oldest [lastUsedAt] first.
+// Added in schema v84 (#1372).
+@DataClassName('MailObjectBlobRow')
+class MailObjectBlobs extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get itemId => text()();
+  TextColumn get contentType => text()();
+  BlobColumn get bytes => blob()();
+  // Decrypted bytes, counted against the cache budget.
+  IntColumn get sizeBytes => integer()();
+  DateTimeColumn get lastUsedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, itemId};
+}
+
+/// The values of the device-state docs opened here (ENCRYPTED-OBJECTS.md
+/// 5.4 item 4): one row per key and device; the effective value of a key is
+/// the one with the highest [hlc].
+// Added in schema v84 (#1372).
+@DataClassName('MailObjectDeviceStateRow')
+class MailObjectDeviceStates extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get key => text()();
+  TextColumn get deviceId => text()();
+  TextColumn get hlc => text()();
+  // The value as JSON; null = unset.
+  TextColumn get valueJson => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, key, deviceId};
 }
 
 /// Senders for whom remote images are loaded automatically.
@@ -918,6 +982,9 @@ class UserPreferences extends Table {
     MailObjectUids,
     MailObjectClocks,
     MailObjectDevices,
+    MailObjectLogEvents,
+    MailObjectBlobs,
+    MailObjectDeviceStates,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1411,6 +1478,7 @@ class AppDatabase extends _$AppDatabase {
           await _createLocationOverlaySchema();
           await _createThreadIndex();
           await _createMailObjectsIndex();
+          await _createMailObjectLogIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2419,6 +2487,33 @@ class AppDatabase extends _$AppDatabase {
         userPreferences.personalDataBeta,
       );
     }
+    if (from < 84 && await _tableExists(this, 'mail_objects')) {
+      // Log segments, blobs and device-state docs (#1372). Each step
+      // re-runnable (#1084).
+      await _addColumnIfMissing(m, mailObjects, mailObjects.coveredBy);
+      if (!await _tableExists(this, 'mail_object_log_events')) {
+        await m.createTable(mailObjectLogEvents);
+      }
+      if (!await _tableExists(this, 'mail_object_blobs')) {
+        await m.createTable(mailObjectBlobs);
+      }
+      if (!await _tableExists(this, 'mail_object_device_states')) {
+        await m.createTable(mailObjectDeviceStates);
+      }
+      await _createMailObjectLogIndexes();
+    }
+  }
+
+  /// Schema v84: events in display order, and the blob cache by age.
+  Future<void> _createMailObjectLogIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS mail_object_log_events_hlc ON '
+      'mail_object_log_events (account_id, log, hlc);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS mail_object_blobs_lru ON '
+      'mail_object_blobs (account_id, last_used_at);',
+    );
   }
 
   /// Schema v82: the versions of one item, which every merge reads.

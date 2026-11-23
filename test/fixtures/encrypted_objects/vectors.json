@@ -153,5 +153,24 @@
   "messageId": {
     "random": "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
     "messageId": "<4dq6fy7e4xtop2hj5lv6z3po54@sharedinbox.invalid>"
+  },
+  "logSegment": {
+    "deviceId": "8PHy8_T19vf4-fr7_P3-_w",
+    "jsonl": "{\"h\":\"1700000000000-0000-8PHy8_T19vf4-fr7_P3-_w\",\"n\":1,\"s\":1}\n{\"h\":\"1700000000000-0001-8PHy8_T19vf4-fr7_P3-_w\",\"n\":\"two\",\"s\":2}\n{\"h\":\"1700000000001-0000-8PHy8_T19vf4-fr7_P3-_w\",\"s\":3,\"x\":{\"a\":null,\"b\":[1,2]}}\n",
+    "gzip": "1f8b0800000000000203ab56ca50b25232343740005d306111e05169111f6268599666a29b56641e1f60ac1b5faea4a394a76465a8a3540c246bb9aab1eb36c4ab5ba9a43c5f096c821136130c09d80fd467aca354a16455ad94a86495579a93a3a394a464156da863145b5bcb0500fb03baa3d1000000",
+    "head": {
+      "device": "8PHy8_T19vf4-fr7_P3-_w",
+      "seqFrom": 1,
+      "seqTo": 3,
+      "covers": [
+        [
+          "8PHy8_T19vf4-fr7_P3-_w",
+          1,
+          3
+        ]
+      ],
+      "period": "2023-11",
+      "hlcMax": "1700000000001-0000-8PHy8_T19vf4-fr7_P3-_w"
+    }
   }
 }

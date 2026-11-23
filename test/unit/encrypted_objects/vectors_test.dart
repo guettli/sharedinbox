@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
@@ -198,6 +199,27 @@ void main() {
     expect(
       newMessageId(random: queuedRandom([hexBytes(v['random'] as String)])),
       v['messageId'],
+    );
+  });
+
+  test('logSegment', () {
+    final v = vectors['logSegment'] as Map<String, dynamic>;
+    final events = decodeEventsBody(hexBytes(v['gzip'] as String));
+    expect([for (final e in events) e.seq], [1, 2, 3]);
+    expect(events.every((e) => e.deviceId == v['deviceId']), isTrue);
+    expect(utf8.decode(encodeEventLines(events)), v['jsonl']);
+    expect(decodeEventsBody(encodeEventsBody(events)).length, 3);
+    final head = SegmentHead.of(
+      v['deviceId'] as String,
+      events,
+      period: periodOf(events.first.hlc),
+    );
+    expect(jsonEncode(head.toExtra()), jsonEncode(v['head']));
+    expect(
+      jsonEncode(
+        SegmentHead.fromExtra(v['head'] as Map<String, Object?>).toExtra(),
+      ),
+      jsonEncode(v['head']),
     );
   });
 }

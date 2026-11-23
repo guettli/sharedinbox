@@ -9,17 +9,23 @@ import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
+import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
+import 'package:sharedinbox/data/repositories/mail_object_log.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_base.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:test/test.dart';
 
 import '../unit/db_test_helper.dart';
+import '../unit/encrypted_objects/test_helpers.dart';
 import '../unit/helpers/fake_secure_storage.dart';
 import '../unit/helpers/mail_object_device.dart';
 import '../unit/recording_app_log_repository.dart';
@@ -39,6 +45,7 @@ class BackendObjectDevice with MailObjectDeviceOps {
     this.account,
     this._build, {
     this.appLogger,
+    this.blobBudget = blobCacheBudgetBytes,
     AppDatabase? db,
     FakeSecureStorage? storage,
   })  : db = db ?? openTestDatabase(),
@@ -56,6 +63,7 @@ class BackendObjectDevice with MailObjectDeviceOps {
   final Account account;
   final ObjectStoreFactory _build;
   final AppLogger? appLogger;
+  final int blobBudget;
   @override
   final AppDatabase db;
   final FakeSecureStorage storage;
@@ -63,6 +71,10 @@ class BackendObjectDevice with MailObjectDeviceOps {
   late final MailboxRepositoryImpl mailboxes;
   @override
   late final MailObjectStoreBase store;
+  late final log = MailObjectLog(db, store);
+  late final blobs = MailObjectBlobStore(db, store, budgetBytes: blobBudget);
+  late final state =
+      DeviceStateStore(db, store, collectionId: testDeckKey.collectionId);
   bool offline = false;
   void Function(String step)? onStep;
 
@@ -80,6 +92,7 @@ class BackendObjectDevice with MailObjectDeviceOps {
         account,
         _build,
         appLogger: appLogger,
+        blobBudget: blobBudget,
         db: db,
         storage: storage,
       );
@@ -94,7 +107,32 @@ class BackendObjectDevice with MailObjectDeviceOps {
       putNew(body: body, itemId: newItemIdForTest());
 
   Future<void> step(String step) async => onStep?.call(step);
+
+  /// Appends one segment of the `review` log holding events `{n: …}`.
+  Future<void> appendEvents(List<int> ns) async {
+    await log.append(accountId, _log, testDeckKey.collectionId, [
+      for (final n in ns) {'n': n},
+    ]);
+    await store.waitForIdle();
+  }
+
+  /// Compacts this device's `review` segments of this month.
+  Future<List<MailObject>> compact() async {
+    final packs = await log.compact(accountId, _log, _thisMonth());
+    await store.waitForIdle();
+    return packs;
+  }
+
+  /// The `n` of every `review` event, in reading order.
+  Future<List<Object?>> eventNs() async => [
+        for (final e in await log.events(accountId, _log)) e.json['n'],
+      ];
 }
+
+const _log = 'review';
+
+String _thisMonth() =>
+    periodOf(Hlc(DateTime.now().millisecondsSinceEpoch, 0, 'any'));
 
 class _OfflineClient extends http.BaseClient {
   _OfflineClient(this._offline);
@@ -134,8 +172,16 @@ void mailObjectStoreScenarios({
   /// The Message-IDs and raw bytes in the Data folder.
   Future<Map<String, Uint8List>> onServer() => withClient(objectDataOnServer);
 
-  Future<BackendObjectDevice> device({AppLogger? appLogger}) async {
-    final d = BackendObjectDevice(account(), build, appLogger: appLogger);
+  Future<BackendObjectDevice> device({
+    AppLogger? appLogger,
+    int blobBudget = blobCacheBudgetBytes,
+  }) async {
+    final d = BackendObjectDevice(
+      account(),
+      build,
+      appLogger: appLogger,
+      blobBudget: blobBudget,
+    );
     addTearDown(d.db.close);
     await d.accounts.addAccount(account(), pool().user.password);
     return d;
@@ -285,7 +331,128 @@ void mailObjectStoreScenarios({
       contains('mos.folder_missing_reupload'),
     );
   });
+
+  test(
+      'log segments are compacted into one pack (#1372): the server holds '
+      'only the pack, the other device reads the same events and uploads '
+      'nothing again', () async {
+    final logsB = RecordingAppLogRepository();
+    final a = await device();
+    final b = await device(appLogger: AppLogger(logsB));
+    await a.appendEvents([1, 2]);
+    await a.appendEvents([3]);
+    await a.appendEvents([4]);
+    await a.sync();
+    expect(await onServer(), hasLength(3));
+    await b.listAndSync();
+    expect(await b.eventNs(), [1, 2, 3, 4]);
+
+    final pack = (await a.compact()).single;
+    await a.sync();
+
+    expect((await onServer()).keys, [pack.messageId]);
+    await b.sync();
+    await b.sync();
+    expect(await b.eventNs(), [1, 2, 3, 4]);
+    expect((await onServer()).keys, [pack.messageId]);
+    expect(
+      logsB.rows.map((r) => r.event),
+      isNot(contains('mos.vanished_reupload')),
+    );
+    expect(await a.eventNs(), [1, 2, 3, 4]);
+  });
+
+  test(
+      'a crash between the pack upload and the expunge (#1372): after a '
+      'restart there is exactly one pack and the segments are gone', () async {
+    final a = await device();
+    final b = await device();
+    await a.appendEvents([1]);
+    await a.appendEvents([2]);
+    a.onStep = (step) {
+      if (step == created) throw const SocketException('crash');
+    };
+
+    final pack = (await a.compact()).single;
+
+    expect(await onServer(), hasLength(3));
+    await b.listAndSync();
+    expect(await b.eventNs(), [1, 2]);
+
+    final restarted = a.restart();
+    await restarted.sync();
+
+    expect((await onServer()).keys, [pack.messageId]);
+    expect(await restarted.eventNs(), [1, 2]);
+    final row = (await restarted.row(pack.messageId))!;
+    expect(row.pendingUpload, isFalse);
+    expect(row.serverId, isNotNull);
+    await b.sync();
+    expect(await b.eventNs(), [1, 2]);
+    expect(await b.messageIds(), [pack.messageId]);
+  });
+
+  test(
+      'a blob over 256 KiB (#1372) is fetched on demand on the other device '
+      'and fetched again after an eviction', () async {
+    final a = await device();
+    final b = await device(blobBudget: 500 * 1024);
+    final image = Uint8List(400 * 1024)..fillRange(0, 400 * 1024, 7);
+    final itemId =
+        await a.blobs.putBlob(a.accountId, _deck, image, 'image/png');
+    await a.store.waitForIdle();
+
+    await b.listAndSync();
+    final pulled = (await b.rows()).single;
+    expect(pulled.payload, isNull);
+    expect(pulled.sizeBytes, greaterThan(mailObjectEagerBodyLimit));
+    expect((await b.blobs.blob(b.accountId, _deck, itemId))!.bytes, image);
+    expect((await b.row(pulled.messageId))!.payload, isNotNull);
+
+    final other = await a.blobs.putBlob(
+      a.accountId,
+      _deck,
+      Uint8List(300 * 1024)..fillRange(0, 300 * 1024, 9),
+      'image/png',
+    );
+    await a.store.waitForIdle();
+    await b.sync();
+    expect(await b.blobs.blob(b.accountId, _deck, other), isNotNull);
+    expect((await b.row(pulled.messageId))!.payload, isNull);
+
+    expect((await b.blobs.blob(b.accountId, _deck, itemId))!.bytes, image);
+  });
+
+  test(
+      "two devices' device-state docs (#1372) converge to the value with the "
+      'highest HLC per key, an unset key included', () async {
+    final a = await device();
+    final b = await device();
+    await a.state.set(a.accountId, 'theme', 'dark');
+    await a.state.set(a.accountId, 'deck', 'd1');
+    await a.store.waitForIdle();
+    await b.listAndSync();
+    await b.state.set(b.accountId, 'theme', 'light');
+    await b.state.set(b.accountId, 'deck', null);
+    await b.state.set(b.accountId, 'only-b', 1);
+    await b.store.waitForIdle();
+    await a.listAndSync();
+    await a.state.set(a.accountId, 'only-a', true);
+    await a.state.set(a.accountId, 'theme', 'blue');
+    await a.store.waitForIdle();
+    await b.sync();
+
+    const expected = {'theme': 'blue', 'only-b': 1, 'only-a': true};
+    for (final d in [a, b]) {
+      expect(await d.state.watch(d.accountId).first, expected);
+      expect(await d.state.get(d.accountId, 'deck'), isNull);
+    }
+    // One doc per device on the server, one version each.
+    expect((await onServer()).keys, hasLength(2));
+  });
 }
+
+const _deck = 'deck-1';
 
 /// [body] with a logged-in IMAP client of [pool]'s user.
 Future<T> withObjectClient<T>(
