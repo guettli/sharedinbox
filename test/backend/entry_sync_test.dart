@@ -2,10 +2,12 @@
 // one account, the key set up on A and unlocked on B with the recovery key;
 // an entry created, edited and deleted on one shows on the other. Each
 // device has its own database, secure storage, key ring, store with the
-// entry projection, and entry repository.
+// entry projection, and entry repository. Concurrent edits on both are a
+// conflict on both; resolving it on one (#1374) clears it on both.
 // Run via: task test-backend
 
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/entry.dart';
@@ -100,6 +102,84 @@ void main() {
     expect(await itemsOnServer(), [created.itemHmac]);
     final item = await b.store.item(b.id, created.itemHmac);
     expect(item!.display.head.deleted, isTrue);
+  });
+
+  /// Both edit [created] at once with different bodies: a conflict on both
+  /// once A, B and A synced. Returns B's version.
+  Future<Hlc> concurrentEdits(
+    _EntryDevice a,
+    _EntryDevice b,
+    Entry created,
+  ) async {
+    await a.repo.update(a.id, created.itemId, body: 'from A');
+    await b.repo.update(b.id, created.itemId, body: 'from B');
+    await a.store.waitForIdle();
+    await b.store.waitForIdle();
+    await a.listAndSync();
+    await b.listAndSync();
+    await a.listAndSync();
+    for (final d in [a, b]) {
+      expect((await d.entries()).single.hasConflict, isTrue);
+      final listed = await d.store.observeConflicts(d.id).first;
+      expect(listed.single.itemHmac, created.itemHmac);
+      final item = await d.store.item(d.id, created.itemHmac);
+      expect(item!.versions, hasLength(2));
+    }
+    final bDevice = (await b.store.clockFor(b.id)).deviceId;
+    final item = (await a.store.item(a.id, created.itemHmac))!;
+    return item.merge.distinctHeads
+        .firstWhere((h) => h.versionId.deviceId == bDevice)
+        .versionId;
+  }
+
+  Future<Entry> sharedEntry(_EntryDevice a, _EntryDevice b) async {
+    final created = await a.repo.create(a.id, body: 'base');
+    await a.store.waitForIdle();
+    await a.listAndSync();
+    await b.listAndSync();
+    expect(await b.entries(), hasLength(1));
+    return created;
+  }
+
+  test('a conflict resolved on A is gone on both', () async {
+    final (a, b) = await twoDevices();
+    final created = await sharedEntry(a, b);
+    final fromB = await concurrentEdits(a, b, created);
+
+    await a.store.resolve(a.id, created.itemHmac, keep: fromB);
+    await a.store.waitForIdle();
+    await a.listAndSync();
+    await b.listAndSync();
+
+    for (final d in [a, b]) {
+      final entry = (await d.entries()).single;
+      expect(entry.hasConflict, isFalse);
+      expect(entry.body, 'from B');
+      expect(await d.store.observeConflicts(d.id).first, isEmpty);
+    }
+    expect(await itemsOnServer(), [created.itemHmac]);
+  });
+
+  test('"keep both" on A leaves two entries on both', () async {
+    final (a, b) = await twoDevices();
+    final created = await sharedEntry(a, b);
+    final fromB = await concurrentEdits(a, b, created);
+
+    await a.store.keepAll(a.id, created.itemHmac, keep: fromB);
+    await a.store.waitForIdle();
+    await a.listAndSync();
+    await b.listAndSync();
+
+    for (final d in [a, b]) {
+      final entries = await d.entries();
+      expect(
+        [for (final e in entries) e.body],
+        unorderedEquals(['from A', 'from B']),
+      );
+      expect(entries.where((e) => e.hasConflict), isEmpty);
+      expect(await d.store.observeConflicts(d.id).first, isEmpty);
+    }
+    expect(await itemsOnServer(), hasLength(2));
   });
 }
 

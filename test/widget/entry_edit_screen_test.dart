@@ -10,6 +10,7 @@ import 'helpers.dart';
 Future<FakeEntryRepository> _pump(
   WidgetTester tester, {
   String body = 'old body',
+  FakeConflictStore? store,
 }) async {
   final repo = FakeEntryRepository([
     testEntry('e1', title: 'Old title', body: body, conflict: true),
@@ -24,6 +25,8 @@ Future<FakeEntryRepository> _pump(
           FixedStatusKeyService(PersonalDataStatus.unlocked),
         ),
         entryRepositoryProvider.overrideWithValue(repo),
+        mailObjectStoreProvider
+            .overrideWithValue(store ?? FakeConflictStore({})),
       ],
     ),
   );
@@ -34,6 +37,26 @@ Future<FakeEntryRepository> _pump(
 }
 
 void main() {
+  testWidgets('"Resolve…" opens the conflict view, then reloads',
+      (tester) async {
+    final store = FakeConflictStore({
+      'hmac-e1': conflictItemOf([
+        entryVersion('devA', 1, body: 'mine'),
+        entryVersion('devB', 2, body: 'theirs'),
+      ]),
+    });
+    await _pump(tester, store: store);
+    await tester.tap(find.byKey(const Key('entryEditResolve')));
+    await tester.pumpAndSettle();
+    expect(find.text('Resolve conflict'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('conflictKeep_0')));
+    await tester.pumpAndSettle();
+    expect(store.resolved.single.itemHmac, 'hmac-e1');
+    expect(find.text('Entry'), findsOneWidget);
+    expect(find.byKey(const Key('entryEditConflict')), findsOneWidget);
+  });
+
   testWidgets('edit saves title and body and goes back', (tester) async {
     final repo = await _pump(tester);
     expect(find.byKey(const Key('entryEditConflict')), findsOneWidget);

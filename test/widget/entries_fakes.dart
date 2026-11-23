@@ -1,7 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
+import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 
 /// In-memory [EntryRepository]: entries newest first, search by substring.
@@ -126,3 +135,124 @@ Entry testEntry(
       updatedAt: DateTime.utc(2026, 11, 23, 10, minute),
       hasConflict: conflict,
     );
+
+/// A [MailObjectStore] serving the versions of items in conflict (#1374);
+/// records [resolve] and [keepAll] and then drops the item.
+class FakeConflictStore implements MailObjectStore {
+  FakeConflictStore(this.items);
+
+  /// The items by item HMAC.
+  final Map<String, MailObjectItem> items;
+  final resolved = <({String itemHmac, Hlc keep})>[];
+  final keptAll = <({String itemHmac, Hlc keep})>[];
+
+  /// Thrown by the next [resolve] or [keepAll], if set.
+  Object? failWith;
+
+  @override
+  Future<MailObjectItem?> item(String accountId, String itemHmac) async =>
+      items[itemHmac];
+
+  @override
+  Future<HlcClock> clockFor(String accountId) async => HlcClock('devA');
+
+  @override
+  Stream<List<ConflictItem>> observeConflicts(String accountId) =>
+      Stream.value([
+        for (final MapEntry(:key, :value) in items.entries)
+          ConflictItem(
+            accountId: accountId,
+            itemHmac: key,
+            kind: value.display.head.kind,
+            displayVersionId: value.display.head.versionId.encode(),
+          ),
+      ]);
+
+  @override
+  Future<MailObject> resolve(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) async {
+    _fail();
+    resolved.add((itemHmac: itemHmac, keep: keep));
+    items.remove(itemHmac);
+    return MailObject(
+      accountId: accountId,
+      folder: MailObjectFolder.data,
+      messageId: '<resolved@x>',
+    );
+  }
+
+  @override
+  Future<void> keepAll(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) async {
+    _fail();
+    keptAll.add((itemHmac: itemHmac, keep: keep));
+    items.remove(itemHmac);
+  }
+
+  void _fail() {
+    final e = failWith;
+    failWith = null;
+    if (e != null) throw e;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// A version of entry `item-1` by [device] at minute [minute].
+InnerObject entryVersion(
+  String device,
+  int minute, {
+  String body = '',
+  String? title,
+  bool deleted = false,
+}) =>
+    InnerObject(
+      head: ObjectHead(
+        itemId: 'item-1',
+        collectionId: personalCollectionId,
+        versionId: Hlc(
+          DateTime.utc(2026, 11, 23, 10, minute).millisecondsSinceEpoch,
+          0,
+          device,
+        ),
+        deleted: deleted,
+        kind: entryKind,
+        extra: {if (title != null) 'title': title},
+      ),
+      parts: [
+        if (!deleted)
+          ObjectPart(
+            contentType: 'text/markdown; charset=utf-8',
+            bytes: Uint8List.fromList(utf8.encode(body)),
+          ),
+      ],
+    );
+
+/// The item whose heads are [versions], each of different content.
+MailObjectItem conflictItemOf(List<InnerObject> versions) {
+  final merge = mergeItem(
+    known: [
+      for (final (i, v) in versions.indexed)
+        ObjectVersion(
+          versionId: v.head.versionId,
+          deleted: v.head.deleted,
+          contentDigest: 'digest-$i',
+          ref: i,
+        ),
+    ],
+    incoming: const [],
+    vv: const {},
+  );
+  return MailObjectItem(
+    merge: merge,
+    display: versions[merge.display!.ref! as int],
+    versions: [for (final h in merge.distinctHeads) versions[h.ref! as int]],
+  );
+}

@@ -249,5 +249,22 @@ void main() {
         'NotEditableException: x',
       );
     });
+
+    test('forkObject copies the content into a new item', () {
+      final clock = HlcClock('devA', nowMs: () => 7000);
+      final copy = forkObject(base, clock);
+      expect(copy.head.itemId, isNot(base.head.itemId));
+      expect(copy.head.collectionId, base.head.collectionId);
+      expect(copy.head.kind, 'entry');
+      expect(copy.head.parents, isEmpty);
+      expect(copy.head.deleted, isFalse);
+      expect(copy.head.versionId, hlcAt(7000));
+      expect(copy.head.extra, base.head.extra);
+      expect(copy.parts.single.bytes, base.parts.single.bytes);
+      expect(
+        () => forkObject(testObject(v: 2), clock),
+        throwsA(isA<NotEditableException>()),
+      );
+    });
   });
 }

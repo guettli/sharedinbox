@@ -604,6 +604,18 @@ a reopen after an unlock (which also re-projects every item of the kind). It
 gets the newest head that is not a tombstone (so an edit racing a delete
 stays visible as a conflict), or none once every head is a tombstone.
 
+**Conflict view** (#1374), generic over kinds: `MailObjectStore.observeConflicts`
+lists the items whose heads carry `conflictOf`; `item()` returns one opened
+version per distinct head. `resolve(keep:)` writes an `edit()` of that head
+(a `tombstone()` if it is one) with `parents = all heads`; `keepAll(keep:)`
+first copies every other distinct head that is not a tombstone into a new
+item (`forkObject`: new itemId, same kind, fields and parts), then resolves.
+Edit vs delete has no "keep both": the user keeps the edit or the deletion.
+A `ConflictPresenter` per kind (`lib/core/encrypted_objects/conflict_presenter.dart`)
+gives the list title and the text each version is diffed by against the
+newest one (an entry: title, one line per field, the body); other kinds fall
+back to the head JSON plus the text parts.
+
 Legacy plaintext notes (`Notes` folder, `X-SharedInbox-Note-*` headers) are
 migrated into entries with `links: [messageId]` (#1355). Only mails with
 `X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too.
@@ -684,7 +696,10 @@ Old device:  [Pair a new device] → scan (Android/iOS) or paste the request
 ```
 
 **Entries home**: tabs Notes | Todos | Journal | Cards, quick-add field,
-search (local). Conflict badge → conflict view (pick a version or keep both).
+search (local). Conflict badge → conflict list → conflict view: one card
+per version (two columns from 600 dp, stacked below), each with a diff against
+the newest, "Keep this" / "Keep deleted", and "Keep both" (more than two live
+versions: "Keep all (n)") only when another live version exists (#1374).
 
 ## 10. Success criteria
 

@@ -91,6 +91,27 @@ class MailObjectStoreRouter implements MailObjectStore {
   Future<MailObject> delete(String accountId, String itemHmac) async =>
       (await _for(accountId)).delete(accountId, itemHmac);
 
+  /// Reads the local rows only, the same for both stores.
+  @override
+  Stream<List<ConflictItem>> observeConflicts(String accountId) =>
+      _imap.observeConflicts(accountId);
+
+  @override
+  Future<MailObject> resolve(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) async =>
+      (await _for(accountId)).resolve(accountId, itemHmac, keep: keep);
+
+  @override
+  Future<void> keepAll(
+    String accountId,
+    String itemHmac, {
+    required Hlc keep,
+  }) async =>
+      (await _for(accountId)).keepAll(accountId, itemHmac, keep: keep);
+
   @override
   Future<MailObject> appendRaw(String accountId, Uint8List mail) async =>
       (await _for(accountId)).appendRaw(accountId, mail);
