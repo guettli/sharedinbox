@@ -1,14 +1,14 @@
-import 'dart:convert';
-
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/repositories/projection_json.dart';
 
 /// Makes sure this device has a write key for a collection, creating the
 /// collection key if needed (`EncryptedKeyService.ensureCollection`).
@@ -135,15 +135,14 @@ class CardRepositoryImpl implements CardRepository {
     String cardId,
     CardContent content,
   ) async {
-    final shown = await _shown(accountId, cardId);
-    final doc = await _doc(accountId, shown);
-    await _store.put(
+    await _writeCardDoc(
       accountId,
-      editCardObject(
+      cardId,
+      (shown, doc, clock) => editCardObject(
         deckId: shown.collectionId,
         cardId: cardId,
         content: content,
-        clock: await _store.clockFor(accountId),
+        clock: clock,
         base: doc?.display,
         merge: doc?.merge,
         above: Hlc.parse(shown.h),
@@ -153,14 +152,13 @@ class CardRepositoryImpl implements CardRepository {
 
   @override
   Future<void> deleteCard(String accountId, String cardId) async {
-    final shown = await _shown(accountId, cardId);
-    final doc = await _doc(accountId, shown);
-    await _store.put(
+    await _writeCardDoc(
       accountId,
-      deleteCardObject(
+      cardId,
+      (shown, doc, clock) => deleteCardObject(
         deckId: shown.collectionId,
         cardId: cardId,
-        clock: await _store.clockFor(accountId),
+        clock: clock,
         base: doc?.display,
         merge: doc?.merge,
         above: Hlc.parse(shown.h),
@@ -203,22 +201,28 @@ class CardRepositoryImpl implements CardRepository {
     }
   }
 
-  /// The `Cards` row of [cardId], deleted or not.
-  Future<CardRow> _shown(String accountId, String cardId) async {
-    final row = await _cardRow(accountId, cardId);
-    if (row == null) throw StateError('unknown card $cardId');
-    return row;
-  }
-
-  /// The `card` doc of the card [shown], or null when it has none yet.
-  Future<MailObjectItem?> _doc(String accountId, CardRow shown) async {
+  /// Writes the next version of the `card` doc of [cardId] that [build]
+  /// makes from the `Cards` row shown and the doc (null when the card has
+  /// none yet, e.g. a batch member).
+  Future<void> _writeCardDoc(
+    String accountId,
+    String cardId,
+    InnerObject Function(CardRow shown, MailObjectItem? doc, HlcClock clock)
+        build,
+  ) async {
+    final shown = await _cardRow(accountId, cardId);
+    if (shown == null) throw StateError('unknown card $cardId');
     final hmac = await _store.itemHmacOf(
       accountId,
       shown.collectionId,
       shown.cardId,
     );
     if (hmac == null) throw NoWriteKeyException(shown.collectionId);
-    return _store.item(accountId, hmac);
+    final doc = await _store.item(accountId, hmac);
+    await _store.put(
+      accountId,
+      build(shown, doc, await _store.clockFor(accountId)),
+    );
   }
 
   Future<CardRow?> _cardRow(String accountId, String cardId) =>
@@ -236,19 +240,6 @@ class CardRepositoryImpl implements CardRepository {
             ))
           .getSingleOrNull();
 
-  static List<String> _strings(String json) {
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is! List) return const [];
-      return [
-        for (final s in decoded)
-          if (s is String) s,
-      ];
-    } on FormatException {
-      return const [];
-    }
-  }
-
   static FlashCard _toCard(CardRow r) => FlashCard(
         accountId: r.accountId,
         cardId: r.cardId,
@@ -256,7 +247,7 @@ class CardRepositoryImpl implements CardRepository {
         content: CardContent(
           front: r.front,
           back: r.back,
-          tags: _strings(r.tagsJson),
+          tags: stringsFromJson(r.tagsJson),
         ),
         h: r.h,
         sourceItemHmac: r.sourceItemHmac,

@@ -31,7 +31,7 @@ void main() {
     final a = await device();
     final created = await a.service.createKey(a.id) as KeyCreated;
     final deck = await a.repo.createDeck(a.id, 'Spanish');
-    await a.repo.importCards(a.id, deck.deckId, _cards(cards));
+    await a.repo.importCards(a.id, deck.deckId, numberedCards(cards));
     await a.store.waitForIdle();
     await a.listAndSync();
     final b = await device();
@@ -148,17 +148,9 @@ void main() {
   });
 }
 
-List<NewCard> _cards(int n) => [
-      for (var i = 0; i < n; i++)
-        NewCard(
-          CardContent(front: 'Q$i', back: 'A$i'),
-          cardId: 'c${i.toString().padLeft(4, '0')}',
-        ),
-    ];
-
 /// A [KeyDevice] whose store writes the card projections, with the card
 /// repository on top.
-class _CardDevice extends KeyDevice {
+class _CardDevice extends ProjectingKeyDevice {
   _CardDevice(super.account)
       : super(
           projectors: (db) => [
@@ -173,14 +165,6 @@ class _CardDevice extends KeyDevice {
     store,
     ensureCollection: service.ensureCollection,
   );
-
-  /// The folder listing the mail sync runs first, then the store's sync and
-  /// the key lifecycle after it.
-  @override
-  Future<void> listAndSync() async {
-    await super.listAndSync();
-    await service.afterSync(id, foreground: true);
-  }
 
   Future<List<FlashCard>> cards(String deckId) =>
       repo.observeCards(id, deckId).first;

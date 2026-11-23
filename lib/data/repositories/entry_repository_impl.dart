@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/repositories/projection_json.dart';
 
 /// [EntryRepository] over the `Entries` projection (read) and the
 /// [MailObjectStore] (write), which keeps the projection up to date in its
@@ -102,19 +103,6 @@ class EntryRepositoryImpl implements EntryRepository {
   static String _likeEscape(String s) =>
       s.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
 
-  static List<String> _strings(String json) {
-    try {
-      final decoded = jsonDecode(json);
-      if (decoded is! List) return const [];
-      return [
-        for (final s in decoded)
-          if (s is String) s,
-      ];
-    } on FormatException {
-      return const [];
-    }
-  }
-
   static EntryTask? _task(String? json) {
     if (json == null) return null;
     try {
@@ -130,10 +118,10 @@ class EntryRepositoryImpl implements EntryRepository {
         itemHmac: r.itemHmac,
         title: r.title,
         body: r.body,
-        tags: _strings(r.tagsJson),
+        tags: stringsFromJson(r.tagsJson),
         date: r.date,
         task: _task(r.taskJson),
-        links: _strings(r.linksJson),
+        links: stringsFromJson(r.linksJson),
         versionId: r.versionId,
         updatedAt:
             DateTime.fromMillisecondsSinceEpoch(r.updatedAt, isUtc: true),

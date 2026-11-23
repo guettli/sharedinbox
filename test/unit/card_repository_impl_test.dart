@@ -15,6 +15,7 @@ import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
+import 'encrypted_objects/test_helpers.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 
@@ -112,14 +113,6 @@ class _CardDevice {
   Future<List<MailObject>> heads(String kind) => store.rowsOfKind(_acc, kind);
 }
 
-List<NewCard> _cards(int n) => [
-      for (var i = 0; i < n; i++)
-        NewCard(
-          CardContent(front: 'Q$i', back: 'A$i'),
-          cardId: 'c${i.toString().padLeft(4, '0')}',
-        ),
-    ];
-
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -164,7 +157,7 @@ void main() {
   test('an import of 1 000 cards is 2 batch mails; B sees every card',
       () async {
     final (a, b, deck) = await twoDevicesWithDeck();
-    final ids = await a.repo.importCards(_acc, deck.deckId, _cards(1000));
+    final ids = await a.repo.importCards(_acc, deck.deckId, numberedCards(1000));
     await a.store.waitForIdle();
     expect(ids, hasLength(1000));
     expect(await a.heads(cardBatchKind), hasLength(2));
@@ -182,7 +175,7 @@ void main() {
       'B edits one member and deletes another; A shows both, the batch '
       'mails stay as they are', () async {
     final (a, b, deck) = await twoDevicesWithDeck();
-    await a.repo.importCards(_acc, deck.deckId, _cards(3));
+    await a.repo.importCards(_acc, deck.deckId, numberedCards(3));
     await a.store.waitForIdle();
     await b.sync();
     final batch = (await b.heads(cardBatchKind)).single;
@@ -230,7 +223,7 @@ void main() {
       'concurrent rewrites of one batch merge per cardId; the next rewrite '
       'collapses them', () async {
     final (a, b, deck) = await twoDevicesWithDeck();
-    await a.repo.importCards(_acc, deck.deckId, _cards(3));
+    await a.repo.importCards(_acc, deck.deckId, numberedCards(3));
     await a.store.waitForIdle();
     await b.sync();
     final hmac = (await a.heads(cardBatchKind)).single.itemHmac!;
@@ -307,7 +300,7 @@ void main() {
 
   test('a device without the deck key cannot edit its cards', () async {
     final (a, _, deck) = await twoDevicesWithDeck();
-    await a.repo.importCards(_acc, deck.deckId, _cards(1));
+    await a.repo.importCards(_acc, deck.deckId, numberedCards(1));
     await a.store.waitForIdle();
     keys.byCollection.clear();
     expect(

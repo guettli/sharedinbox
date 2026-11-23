@@ -45,17 +45,27 @@ abstract class ObjectProjector {
   /// after a collapse stay as they are.
   bool get mergesHeads => false;
 
-  /// Projects item [itemHmac]: [display] is its newest head that is not a
-  /// tombstone, or null when the item is deleted (the row goes).
-  /// [conflict]: it has several heads with different content. [heads]:
-  /// every opened head, tombstones included, oldest first.
-  Future<void> apply(
-    String accountId,
-    String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
+  /// Projects item [itemHmac] as the merge sees it ([ProjectedItem]).
+  Future<void> apply(String accountId, String itemHmac, ProjectedItem item);
+}
+
+/// What the merge hands an [ObjectProjector] for one item.
+class ProjectedItem {
+  const ProjectedItem({
+    this.display,
+    this.conflict = false,
+    this.heads = const [],
   });
+
+  /// The newest head that is not a tombstone, or null when the item is
+  /// deleted (the row goes).
+  final InnerObject? display;
+
+  /// It has several heads with different content.
+  final bool conflict;
+
+  /// Every opened head, tombstones included, oldest first.
+  final List<InnerObject> heads;
 }
 
 /// An item as the merge of its opened versions sees it.

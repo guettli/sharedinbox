@@ -854,9 +854,11 @@ abstract class MailObjectStoreBase implements MailObjectStore {
       projector.apply(
         accountId,
         itemHmac,
-        heads.where((h) => !h.head.deleted).lastOrNull,
-        conflict: conflict,
-        heads: heads,
+        ProjectedItem(
+          display: heads.where((h) => !h.head.deleted).lastOrNull,
+          conflict: conflict,
+          heads: heads,
+        ),
       );
 
   // ── Projections (#1372) ───────────────────────────────────────────────────

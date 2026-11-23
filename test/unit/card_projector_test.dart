@@ -3,6 +3,7 @@ import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/models/card.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/card_projector.dart';
 
@@ -13,6 +14,14 @@ const _deck = 'deck-1';
 
 HlcClock _clockAt(int ms, [String device = 'devA']) =>
     HlcClock(device, nowMs: () => ms);
+
+/// What the store's merge hands a projector for [heads].
+ProjectedItem _item(List<InnerObject> heads, {bool conflict = false}) =>
+    ProjectedItem(
+      display: heads.where((h) => !h.head.deleted).lastOrNull,
+      conflict: conflict,
+      heads: heads,
+    );
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -35,26 +44,14 @@ void main() {
           .getSingleOrNull();
 
   Future<void> applyBatch(String hmac, List<InnerObject> heads) =>
-      batches.apply(
-        _acc,
-        hmac,
-        heads.where((h) => !h.head.deleted).lastOrNull,
-        conflict: heads.length > 1,
-        heads: heads,
-      );
+      batches.apply(_acc, hmac, _item(heads, conflict: heads.length > 1));
 
   Future<void> applyDoc(
     String hmac,
     List<InnerObject> heads, {
     bool conflict = false,
   }) =>
-      docs.apply(
-        _acc,
-        hmac,
-        heads.where((h) => !h.head.deleted).lastOrNull,
-        conflict: conflict,
-        heads: heads,
-      );
+      docs.apply(_acc, hmac, _item(heads, conflict: conflict));
 
   InnerObject batchOf(List<String> ids, HlcClock clock) => cardBatchObjects(
         deckId: _deck,
@@ -169,7 +166,11 @@ void main() {
     final clock = _clockAt(1000);
     final a = batchOf(['c1'], clock);
     final b = batchOf(['c1'], clock);
-    await batches.apply(_acc, 'B1', b, conflict: true, heads: [a, b]);
+    await batches.apply(
+      _acc,
+      'B1',
+      ProjectedItem(display: b, conflict: true, heads: [a, b]),
+    );
 
     final c1 = (await cardRow('c1'))!;
     expect(c1.hasConflict, isFalse);
@@ -182,7 +183,7 @@ void main() {
     ]);
     expect(await cardRow('c1'), isNotNull);
 
-    await batches.apply(_acc, 'B1', null, conflict: false, heads: const []);
+    await batches.apply(_acc, 'B1', const ProjectedItem());
 
     expect(await cardRow('c1'), isNull);
     expect(await db.select(db.cardSources).get(), isEmpty);
@@ -194,7 +195,7 @@ void main() {
       name: 'Spanish',
       clock: _clockAt(1700000000000),
     );
-    await decks.apply(_acc, 'K1', deck, conflict: false, heads: [deck]);
+    await decks.apply(_acc, 'K1', _item([deck]));
 
     final row = (await db.select(db.decks).get()).single;
     expect(row.collectionId, _deck);
@@ -202,7 +203,7 @@ void main() {
     expect(row.itemHmac, 'K1');
     expect(row.updatedAt, 1700000000000);
 
-    await decks.apply(_acc, 'K1', null, conflict: false, heads: const []);
+    await decks.apply(_acc, 'K1', const ProjectedItem());
     expect(await db.select(db.decks).get(), isEmpty);
   });
 }

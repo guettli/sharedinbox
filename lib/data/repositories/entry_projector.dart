@@ -21,17 +21,16 @@ class EntryProjector extends ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
-  }) async {
+    ProjectedItem item,
+  ) async {
+    final display = item.display;
     final entry = display == null
         ? null
         : entryFromObject(
             display,
             accountId: accountId,
             itemHmac: itemHmac,
-            conflict: conflict,
+            conflict: item.conflict,
           );
     if (entry == null) {
       await (db.delete(db.entries)

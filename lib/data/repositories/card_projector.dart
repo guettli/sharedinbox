@@ -25,11 +25,10 @@ class CardDocProjector extends ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
-  }) async {
-    final shown = display ?? heads.lastOrNull;
+    ProjectedItem item,
+  ) async {
+    final display = item.display;
+    final shown = display ?? item.heads.lastOrNull;
     final content = shown == null ? null : cardContentOf(shown);
     await replaceCardSources(db, accountId, itemHmac, [
       if (shown != null)
@@ -44,7 +43,7 @@ class CardDocProjector extends ObjectProjector {
           front: Value(content?.front ?? ''),
           back: Value(content?.back ?? ''),
           tagsJson: Value(jsonEncode(content?.tags ?? const <String>[])),
-          hasConflict: Value(conflict),
+          hasConflict: Value(item.conflict),
         ),
     ]);
   }
@@ -68,14 +67,12 @@ class CardBatchProjector extends ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
-  }) async {
-    final collectionId = display?.head.collectionId;
+    ProjectedItem item,
+  ) async {
+    final collectionId = item.display?.head.collectionId;
     await replaceCardSources(db, accountId, itemHmac, [
       if (collectionId != null)
-        for (final m in mergeBatchMembers(heads))
+        for (final m in mergeBatchMembers(item.heads))
           CardSourcesCompanion.insert(
             accountId: accountId,
             cardId: m.cardId,
@@ -104,10 +101,9 @@ class DeckProjector extends ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
-  }) async {
+    ProjectedItem item,
+  ) async {
+    final display = item.display;
     final name = display == null ? null : deckNameOf(display);
     if (display == null || name == null) {
       await (db.delete(db.decks)
@@ -127,7 +123,7 @@ class DeckProjector extends ObjectProjector {
             name: name,
             versionId: head.versionId.encode(),
             updatedAt: head.versionId.wallMs,
-            hasConflict: Value(conflict),
+            hasConflict: Value(item.conflict),
           ),
         );
   }

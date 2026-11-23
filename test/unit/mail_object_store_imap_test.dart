@@ -680,9 +680,7 @@ class _MergingProjector extends ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-    required List<InnerObject> heads,
-  }) async =>
-      calls.add((conflict: conflict, heads: heads));
+    ProjectedItem item,
+  ) async =>
+      calls.add((conflict: item.conflict, heads: item.heads));
 }
