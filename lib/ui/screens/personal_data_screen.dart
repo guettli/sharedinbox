@@ -845,6 +845,7 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
           trailing: const Icon(Icons.chevron_right),
           onTap: () => context.push('/accounts/${widget.accountId}/entries'),
         ),
+        _LegacyNotesCard(accountId: widget.accountId),
         const SizedBox(height: AppSpacing.lg),
         OutlinedButton.icon(
           key: const Key('pairSendStart'),
@@ -893,6 +894,74 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
         if (_service.passkeysAvailable) _passkeySection(context),
       ],
     );
+  }
+}
+
+/// Offers to move the account's plaintext email notes into encrypted
+/// entries, once the user read the warning (ENCRYPTED-OBJECTS.md 9,
+/// #1375). Shown while synced legacy notes wait for that confirmation.
+class _LegacyNotesCard extends ConsumerWidget {
+  const _LegacyNotesCard({required this.accountId});
+
+  final String accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final n =
+        ref.watch(legacyNotesAwaitingConfirmationProvider(accountId)).value ??
+            0;
+    if (n == 0) return const SizedBox.shrink();
+    return Card(
+      key: const Key('legacyNotesCard'),
+      child: ListTile(
+        leading: const Icon(Icons.sticky_note_2_outlined),
+        title: Text(
+          'Move $n email ${n == 1 ? 'note' : 'notes'} into encrypted entries',
+        ),
+        subtitle: const Text(
+          'Notes on mails are stored unencrypted in the "Notes" folder.',
+        ),
+        trailing: TextButton(
+          key: const Key('legacyNotesMove'),
+          onPressed: () => unawaited(_confirm(context, ref)),
+          child: const Text('Move'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirm(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Encrypt email notes?'),
+        content: const Text(
+          'Each note becomes an encrypted entry linked to its mail, and the '
+          'unencrypted copy is deleted from the server.\n\n'
+          '• Older SharedInbox versions on other devices will no longer see '
+          'these notes.\n'
+          '• Your mail provider may keep copies of the deleted notes for a '
+          'while (e.g. Gmail "All Mail" and Trash, Exchange "Recoverable '
+          'Items").\n'
+          '• The "Notes" folder and other mail in it (e.g. Apple Notes) are '
+          'left alone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('legacyNotesConfirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Move notes'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(legacyNoteMigrationProvider).confirm(accountId);
+    ref.read(syncNowProvider)(accountId);
   }
 }
 

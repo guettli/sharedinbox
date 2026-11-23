@@ -35,7 +35,9 @@ class NoteRepositoryImpl implements NoteRepository {
     http.Client? httpClient,
     AppLogger? appLogger,
     bool pushPending = true,
+    NotesModeLookup notesMode = alwaysLegacyNotes,
   })  : _pushEnabled = pushPending,
+        _notesMode = notesMode,
         _imapConnect = imapConnect,
         _httpClient = httpClient ?? http.Client(),
         _appLogger = appLogger;
@@ -49,6 +51,10 @@ class NoteRepositoryImpl implements NoteRepository {
   /// False in the background (WorkManager) isolate: [_exclusive] serializes
   /// pushes within one isolate only, so only the app's isolate pushes.
   final bool _pushEnabled;
+
+  /// Outside [NotesMode.legacy] no plaintext note is written or uploaded
+  /// (#1375).
+  final NotesModeLookup _notesMode;
 
   String _effectiveUsername(account_model.Account account) =>
       account.username.isNotEmpty ? account.username : account.email;
@@ -155,6 +161,16 @@ class NoteRepositoryImpl implements NoteRepository {
       await Future.wait(_accountTails.values.toList());
     }
   }
+
+  /// Pushes the pending note changes of [accountId] now, e.g. the deletes
+  /// the legacy-note migration queued (#1375). Throws like a push does.
+  Future<void> pushPendingNow(String accountId) =>
+      _exclusive(accountId, () async {
+        final account = await _accounts.getAccount(accountId);
+        if (account == null) return;
+        final password = await _accounts.getPassword(accountId);
+        await _pushPending(account, password);
+      });
 
   /// Tries to push right after a local add/delete. Offline (or any failure)
   /// is fine: the row stays pending and the next sync cycle pushes it.
@@ -661,6 +677,10 @@ class NoteRepositoryImpl implements NoteRepository {
       );
       return;
     }
+    // An encrypted account gets no new plaintext note (#1375).
+    if (await _notesMode(accountId) != NotesMode.legacy) {
+      throw NotesEncryptedException(accountId);
+    }
     final noteId = _generateId();
     // Offline-first: the note exists as soon as it is stored here; the push
     // to the server follows (now if online, else on a later sync).
@@ -744,7 +764,9 @@ class NoteRepositoryImpl implements NoteRepository {
   /// Uploads notes added locally and removes the server copies of notes
   /// deleted locally. Connects only when something is pending. A failure on
   /// one note is logged and leaves it pending; connection failures throw.
-  /// Callers hold [_exclusive] for the account.
+  /// Outside [NotesMode.legacy] nothing is uploaded: those notes stay
+  /// pending until the migration makes them entries (#1375). Callers hold
+  /// [_exclusive] for the account.
   Future<void> _pushPending(
     account_model.Account account,
     String password,
@@ -759,17 +781,19 @@ class NoteRepositoryImpl implements NoteRepository {
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)]))
         .get();
     if (pending.isEmpty) return;
+    final upload = await _notesMode(account.id) == NotesMode.legacy;
     // A note deleted before its upload is not uploaded; the delete step
     // still looks for a server copy, in case an earlier upload got through
     // without its answer reaching us.
     final uploads = [
       for (final r in pending)
-        if (r.pendingUpload && !r.pendingDelete) r,
+        if (upload && r.pendingUpload && !r.pendingDelete) r,
     ];
     final deletes = [
       for (final r in pending)
         if (r.pendingDelete) r,
     ];
+    if (uploads.isEmpty && deletes.isEmpty) return;
     switch (account.type) {
       case account_model.AccountType.imap:
         await _pushPendingImap(account, password, uploads, deletes);
@@ -857,7 +881,7 @@ class NoteRepositoryImpl implements NoteRepository {
       for (final row in deletes) {
         try {
           final uids = await _imapUidsOfNote(client, row);
-          if (uids.isNotEmpty) await deleteAndExpungeUids(client, uids);
+          if (uids.isNotEmpty) await _deleteNoteUids(client, row, uids);
           await _dropTombstone(row);
         } catch (e) {
           if (isImapConnectionLost(e)) rethrow;
@@ -867,6 +891,35 @@ class NoteRepositoryImpl implements NoteRepository {
     } finally {
       await closeImapClient(client);
     }
+  }
+
+  /// Deletes the copies [uids] of note [row] in the selected Notes folder.
+  /// On Gmail an expunge there only drops the label (the mail stays in All
+  /// Mail), so they go through Trash ([moveToTrashAndExpunge]), found there
+  /// by the note-id header; without a Trash folder only the label goes.
+  Future<void> _deleteNoteUids(
+    imap.ImapClient client,
+    EmailNoteRow row,
+    List<int> uids,
+  ) async {
+    if (!isGmailImap(client)) return deleteAndExpungeUids(client, uids);
+    final trashed = await moveToTrashAndExpunge(
+      client,
+      uids,
+      sourcePath: _notesFolder,
+      header: (_headerNoteId, row.id),
+    );
+    if (trashed) return;
+    unawaited(
+      _appLogger?.warn(
+        'notes.gmail_no_trash',
+        'Gmail account without a Trash folder: the note is only removed '
+            'from the Notes label and stays in All Mail',
+        accountId: row.accountId,
+        data: {'noteId': row.id},
+      ),
+    );
+    await deleteAndExpungeUids(client, uids);
   }
 
   Future<void> _uploadNoteImap(imap.ImapClient client, EmailNoteRow row) async {

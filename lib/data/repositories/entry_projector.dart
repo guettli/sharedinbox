@@ -6,8 +6,9 @@ import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
-/// Writes the `Entries` projection of the `entry` documents (#1373). Runs
-/// inside the store's merge transaction ([ObjectProjector]).
+/// Writes the `Entries` projection of the `entry` documents (#1373) and
+/// their `EntryLinks` (#1375). Runs inside the store's merge transaction
+/// ([ObjectProjector]).
 class EntryProjector extends ObjectProjector {
   EntryProjector(this.db);
 
@@ -31,6 +32,11 @@ class EntryProjector extends ObjectProjector {
             itemHmac: itemHmac,
             conflict: item.conflict,
           );
+    await (db.delete(db.entryLinks)
+          ..where(
+            (t) => t.accountId.equals(accountId) & t.itemHmac.equals(itemHmac),
+          ))
+        .go();
     if (entry == null) {
       await (db.delete(db.entries)
             ..where(
@@ -39,6 +45,15 @@ class EntryProjector extends ObjectProjector {
             ))
           .go();
       return;
+    }
+    for (final messageId in entry.links.toSet()) {
+      await db.into(db.entryLinks).insert(
+            EntryLinksCompanion.insert(
+              accountId: accountId,
+              itemHmac: itemHmac,
+              messageId: messageId,
+            ),
+          );
     }
     await db.into(db.entries).insertOnConflictUpdate(
           EntriesCompanion.insert(
@@ -56,6 +71,7 @@ class EntryProjector extends ObjectProjector {
             versionId: entry.versionId,
             updatedAt: entry.updatedAt.millisecondsSinceEpoch,
             hasConflict: Value(entry.hasConflict),
+            createdAt: Value(entry.createdAt?.millisecondsSinceEpoch),
           ),
         );
   }

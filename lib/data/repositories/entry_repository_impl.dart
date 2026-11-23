@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/db/like_escape.dart';
 import 'package:sharedinbox/data/repositories/projection_json.dart';
 
 /// [EntryRepository] over the `Entries` projection (read) and the
@@ -25,12 +26,12 @@ class EntryRepositoryImpl implements EntryRepository {
     final q = _db.select(_db.entries)
       ..where((t) => t.accountId.equals(accountId))
       ..orderBy([
-        (t) => OrderingTerm.desc(t.updatedAt),
+        (t) => OrderingTerm.desc(_sortDate(t)),
         (t) => OrderingTerm.desc(t.versionId),
       ]);
     final needle = query.trim();
     if (needle.isNotEmpty) {
-      final pattern = '%${_likeEscape(needle)}%';
+      final pattern = '%${likeEscape(needle)}%';
       q.where(
         (t) =>
             t.title.like(pattern, escapeChar: r'\') |
@@ -38,6 +39,40 @@ class EntryRepositoryImpl implements EntryRepository {
       );
     }
     return q.watch().map((rows) => rows.map(_toModel).toList());
+  }
+
+  /// `createdAt`, else `updatedAt` (#1375).
+  static Expression<int> _sortDate($EntriesTable t) =>
+      coalesce([t.createdAt, t.updatedAt]);
+
+  @override
+  Stream<List<Entry>> observeEntriesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) {
+    final ids = messageIds.toSet();
+    if (ids.isEmpty) return Stream.value(const <Entry>[]);
+    final e = _db.entries;
+    final l = _db.entryLinks;
+    final q = _db.select(e).join([
+      innerJoin(
+        l,
+        l.accountId.equalsExp(e.accountId) & l.itemHmac.equalsExp(e.itemHmac),
+      ),
+    ])
+      ..where(e.accountId.equals(accountId) & l.messageId.isIn(ids))
+      ..orderBy([
+        OrderingTerm.asc(_sortDate(e)),
+        OrderingTerm.asc(e.versionId),
+      ]);
+    return q.watch().map((rows) {
+      // An entry linked to several of the mails comes once.
+      final seen = <String>{};
+      return [
+        for (final r in rows)
+          if (seen.add(r.readTable(e).itemId)) _toModel(r.readTable(e)),
+      ];
+    });
   }
 
   @override
@@ -56,8 +91,7 @@ class EntryRepositoryImpl implements EntryRepository {
         );
   }
 
-  static int _newestFirst(Entry a, Entry b) =>
-      b.updatedAt.compareTo(a.updatedAt);
+  static int _newestFirst(Entry a, Entry b) => b.sortDate.compareTo(a.sortDate);
 
   /// By due date (none last), priority (none last), then newest first.
   static int _byDue(Entry a, Entry b) {
@@ -164,10 +198,6 @@ class EntryRepositoryImpl implements EntryRepository {
             ))
           .getSingleOrNull();
 
-  /// Escapes the LIKE meta-characters with `\`.
-  static String _likeEscape(String s) =>
-      s.replaceAll(r'\', r'\\').replaceAll('%', r'\%').replaceAll('_', r'\_');
-
   static EntryTask? _task(String? json) {
     if (json == null) return null;
     try {
@@ -187,6 +217,9 @@ class EntryRepositoryImpl implements EntryRepository {
         date: r.date,
         task: _task(r.taskJson),
         links: stringsFromJson(r.linksJson),
+        createdAt: r.createdAt == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(r.createdAt!, isUtc: true),
         versionId: r.versionId,
         updatedAt:
             DateTime.fromMillisecondsSinceEpoch(r.updatedAt, isUtc: true),

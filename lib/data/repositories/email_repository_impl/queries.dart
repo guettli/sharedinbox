@@ -23,62 +23,6 @@ Expression<bool> _visible($EmailsTable t) =>
     t.mailboxPath.equals('').not() &
     CustomExpression<bool>('NOT (${_inHiddenFolderSql(t.aliasedName)})');
 
-/// The latest value of [a] and of [b], combined, each time either emits
-/// (once both have). Cancelling it cancels both.
-Stream<R> _combineLatest<A, B, R>(
-  Stream<A> a,
-  Stream<B> b,
-  R Function(A a, B b) combine,
-) {
-  // Single-subscription: it ends with its listener's cancel, which cancels
-  // both sources; nothing is added after that.
-  // ignore: close_sinks
-  late final StreamController<R> out;
-  StreamSubscription<A>? subA;
-  StreamSubscription<B>? subB;
-  late A lastA;
-  late B lastB;
-  var hasA = false;
-  var hasB = false;
-  void emit() {
-    if (hasA && hasB) out.add(combine(lastA, lastB));
-  }
-
-  out = StreamController<R>(
-    onListen: () {
-      subA = a.listen(
-        (v) {
-          lastA = v;
-          hasA = true;
-          emit();
-        },
-        onError: out.addError,
-      );
-      subB = b.listen(
-        (v) {
-          lastB = v;
-          hasB = true;
-          emit();
-        },
-        onError: out.addError,
-      );
-    },
-    onPause: () {
-      subA?.pause();
-      subB?.pause();
-    },
-    onResume: () {
-      subA?.resume();
-      subB?.resume();
-    },
-    onCancel: () async {
-      await subA?.cancel();
-      await subB?.cancel();
-    },
-  );
-  return out.stream;
-}
-
 /// SQL (correlated on the `emails` alias [e]): the mail shows in a folder
 /// whose delete is queued, or in one of the app's own data folders, which
 /// shows nowhere and is never mail-synced (#1364).
@@ -334,12 +278,14 @@ extension _Queries on EmailRepositoryImpl {
     );
     final noteRows =
         await _searchEmailsByNotes(accountId, mailboxPath, query, limit);
+    final entryRows =
+        await _searchEmailsByEntries(accountId, mailboxPath, query, limit);
     final bodyRows =
         await _searchEmailsByBody(accountId, mailboxPath, query, limit);
 
     final seen = <String>{};
     final merged = <model.Email>[];
-    for (final e in [...subjectRows, ...noteRows, ...bodyRows]) {
+    for (final e in [...subjectRows, ...noteRows, ...entryRows, ...bodyRows]) {
       if (seen.add(e.id)) merged.add(e);
     }
     merged.sort(model.compareFlaggedThenNewest);
@@ -391,6 +337,63 @@ extension _Queries on EmailRepositoryImpl {
         limit: limit,
       );
 
+  /// Returns emails linked to an encrypted entry (#1375) whose title or body
+  /// contains [query] (case-insensitive), through `entry_links`. The legacy
+  /// notes not migrated yet are found by [_searchEmailsByNotes]; without
+  /// encryption there are no entries.
+  Future<List<model.Email>> _searchEmailsByEntries(
+    String? accountId,
+    String? mailboxPath,
+    String query,
+    int limit,
+  ) async {
+    final needle = query.trim();
+    if (needle.isEmpty) return [];
+    final pattern = '%${likeEscape(needle)}%';
+    final (conditions, vars) = _searchConditions(accountId, mailboxPath);
+    final rows = await _db.customSelect(
+      'SELECT DISTINCT e.* FROM entries n'
+      ' JOIN entry_links l ON l.account_id = n.account_id'
+      ' AND l.item_hmac = n.item_hmac'
+      ' JOIN emails e ON e.account_id = l.account_id'
+      ' AND e.message_id = l.message_id'
+      r" WHERE (n.title LIKE ? ESCAPE '\' OR n.body LIKE ? ESCAPE '\')"
+      '$conditions ORDER BY $_emailListOrderSql LIMIT ?',
+      variables: [
+        Variable<String>(pattern),
+        Variable<String>(pattern),
+        ...vars,
+        Variable<int>(limit),
+      ],
+      readsFrom: {_db.emails, _db.entries, _db.entryLinks},
+    ).get();
+    final emailRows =
+        await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
+    return emailRows.map(_toModel).toList();
+  }
+
+  /// The `AND …` conditions of a search on `emails` (aliased `e`): not a
+  /// hidden row, and optionally in [accountId] and [mailboxPath].
+  (String, List<Variable<String>>) _searchConditions(
+    String? accountId,
+    String? mailboxPath,
+  ) {
+    // Not a hidden row (SYNC-REDESIGN.md §2).
+    final conditions = StringBuffer(
+      " AND e.mailbox_path <> '' AND NOT (${_inHiddenFolderSql('e')})",
+    );
+    final vars = <Variable<String>>[];
+    if (accountId != null) {
+      conditions.write(' AND e.account_id = ?');
+      vars.add(Variable<String>(accountId));
+    }
+    if (mailboxPath != null) {
+      conditions.write(' AND e.mailbox_path = ?');
+      vars.add(Variable<String>(mailboxPath));
+    }
+    return (conditions.toString(), vars);
+  }
+
   /// Runs an FTS5 `MATCH` search whose hits resolve back to `emails` (aliased
   /// `e`) and returns them as models, flagged and newest first. [fromJoin] is
   /// the `FROM …` clause joining the [ftsTable] shadow index to `emails`;
@@ -410,19 +413,8 @@ extension _Queries on EmailRepositoryImpl {
     final ftsQuery = _toFtsQuery(query);
     if (ftsQuery.isEmpty) return [];
 
-    // Not a hidden row (SYNC-REDESIGN.md §2).
-    final extraConditions = StringBuffer(
-      " AND e.mailbox_path <> '' AND NOT (${_inHiddenFolderSql('e')})",
-    );
-    final extraVars = <Variable<String>>[];
-    if (accountId != null) {
-      extraConditions.write(' AND e.account_id = ?');
-      extraVars.add(Variable<String>(accountId));
-    }
-    if (mailboxPath != null) {
-      extraConditions.write(' AND e.mailbox_path = ?');
-      extraVars.add(Variable<String>(mailboxPath));
-    }
+    final (extraConditions, extraVars) =
+        _searchConditions(accountId, mailboxPath);
 
     final sql = 'SELECT${distinct ? ' DISTINCT' : ''} e.* $fromJoin'
         ' WHERE $ftsTable MATCH ?$extraConditions'
@@ -739,7 +731,7 @@ extension _Queries on EmailRepositoryImpl {
     // The mail of a folder whose delete is queued shows nowhere ([_visible]):
     // filtered here, so the thread updates when that set changes and not on
     // every folder listing.
-    return _combineLatest(
+    return combineLatest(
       rows,
       _hiddenFoldersOf(accountId),
       (rows, hidden) => [

@@ -640,12 +640,29 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       return [messages.lastKey()!];
     }
     final header = RegExp(r'^HEADER Message-ID "(.*)"$').firstMatch(criteria);
-    if (header == null) throw UnsupportedError('fake IMAP: SEARCH $criteria');
+    final other = RegExp(r'^HEADER (\S+) "(.*)"$').firstMatch(criteria);
+    if (header == null && other == null) {
+      throw UnsupportedError('fake IMAP: SEARCH $criteria');
+    }
     if (!server.headerSearch) {
       if (server.headerSearchAnswersBad) {
         throw StatefulFakeImapServer.badAnswer('Unsupported search key');
       }
       return const [];
+    }
+    if (header == null) {
+      // Another header (e.g. `X-SharedInbox-Note-Id`): of APPENDed mail.
+      final name = other!.group(1)!;
+      final value = other.group(2)!;
+      return [
+        for (final m in messages.values)
+          if (m.raw != null &&
+              imap.MimeMessage.parseFromData(m.raw!)
+                      .getHeaderValue(name)
+                      ?.trim() ==
+                  value)
+            m.uid,
+      ];
     }
     final wanted = _bare(header.group(1)!);
     return [
@@ -862,6 +879,21 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       }
     }
   }
+
+  @override
+  Future<imap.GenericImapResult> appendMessage(
+    imap.MimeMessage message, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) =>
+      appendMessageText(
+        message.renderMessage(),
+        flags: flags,
+        targetMailbox: targetMailbox,
+        targetMailboxPath: targetMailboxPath,
+      );
 
   @override
   Future<imap.GenericImapResult> appendMessageText(

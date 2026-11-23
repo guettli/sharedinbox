@@ -1126,6 +1126,9 @@ Widget buildApp({
       userPreferencesRepositoryProvider.overrideWithValue(
         userPreferences ?? FakeUserPreferencesRepository(),
       ),
+      // A Drift StreamQuery too (#1375): no legacy notes to migrate.
+      legacyNotesAwaitingConfirmationProvider
+          .overrideWith((ref, accountId) => Stream.value(0)),
       ...overrides,
       manageSieveProbeServiceProvider.overrideWith(
         (ref) => _NoOpManageSieveProbeService(),

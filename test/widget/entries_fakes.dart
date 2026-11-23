@@ -36,6 +36,12 @@ class FakeEntryRepository implements EntryRepository {
 
   List<Entry> get entries => List.unmodifiable(_entries);
 
+  /// An entry another device (or the note migration) wrote arrives.
+  void add(Entry entry) {
+    _entries.add(entry);
+    _changes.add(null);
+  }
+
   @override
   Stream<List<Entry>> observeEntries(
     String accountId, {
@@ -54,6 +60,20 @@ class FakeEntryRepository implements EntryRepository {
             e.body.toLowerCase().contains(q))
           e,
     ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  @override
+  Stream<List<Entry>> observeEntriesForMessages(
+    String accountId,
+    Iterable<String> messageIds,
+  ) async* {
+    final ids = messageIds.toSet();
+    List<Entry> linked() => [
+          for (final e in _entries)
+            if (e.accountId == accountId && e.links.any(ids.contains)) e,
+        ]..sort((a, b) => a.sortDate.compareTo(b.sortDate));
+    yield linked();
+    yield* _changes.stream.map((_) => linked());
   }
 
   @override

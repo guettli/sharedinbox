@@ -1438,6 +1438,13 @@
     },
     {
       "tool": "jscpd",
+      "file": "test/unit/card_repository_impl_test.dart",
+      "start_line": 52,
+      "end_line": 69,
+      "key": "5e25317d400830a2"
+    },
+    {
+      "tool": "jscpd",
       "file": "test/unit/connectivity_service_test.dart",
       "start_line": 26,
       "end_line": 36,
@@ -1491,6 +1498,13 @@
       "start_line": 309,
       "end_line": 322,
       "key": "af44a33481105619"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/unit/entry_repository_impl_test.dart",
+      "start_line": 41,
+      "end_line": 67,
+      "key": "5e25317d400830a2"
     },
     {
       "tool": "jscpd",
