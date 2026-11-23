@@ -255,6 +255,41 @@ def log_segment_section():
     }
 
 
+def passkey_slot_section(account_key, account_key_id, slot_id, slot_nonce):
+    """The passkey slot (#1360): KEK from the PRF output, clear slot fields."""
+    prf_output = bytes(range(0x60, 0x80))
+    credential_id = bytes(range(0xD0, 0xE0))
+    prf_salt = bytes(range(0xE0, 0x100))
+    kek = hkdf(prf_output, INFOS["kekPasskey"])
+    aad = account_key_id + slot_id + enc("passkey-prf")
+    wrapped = xchacha20poly1305_encrypt(kek, slot_nonce, account_key, aad)
+    slot = {
+        "slotId": b64url(slot_id),
+        "type": "passkey-prf",
+        "nonce": b64url(slot_nonce),
+        "wrapped": b64url(wrapped),
+        "credentialId": b64url(credential_id),
+        "prfSalt": b64url(prf_salt),
+        "rpId": "sharedinbox.de",
+        "label": "Google Password Manager",
+    }
+    return {
+        "passkeySlot": {
+            "accountKey": account_key.hex(),
+            "accountKeyId": account_key_id.hex(),
+            "prfOutput": prf_output.hex(),
+            "kek": kek.hex(),
+            "slotId": slot_id.hex(),
+            "nonce": slot_nonce.hex(),
+            "credentialId": credential_id.hex(),
+            "prfSalt": prf_salt.hex(),
+            "aad": aad.hex(),
+            "wrapped": wrapped.hex(),
+            "slot": json.dumps(slot, separators=(",", ":")),
+        }
+    }
+
+
 def main():
     _self_check()
 
@@ -348,6 +383,9 @@ def main():
     }
     vectors.update(envelope_sections(collection_key, key_id))
     vectors.update(log_segment_section())
+    vectors.update(
+        passkey_slot_section(account_key, account_key_id, slot_id, slot_nonce)
+    )
     json.dump(vectors, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -390,6 +391,7 @@ class _UnlockViewState extends ConsumerState<_UnlockView> with _TextInput {
               : 'Encrypted personal data exists for this account. Enter the '
                   'recovery key to use it on this device.',
         ),
+        _PasskeyUnlock(accountId: widget.accountId, enabled: !busy),
         const SizedBox(height: AppSpacing.lg),
         TextField(
           key: const Key('recoveryKeyField'),
@@ -439,14 +441,97 @@ class _UnlockViewState extends ConsumerState<_UnlockView> with _TextInput {
                 'of 4.',
           UnlockFailure.badChecksum =>
             'This recovery key has a typo. Check every group.',
-          UnlockFailure.noSlotOpens =>
-            'This recovery key does not unlock the data of this account.',
+          _ => 'This recovery key does not unlock the data of this account.',
         };
       } catch (e) {
         return 'Could not unlock: ${userErrorMessage(e)}';
       }
     });
   }
+}
+
+const _noPrf = 'Your password manager does not support passkey encryption '
+    '(PRF). Use the recovery key. You can delete the passkey that was just '
+    'created in your password manager.';
+
+/// Locked device: unlock with a passkey, shown only where there are
+/// passkeys and the account has a passkey slot.
+class _PasskeyUnlock extends ConsumerStatefulWidget {
+  const _PasskeyUnlock({required this.accountId, required this.enabled});
+
+  final String accountId;
+  final bool enabled;
+
+  @override
+  ConsumerState<_PasskeyUnlock> createState() => _PasskeyUnlockState();
+}
+
+class _PasskeyUnlockState extends ConsumerState<_PasskeyUnlock> {
+  late final Future<bool> _hasSlot = _loadHasSlot();
+  bool _busy = false;
+  String? _error;
+
+  EncryptedKeyService get _service => ref.read(encryptedKeyServiceProvider);
+
+  Future<bool> _loadHasSlot() async {
+    if (!_service.passkeysAvailable) return false;
+    return (await _service.passkeySlots(widget.accountId)).isNotEmpty;
+  }
+
+  Future<void> _unlock() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    String? failure;
+    try {
+      await _service.unlockWithPasskey(widget.accountId);
+    } on UnlockFailed catch (e) {
+      failure = switch (e.reason) {
+        UnlockFailure.passkeyCancelled => 'Cancelled.',
+        UnlockFailure.passkeyUnsupported =>
+          'Your password manager does not support passkey encryption (PRF). '
+              'Use the recovery key.',
+        UnlockFailure.noPasskeySlot =>
+          'This account has no passkey. Use the recovery key.',
+        _ => 'None of your passkeys unlocks the data of this account. If you '
+            'deleted the passkey, use the recovery key.',
+      };
+    } catch (e) {
+      failure = 'Could not unlock: ${userErrorMessage(e)}';
+    }
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _error = failure;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<bool>(
+        future: _hasSlot,
+        builder: (context, snapshot) {
+          if (snapshot.data != true) return const SizedBox.shrink();
+          final error = _error;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: AppSpacing.lg),
+              FilledButton.icon(
+                key: const Key('passkeyUnlock'),
+                icon: const Icon(Icons.key),
+                label: const Text('Unlock with passkey'),
+                onPressed: widget.enabled && !_busy ? _unlock : null,
+              ),
+              if (_busy) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const Center(child: CircularProgressIndicator()),
+              ],
+              if (error != null) _ErrorText(error),
+            ],
+          );
+        },
+      );
 }
 
 /// The text of a passphrase [checkPassphraseStrength] refused.
@@ -550,15 +635,117 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
 
   EncryptedKeyService get _service => ref.read(encryptedKeyServiceProvider);
 
+  late Future<List<PasskeySlotInfo>> _passkeys = _loadPasskeys();
+
   Future<bool> _loadHasPassphrase() =>
       _service.hasPassphraseSlot(widget.accountId);
 
+  Future<List<PasskeySlotInfo>> _loadPasskeys() async {
+    if (!_service.passkeysAvailable) return const [];
+    return _service.passkeySlots(widget.accountId);
+  }
+
   void _reload() {
     final hasPassphrase = _loadHasPassphrase();
+    final passkeys = _loadPasskeys();
     setState(() {
       _hasPassphrase = hasPassphrase;
+      _passkeys = passkeys;
     });
   }
+
+  Future<void> _addPasskey() async {
+    final done = await showDialog<bool>(
+      context: context,
+      builder: (_) => _PasskeyDialog(accountId: widget.accountId),
+    );
+    if (!mounted || done != true) return;
+    _reload();
+    context.showAppSnackBar('Passkey added');
+  }
+
+  Future<void> _removePasskey(PasskeySlotInfo passkey) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove this passkey?'),
+        content: const Text(
+          'It no longer unlocks the data. This device and the recovery key '
+          'keep working. Removing does not revoke it: old copies of the key '
+          'mail may stay on the server or in backups and still open with the '
+          'passkey. You can also delete it in your password manager.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('passkeyRemoveConfirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await _service.removePasskeySlot(widget.accountId, passkey.slotIdB64);
+      if (!mounted) return;
+      _reload();
+      context.showAppSnackBar('Passkey removed');
+    } on KeyMailOfflineException {
+      if (!mounted) return;
+      context.showAppSnackBar(_passkeyNeedsConnection);
+    } catch (e) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Could not remove the passkey: ${userErrorMessage(e)}',
+      );
+    }
+  }
+
+  Widget _passkeySection(BuildContext context) =>
+      FutureBuilder<List<PasskeySlotInfo>>(
+        future: _passkeys,
+        builder: (context, snapshot) {
+          final passkeys = snapshot.data;
+          if (passkeys == null) return const SizedBox.shrink();
+          return Column(
+            key: const Key('passkeySection'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const ListTile(
+                leading: Icon(Icons.key),
+                title: Text('Passkeys'),
+                subtitle: Text(
+                  'Deleting this passkey from your password manager removes '
+                  'this way to unlock. Keep your recovery key.',
+                ),
+              ),
+              for (final p in passkeys)
+                ListTile(
+                  key: Key('passkeySlot-${p.slotIdB64}'),
+                  title: Text(p.label.isEmpty ? 'Passkey' : p.label),
+                  trailing: IconButton(
+                    key: Key('passkeyRemove-${p.slotIdB64}'),
+                    tooltip: 'Remove',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _removePasskey(p),
+                  ),
+                ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  key: const Key('passkeyAdd'),
+                  onPressed: _addPasskey,
+                  child: const Text('Add passkey'),
+                ),
+              ),
+            ],
+          );
+        },
+      );
 
   Future<void> _setPassphrase({required bool change}) async {
     final account = ref.read(accountByIdProvider(widget.accountId)).value;
@@ -703,9 +890,94 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
             );
           },
         ),
+        if (_service.passkeysAvailable) _passkeySection(context),
       ],
     );
   }
+}
+
+const _passkeyNeedsConnection =
+    'Changing the passkeys needs a connection to the mail server.';
+
+/// Add a passkey slot: an optional label, then the password manager's
+/// dialogs (create, then use the new passkey once).
+class _PasskeyDialog extends ConsumerStatefulWidget {
+  const _PasskeyDialog({required this.accountId});
+
+  final String accountId;
+
+  @override
+  ConsumerState<_PasskeyDialog> createState() => _PasskeyDialogState();
+}
+
+class _PasskeyDialogState extends ConsumerState<_PasskeyDialog>
+    with _TextInput {
+  Future<void> _save() async {
+    final failure = await runBusy(() async {
+      try {
+        await ref
+            .read(encryptedKeyServiceProvider)
+            .addPasskeySlot(widget.accountId, label: controller.text);
+        return null;
+      } on PrfUnsupported {
+        return _noPrf;
+      } on PrfCancelled {
+        return 'Cancelled. Nothing was saved. If a passkey was created, you '
+            'can delete it in your password manager.';
+      } on KeyMailOfflineException {
+        return _passkeyNeedsConnection;
+      } catch (e) {
+        return 'Could not add the passkey: ${userErrorMessage(e)}';
+      }
+    });
+    if (failure != null || !mounted) return;
+    Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Add passkey'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Other devices with this password manager can then unlock '
+                'with the passkey. Your password manager asks you twice: to '
+                'create the passkey and to check that it works.',
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              TextField(
+                key: const Key('passkeyLabelField'),
+                controller: controller,
+                enabled: !busy,
+                decoration: const InputDecoration(
+                  labelText: 'Name (optional)',
+                  hintText: 'e.g. Google Password Manager',
+                ),
+                onSubmitted: (_) => busy ? null : _save(),
+              ),
+              if (busy) ...[
+                const SizedBox(height: AppSpacing.lg),
+                const Center(child: CircularProgressIndicator()),
+              ],
+              if (error != null) _ErrorText(error!),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: busy ? null : () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('passkeySave'),
+            onPressed: busy ? null : _save,
+            child: const Text('Add passkey'),
+          ),
+        ],
+      );
 }
 
 /// Add or change the passphrase slot: the brute-force warning, the

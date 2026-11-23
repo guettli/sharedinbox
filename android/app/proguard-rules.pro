@@ -24,3 +24,10 @@
 # Keep the no-arg constructor of every Room database implementation so Room's
 # reflective lookup (Class.getDeclaredConstructor().newInstance()) succeeds. (#100)
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# Credential Manager loads its Play Services provider by reflection; keep it
+# so passkeys (PasskeyBridge.kt) work in release builds on Android <= 13.
+-if class androidx.credentials.CredentialManager
+-keep class androidx.credentials.playservices.** {
+  *;
+}

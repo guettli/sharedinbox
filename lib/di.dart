@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -64,6 +66,7 @@ import 'package:sharedinbox/data/db/database.dart'
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
+import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
@@ -898,6 +901,9 @@ final encryptedKeyServiceProvider = Provider<EncryptedKeyService>((ref) {
     shareKeys: ref.watch(shareKeyRepositoryProvider),
     findAccount: ref.watch(accountRepositoryProvider).getAccount,
     appLogger: ref.watch(appLoggerProvider),
+    prf: !kIsWeb && Platform.isAndroid
+        ? const CredentialManagerPrfProvider()
+        : null,
   );
   ref.onDispose(service.dispose);
   return service;

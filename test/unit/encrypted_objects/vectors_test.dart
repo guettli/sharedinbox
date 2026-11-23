@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:test/test.dart';
@@ -71,6 +72,48 @@ void main() {
     );
     expect(toHex(slot.wrapped), v['wrapped']);
     final back = await unwrapSlot(slot, kek, accountKey.accountKeyId);
+    expect(back.key.bytes, accountKey.key.bytes);
+  });
+
+  test('passkeySlot', () async {
+    final v = vectors['passkeySlot'] as Map<String, dynamic>;
+    final accountKey = AccountKey(
+      hexBytes(v['accountKeyId'] as String),
+      hexBytes(v['accountKey'] as String),
+    );
+    final prfOutput = hexBytes(v['prfOutput'] as String);
+    expect(toHex((await passkeyKek(prfOutput)).bytes), v['kek']);
+    final slot = await wrapPasskeySlot(
+      accountKey,
+      prfOutput,
+      credentialId: hexBytes(v['credentialId'] as String),
+      salt: hexBytes(v['prfSalt'] as String),
+      label: 'Google Password Manager',
+      random: queuedRandom([
+        hexBytes(v['slotId'] as String),
+        hexBytes(v['nonce'] as String),
+      ]),
+    );
+    expect(
+      toHex(
+        slotAad(
+          accountKeyId: accountKey.accountKeyId,
+          slotId: slot.slotId,
+          type: slot.type,
+        ),
+      ),
+      v['aad'],
+    );
+    expect(toHex(slot.wrapped), v['wrapped']);
+    expect(jsonEncode(slot.toJson()), v['slot']);
+    final parsed = UnlockSlot.fromJson(
+      jsonDecode(v['slot'] as String) as Map<String, Object?>,
+    );
+    final back = await unwrapPasskeySlot(
+      parsed,
+      prfOutput,
+      accountKey.accountKeyId,
+    );
     expect(back.key.bytes, accountKey.key.bytes);
   });
 

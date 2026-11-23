@@ -4,6 +4,7 @@
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
@@ -50,6 +51,7 @@ class KeyDevice {
   KeyDevice(
     this.account, {
     List<ObjectProjector> Function(AppDatabase db) projectors = _noProjectors,
+    PrfProvider? prf,
   }) {
     accounts = AccountRepositoryImpl(db, storage);
     mailboxes = MailboxRepositoryImpl(
@@ -79,6 +81,7 @@ class KeyDevice {
       shareKeys: ShareKeyRepositoryImpl(db),
       findAccount: accounts.getAccount,
       appLogger: AppLogger(logs),
+      prf: prf,
     );
   }
 

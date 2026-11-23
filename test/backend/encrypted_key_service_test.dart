@@ -8,6 +8,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
@@ -16,12 +17,14 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:test/test.dart';
 
+import '../unit/encrypted_objects/fake_prf_provider.dart';
 import 'key_device_harness.dart';
 
 void main() {
   final pool = setUpKeyPool();
 
-  Future<KeyDevice> device() => addKeyDevice(pool(), KeyDevice(pool().account));
+  Future<KeyDevice> device({FakePrfProvider? prf}) =>
+      addKeyDevice(pool(), KeyDevice(pool().account, prf: prf));
 
   /// The account-key mails on the server, by Message-ID.
   Future<Map<String, AccountKeyMailMsg>> keyMailsOnServer() async => {
@@ -199,6 +202,36 @@ void main() {
     await a.service.afterSync(a.id, foreground: true);
     await a.sync();
     expect(await pairingMailsOnServer(), isEmpty);
+  });
+
+  test('a passkey slot on the server: a second device unlocks with it',
+      () async {
+    final vault = FakePasskeyVault();
+    final a = await device(prf: FakePrfProvider(vault));
+    await a.service.createKey(a.id);
+    await a.store.waitForIdle();
+
+    final info = await a.service.addPasskeySlot(a.id, label: 'Phone');
+    await a.store.waitForIdle();
+
+    final keyMail = (await keyMailsOnServer()).values.single;
+    expect(keyMail.mail.payload.slotListVersion, 2);
+    expect(
+      [for (final s in keyMail.mail.payload.slots) s.type],
+      [UnlockSlotType.recovery, UnlockSlotType.passkeyPrf],
+    );
+    final key = (await a.keys.load(a.id))!;
+    expect(await keyMail.mail.verify(await key.kSlots()), isTrue);
+
+    final b = await device(prf: FakePrfProvider(vault));
+    await b.service.unlockWithPasskey(b.id);
+    expect((await b.keys.load(b.id))!.key.bytes, key.key.bytes);
+    expect(await b.service.status(b.id), PersonalDataStatus.unlocked);
+
+    await a.service.removePasskeySlot(a.id, info.slotIdB64);
+    await a.store.waitForIdle();
+    final after = (await keyMailsOnServer()).values.single.mail.payload;
+    expect([for (final s in after.slots) s.type], [UnlockSlotType.recovery]);
   });
 
   test('a foreign key mail after the first write only warns', () async {
