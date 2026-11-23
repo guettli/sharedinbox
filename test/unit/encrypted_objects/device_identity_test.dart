@@ -20,7 +20,12 @@ void main() {
   });
 
   Future<DeviceIdentity> markerValue() async => DeviceIdentity.fromJson(
-        jsonDecode((await storage.read(key: marker))!) as Map<String, Object?>,
+        jsonDecode(
+          (await storage.read(
+            key: marker,
+            access: SecureStorageAccess.afterFirstUnlockThisDevice,
+          ))!,
+        ) as Map<String, Object?>,
       );
 
   test('marker key is enc-device-marker/<accountId>', () {

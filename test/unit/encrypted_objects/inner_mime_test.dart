@@ -49,7 +49,7 @@ void main() {
     );
     final bytes = buildInnerMime(object, random: counterRandom());
     expect(
-      ascii.decode(bytes.sublist(0, 40)),
+      ascii.decode(bytes.sublist(0, 60)),
       startsWith('Content-Type: multipart/related; boundary="si-'),
     );
     final back = parseInnerMime(bytes);
