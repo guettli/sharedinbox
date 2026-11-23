@@ -8,48 +8,25 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
-import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:test/test.dart';
 
-import 'mail_object_harness.dart';
-
-const _keysPath = 'SharedInbox/Keys';
+import 'key_device_harness.dart';
 
 void main() {
-  late PoolImapAccount pool;
+  final pool = setUpKeyPool();
 
-  setUpAll(() {
-    configureSqliteForTests();
-    pool = PoolImapAccount();
-  });
-
-  setUp(
-    () => pool.deleteFolders(['SharedInbox/Data', _keysPath, 'SharedInbox']),
-  );
-
-  Future<_KeyDevice> device() async {
-    final d = _KeyDevice(pool.account);
-    addTearDown(() async {
-      await d.store.waitForIdle();
-      d.service.dispose();
-      await d.db.close();
-    });
-    await d.accounts.addAccount(pool.account, pool.user.password);
-    return d;
-  }
+  Future<KeyDevice> device() => addKeyDevice(pool(), KeyDevice(pool().account));
 
   /// The account-key mails on the server, by Message-ID.
   Future<Map<String, AccountKeyMailMsg>> keyMailsOnServer() async => {
         for (final MapEntry(:key, :value)
-            in (await pool.rawMails(_keysPath)).entries)
+            in (await pool().rawMails(keysPath)).entries)
           if (parseKeyMailMessage(value) case final AccountKeyMailMsg m) key: m,
       };
 
@@ -65,7 +42,7 @@ void main() {
     final b = await device();
     await b.listAndSync();
 
-    final server = await pool.rawMails(_keysPath);
+    final server = await pool().rawMails(keysPath);
     expect(server.keys.toSet(), ownRows.keys.toSet());
     expect(server, hasLength(2));
     final seen = await b.keyRows();
@@ -156,13 +133,13 @@ void main() {
     final a = await device();
     await a.service.createKey(a.id);
     await a.store.waitForIdle();
-    final before = await pool.rawMails(_keysPath);
+    final before = await pool().rawMails(keysPath);
 
-    await pool.deleteFolders([_keysPath]);
+    await pool().deleteFolders([keysPath]);
     await a.listAndSync();
     await a.service.afterSync(a.id, foreground: true);
 
-    final after = await pool.rawMails(_keysPath);
+    final after = await pool().rawMails(keysPath);
     expect(after.keys.toSet(), before.keys.toSet());
     for (final id in before.keys) {
       expect(after[id], before[id]);
@@ -174,7 +151,7 @@ void main() {
   /// The Message-IDs of the pairing mails on the server.
   Future<List<String>> pairingMailsOnServer() async => [
         for (final MapEntry(:key, :value)
-            in (await pool.rawMails(_keysPath)).entries)
+            in (await pool().rawMails(keysPath)).entries)
           if (_isPairingMail(value)) key,
       ];
 
@@ -205,7 +182,7 @@ void main() {
     expect(b.logs.rows.map((r) => r.event), contains('mos.pairing_accepted'));
 
     final stale = newMessageId();
-    await pool.withClient(
+    await pool().withClient(
       (c) => c.appendMessageText(
         ascii.decode(
           buildPairingMail(
@@ -214,7 +191,7 @@ void main() {
             date: DateTime.now().subtract(const Duration(hours: 1)),
           ),
         ),
-        targetMailboxPath: _keysPath,
+        targetMailboxPath: keysPath,
       ),
     );
     await a.sync();
@@ -238,10 +215,10 @@ void main() {
     );
     await a.store.waitForIdle();
     final foreign = await foreignKeyMailForTest();
-    await pool.withClient(
+    await pool().withClient(
       (c) => c.appendMessageText(
         ascii.decode(foreign.mail),
-        targetMailboxPath: _keysPath,
+        targetMailboxPath: keysPath,
       ),
     );
 
@@ -256,66 +233,6 @@ void main() {
       contains('mos.foreign_key_mail'),
     );
   });
-}
-
-/// One install with the key lifecycle wired like the app's.
-class _KeyDevice {
-  _KeyDevice(this.account) {
-    accounts = AccountRepositoryImpl(db, storage);
-    mailboxes = MailboxRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: testImapConnect,
-    );
-    store = MailObjectStoreImap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      imapConnect: testImapConnect,
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: AppLogger(logs),
-    );
-    service = EncryptedKeyService(
-      db: db,
-      store: store,
-      keys: keys,
-      ring: ring,
-      betaEnabled: () async => true,
-      listFolders: (id) => mailboxes.syncMailboxes(id),
-      shareKeys: ShareKeyRepositoryImpl(db),
-      findAccount: accounts.getAccount,
-      appLogger: AppLogger(logs),
-    );
-  }
-
-  final Account account;
-  final AppDatabase db = openTestDatabase();
-  final storage = FakeSecureStorage();
-  final ring = KeyRing();
-  final logs = RecordingAppLogRepository();
-  late final keys = AccountKeyStore(storage);
-  late final AccountRepositoryImpl accounts;
-  late final MailboxRepositoryImpl mailboxes;
-  late final MailObjectStoreImap store;
-  late final EncryptedKeyService service;
-
-  String get id => account.id;
-
-  Future<void> sync() async {
-    await store.sync(id);
-    await store.waitForIdle();
-  }
-
-  Future<void> listAndSync() async {
-    await mailboxes.syncMailboxes(id);
-    await sync();
-  }
-
-  Future<List<MailObject>> keyRows() =>
-      store.observe(id, MailObjectFolder.keys).first;
 }
 
 bool _isPairingMail(Uint8List mail) {

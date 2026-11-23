@@ -5,50 +5,22 @@
 // entry projection, and entry repository.
 // Run via: task test-backend
 
-import 'dart:convert';
-import 'dart:typed_data';
-
-import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
-import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
-import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
-import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
-import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:test/test.dart';
 
-import 'mail_object_harness.dart';
-
-const _dataPath = 'SharedInbox/Data';
+import 'key_device_harness.dart';
 
 void main() {
-  late PoolImapAccount pool;
+  final pool = setUpKeyPool();
 
-  setUpAll(() {
-    configureSqliteForTests();
-    pool = PoolImapAccount();
-  });
-
-  setUp(
-    () => pool.deleteFolders([_dataPath, 'SharedInbox/Keys', 'SharedInbox']),
-  );
-
-  Future<_EntryDevice> device() async {
-    final d = _EntryDevice(pool.account);
-    addTearDown(() async {
-      await d.store.waitForIdle();
-      d.service.dispose();
-      await d.db.close();
-    });
-    await d.accounts.addAccount(pool.account, pool.user.password);
-    return d;
-  }
+  Future<_EntryDevice> device() =>
+      addKeyDevice(pool(), _EntryDevice(pool().account));
 
   /// A with a new key, B unlocked with its recovery key.
   Future<(_EntryDevice, _EntryDevice)> twoDevices() async {
@@ -64,7 +36,7 @@ void main() {
 
   /// The item HMACs of the mails in the Data folder.
   Future<List<String>> itemsOnServer() async => [
-        for (final raw in (await pool.rawMails(_dataPath)).values)
+        for (final raw in (await pool().rawMails(dataPath)).values)
           b64url(parseObjectMail(raw).itemHmac),
       ];
 
@@ -87,30 +59,7 @@ void main() {
     final (a, b) = await twoDevices();
     final clock = await a.store.clockFor(a.id);
     final itemId = newItemId();
-    await a.store.put(
-      a.id,
-      InnerObject(
-        head: ObjectHead(
-          itemId: itemId,
-          collectionId: personalCollectionId,
-          versionId: clock.send(),
-          kind: entryKind,
-          extra: const {
-            'title': 'Plan',
-            'tags': ['work'],
-            'date': '2026-11-23',
-            'task': {'done': false, 'due': '2026-12-01'},
-            'links': ['<m1@example.com>'],
-          },
-        ),
-        parts: [
-          ObjectPart(
-            contentType: 'text/markdown; charset=utf-8',
-            bytes: Uint8List.fromList(utf8.encode('old')),
-          ),
-        ],
-      ),
-    );
+    await a.store.put(a.id, plannedEntryObject(itemId, clock.send()));
     await a.store.waitForIdle();
     await a.listAndSync();
     await b.listAndSync();
@@ -154,59 +103,18 @@ void main() {
   });
 }
 
-class _EntryDevice {
-  _EntryDevice(this.account) {
-    accounts = AccountRepositoryImpl(db, storage);
-    mailboxes = MailboxRepositoryImpl(
-      db,
-      accounts,
-      imapConnect: testImapConnect,
-    );
-    store = MailObjectStoreImap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      imapConnect: testImapConnect,
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: AppLogger(logs),
-      projectors: [EntryProjector(db)],
-    );
-    service = EncryptedKeyService(
-      db: db,
-      store: store,
-      keys: AccountKeyStore(storage),
-      ring: ring,
-      betaEnabled: () async => true,
-      listFolders: (id) => mailboxes.syncMailboxes(id),
-      shareKeys: ShareKeyRepositoryImpl(db),
-      findAccount: accounts.getAccount,
-      appLogger: AppLogger(logs),
-    );
-    repo = EntryRepositoryImpl(db, store);
-  }
+/// A [KeyDevice] whose store writes the entry projection, with the entry
+/// repository on top.
+class _EntryDevice extends KeyDevice {
+  _EntryDevice(super.account) : super(projectors: (db) => [EntryProjector(db)]);
 
-  final Account account;
-  final AppDatabase db = openTestDatabase();
-  final storage = FakeSecureStorage();
-  final ring = KeyRing();
-  final logs = RecordingAppLogRepository();
-  late final AccountRepositoryImpl accounts;
-  late final MailboxRepositoryImpl mailboxes;
-  late final MailObjectStoreImap store;
-  late final EncryptedKeyService service;
-  late final EntryRepositoryImpl repo;
-
-  String get id => account.id;
+  late final repo = EntryRepositoryImpl(db, store);
 
   /// The folder listing the mail sync runs first, then the store's sync and
   /// the key lifecycle after it.
+  @override
   Future<void> listAndSync() async {
-    await mailboxes.syncMailboxes(id);
-    await store.sync(id);
-    await store.waitForIdle();
+    await super.listAndSync();
     await service.afterSync(id, foreground: true);
   }
 

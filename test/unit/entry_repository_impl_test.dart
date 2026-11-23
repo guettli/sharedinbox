@@ -1,10 +1,5 @@
-import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
-import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -155,27 +150,10 @@ void main() {
     final itemId = newItemId();
     await b.store.put(
       _acc,
-      InnerObject(
-        head: ObjectHead(
-          itemId: itemId,
-          collectionId: personalCollectionId,
-          versionId: clock.send(),
-          kind: entryKind,
-          extra: const {
-            'title': 'Plan',
-            'tags': ['work'],
-            'date': '2026-11-23',
-            'task': {'done': false, 'due': '2026-12-01'},
-            'links': ['<m1@example.com>'],
-            'later': 'kept',
-          },
-        ),
-        parts: [
-          ObjectPart(
-            contentType: 'text/markdown; charset=utf-8',
-            bytes: Uint8List.fromList(utf8.encode('old')),
-          ),
-        ],
+      plannedEntryObject(
+        itemId,
+        clock.send(),
+        extra: const {'later': 'kept'},
       ),
     );
     await b.store.waitForIdle();

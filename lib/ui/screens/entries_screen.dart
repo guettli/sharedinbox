@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
 
 /// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): search, quick-add and
 /// the list of entries, newest first. Behind the "Personal data (beta)"
@@ -209,32 +210,14 @@ class _EntryTile extends StatelessWidget {
 }
 
 /// Asks before [entry] is deleted.
-Future<bool> confirmDeleteEntry(BuildContext context, Entry entry) async {
+Future<bool> confirmDeleteEntry(BuildContext context, Entry entry) {
   final title = entry.displayTitle;
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Delete entry?'),
-      content: Text(
-        title.isEmpty ? 'Delete this entry?' : 'Delete "$title"?',
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          key: const Key('entryDeleteConfirm'),
-          style: FilledButton.styleFrom(
-            backgroundColor: Theme.of(ctx).colorScheme.error,
-          ),
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Delete'),
-        ),
-      ],
-    ),
+  return showConfirmDelete(
+    context,
+    title: 'Delete entry?',
+    content: title.isEmpty ? 'Delete this entry?' : 'Delete "$title"?',
+    confirmKey: const Key('entryDeleteConfirm'),
   );
-  return confirmed == true;
 }
 
 /// Shows [child] only while the "Personal data (beta)" switch is on and the

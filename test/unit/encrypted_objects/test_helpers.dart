@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
+import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
@@ -118,3 +119,33 @@ Future<({String messageId, Uint8List mail})> foreignKeyMailForTest() async {
     ),
   );
 }
+
+/// An entry as another device writes it (#1373): title "Plan", body "old"
+/// and the fields the UI does not edit yet, plus [extra] ones.
+InnerObject plannedEntryObject(
+  String itemId,
+  Hlc versionId, {
+  Map<String, Object?> extra = const {},
+}) =>
+    InnerObject(
+      head: ObjectHead(
+        itemId: itemId,
+        collectionId: personalCollectionId,
+        versionId: versionId,
+        kind: entryKind,
+        extra: {
+          'title': 'Plan',
+          'tags': ['work'],
+          'date': '2026-11-23',
+          'task': {'done': false, 'due': '2026-12-01'},
+          'links': ['<m1@example.com>'],
+          ...extra,
+        },
+      ),
+      parts: [
+        ObjectPart(
+          contentType: 'text/markdown; charset=utf-8',
+          bytes: Uint8List.fromList(utf8.encode('old')),
+        ),
+      ],
+    );

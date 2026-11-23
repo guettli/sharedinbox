@@ -69,14 +69,11 @@ import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
-import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_factory.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -830,33 +827,15 @@ final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
   final mailboxes = ref.watch(mailboxRepositoryProvider);
   final storage = ref.watch(secureStorageProvider);
   final appLogger = ref.watch(appLoggerProvider);
-  final projectors = [EntryProjector(db)];
-  return MailObjectStoreRouter(
+  return buildMailObjectStore(
+    db,
     accounts,
-    imap: MailObjectStoreImap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      imapConnect: ref.watch(imapConnectProvider),
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: appLogger,
-      projectors: projectors,
-    ),
-    jmap: MailObjectStoreJmap(
-      db,
-      accounts,
-      mailboxes,
-      storage,
-      httpClient: ref.watch(httpClientProvider),
-      keyLookup: ring.lookup,
-      writeKey: ring.writeKey,
-      keepVanishedKeyMail: ring.keepVanishedKeyMail,
-      appLogger: appLogger,
-      projectors: projectors,
-    ),
+    mailboxes,
+    storage,
+    ring: ring,
+    imapConnect: ref.watch(imapConnectProvider),
+    httpClient: ref.watch(httpClientProvider),
+    appLogger: appLogger,
   );
 });
 

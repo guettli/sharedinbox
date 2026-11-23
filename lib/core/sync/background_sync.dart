@@ -25,10 +25,7 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/entry_projector.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_factory.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -127,31 +124,13 @@ Future<void> _doBackgroundSync() async {
     // (ENCRYPTED-OBJECTS.md 5.5).
     final ring = KeyRing();
     final mailboxRepo = MailboxRepositoryImpl(db, accountRepo);
-    final projectors = [EntryProjector(db)];
-    final objectStore = MailObjectStoreRouter(
+    final objectStore = buildMailObjectStore(
+      db,
       accountRepo,
-      imap: MailObjectStoreImap(
-        db,
-        accountRepo,
-        mailboxRepo,
-        const FlutterSecureStorageImpl(),
-        keyLookup: ring.lookup,
-        writeKey: ring.writeKey,
-        keepVanishedKeyMail: ring.keepVanishedKeyMail,
-        pushPending: false,
-        projectors: projectors,
-      ),
-      jmap: MailObjectStoreJmap(
-        db,
-        accountRepo,
-        mailboxRepo,
-        const FlutterSecureStorageImpl(),
-        keyLookup: ring.lookup,
-        writeKey: ring.writeKey,
-        keepVanishedKeyMail: ring.keepVanishedKeyMail,
-        pushPending: false,
-        projectors: projectors,
-      ),
+      mailboxRepo,
+      const FlutterSecureStorageImpl(),
+      ring: ring,
+      pushPending: false,
     );
     final prefs = UserPreferencesRepositoryImpl(db);
     final keyService = EncryptedKeyService(
