@@ -172,5 +172,18 @@
       "period": "2023-11",
       "hlcMax": "1700000000001-0000-8PHy8_T19vf4-fr7_P3-_w"
     }
+  },
+  "passkeySlot": {
+    "accountKey": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "accountKeyId": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "prfOutput": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+    "kek": "3ba7604c018d2575550024357f9e07c2e4b851294fad7117531d41bc018a911e",
+    "slotId": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "nonce": "505152535455565758595a5b5c5d5e5f6061626364656667",
+    "credentialId": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "prfSalt": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "aad": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecf000b706173736b65792d707266",
+    "wrapped": "db5e09751793c1ec2f66511d57cefb38d58e91e3bf781be07c71b0dc7965361da9c3eeddc125238b942b1058463786ef",
+    "slot": "{\"slotId\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"type\":\"passkey-prf\",\"nonce\":\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn\",\"wrapped\":\"214JdReTwewvZlEdV877ONWOkeO_eBvgfHGw3HllNh2pw-7dwSUji5QrEFhGN4bv\",\"credentialId\":\"0NHS09TV1tfY2drb3N3e3w\",\"prfSalt\":\"4OHi4-Tl5ufo6err7O3u7_Dx8vP09fb3-Pn6-_z9_v8\",\"rpId\":\"sharedinbox.de\",\"label\":\"Google Password Manager\"}"
   }
 }

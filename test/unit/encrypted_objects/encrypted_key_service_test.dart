@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
@@ -22,6 +23,7 @@ import '../db_test_helper.dart';
 import '../helpers/fake_secure_storage.dart';
 import '../recording_app_log_repository.dart';
 import 'fake_keys_store.dart';
+import 'fake_prf_provider.dart';
 import 'test_helpers.dart';
 
 const _acc = 'acc';
@@ -35,7 +37,12 @@ const _account = Account(
 
 /// One install: its own database, secure storage, store and key ring.
 class _Device {
-  _Device(this.server, {this.beta = true, this.account = _account}) {
+  _Device(
+    this.server, {
+    this.beta = true,
+    this.account = _account,
+    this.prf,
+  }) {
     service = EncryptedKeyService(
       db: db,
       store: store,
@@ -46,6 +53,7 @@ class _Device {
       findAccount: (id) async => id == _acc ? account : null,
       appLogger: AppLogger(logs),
       deriver: _cheapArgon2id,
+      prf: prf,
     );
     store.keepVanished = (row) => ring.keepVanishedKeyMail(_acc, row);
   }
@@ -53,6 +61,7 @@ class _Device {
   final FakeKeysServer server;
   bool beta;
   final Account account;
+  final FakePrfProvider? prf;
   final AppDatabase db = openTestDatabase();
   final storage = FakeSecureStorage();
   late final store = FakeKeysStore(server);
@@ -94,8 +103,9 @@ void main() {
   Future<_Device> device({
     bool beta = true,
     Account account = _account,
+    FakePrfProvider? prf,
   }) async {
-    final d = _Device(server, beta: beta, account: account);
+    final d = _Device(server, beta: beta, account: account, prf: prf);
     devices.add(d);
     await seedAccountRow(d.db, _acc);
     return d;
@@ -702,6 +712,330 @@ void main() {
         throwsA(isA<UnlockFailed>()),
       );
       expect(b.events, contains('mos.unlock_slot_skipped'));
+    });
+  });
+
+  group('passkey', () {
+    late FakePasskeyVault vault;
+    setUp(() => vault = FakePasskeyVault());
+
+    List<String> slotTypes() => [
+          for (final s in _accountKeyMails(server).single.mail.payload.slots)
+            s.type,
+        ];
+
+    Future<_Device> unlocked() async {
+      final a = await device(prf: FakePrfProvider(vault));
+      await a.service.createKey(_acc);
+      return a;
+    }
+
+    Future<UnlockFailure> unlockFailure(_Device d) async {
+      try {
+        await d.service.unlockWithPasskey(_acc);
+      } on UnlockFailed catch (e) {
+        return e.reason;
+      }
+      fail('unlocked');
+    }
+
+    test('adding writes version + 1 and keeps the recovery slot', () async {
+      final a = await unlocked();
+      final before = _accountKeyMails(server).single;
+      expect(a.service.passkeysAvailable, isTrue);
+      expect(await a.service.passkeySlots(_acc), isEmpty);
+
+      final info = await a.service.addPasskeySlot(_acc, label: ' Phone ');
+
+      final after = _accountKeyMails(server).single;
+      expect(
+        after.mail.payload.slotListVersion,
+        before.mail.payload.slotListVersion + 1,
+      );
+      expect(slotTypes(), [UnlockSlotType.recovery, UnlockSlotType.passkeyPrf]);
+      expect(
+        await after.mail.verify(await (await a.keys.load(_acc))!.kSlots()),
+        isTrue,
+      );
+      expect(info.label, 'Phone');
+      expect(info.rpId, passkeyRpId);
+      final slots = await a.service.passkeySlots(_acc);
+      expect(slots.single.slotIdB64, info.slotIdB64);
+      expect(a.prf!.registrations.single.rpId, passkeyRpId);
+      expect(a.prf!.registrations.single.userName, 'alice@example.com');
+      // Checked right after creating: the same credential and salt.
+      expect(a.prf!.evaluations.single, {
+        info.credentialIdB64: info.prfSalt,
+      });
+      expect(a.events, contains('mos.passkey_slot_added'));
+    });
+
+    test('two passkeys side by side; a second device unlocks with either',
+        () async {
+      final a = await unlocked();
+      final first = await a.service.addPasskeySlot(_acc, label: 'Google');
+      final second = await a.service.addPasskeySlot(_acc, label: 'Bitwarden');
+      expect(slotTypes(), [
+        UnlockSlotType.recovery,
+        UnlockSlotType.passkeyPrf,
+        UnlockSlotType.passkeyPrf,
+      ]);
+      expect(
+        [for (final p in await a.service.passkeySlots(_acc)) p.label],
+        ['Google', 'Bitwarden'],
+      );
+
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.store.sync(_acc);
+      expect(await b.status(), PersonalDataStatus.locked);
+      // Locked: the slots of the key mails, for the unlock button.
+      expect(await b.service.passkeySlots(_acc), hasLength(2));
+      b.prf!.pick = second.credentialIdB64;
+
+      await b.service.unlockWithPasskey(_acc);
+
+      // One dialog for both passkeys.
+      expect(b.prf!.evaluations.single, {
+        first.credentialIdB64: first.prfSalt,
+        second.credentialIdB64: second.prfSalt,
+      });
+      final ka = (await a.keys.load(_acc))!;
+      final kb = (await b.keys.load(_acc))!;
+      expect(kb.accountKeyId, ka.accountKeyId);
+      expect(kb.key.bytes, ka.key.bytes);
+      expect(b.ring.hasWriteKey(_acc, personalCollectionId), isTrue);
+      expect(await b.status(), PersonalDataStatus.unlocked);
+      expect(
+        b.logs.rows.where((r) => r.event == 'mos.key_unlocked').single.dataJson,
+        contains('passkey'),
+      );
+
+      final c = await device(prf: FakePrfProvider(vault));
+      c.prf!.pick = first.credentialIdB64;
+      await c.service.unlockWithPasskey(_acc);
+      expect((await c.keys.load(_acc))!.key.bytes, ka.key.bytes);
+    });
+
+    test('unlocks offline from the key mails seen before', () async {
+      final a = await unlocked();
+      await a.service.addPasskeySlot(_acc);
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.store.sync(_acc);
+      b.store.offline = true;
+
+      await b.service.unlockWithPasskey(_acc);
+
+      expect(await b.status(), PersonalDataStatus.unlocked);
+    });
+
+    test('no PRF: nothing is written', () async {
+      final a = await unlocked();
+      final ids = server.messageIds;
+      a.prf!.noPrf = true;
+
+      await expectLater(
+        a.service.addPasskeySlot(_acc),
+        throwsA(isA<PrfUnsupported>()),
+      );
+      a.prf!
+        ..noPrf = false
+        ..answerOther = true;
+      await expectLater(
+        a.service.addPasskeySlot(_acc),
+        throwsA(isA<PrfUnsupported>()),
+      );
+
+      expect(server.messageIds, ids);
+      expect(a.store.rows.where((r) => r.pendingUpload), isEmpty);
+      expect(await a.service.passkeySlots(_acc), isEmpty);
+    });
+
+    test('cancel while adding: nothing is written', () async {
+      final a = await unlocked();
+      final ids = server.messageIds;
+      a.prf!.cancel = true;
+
+      await expectLater(
+        a.service.addPasskeySlot(_acc),
+        throwsA(isA<PrfCancelled>()),
+      );
+      expect(server.messageIds, ids);
+    });
+
+    test('offline: no passkey is created, nothing is appended', () async {
+      final a = await unlocked();
+      final rows = a.store.rows.length;
+      a.store.offline = true;
+
+      await expectLater(
+        a.service.addPasskeySlot(_acc),
+        throwsA(isA<KeyMailOfflineException>()),
+      );
+      expect(a.prf!.registrations, isEmpty);
+      expect(a.store.rows, hasLength(rows));
+    });
+
+    test('unlock failures are typed', () async {
+      final a = await unlocked();
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.store.sync(_acc);
+      expect(await unlockFailure(b), UnlockFailure.noPasskeySlot);
+      expect(b.prf!.evaluations, isEmpty);
+
+      final info = await a.service.addPasskeySlot(_acc);
+      await b.store.sync(_acc);
+      b.prf!.cancel = true;
+      expect(await unlockFailure(b), UnlockFailure.passkeyCancelled);
+      b.prf!
+        ..cancel = false
+        ..noPrf = true;
+      expect(await unlockFailure(b), UnlockFailure.passkeyUnsupported);
+      b.prf!
+        ..noPrf = false
+        ..answerOther = true;
+      expect(await unlockFailure(b), UnlockFailure.noSlotOpens);
+
+      // Deleted from the password manager.
+      b.prf!.answerOther = false;
+      vault.secrets.remove(info.credentialIdB64);
+      expect(await unlockFailure(b), UnlockFailure.noSlotOpens);
+
+      expect(await b.keys.load(_acc), isNull);
+      expect(
+        [
+          for (final r in b.logs.rows)
+            if (r.event == 'mos.key_unlock_failed') r.dataJson,
+        ],
+        everyElement(contains('passkey')),
+      );
+    });
+
+    test('removing one passkey keeps the others and the recovery slot',
+        () async {
+      final a = await unlocked();
+      final first = await a.service.addPasskeySlot(_acc, label: 'one');
+      final second = await a.service.addPasskeySlot(_acc, label: 'two');
+
+      await a.service.removePasskeySlot(_acc, first.slotIdB64);
+
+      expect(slotTypes(), [UnlockSlotType.recovery, UnlockSlotType.passkeyPrf]);
+      expect(
+        (await a.service.passkeySlots(_acc)).single.slotIdB64,
+        second.slotIdB64,
+      );
+      expect(a.events, contains('mos.passkey_slot_removed'));
+
+      // The removed passkey is no longer asked for.
+      final b = await device(prf: FakePrfProvider(vault));
+      b.prf!.pick = first.credentialIdB64;
+      await b.service.unlockWithPasskey(_acc);
+      expect(b.prf!.evaluations.single.keys, [second.credentialIdB64]);
+    });
+
+    test('removing the recovery slot is refused; nothing is written', () async {
+      final a = await unlocked();
+      await a.service.addPasskeySlot(_acc);
+      final ids = server.messageIds;
+      final recovery = _accountKeyMails(server)
+          .single
+          .mail
+          .payload
+          .slots
+          .firstWhere((s) => s.type == UnlockSlotType.recovery);
+
+      await expectLater(
+        a.service.removePasskeySlot(_acc, recovery.slotIdB64),
+        throwsArgumentError,
+      );
+      await expectLater(
+        a.service.removePasskeySlot(_acc, 'nope'),
+        throwsArgumentError,
+      );
+      expect(server.messageIds, ids);
+      expect(a.store.rows.where((r) => r.pendingUpload), isEmpty);
+    });
+
+    test('a locked device cannot change passkeys', () async {
+      await unlocked();
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.store.sync(_acc);
+      await expectLater(
+        b.service.addPasskeySlot(_acc),
+        throwsA(isA<KeySetupException>()),
+      );
+      await expectLater(
+        b.service.removePasskeySlot(_acc, 'x'),
+        throwsA(isA<KeySetupException>()),
+      );
+      expect(b.prf!.registrations, isEmpty);
+    });
+
+    test('without a provider there are no passkeys', () async {
+      final a = await device();
+      expect(a.service.passkeysAvailable, isFalse);
+      await expectLater(
+        () => a.service.addPasskeySlot(_acc),
+        throwsStateError,
+      );
+      await expectLater(
+        () => a.service.unlockWithPasskey(_acc),
+        throwsStateError,
+      );
+    });
+
+    test('a malformed passkey slot is skipped', () async {
+      final a = await unlocked();
+      final key = (await a.keys.load(_acc))!;
+      final info = await a.service.addPasskeySlot(_acc);
+      final current = _accountKeyMails(server).single;
+      final good = current.mail.payload.slots.last;
+      // Same credential, a salt of the wrong length.
+      final bad = UnlockSlot.fromJson({
+        ...good.toJson(),
+        'slotId': b64url(seqBytes(1, 16)),
+        'prfSalt': b64url(seqBytes(1, 8)),
+      });
+      final payload = current.mail.payload.withSlotAdded(bad);
+      final messageId = newMessageId();
+      server.append(
+        messageId,
+        buildKeyMail(
+          messageId: messageId,
+          mail: await payload.serialize(await key.kSlots()),
+          date: DateTime.now(),
+        ),
+      );
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.store.sync(_acc);
+      expect(await b.service.passkeySlots(_acc), hasLength(1));
+
+      await b.service.unlockWithPasskey(_acc);
+
+      expect(b.prf!.evaluations.single.keys, [info.credentialIdB64]);
+      expect(await b.status(), PersonalDataStatus.unlocked);
+    });
+
+    test('no PRF output, salt or credential id reaches the logs', () async {
+      final a = await unlocked();
+      final info = await a.service.addPasskeySlot(_acc, label: 'Phone');
+      final b = await device(prf: FakePrfProvider(vault));
+      await b.service.unlockWithPasskey(_acc);
+      final slot = _accountKeyMails(server).single.mail.payload.slots.last;
+
+      final secrets = [
+        info.credentialIdB64,
+        b64url(info.prfSalt),
+        b64url(slot.wrapped),
+        b64url(vault.secrets[info.credentialIdB64]!),
+      ];
+      for (final d in [a, b]) {
+        for (final r in d.logs.rows) {
+          final line = '${r.message} ${r.dataJson ?? ''}';
+          for (final secret in secrets) {
+            expect(line, isNot(contains(secret)));
+          }
+        }
+      }
     });
   });
 

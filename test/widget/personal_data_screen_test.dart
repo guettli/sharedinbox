@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
@@ -29,6 +31,13 @@ class _FakeKeyService implements EncryptedKeyService {
   bool hasPassphrase = false;
   Object? passphraseError;
   final passphrases = <String>[];
+  @override
+  bool passkeysAvailable = false;
+  final passkeys = <PasskeySlotInfo>[];
+  Object? passkeyError;
+  UnlockFailure? passkeyUnlockFailure;
+  final passkeyLabels = <String>[];
+  final removedPasskeys = <String>[];
 
   void setStatus(PersonalDataStatus s) {
     _status = s;
@@ -105,17 +114,60 @@ class _FakeKeyService implements EncryptedKeyService {
   }
 
   @override
+  Future<List<PasskeySlotInfo>> passkeySlots(String accountId) async =>
+      List.of(passkeys);
+
+  @override
+  Future<PasskeySlotInfo> addPasskeySlot(
+    String accountId, {
+    String label = '',
+  }) async {
+    passkeyLabels.add(label);
+    final error = passkeyError;
+    if (error != null) throw error;
+    final info = _passkey(passkeys.length + 1, label);
+    passkeys.add(info);
+    return info;
+  }
+
+  @override
+  Future<void> removePasskeySlot(String accountId, String slotId) async {
+    removedPasskeys.add(slotId);
+    passkeys.removeWhere((p) => p.slotIdB64 == slotId);
+  }
+
+  @override
+  Future<void> unlockWithPasskey(String accountId) async {
+    final failure = passkeyUnlockFailure;
+    if (failure != null) throw UnlockFailed(failure);
+    setStatus(PersonalDataStatus.unlocked);
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
+PasskeySlotInfo _passkey(int n, String label) => PasskeySlotInfo(
+      slotId: Uint8List(16)..fillRange(0, 16, n),
+      credentialId: Uint8List(16)..fillRange(0, 16, 0x40 + n),
+      prfSalt: Uint8List(32),
+      rpId: passkeyRpId,
+      label: label,
+    );
 
 Future<_FakeKeyService> _pump(
   WidgetTester tester,
   PersonalDataStatus status, {
   bool beta = true,
   bool hasPassphrase = false,
+  bool passkeys = false,
+  List<PasskeySlotInfo> passkeySlots = const [],
   String location = '/accounts/acc-1/personal-data',
 }) async {
-  final service = _FakeKeyService(status)..hasPassphrase = hasPassphrase;
+  final service = _FakeKeyService(status)
+    ..hasPassphrase = hasPassphrase
+    ..passkeysAvailable = passkeys
+    ..passkeys.addAll(passkeySlots);
   await tester.pumpWidget(
     buildApp(
       initialLocation: location,
@@ -329,6 +381,125 @@ void main() {
     await tester.pumpAndSettle();
     expect(service.passphrases, ['bad', 'good']);
     expect(find.text('Unlocked on this device'), findsOneWidget);
+  });
+
+  testWidgets('passkeys show only with a provider', (tester) async {
+    await _pump(
+      tester,
+      PersonalDataStatus.locked,
+      passkeySlots: [_passkey(1, 'Phone')],
+    );
+    expect(find.byKey(const Key('passkeyUnlock')), findsNothing);
+    await _pump(tester, PersonalDataStatus.unlocked);
+    expect(find.byKey(const Key('passkeySection')), findsNothing);
+
+    // With a provider, the unlock button needs a passkey slot.
+    await _pump(tester, PersonalDataStatus.locked, passkeys: true);
+    expect(find.byKey(const Key('passkeyUnlock')), findsNothing);
+    await _pump(tester, PersonalDataStatus.unlocked, passkeys: true);
+    expect(find.byKey(const Key('passkeySection')), findsOneWidget);
+  });
+
+  testWidgets('unlock with passkey: the reason it failed, then unlocks',
+      (tester) async {
+    final service = await _pump(
+      tester,
+      PersonalDataStatus.locked,
+      passkeys: true,
+      passkeySlots: [_passkey(1, 'Phone')],
+    );
+    final button = find.byKey(const Key('passkeyUnlock'));
+    expect(button, findsOneWidget);
+
+    for (final (failure, text) in [
+      (UnlockFailure.passkeyCancelled, 'Cancelled.'),
+      (UnlockFailure.passkeyUnsupported, 'does not support passkey'),
+      (UnlockFailure.noPasskeySlot, 'has no passkey'),
+      (UnlockFailure.noSlotOpens, 'None of your passkeys'),
+    ]) {
+      service.passkeyUnlockFailure = failure;
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.textContaining(text), findsOneWidget, reason: '$failure');
+    }
+
+    service.passkeyUnlockFailure = null;
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('Unlocked on this device'), findsOneWidget);
+  });
+
+  testWidgets('add a passkey: no PRF fails cleanly, then one is added',
+      (tester) async {
+    final service = await _pump(
+      tester,
+      PersonalDataStatus.unlocked,
+      passkeys: true,
+      passkeySlots: [_passkey(1, 'Phone')],
+    );
+    final add = find.byKey(const Key('passkeyAdd'));
+    await tester.scrollUntilVisible(
+      add,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Phone'), findsOneWidget);
+    expect(find.textContaining('Keep your recovery key'), findsOneWidget);
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const Key('passkeyLabelField')), 'Tab');
+
+    service.passkeyError = const PrfUnsupported('no PRF');
+    await tester.tap(find.byKey(const Key('passkeySave')));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('does not support passkey encryption (PRF)'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('delete the passkey'), findsOneWidget);
+
+    service.passkeyError =
+        const KeyMailOfflineException(SocketException('offline'));
+    await tester.tap(find.byKey(const Key('passkeySave')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('needs a connection'), findsOneWidget);
+
+    service.passkeyError = null;
+    await tester.tap(find.byKey(const Key('passkeySave')));
+    await tester.pumpAndSettle();
+    expect(service.passkeyLabels, ['Tab', 'Tab', 'Tab']);
+    expect(find.byKey(const Key('passkeySave')), findsNothing);
+    expect(find.text('Tab'), findsOneWidget);
+  });
+
+  testWidgets('remove a passkey after confirming', (tester) async {
+    final first = _passkey(1, 'Phone');
+    final service = await _pump(
+      tester,
+      PersonalDataStatus.unlocked,
+      passkeys: true,
+      passkeySlots: [first, _passkey(2, 'Tablet')],
+    );
+    final remove = find.byKey(Key('passkeyRemove-${first.slotIdB64}'));
+    await tester.scrollUntilVisible(
+      remove,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(service.removedPasskeys, isEmpty);
+
+    await tester.tap(remove);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('passkeyRemoveConfirm')));
+    await tester.pumpAndSettle();
+    expect(service.removedPasskeys, [first.slotIdB64]);
+    expect(find.text('Phone'), findsNothing);
+    expect(find.text('Tablet'), findsOneWidget);
   });
 
   testWidgets('a lost race asks for the other device’s recovery key',

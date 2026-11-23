@@ -96,6 +96,10 @@ flutter {
 dependencies {
     // Required for flutter_local_notifications and other plugins that need Java 8+ APIs on API < 26.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    // Passkeys with the WebAuthn PRF extension (PasskeyBridge.kt, #1360).
+    // play-services-auth provides Credential Manager on Android 13 and older.
+    implementation("androidx.credentials:credentials:1.5.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.5.0")
     // integration_test is a dev dependency. Since Flutter 3.47 the plugin loader
     // strips dev-dependency plugins from release builds entirely (flutter#161826):
     // it neither registers the `:integration_test` Gradle subproject nor references

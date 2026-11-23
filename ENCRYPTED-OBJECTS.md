@@ -203,7 +203,7 @@ server or in backups. A compromised slot needs account-key rotation
 | --- | --- | --- |
 | `recovery` (mandatory, created first) | HKDF(recovery key) | Recovery key = 128 bit random + 32 bit SHA-256 checksum = 160 bit = 32 Crockford base32 chars, shown as 8 groups of 4; shown once, printable, QR. |
 | `passphrase` (optional) | Argon2id(passphrase, salt) | Salt = 16 random bytes stored in the slot. Defaults m=64 MiB, t=3, p=1 (pure-Dart `cryptography`, run in an isolate); the params used are stored in the slot. Minimum strength + warning. |
-| `passkey-prf` (optional, #1360) | HKDF(WebAuthn PRF output) | One slot per ecosystem (Google / Apple). |
+| `passkey-prf` (optional, #1360) | HKDF(WebAuthn PRF output) | One labelled slot per added passkey; credential id and PRF salt in clear in the slot. |
 
 Not slots, but ways to get the key onto a device:
 
@@ -263,6 +263,34 @@ Only an unlocked device may add or remove slots.
 - Changing slots needs the server: the keys folder is pulled first and,
   offline, nothing is written. The old key mails are deleted only after the
   server took the new one.
+
+**Passkey slot** (`lib/core/encrypted_objects/passkey_slot.dart`):
+
+- KEK = HKDF(PRF output, `sharedinbox-kek-passkey-v1`); the PRF output is
+  `prf.results.first` (32 bytes) of a WebAuthn assertion with the PRF
+  extension. No server takes part: the challenge is 32 random bytes made on
+  the device, and only the PRF output is used, never the signature.
+- Slot fields next to the known ones, all in clear: `credentialId`
+  (base64url), `prfSalt` (32 random bytes, base64url; the PRF input),
+  `rpId` (`sharedinbox.de`) and `label` (chosen by the user, e.g. the name
+  of the password manager; may be empty). A slot with a missing or
+  malformed field is skipped.
+- Each "Add passkey" registers a new discoverable passkey (`residentKey` and
+  `userVerification` required) and adds one more slot; "one slot per
+  password manager" is a convention, not a limit. Right after creating it,
+  the device evaluates the PRF of the new credential with the new salt and
+  checks that the new slot opens; a password manager without PRF (or one
+  that answers with another credential) fails cleanly and nothing is
+  written. Each passkey slot can be removed on its own; the `recovery` slot
+  always stays.
+- Unlock asks once for any of the passkeys of every key mail
+  (`allowCredentials` + `extensions.prf.evalByCredential`, one salt per
+  credential) and tries the slots of the credential that answered. It works
+  offline from the key mails seen before.
+- Deleting the passkey in the password manager removes this way to unlock.
+- Android only for now (Credential Manager; `assetlinks.json` with
+  `delegate_permission/common.get_login_creds` for `de.sharedinbox.mua` on
+  `sharedinbox.de`). Linux, iOS and macOS show no passkey UI.
 
 ### 4.3 Key creation race and missing key folder
 
@@ -330,7 +358,8 @@ Implemented in `lib/core/encrypted_objects/` (pure Dart).
   `{"v": 1, "kind": "account-key", "accountKeyId", "slotListVersion", "slots": [...]}`;
   a slot is `{"slotId", "type", "nonce", "wrapped", ...}` (types
   `recovery`, `passphrase`, `passkey-prf`; type-specific fields such as the
-  passphrase salt and params sit next to them). The MAC is
+  passphrase salt and params or the passkey `credentialId`, `prfSalt`,
+  `rpId` and `label` sit next to them). The MAC is
   HMAC-SHA256(`k_slots`, the exact stored bytes) — never a re-serialization;
   JSON with the same content in another key order does not verify.
 - Collection-key mail (`application/json`, no separate MAC):
@@ -614,9 +643,10 @@ plaintexts and the expected bytes, with **one top-level section per slice**.
 The key-hierarchy slice (#1365) created it with `hkdf`, `recoveryKey`,
 `slotWrap`, `collectionWrap` and `keyMailMac`, computed independently by
 `scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1369) added
-`itemHmac`, `padding`, `envelope`, `hlc` and `messageId`. Once merged, a section is
-**frozen**: changing it requires a new magic (`SIE2`) or schema version and a
-migration. New slices add sections; they never edit existing ones.
+`itemHmac`, `padding`, `envelope`, `hlc` and `messageId`; the log-segment
+slice (#1372) `logSegment`; the passkey slot (#1360) `passkeySlot`. Once
+merged, a section is **frozen**: changing it requires a new magic (`SIE2`)
+or schema version and a migration. New slices add sections; they never edit existing ones.
 
 ## 9. Rollout and user flows
 

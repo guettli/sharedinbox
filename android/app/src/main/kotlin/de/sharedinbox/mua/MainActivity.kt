@@ -8,6 +8,7 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     private var rawEmailDownloader: RawEmailDownloader? = null
     private var mailIntentBridge: MailIntentBridge? = null
+    private var passkeyBridge: PasskeyBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -19,6 +20,7 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             applicationContext,
         ).also { it.initialIntent = intent }
+        passkeyBridge = PasskeyBridge(flutterEngine.dartExecutor.binaryMessenger, this)
         Log.i(
             MailIntentBridge.TAG,
             "cold start: action=${intent?.action} scheme=${intent?.data?.scheme}",
@@ -43,6 +45,8 @@ class MainActivity : FlutterActivity() {
         rawEmailDownloader = null
         mailIntentBridge?.dispose()
         mailIntentBridge = null
+        passkeyBridge?.dispose()
+        passkeyBridge = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

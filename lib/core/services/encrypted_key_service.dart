@@ -12,6 +12,7 @@ import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
@@ -82,7 +83,18 @@ final class KeyRaceLost extends CreateKeyResult {
   const KeyRaceLost();
 }
 
-enum UnlockFailure { badFormat, badChecksum, noSlotOpens }
+enum UnlockFailure {
+  badFormat,
+  badChecksum,
+  noSlotOpens,
+
+  /// The account has no passkey slot.
+  noPasskeySlot,
+  passkeyCancelled,
+
+  /// The password manager has no PRF.
+  passkeyUnsupported,
+}
 
 class UnlockFailed implements Exception {
   const UnlockFailed(this.reason);
@@ -172,12 +184,13 @@ const _noState = (phase: KeyPhase.none, ownMessageId: null, committed: false);
 
 /// Key lifecycle of the encrypted personal data (`ENCRYPTED-OBJECTS.md`
 /// 4.2, 4.3, 9): key mail and collection-key mails in `SharedInbox/Keys`
-/// via the [MailObjectStore], the key-creation race, the passphrase slot
-/// and unlocking with the recovery key or the passphrase. Fills the shared
-/// [KeyRing].
+/// via the [MailObjectStore], the key-creation race, the passphrase and
+/// passkey slots and unlocking with the recovery key, the passphrase or a
+/// passkey. Fills the shared [KeyRing].
 ///
 /// Logs event names, counts and Message-IDs only — never slots, MACs,
-/// keys, the recovery key, the passphrase or `accountKeyId`s.
+/// keys, the recovery key, the passphrase, PRF outputs, credential ids or
+/// `accountKeyId`s.
 class EncryptedKeyService {
   EncryptedKeyService({
     required AppDatabase db,
@@ -191,6 +204,7 @@ class EncryptedKeyService {
     AppLogger? appLogger,
     DateTime Function()? now,
     PassphraseDeriver deriver = argon2idInIsolate,
+    PrfProvider? prf,
   })  : _db = db,
         _store = store,
         _keys = keys,
@@ -201,7 +215,8 @@ class EncryptedKeyService {
         _findAccount = findAccount,
         _appLogger = appLogger,
         _now = now ?? DateTime.now,
-        _deriver = deriver {
+        _deriver = deriver,
+        _prf = prf {
     ring.onWriteKeyUsed = (accountId) {
       unawaited(_markCommitted(accountId));
     };
@@ -224,6 +239,10 @@ class EncryptedKeyService {
 
   /// Argon2id of the passphrase slot; tests inject cheap params or a spy.
   final PassphraseDeriver _deriver;
+
+  /// The platform passkeys with PRF; null where there are none (Linux, the
+  /// background isolate): no passkey slot is added or used.
+  final PrfProvider? _prf;
 
   final _changes = StreamController<String>.broadcast();
 
@@ -685,12 +704,71 @@ class EncryptedKeyService {
     );
   }
 
+  /// Unlocks with a passkey: one passkey dialog for the passkey slots of
+  /// every key mail (`evalByCredential`), then the slots of the credential
+  /// that answered. Works offline from the key mails seen before. Throws
+  /// [UnlockFailed] and [StateError] without passkeys.
+  Future<void> unlockWithPasskey(String accountId) {
+    final prf = _requirePrf();
+    late final PrfAssertion answer;
+    return _unlock(
+      accountId,
+      UnlockSlotType.passkeyPrf,
+      (slot, accountKeyId) {
+        final info = PasskeySlotInfo.parse(slot);
+        if (!constantTimeEquals(info.credentialId, answer.credentialId)) {
+          throw const KeyUnwrapException('another passkey');
+        }
+        return unwrapPasskeySlot(slot, answer.output, accountKeyId);
+      },
+      via: 'passkey',
+      prepare: (entries) async {
+        // Old key mails of a group repeat a slot: one salt per credential.
+        final salts = <String, Uint8List>{};
+        for (final e in entries) {
+          for (final slot in e.mail.payload.slots) {
+            final info = PasskeySlotInfo.tryParse(slot);
+            if (info == null || info.rpId != passkeyRpId) continue;
+            salts.putIfAbsent(info.credentialIdB64, () => info.prfSalt);
+          }
+        }
+        if (salts.isEmpty) {
+          _unlockFailed(accountId, UnlockFailure.noPasskeySlot, via: 'passkey');
+        }
+        try {
+          answer = await prf.evaluate(
+            rpId: passkeyRpId,
+            challenge: secureRandomBytes(passkeyChallengeLength),
+            evalByCredential: salts,
+          );
+        } on PrfCancelled {
+          _unlockFailed(
+            accountId,
+            UnlockFailure.passkeyCancelled,
+            via: 'passkey',
+          );
+        } on PrfUnsupported {
+          _unlockFailed(
+            accountId,
+            UnlockFailure.passkeyUnsupported,
+            via: 'passkey',
+          );
+        } on PrfNoCredential {
+          _unlockFailed(accountId, UnlockFailure.noSlotOpens, via: 'passkey');
+        }
+      },
+    );
+  }
+
+  /// [prepare] runs on the key mails before the slots are tried; it may
+  /// throw [UnlockFailed].
   Future<void> _unlock(
     String accountId,
     String slotType,
     Future<AccountKey> Function(UnlockSlot slot, Uint8List accountKeyId)
         unwrap, {
     required String via,
+    Future<void> Function(List<KeyMailEntry> entries)? prepare,
   }) async {
     await _exclusive(accountId, () async {
       try {
@@ -700,10 +778,10 @@ class EncryptedKeyService {
         // Offline first: the key mails seen before are enough.
       }
       final entries = await _accountKeyMails(accountId);
+      await prepare?.call(entries);
       final accountKey = await _openWith(accountId, entries, slotType, unwrap);
       if (accountKey == null) {
-        _logUnlockFailed(accountId, UnlockFailure.noSlotOpens.name, via: via);
-        throw const UnlockFailed(UnlockFailure.noSlotOpens);
+        _unlockFailed(accountId, UnlockFailure.noSlotOpens, via: via);
       }
       await _adopt(accountId, accountKey, via: via);
     });
@@ -786,11 +864,21 @@ class EncryptedKeyService {
       unawaited(
         _appLogger?.info(
           'mos.key_unlock_failed',
-          'The recovery key or passphrase did not unlock the encrypted data',
+          'The recovery key, passphrase or passkey did not unlock the '
+              'encrypted data',
           accountId: accountId,
           data: {'reason': reason, 'via': via},
         ),
       );
+
+  Never _unlockFailed(
+    String accountId,
+    UnlockFailure reason, {
+    required String via,
+  }) {
+    _logUnlockFailed(accountId, reason.name, via: via);
+    throw UnlockFailed(reason);
+  }
 
   // ── Passphrase slot ───────────────────────────────────────────────────────
 
@@ -859,14 +947,22 @@ class EncryptedKeyService {
   /// Whether the account has a passphrase slot: in the current key mail of
   /// this device's key, or — while locked — in any key mail (slot types
   /// are plaintext).
-  Future<bool> hasPassphraseSlot(String accountId) async {
+  Future<bool> hasPassphraseSlot(String accountId) async =>
+      (await _currentSlots(accountId))
+          .any((s) => s.type == UnlockSlotType.passphrase);
+
+  /// The slots of the current key mail of this device's key; while locked
+  /// those of every key mail, once per `slotId`.
+  Future<List<UnlockSlot>> _currentSlots(String accountId) async {
     final entries = await _accountKeyMails(accountId);
     final key = await _localKey(accountId);
     if (key == null) {
-      return entries.any(
-        (e) => e.mail.payload.slots
-            .any((s) => s.type == UnlockSlotType.passphrase),
-      );
+      final seen = <String>{};
+      return [
+        for (final e in entries)
+          for (final s in e.mail.payload.slots)
+            if (seen.add(s.slotIdB64)) s,
+      ];
     }
     final current = await selectWinner(
       [
@@ -879,14 +975,126 @@ class EncryptedKeyService {
       ],
       key,
     );
-    if (current == null) return false;
-    return current.payload.slots
-        .any((s) => s.type == UnlockSlotType.passphrase);
+    return current?.payload.slots ?? const [];
   }
 
   Future<AccountKey> _requireLocalKey(String accountId) async =>
       await _localKey(accountId) ??
       (throw const KeySetupException('this device is locked'));
+
+  // ── Passkey slots ─────────────────────────────────────────────────────────
+
+  /// Whether this device can add and use passkey slots (Android).
+  bool get passkeysAvailable => _prf != null;
+
+  /// Adds a `passkey-prf` slot for a new passkey; every call adds one more.
+  /// Creates the passkey, evaluates its PRF right away and checks that the
+  /// new slot opens before it is written. Needs an unlocked device and the
+  /// server. Throws [PrfUnsupported] for a password manager without PRF and
+  /// [PrfCancelled] — nothing is written then, but a created passkey stays
+  /// in the password manager — [KeySetupException] on a locked device and
+  /// [KeyMailOfflineException].
+  Future<PasskeySlotInfo> addPasskeySlot(
+    String accountId, {
+    String label = '',
+  }) async {
+    final prf = _requirePrf();
+    final info = await _exclusive(accountId, () async {
+      final key = await _requireLocalKey(accountId);
+      // Before the passkey is created: offline, no orphan passkey.
+      try {
+        await _listFolders?.call(accountId);
+        await _store.sync(accountId);
+      } catch (e) {
+        throw KeyMailOfflineException(e);
+      }
+      final account = await _findAccount?.call(accountId);
+      final registration = await prf.register(
+        rpId: passkeyRpId,
+        userId: secureRandomBytes(passkeyUserIdLength),
+        userName: account?.email ?? accountId,
+        challenge: secureRandomBytes(passkeyChallengeLength),
+      );
+      final credentialId = registration.credentialId;
+      final salt = secureRandomBytes(prfSaltLength);
+      final answer = await prf.evaluate(
+        rpId: passkeyRpId,
+        challenge: secureRandomBytes(passkeyChallengeLength),
+        evalByCredential: {b64url(credentialId): salt},
+      );
+      if (!constantTimeEquals(answer.credentialId, credentialId) ||
+          answer.output.length != prfOutputLength) {
+        throw const PrfUnsupported('the new passkey gave no PRF output');
+      }
+      final slot = await wrapPasskeySlot(
+        key,
+        answer.output,
+        credentialId: credentialId,
+        salt: salt,
+        label: label.trim(),
+      );
+      final back = await unwrapPasskeySlot(
+        slot,
+        answer.output,
+        key.accountKeyId,
+      );
+      if (!constantTimeEquals(back.key.bytes, key.key.bytes)) {
+        throw StateError('the new passkey slot does not open');
+      }
+      await _rewriteKeyMail(accountId, key, (slots) => [...slots, slot]);
+      unawaited(
+        _appLogger?.info(
+          'mos.passkey_slot_added',
+          'Added a passkey to unlock the encrypted data',
+          accountId: accountId,
+        ),
+      );
+      return PasskeySlotInfo.parse(slot);
+    });
+    _changed(accountId);
+    return info;
+  }
+
+  /// Removes the passkey slot [slotId] (base64url); the other slots stay.
+  /// Throws [ArgumentError] — before anything is written — for a slot that
+  /// is not a passkey slot of the current key mail, so the recovery slot
+  /// always stays; otherwise like [addPasskeySlot]. Removing is not
+  /// revocation (4.2).
+  Future<void> removePasskeySlot(String accountId, String slotId) async {
+    await _exclusive(accountId, () async {
+      final key = await _requireLocalKey(accountId);
+      await _rewriteKeyMail(accountId, key, (slots) {
+        final found = slots.any(
+          (s) => s.slotIdB64 == slotId && s.type == UnlockSlotType.passkeyPrf,
+        );
+        if (!found) {
+          throw ArgumentError.value(slotId, 'slotId', 'no passkey slot');
+        }
+        return [
+          for (final s in slots)
+            if (s.slotIdB64 != slotId) s,
+        ];
+      });
+      unawaited(
+        _appLogger?.info(
+          'mos.passkey_slot_removed',
+          'Removed a passkey of the encrypted data',
+          accountId: accountId,
+        ),
+      );
+    });
+    _changed(accountId);
+  }
+
+  /// The passkey slots, like [hasPassphraseSlot] sees them; malformed ones
+  /// are left out.
+  Future<List<PasskeySlotInfo>> passkeySlots(String accountId) async => [
+        for (final s in await _currentSlots(accountId))
+          if (PasskeySlotInfo.tryParse(s) case final info?) info,
+      ];
+
+  PrfProvider _requirePrf() =>
+      _prf ?? (throw StateError('passkeys are not available here'));
 
   // ── Pairing ───────────────────────────────────────────────────────────────
 
