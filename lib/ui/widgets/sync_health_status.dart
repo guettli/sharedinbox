@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
@@ -26,7 +27,11 @@ class SyncHealthStatus extends ConsumerWidget {
         if (isVerifying) return const _SyncHealthVerifyingRow();
         if (h == null) return const Text('Sync health: Not verified yet');
         if (h.lastError != null) {
-          return _SyncHealthErrorRow(error: h.lastError!);
+          // A failed check stores its failure time in lastVerifiedAt.
+          return _SyncHealthErrorRow(
+            error: h.lastError!,
+            failedAt: h.lastVerifiedAt,
+          );
         }
         return _SyncHealthResultRow(
           isHealthy: h.isHealthy,
@@ -61,6 +66,27 @@ String syncHealthResultMessage({
       : 'Sync health: Discrepancies found (${details.join(', ')})';
 }
 
+final _timeFmt = DateFormat.Hm();
+final _dayFmt = DateFormat('MMM d');
+final _dayWithYearFmt = DateFormat('MMM d, y');
+
+/// "at 14:02" for a time today, "on Nov 20 at 14:02" for an earlier day, so
+/// the user can tell an old failure from a current one (#1386).
+@visibleForTesting
+String failedAtLabel(DateTime failedAt, {DateTime? now}) {
+  final local = failedAt.toLocal();
+  final today = (now ?? DateTime.now()).toLocal();
+  final time = _timeFmt.format(local);
+  final sameDay = local.year == today.year &&
+      local.month == today.month &&
+      local.day == today.day;
+  if (sameDay) return 'at $time';
+  final day = local.year == today.year
+      ? _dayFmt.format(local)
+      : _dayWithYearFmt.format(local);
+  return 'on $day at $time';
+}
+
 /// Shown in the sync-health row while a verification is in flight, so a manual
 /// "Verify sync health" is visibly running instead of silently unchanged.
 class _SyncHealthVerifyingRow extends StatelessWidget {
@@ -86,11 +112,13 @@ class _SyncHealthVerifyingRow extends StatelessWidget {
 }
 
 /// Shown when the last verification failed to complete, so the user can see
-/// why instead of the row staying on "Not verified yet".
+/// why instead of the row staying on "Not verified yet", and when, so a stale
+/// failure does not read as the current state.
 class _SyncHealthErrorRow extends StatelessWidget {
-  const _SyncHealthErrorRow({required this.error});
+  const _SyncHealthErrorRow({required this.error, required this.failedAt});
 
   final String error;
+  final DateTime failedAt;
 
   @override
   Widget build(BuildContext context) {
@@ -102,7 +130,12 @@ class _SyncHealthErrorRow extends StatelessWidget {
           color: Colors.red,
         ),
         const SizedBox(width: AppSpacing.xs),
-        Expanded(child: Text('Sync check failed: ${userErrorMessage(error)}')),
+        Expanded(
+          child: Text(
+            'Sync check failed ${failedAtLabel(failedAt)}: '
+            '${userErrorMessage(error)}',
+          ),
+        ),
       ],
     );
   }

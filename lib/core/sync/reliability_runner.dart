@@ -26,16 +26,32 @@ class ReliabilityRunner {
     this._accounts,
     this._mailboxes,
     this._emails,
-    this._appLogger,
-  );
+    this._appLogger, {
+    DateTime Function()? clock,
+  }) : _now = clock ?? DateTime.now;
 
   final AppDatabase _db;
   final AccountRepository _accounts;
   final MailboxRepository _mailboxes;
   final EmailRepository _emails;
   final AppLogger _appLogger;
+  final DateTime Function() _now;
 
   Timer? _timer;
+  Timer? _startupTimer;
+  StreamSubscription<String>? _syncSucceededSub;
+
+  /// Earliest time a successful sync may re-run a failed check, by account
+  /// id. Keeps a flapping connection from running the check after every sync.
+  final Map<String, DateTime> _nextRecheckAt = {};
+
+  /// Wait before the next sync-triggered re-check, by account id. Doubles
+  /// after each re-check (up to the hourly interval) until a check completes,
+  /// so a check that keeps failing does not run every few minutes.
+  final Map<String, Duration> _recheckDelay = {};
+
+  /// Wait after the first sync-triggered re-check of a failure.
+  static const recheckThrottle = Duration(minutes: 5);
   bool _running = false;
 
   /// Account ids whose verification is currently in flight. Broadcast so the
@@ -55,13 +71,22 @@ class ReliabilityRunner {
 
   static const _checkInterval = Duration(hours: 1);
 
-  void start() {
+  /// Starts the hourly check. [syncSucceeded] emits the account id of every
+  /// successful sync cycle: after a failed check, the next one re-runs the
+  /// check so a stale "Sync check failed" clears once the server is reachable
+  /// again instead of staying up to an hour (#1386).
+  void start({Stream<String>? syncSucceeded}) {
+    // A second start() replaces the first one's timers and subscription.
+    _cancelSchedule();
     _running = true;
+    _syncSucceededSub = syncSucceeded?.listen(
+      (accountId) => unawaited(_recheckAfterSync(accountId)),
+    );
     _timer = Timer.periodic(_checkInterval, (_) {
       unawaited(_runAll());
     });
     // Also run once on startup (after a short delay to not compete with initial sync).
-    Future.delayed(const Duration(minutes: 5), () {
+    _startupTimer = Timer(const Duration(minutes: 5), () {
       if (_running) {
         unawaited(_runAll());
       }
@@ -70,11 +95,19 @@ class ReliabilityRunner {
 
   void stop() {
     _running = false;
-    _timer?.cancel();
-    _timer = null;
+    _cancelSchedule();
     if (!_verifyingController.isClosed) {
       unawaited(_verifyingController.close());
     }
+  }
+
+  void _cancelSchedule() {
+    _timer?.cancel();
+    _timer = null;
+    _startupTimer?.cancel();
+    _startupTimer = null;
+    unawaited(_syncSucceededSub?.cancel());
+    _syncSucceededSub = null;
   }
 
   void _setVerifying(String accountId, {required bool active}) {
@@ -88,8 +121,66 @@ class ReliabilityRunner {
     }
   }
 
+  /// Re-runs the check of [accountId] after a successful sync when the stored
+  /// result is a failure. Skipped while a check of the account runs and until
+  /// the account's re-check delay (see [_recheckDelay]) has passed.
+  Future<void> _recheckAfterSync(String accountId) async {
+    if (!_running || !_mayRecheck(accountId)) return;
+    final SyncHealthRow? row;
+    try {
+      row = await (_db.select(_db.syncHealth)
+            ..where((t) => t.accountId.equals(accountId)))
+          .getSingleOrNull();
+    } catch (e) {
+      // Best-effort: the hourly check still runs.
+      await _appLogger.debug(
+        'sync_health',
+        'Could not read the sync health result after a successful sync',
+        accountId: accountId,
+        data: {'error': e.toString()},
+      );
+      return;
+    }
+    if (row == null) {
+      // No result (or the account was removed): nothing to re-check.
+      _forgetRechecks(accountId);
+      return;
+    }
+    if (row.lastError == null) return;
+    // Checked again: another sync may have started a re-check while the row
+    // was being read.
+    if (!_running || !_mayRecheck(accountId)) return;
+    final delay = _recheckDelay[accountId] ?? recheckThrottle;
+    _nextRecheckAt[accountId] = _now().add(delay);
+    final doubled = delay * 2;
+    _recheckDelay[accountId] =
+        doubled > _checkInterval ? _checkInterval : doubled;
+    await _appLogger.info(
+      'sync_health',
+      'Sync succeeded after a failed sync health check; checking again',
+      accountId: accountId,
+    );
+    // stop() may have run while the log line was written.
+    if (!_running) return;
+    await _verifyOnce(accountId);
+  }
+
+  bool _mayRecheck(String accountId) {
+    if (_inFlight.containsKey(accountId)) return false;
+    final next = _nextRecheckAt[accountId];
+    return next == null || !_now().isBefore(next);
+  }
+
+  void _forgetRechecks(String accountId) {
+    _nextRecheckAt.remove(accountId);
+    _recheckDelay.remove(accountId);
+  }
+
   Future<void> _runAll() async {
     final accounts = await _accounts.observeAccounts().first;
+    final ids = accounts.map((a) => a.id).toSet();
+    _nextRecheckAt.removeWhere((id, _) => !ids.contains(id));
+    _recheckDelay.removeWhere((id, _) => !ids.contains(id));
     for (final account in accounts) {
       if (!_running) break;
       await _verifyOnce(account.id);
@@ -136,7 +227,16 @@ class ReliabilityRunner {
       final affectedFolders = <String>[];
 
       for (final mailbox in mailboxes) {
-        if (!force && !_running) break;
+        if (!force && !_running) {
+          // Stopped part-way: the folders not reached say nothing, so saving
+          // zero counts would store a false "healthy" result.
+          await _appLogger.debug(
+            'sync_health',
+            'Sync health verification stopped before it finished',
+            accountId: accountId,
+          );
+          return;
+        }
         // The app's own data folders are never mail-synced (#1364).
         if (isAppDataFolder(mailbox)) continue;
         final result = await _emails.verifySyncReliability(
@@ -165,13 +265,15 @@ class ReliabilityRunner {
       await _db.into(_db.syncHealth).insertOnConflictUpdate(
             SyncHealthCompanion.insert(
               accountId: accountId,
-              lastVerifiedAt: DateTime.now(),
+              lastVerifiedAt: _now(),
               isHealthy: isHealthy,
               discrepancySummary: Value(isHealthy ? null : jsonEncode(details)),
               // Clear any previous failure now that the check ran to completion.
               lastError: const Value(null),
             ),
           );
+      // The server answered: a later failure starts a fresh re-check delay.
+      _forgetRechecks(accountId);
 
       if (isHealthy) {
         await _appLogger.info(
@@ -200,7 +302,7 @@ class ReliabilityRunner {
         await _db.into(_db.syncHealth).insertOnConflictUpdate(
               SyncHealthCompanion.insert(
                 accountId: accountId,
-                lastVerifiedAt: DateTime.now(),
+                lastVerifiedAt: _now(),
                 isHealthy: false,
                 discrepancySummary: const Value(null),
                 lastError: Value(e.toString()),

@@ -280,6 +280,13 @@ class AccountSyncManager {
   Stream<bool> watchSyncing(String accountId) =>
       _syncPhaseCtrl.stream.where((e) => e.$1 == accountId).map((e) => e.$2);
 
+  final _syncSucceededCtrl = StreamController<String>.broadcast();
+
+  /// Emits the account id each time a sync cycle of that account completes
+  /// successfully (every folder synced). Lets other components react to the
+  /// server being reachable again without polling the sync log.
+  Stream<String> get syncSucceeded => _syncSucceededCtrl.stream;
+
   void _emitSyncing(String accountId, {required bool syncing}) {
     if (!_syncPhaseCtrl.isClosed) _syncPhaseCtrl.add((accountId, syncing));
   }
@@ -298,37 +305,7 @@ class AccountSyncManager {
 
       for (final account in accounts) {
         if (_active.containsKey(account.id)) continue;
-        final id = account.id;
-        final loop = switch (account.type) {
-          AccountType.imap => _AccountSync(
-              account,
-              _accounts,
-              _mailboxes,
-              _emails,
-              _imapConnect,
-              _syncLog,
-              _appLogger,
-              _drafts,
-              _notes,
-              _onNewMail,
-              idleTimings: _imapIdleTimings,
-              onSyncStart: () => _emitSyncing(id, syncing: true),
-              onSyncEnd: () => _emitSyncing(id, syncing: false),
-            ),
-          AccountType.jmap => _JmapAccountSync(
-              account,
-              _mailboxes,
-              _emails,
-              _accounts,
-              _syncLog,
-              _appLogger,
-              _drafts,
-              _notes,
-              _onNewMail,
-              onSyncStart: () => _emitSyncing(id, syncing: true),
-              onSyncEnd: () => _emitSyncing(id, syncing: false),
-            ),
-        };
+        final loop = _createLoop(account);
         _active[account.id] = loop;
         loop.start();
       }
@@ -350,6 +327,7 @@ class AccountSyncManager {
     }
     _active.clear();
     unawaited(_syncPhaseCtrl.close());
+    unawaited(_syncSucceededCtrl.close());
   }
 
   /// Wakes the given account's sync loop so a new sync cycle (which drains the
@@ -767,8 +745,21 @@ class AccountSyncManager {
   /// Rebuilds and starts the background sync loop for [account], registering it
   /// in [_active]. Used after a force-resync run releases the account.
   void _restartLoop(Account account) {
-    final accountId = account.id;
-    final loop = switch (account.type) {
+    final loop = _createLoop(account);
+    _active[account.id] = loop;
+    loop.start();
+  }
+
+  /// Builds the protocol-specific sync loop for [account], wired to the
+  /// syncing-phase and sync-success streams.
+  _SyncLoop _createLoop(Account account) {
+    final id = account.id;
+    void onSyncEnd({required bool success}) {
+      _emitSyncing(id, syncing: false);
+      if (success && !_syncSucceededCtrl.isClosed) _syncSucceededCtrl.add(id);
+    }
+
+    return switch (account.type) {
       AccountType.imap => _AccountSync(
           account,
           _accounts,
@@ -781,8 +772,8 @@ class AccountSyncManager {
           _notes,
           _onNewMail,
           idleTimings: _imapIdleTimings,
-          onSyncStart: () => _emitSyncing(accountId, syncing: true),
-          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+          onSyncStart: () => _emitSyncing(id, syncing: true),
+          onSyncEnd: onSyncEnd,
         ),
       AccountType.jmap => _JmapAccountSync(
           account,
@@ -794,12 +785,10 @@ class AccountSyncManager {
           _drafts,
           _notes,
           _onNewMail,
-          onSyncStart: () => _emitSyncing(accountId, syncing: true),
-          onSyncEnd: () => _emitSyncing(accountId, syncing: false),
+          onSyncStart: () => _emitSyncing(id, syncing: true),
+          onSyncEnd: onSyncEnd,
         ),
     };
-    _active[accountId] = loop;
-    loop.start();
   }
 }
 
@@ -878,7 +867,7 @@ class _AccountSync with _KickableWait {
     this._onNewMail, {
     required ImapIdleTimings idleTimings,
     void Function()? onSyncStart,
-    void Function()? onSyncEnd,
+    void Function({required bool success})? onSyncEnd,
   })  : _idleTimings = idleTimings,
         _onSyncStart = onSyncStart,
         _onSyncEnd = onSyncEnd;
@@ -895,7 +884,7 @@ class _AccountSync with _KickableWait {
   final NoteRepository? _notes;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
-  final void Function()? _onSyncEnd;
+  final void Function({required bool success})? _onSyncEnd;
 
   bool _running = false;
 
@@ -981,10 +970,13 @@ class _AccountSync with _KickableWait {
           ),
         );
         _backoffSeconds = 5;
-        _onSyncEnd?.call();
+        // A loop stopped mid-cycle (account removed, force resync, dispose)
+        // skips the folders it did not reach and returns normally; that is
+        // not a successful sync.
+        _onSyncEnd?.call(success: _running);
         await _idle();
       } catch (e, st) {
-        _onSyncEnd?.call();
+        _onSyncEnd?.call(success: false);
         // A cycle that finished most of its folders still did real work. Log
         // what landed rather than the hardcoded zeros that made the Sync Entry
         // read as "nothing happened" (#967), and classify the cycle by the
@@ -1406,7 +1398,7 @@ class _JmapAccountSync with _KickableWait {
     this._notes,
     this._onNewMail, {
     void Function()? onSyncStart,
-    void Function()? onSyncEnd,
+    void Function({required bool success})? onSyncEnd,
   })  : _onSyncStart = onSyncStart,
         _onSyncEnd = onSyncEnd;
 
@@ -1420,7 +1412,7 @@ class _JmapAccountSync with _KickableWait {
   final NoteRepository? _notes;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
-  final void Function()? _onSyncEnd;
+  final void Function({required bool success})? _onSyncEnd;
 
   bool _running = false;
   int _backoffSeconds = 5;
@@ -1495,10 +1487,13 @@ class _JmapAccountSync with _KickableWait {
           ),
         );
         _backoffSeconds = 5;
-        _onSyncEnd?.call();
+        // A loop stopped mid-cycle (account removed, force resync, dispose)
+        // skips the folders it did not reach and returns normally; that is
+        // not a successful sync.
+        _onSyncEnd?.call(success: _running);
         await _wait();
       } catch (e, st) {
-        _onSyncEnd?.call();
+        _onSyncEnd?.call(success: false);
         // A cycle that finished most of its folders still did real work. Log
         // what landed rather than the hardcoded zeros that made the Sync Entry
         // read as "nothing happened" (#967), and classify the cycle by the

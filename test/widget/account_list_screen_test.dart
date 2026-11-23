@@ -264,10 +264,11 @@ void main() {
       required bool isHealthy,
       String? discrepancySummary,
       String? lastError,
+      DateTime? lastVerifiedAt,
     }) =>
         SyncHealthRow(
           accountId: kTestAccount.id,
-          lastVerifiedAt: DateTime(2024, 6),
+          lastVerifiedAt: lastVerifiedAt ?? DateTime(2024, 6),
           isHealthy: isHealthy,
           discrepancySummary: discrepancySummary,
           lastError: lastError,
@@ -479,6 +480,31 @@ void main() {
 
       expect(find.textContaining('Sync check failed'), findsOneWidget);
       expect(find.textContaining('JMAP connect failed'), findsOneWidget);
+      // An old failure names its day, so it does not read as current (#1386).
+      expect(
+        find.textContaining('Sync check failed on Jun 1, 2024 at 00:00: '),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('shows when a sync health check failed today (#1386)', (
+      tester,
+    ) async {
+      final now = DateTime.now();
+      await _pumpAccountList(
+        tester,
+        syncHealth: healthRow(
+          isHealthy: false,
+          lastError: 'JMAP connect failed',
+          lastVerifiedAt: DateTime(now.year, now.month, now.day, 14, 2),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Sync check failed at 14:02: JMAP connect failed'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('shows verifying indicator while a check is in progress', (
