@@ -113,3 +113,18 @@ class KeyDevice {
 }
 
 List<ObjectProjector> _noProjectors(AppDatabase db) => const [];
+
+/// A [KeyDevice] whose store writes projections (#1373, #1379): its
+/// [listAndSync] also runs the key lifecycle after the sync, as the app
+/// does, so collection keys that arrived open the new objects.
+class ProjectingKeyDevice extends KeyDevice {
+  ProjectingKeyDevice(super.account, {required super.projectors});
+
+  /// The folder listing the mail sync runs first, then the store's sync and
+  /// the key lifecycle after it.
+  @override
+  Future<void> listAndSync() async {
+    await super.listAndSync();
+    await service.afterSync(id, foreground: true);
+  }
+}

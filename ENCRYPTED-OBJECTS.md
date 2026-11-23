@@ -670,6 +670,47 @@ migrated into entries with `links: [messageId]` (#1355). Only mails with
   packs of closed months are immutable. Events of deleted cards are dropped at
   the next pack **only** if a synced tombstone exists.
 
+Implemented in `lib/core/encrypted_objects/card_object.dart` (the kinds
+`card`, `card-batch` and `deck`: new, read, edit, delete, import packing,
+batch merge and rewrite), `lib/data/repositories/card_projector.dart` (the
+projections) and `lib/data/repositories/card_repository_impl.dart` (reads
+the projections, writes through the store); #1379.
+
+- **`card`**: itemId = cardId (item HMAC `HMAC(k_item, cardId)` in the deck's
+  collection), `tags` in the head, front and back as `text/markdown` parts
+  with Content-ID `front` / `back`. Its `h` is the version's `versionId`. The
+  first doc of a batch member (an edit or a delete) has `parents: []` and an
+  `h` above the member's.
+- **`card-batch`**: `count` in the head, one `application/jsonl+gzip` part
+  (the codec of the log segments), one line per member
+  `{c: cardId, h, f: front, b: back, tags}`; unknown member fields are kept on
+  rewrite. A batch holds **at most 500 cards and at most 200 KiB of gzip
+  body**, so it always stays below the 256 KiB eager-fetch limit (5.5) and
+  arrives with the normal sync. An import packs cards greedily; a card whose
+  line alone is over 200 KiB is written as a `card` doc. A rewrite never
+  drops members (only a `card` tombstone deletes one), except when they no
+  longer fit: the members that do not fit move to new batches with a new `h`.
+- **The exception to 5.4** is the store hook `ObjectProjector.mergesHeads`
+  (true for `card-batch`): its heads never get `conflictOf` (so they never
+  show in the conflict view) and its projector gets `conflict: false` and
+  every head; superseding, the rollback guard and the expunge after a
+  collapse stay as they are. The next rewrite (`parents = all heads`)
+  collapses concurrent heads.
+- **Projections** (schema v86): `CardSources` holds one row per card per
+  source item (batch member or `card` doc; a `card` doc whose heads are all
+  tombstones is a `deleted` row); `Cards` holds per cardId the source with the
+  highest `h` (ties: a doc beats a member, then the greater item HMAC). A
+  winning tombstone stays, so a batch arriving later with a lower `h` cannot
+  bring a deleted card back.
+- **Decks**: a deck is a collection of its own (`collectionId` =
+  `deck-` + a random itemId) whose key comes from
+  `EncryptedKeyService.ensureCollection` (a collection-key mail in the keys
+  folder; other devices load it like the `personal` key). The deck name is
+  encrypted in a `deck` doc (itemId = collectionId) inside the deck's own
+  collection — never in the collection-key mail, whose fields are plaintext
+  on the server. The `Decks` projection lists them. Deleting a deck comes
+  with the deck UI (#1381).
+
 ## 8. Test vectors
 
 `test/fixtures/encrypted_objects/vectors.json` holds fixed keys, nonces,
@@ -678,7 +719,8 @@ The key-hierarchy slice (#1365) created it with `hkdf`, `recoveryKey`,
 `slotWrap`, `collectionWrap` and `keyMailMac`, computed independently by
 `scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1369) added
 `itemHmac`, `padding`, `envelope`, `hlc` and `messageId`; the log-segment
-slice (#1372) `logSegment`; the passkey slot (#1360) `passkeySlot`. Once
+slice (#1372) `logSegment`; the passkey slot (#1360) `passkeySlot`; the
+card batches (#1379) `cardBatch`. Once
 merged, a section is **frozen**: changing it requires a new magic (`SIE2`)
 or schema version and a migration. New slices add sections; they never edit existing ones.
 

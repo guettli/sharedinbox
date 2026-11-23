@@ -231,6 +231,34 @@ int compareEvents(LogEvent a, LogEvent b) {
   return byDevice != 0 ? byDevice : a.seq.compareTo(b.seq);
 }
 
+/// One JSONL line: the canonical JSON of [json] ended by `\n`.
+Uint8List encodeJsonLine(Map<String, Object?> json) =>
+    Uint8List.fromList(utf8.encode('${canonicalJson(json)}\n'));
+
+/// The gzip of the concatenated [lines] ([encodeJsonLine]).
+Uint8List gzipJsonLines(Iterable<Uint8List> lines) {
+  final plain = BytesBuilder(copy: false);
+  for (final line in lines) {
+    plain.add(line);
+  }
+  return Uint8List.fromList(gzip.encode(plain.takeBytes()));
+}
+
+/// The JSON objects of a gzip JSONL body; blank lines are skipped. Throws
+/// [FormatException].
+List<Map<String, Object?>> decodeJsonLinesBody(Uint8List body) {
+  final List<int> plain;
+  try {
+    plain = gzip.decode(body);
+  } catch (e) {
+    throw FormatException('bad gzip: $e');
+  }
+  return [
+    for (final line in utf8.decode(plain).split('\n'))
+      if (line.trim().isNotEmpty) decodeJsonObject(utf8.encode(line)),
+  ];
+}
+
 /// The JSONL of [events]: one canonical JSON object per line, each line
 /// ended by `\n`.
 Uint8List encodeEventLines(Iterable<LogEvent> events) => Uint8List.fromList(
@@ -245,19 +273,8 @@ Uint8List encodeEventsBody(Iterable<LogEvent> events) =>
 
 /// Reads a gzip JSONL body; blank lines are skipped. Throws
 /// [FormatException].
-List<LogEvent> decodeEventsBody(Uint8List body) {
-  final List<int> plain;
-  try {
-    plain = gzip.decode(body);
-  } catch (e) {
-    throw FormatException('bad gzip: $e');
-  }
-  return [
-    for (final line in utf8.decode(plain).split('\n'))
-      if (line.trim().isNotEmpty)
-        LogEvent.fromJson(decodeJsonObject(utf8.encode(line))),
-  ];
-}
+List<LogEvent> decodeEventsBody(Uint8List body) =>
+    [for (final json in decodeJsonLinesBody(body)) LogEvent.fromJson(json)];
 
 /// A segment or pack read from an opened object.
 typedef OpenedSegment = ({SegmentHead head, List<LogEvent> events});

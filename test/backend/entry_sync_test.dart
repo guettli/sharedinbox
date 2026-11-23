@@ -221,18 +221,10 @@ void main() {
 
 /// A [KeyDevice] whose store writes the entry projection, with the entry
 /// repository on top.
-class _EntryDevice extends KeyDevice {
+class _EntryDevice extends ProjectingKeyDevice {
   _EntryDevice(super.account) : super(projectors: (db) => [EntryProjector(db)]);
 
   late final repo = EntryRepositoryImpl(db, store);
-
-  /// The folder listing the mail sync runs first, then the store's sync and
-  /// the key lifecycle after it.
-  @override
-  Future<void> listAndSync() async {
-    await super.listAndSync();
-    await service.afterSync(id, foreground: true);
-  }
 
   Future<List<Entry>> entries() => repo.observeEntries(id).first;
 }

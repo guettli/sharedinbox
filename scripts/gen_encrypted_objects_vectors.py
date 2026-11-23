@@ -255,6 +255,46 @@ def log_segment_section():
     }
 
 
+def card_batch_section():
+    """The card-batch slice (#1379): gzip JSONL members, each with its own h."""
+    device_id = b64url(bytes(range(0xF0, 0x100)))
+    members = [
+        {
+            "b": "dog",
+            "c": "card-1",
+            "f": "Hund",
+            "h": hlc(1700000000000, 0, device_id),
+            "tags": ["de"],
+        },
+        {
+            "b": "cat",
+            "c": "card-2",
+            "f": "Katze",
+            "h": hlc(1700000000000, 1, device_id),
+            "tags": [],
+        },
+        {
+            "b": "mouse",
+            "c": "card-3",
+            "ease": 2.5,
+            "f": "Maus",
+            "h": hlc(1700000000001, 0, device_id),
+            "tags": ["de", "animal"],
+        },
+    ]
+    lines = "".join(
+        json.dumps(m, sort_keys=True, separators=(",", ":")) + "\n" for m in members
+    ).encode()
+    return {
+        "cardBatch": {
+            "deviceId": device_id,
+            "jsonl": lines.decode(),
+            "gzip": gzip.compress(lines, compresslevel=9, mtime=0).hex(),
+            "head": {"count": len(members)},
+        }
+    }
+
+
 def passkey_slot_section(account_key, account_key_id, slot_id, slot_nonce):
     """The passkey slot (#1360): KEK from the PRF output, clear slot fields."""
     prf_output = bytes(range(0x60, 0x80))
@@ -383,6 +423,7 @@ def main():
     }
     vectors.update(envelope_sections(collection_key, key_id))
     vectors.update(log_segment_section())
+    vectors.update(card_batch_section())
     vectors.update(
         passkey_slot_section(account_key, account_key_id, slot_id, slot_nonce)
     )

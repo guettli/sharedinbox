@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
@@ -264,5 +266,36 @@ void main() {
       ),
       jsonEncode(v['head']),
     );
+  });
+
+  test('cardBatch', () {
+    final v = vectors['cardBatch'] as Map<String, dynamic>;
+    final batch = InnerObject(
+      head: ObjectHead(
+        itemId: 'batch-1',
+        collectionId: 'deck-1',
+        versionId: Hlc.parse('1700000000002-0000-${v['deviceId'] as String}'),
+        kind: cardBatchKind,
+        extra: v['head'] as Map<String, Object?>,
+      ),
+      parts: [
+        ObjectPart(
+          contentType: cardBatchContentType,
+          bytes: hexBytes(v['gzip'] as String),
+        ),
+      ],
+    );
+    final members = readBatchMembers(batch);
+    expect([for (final m in members) m.cardId], ['card-1', 'card-2', 'card-3']);
+    expect(members.every((m) => m.h.deviceId == v['deviceId']), isTrue);
+    expect(members.last.extra, {'ease': 2.5});
+    expect(members.last.content.tags, ['de', 'animal']);
+    expect(
+      utf8.decode([
+        for (final m in members) ...encodeJsonLine(m.toJson()),
+      ]),
+      v['jsonl'],
+    );
+    expect(mergeBatchMembers([batch]), hasLength(3));
   });
 }

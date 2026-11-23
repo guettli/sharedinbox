@@ -816,6 +816,78 @@ class Entries extends Table {
   Set<Column> get primaryKey => {accountId, itemId};
 }
 
+/// The decks of the encrypted personal data (#1379): the projection of the
+/// `deck` docs, one per deck collection. Written only by the store's merge
+/// (`DeckProjector`). Added in schema v86.
+@DataClassName('DeckRow')
+class Decks extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // The deck: its collection id.
+  TextColumn get collectionId => text()();
+  TextColumn get itemHmac => text()();
+  TextColumn get name => text()();
+  // The encoded HLC of the version shown.
+  TextColumn get versionId => text()();
+  // Its wall clock, ms since the epoch.
+  IntColumn get updatedAt => integer()();
+  BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, collectionId};
+}
+
+/// Every version of a card the merge shows (#1379): one row per card per
+/// source item, a member of a `card-batch` or a `card` doc. A projector call
+/// replaces all rows of its source item. Added in schema v86.
+@DataClassName('CardSourceRow')
+class CardSources extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get cardId => text()();
+  TextColumn get sourceItemHmac => text()();
+  // The deck.
+  TextColumn get collectionId => text()();
+  // `batch` or `doc` (CardSourceKind).
+  TextColumn get sourceKind => text()();
+  // The encoded HLC of the member or doc version.
+  TextColumn get h => text()();
+  // A `card` tombstone.
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
+  TextColumn get front => text().withDefault(const Constant(''))();
+  TextColumn get back => text().withDefault(const Constant(''))();
+  // JSON list of strings.
+  TextColumn get tagsJson => text().withDefault(const Constant('[]'))();
+  BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, cardId, sourceItemHmac};
+}
+
+/// The cards (#1379): per cardId the [CardSources] row with the highest `h`.
+/// A winning tombstone stays (`deleted`), so a batch arriving later with a
+/// lower `h` cannot bring a deleted card back. Added in schema v86.
+@DataClassName('CardRow')
+class Cards extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get cardId => text()();
+  // The deck.
+  TextColumn get collectionId => text()();
+  // Where the version shown comes from: the item an edit rewrites.
+  TextColumn get sourceItemHmac => text()();
+  TextColumn get sourceKind => text()();
+  TextColumn get h => text()();
+  BoolColumn get deleted => boolean().withDefault(const Constant(false))();
+  TextColumn get front => text().withDefault(const Constant(''))();
+  TextColumn get back => text().withDefault(const Constant(''))();
+  TextColumn get tagsJson => text().withDefault(const Constant('[]'))();
+  BoolColumn get hasConflict => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, cardId};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -970,7 +1042,7 @@ class UserPreferences extends Table {
   // Added in schema v83: the "Personal data (beta)" switch (#1366).
   BoolColumn get personalDataBeta =>
       boolean().withDefault(const Constant(false))();
-  // Added in schema v86: the account new todos and entries go to (#1357);
+  // Added in schema v87: the account new todos and entries go to (#1357);
   // null = the open account, else the first unlocked one.
   TextColumn get defaultItemsAccountId => text().nullable()();
 
@@ -1019,6 +1091,9 @@ class UserPreferences extends Table {
     MailObjectBlobs,
     MailObjectDeviceStates,
     Entries,
+    Decks,
+    CardSources,
+    Cards,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1514,6 +1589,7 @@ class AppDatabase extends _$AppDatabase {
           await _createMailObjectsIndex();
           await _createMailObjectLogIndexes();
           await _createEntriesIndex();
+          await _createCardIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2544,7 +2620,20 @@ class AppDatabase extends _$AppDatabase {
       }
       await _createEntriesIndex();
     }
-    if (from < 86 && await _tableExists(this, 'user_preferences')) {
+    if (from < 86) {
+      // Cards and decks (#1379). Each step re-runnable (#1084).
+      if (!await _tableExists(this, 'decks')) {
+        await m.createTable(decks);
+      }
+      if (!await _tableExists(this, 'card_sources')) {
+        await m.createTable(cardSources);
+      }
+      if (!await _tableExists(this, 'cards')) {
+        await m.createTable(cards);
+      }
+      await _createCardIndexes();
+    }
+    if (from < 87 && await _tableExists(this, 'user_preferences')) {
       // The default account for new items (#1357).
       await _addColumnIfMissing(
         m,
@@ -2552,6 +2641,19 @@ class AppDatabase extends _$AppDatabase {
         userPreferences.defaultItemsAccountId,
       );
     }
+  }
+
+  /// Schema v86: the cards of a deck, which every deck view reads, and the
+  /// sources of one item, which every card projection replaces.
+  Future<void> _createCardIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS cards_deck ON cards '
+      '(account_id, collection_id, deleted);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS card_sources_item ON card_sources '
+      '(account_id, source_item_hmac);',
+    );
   }
 
   /// Schema v85: entries newest first, which every entry list reads.
