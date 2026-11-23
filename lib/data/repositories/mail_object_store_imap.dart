@@ -497,13 +497,9 @@ class MailObjectStoreImap extends MailObjectStoreBase {
         logPushFailed(accountId, row, 'upload', e);
       }
     }
-    final waiting = {
-      for (final r in uploads)
-        if (await stillPending(accountId, r.messageId)) r.itemHmac,
-    };
-    for (final row in deletes) {
-      // Only once the version superseding it is confirmed.
-      if (row.itemHmac != null && waiting.contains(row.itemHmac)) continue;
+    // Only once the version superseding it, or the pack covering it, is
+    // confirmed.
+    for (final row in await deletableNow(accountId, uploads, deletes)) {
       try {
         final uids = await _serverUids(
           client,

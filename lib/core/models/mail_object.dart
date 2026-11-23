@@ -28,6 +28,7 @@ class MailObject {
     this.pendingUpload = false,
     this.pendingDelete = false,
     this.conflictOf,
+    this.coveredBy,
     this.payload,
   });
 
@@ -59,6 +60,10 @@ class MailObject {
   /// Set on every head of an item in conflict: the versionId shown.
   final String? conflictOf;
 
-  /// Null while a body over 256 KiB was not fetched yet.
+  /// A log segment or pack replaced by a pack: the pack's Message-ID.
+  final String? coveredBy;
+
+  /// Null while a body over 256 KiB was not fetched yet (or a confirmed
+  /// blob was evicted from the cache).
   final Uint8List? payload;
 }

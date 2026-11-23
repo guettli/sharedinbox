@@ -622,14 +622,10 @@ class MailObjectStoreJmap extends MailObjectStoreBase {
         logPushFailed(accountId, r, 'upload', e);
       }
     }
-    final waiting = {
-      for (final r in uploads)
-        if (await stillPending(accountId, r.messageId)) r.itemHmac,
-    };
     final destroy = <MailObjectRow, Set<String>>{};
-    for (final r in deletes) {
-      // Only once the version superseding it is confirmed.
-      if (r.itemHmac != null && waiting.contains(r.itemHmac)) continue;
+    // Only once the version superseding it, or the pack covering it, is
+    // confirmed.
+    for (final r in await deletableNow(accountId, uploads, deletes)) {
       try {
         destroy[r] = {
           if (r.serverId case final id?) id,

@@ -6,6 +6,10 @@ import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 
+/// The kind of a blob document (an image), referenced by its itemId
+/// (ENCRYPTED-OBJECTS.md 5.4 item 3). Immutable: one version only.
+const mailObjectBlobKind = 'blob';
+
 /// The collection key of a `keyId` for [accountId], or null when this
 /// device does not hold it (yet).
 typedef CollectionKeyLookup = CollectionKey? Function(
@@ -80,8 +84,30 @@ abstract class MailObjectStore {
   /// Seals [object] (a new item, or an `edit()` of [item]) and stores it to
   /// be uploaded. Versions its `parents` name become superseded.
   ///
-  /// Throws [NoWriteKeyException].
+  /// Throws [NoWriteKeyException], and [StateError] for a second version of
+  /// a blob (blobs are immutable).
   Future<MailObject> put(String accountId, InnerObject object);
+
+  /// Like [put] for a log pack (#1372): in the same transaction the rows
+  /// [covered] (Message-IDs of the segments and packs it replaces) are
+  /// hidden and marked to be deleted on the server, once the pack is
+  /// confirmed there.
+  Future<MailObject> putCovering(
+    String accountId,
+    InnerObject pack, {
+    required List<String> covered,
+  });
+
+  /// The opened heads of [kind] that no pack covers, oldest first.
+  Future<List<MailObject>> rowsOfKind(String accountId, String kind);
+
+  /// The item HMAC of [itemId] in [collectionId], or null without a key for
+  /// the collection.
+  Future<String?> itemHmacOf(
+    String accountId,
+    String collectionId,
+    String itemId,
+  );
 
   /// Writes a tombstone over all heads of [itemHmac]. Throws [StateError]
   /// when the item is unknown.

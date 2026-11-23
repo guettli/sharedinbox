@@ -6,10 +6,12 @@ import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:meta/meta.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
+import 'package:sharedinbox/core/encrypted_objects/device_state.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
@@ -117,7 +119,8 @@ abstract class MailObjectStoreBase implements MailObjectStore {
               (t) =>
                   t.accountId.equals(accountId) &
                   t.folder.equals(folder.name) &
-                  t.pendingDelete.equals(false),
+                  t.pendingDelete.equals(false) &
+                  t.coveredBy.isNull(),
             )
             ..orderBy([(t) => OrderingTerm.asc(t.messageId)]))
           .watch()
@@ -157,8 +160,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     final versions = <ObjectVersion>[];
     final objects = <String, InnerObject>{};
     for (final row in await _itemRows(accountId, itemHmac)) {
-      if (row.versionId == null) continue;
-      final object = await _openPayload(accountId, row.payload!);
+      final payload = row.payload;
+      if (row.versionId == null || payload == null) continue;
+      final object = await _openPayload(accountId, payload);
       if (object == null) continue;
       objects[row.messageId] = object;
       versions.add(await ObjectVersion.of(object, ref: row.messageId));
@@ -193,11 +197,40 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         if (_tryHlc(r.versionId) case final hlc?)
           if (hlc.deviceId == identity.deviceId) hlc,
     ]);
+    // And past every own log event (5.4 item 2).
+    final maxSeq = db.mailObjectLogEvents.seq.max();
+    final ownSeq = await (db.selectOnly(db.mailObjectLogEvents)
+          ..addColumns([maxSeq])
+          ..where(
+            db.mailObjectLogEvents.accountId.equals(accountId) &
+                db.mailObjectLogEvents.deviceId.equals(identity.deviceId),
+          ))
+        .map((r) => r.read(maxSeq))
+        .getSingle();
+    if (ownSeq != null) clock.advanceSeqPast(ownSeq);
     return _clocks[accountId] ??= clock;
   }
 
   @override
-  Future<MailObject> put(String accountId, InnerObject object) async {
+  Future<MailObject> put(String accountId, InnerObject object) =>
+      _put(accountId, object);
+
+  @override
+  Future<MailObject> putCovering(
+    String accountId,
+    InnerObject pack, {
+    required List<String> covered,
+  }) =>
+      _put(accountId, pack, covered: covered);
+
+  /// [put]; the rows [covered] are hidden behind the new row and marked to
+  /// be deleted on the server in the same transaction, so a crash leaves
+  /// either nothing or both.
+  Future<MailObject> _put(
+    String accountId,
+    InnerObject object, {
+    List<String> covered = const [],
+  }) async {
     final head = object.head;
     final key = _writeKey(accountId, head.collectionId);
     if (key == null) throw NoWriteKeyException(head.collectionId);
@@ -214,28 +247,49 @@ abstract class MailObjectStoreBase implements MailObjectStore {
       date: now(),
     );
     final hmac = b64url(sealed.itemHmac);
-    await db.into(db.mailObjects).insert(
-          MailObjectsCompanion.insert(
-            accountId: accountId,
-            folder: MailObjectFolder.data.name,
-            messageId: messageId,
-            itemHmac: Value(hmac),
-            itemId: Value(head.itemId),
-            versionId: Value(head.versionId.encode()),
-            parents: Value(_encodeParents(head.parents)),
-            kind: Value(head.kind),
-            collectionId: Value(head.collectionId),
-            sizeBytes: Value(mail.length),
-            pendingUpload: const Value(true),
-            payload: Value(mail),
-          ),
-        );
+    if (head.kind == mailObjectBlobKind &&
+        (await _itemRows(accountId, hmac)).isNotEmpty) {
+      throw StateError('a blob is immutable: ${head.itemId} exists');
+    }
+    await db.transaction(() async {
+      await db.into(db.mailObjects).insert(
+            MailObjectsCompanion.insert(
+              accountId: accountId,
+              folder: MailObjectFolder.data.name,
+              messageId: messageId,
+              itemHmac: Value(hmac),
+              itemId: Value(head.itemId),
+              versionId: Value(head.versionId.encode()),
+              parents: Value(_encodeParents(head.parents)),
+              kind: Value(head.kind),
+              collectionId: Value(head.collectionId),
+              sizeBytes: Value(mail.length),
+              pendingUpload: const Value(true),
+              payload: Value(mail),
+            ),
+          );
+      if (covered.isEmpty) return;
+      await (db.update(db.mailObjects)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.folder.equals(MailObjectFolder.data.name) &
+                  t.messageId.isIn(covered),
+            ))
+          .write(
+        MailObjectsCompanion(
+          pendingDelete: const Value(true),
+          coveredBy: Value(messageId),
+        ),
+      );
+    });
     final vv = {...await _loadVv(accountId, hmac)};
     final device = head.versionId.deviceId;
     final seen = vv[device];
     if (seen == null || head.versionId > seen) vv[device] = head.versionId;
     await _saveVv(accountId, hmac, vv);
-    await _remerge(accountId, hmac);
+    final log = await _remerge(accountId, hmac);
+    if (log != null) await _coverLog(accountId, log);
     final clock = await clockFor(accountId);
     if (device == clock.deviceId) clock.advancePast([head.versionId]);
     await _resolver.recordHighWater(
@@ -248,6 +302,34 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     );
     _kickPush(accountId);
     return _toModel((await row(accountId, messageId))!);
+  }
+
+  @override
+  Future<List<MailObject>> rowsOfKind(String accountId, String kind) async => [
+        for (final r in await (db.select(db.mailObjects)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.folder.equals(MailObjectFolder.data.name) &
+                    t.kind.equals(kind) &
+                    t.versionId.isNotNull() &
+                    t.pendingDelete.equals(false) &
+                    t.coveredBy.isNull(),
+              )
+              ..orderBy([(t) => OrderingTerm.asc(t.versionId)]))
+            .get())
+          _toModel(r),
+      ];
+
+  @override
+  Future<String?> itemHmacOf(
+    String accountId,
+    String collectionId,
+    String itemId,
+  ) async {
+    final key = _writeKey(accountId, collectionId);
+    if (key == null) return null;
+    return b64url(await itemHmac(key, itemId));
   }
 
   @override
@@ -400,19 +482,24 @@ abstract class MailObjectStoreBase implements MailObjectStore {
           .get();
 
   /// Mails gone from the server. A superseded version (or one no key opens
-  /// here) is dropped; a head, and a key mail the key lifecycle keeps, is
-  /// uploaded again from the local copy, never deleted (5.4, 4.3).
+  /// here, or one without a local body) is dropped, and so is a log segment
+  /// or pack a pack covers; a head, and a key mail the key lifecycle keeps,
+  /// is uploaded again from the local copy, never deleted (5.4, 4.3).
   @protected
   Future<void> markGone(
     String accountId,
     MailObjectFolder folder,
     List<MailObjectRow> gone,
   ) async {
-    for (final r in gone) {
+    for (final listed in gone) {
+      // As it is now: opening the pull's new mails may have covered it.
+      final r = await row(accountId, listed.messageId);
+      if (r == null) continue;
       final keep = !r.pendingDelete &&
+          r.coveredBy == null &&
           (folder == MailObjectFolder.keys
               ? await _keepVanishedKey(accountId, _toModel(r))
-              : r.versionId != null);
+              : r.versionId != null && r.payload != null);
       if (!keep) {
         await dropRow(accountId, r.messageId);
         continue;
@@ -453,9 +540,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
 
   /// The folder ([where] names it in the log) is gone on the server while
   /// rows exist: they all lose their server id and are uploaded again (the
-  /// folder is made again by the next foreground push). Superseded rows, and
-  /// rows whose body was never fetched, are dropped. Local data is never
-  /// deleted for a missing folder.
+  /// folder is made again by the next foreground push). Superseded and
+  /// covered rows, and rows whose body was never fetched, are dropped. Local
+  /// data is never deleted for a missing folder.
   @protected
   Future<void> folderGone(
     String accountId,
@@ -467,6 +554,7 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     var reupload = 0;
     for (final r in await rows(accountId, folder)) {
       if (r.pendingDelete ||
+          r.coveredBy != null ||
           r.payload == null ||
           (folder == MailObjectFolder.keys &&
               !r.pendingUpload &&
@@ -519,16 +607,24 @@ abstract class MailObjectStoreBase implements MailObjectStore {
       if (object == null) continue;
       (incoming[hmac] ??= {})[r.messageId] = object;
     }
+    final logs = <String>{};
     for (final MapEntry(key: hmac, value: objects) in incoming.entries) {
-      await _remerge(accountId, hmac, incoming: objects);
+      if (await _remerge(accountId, hmac, incoming: objects) case final log?) {
+        logs.add(log);
+      }
+    }
+    for (final log in logs) {
+      await _coverLog(accountId, log);
     }
   }
 
   /// Merges item [itemHmac]: its opened rows are known, [incoming] (by
   /// Message-ID) the newly opened ones. Replays are dropped locally,
   /// superseded versions and duplicates marked [MailObjects.pendingDelete],
-  /// heads get their head columns and [MailObjects.conflictOf].
-  Future<void> _remerge(
+  /// heads get their head columns and [MailObjects.conflictOf], and the
+  /// heads are projected ([_project]). Returns the log of a segment or pack
+  /// head, whose covering the caller checks next ([_coverLog]).
+  Future<String?> _remerge(
     String accountId,
     String itemHmac, {
     Map<String, InnerObject> incoming = const {},
@@ -536,7 +632,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     final known = <ObjectVersion>[];
     final fresh = <ObjectVersion>[];
     final objects = <String, InnerObject>{};
+    final rowsById = <String, MailObjectRow>{};
     for (final r in await _itemRows(accountId, itemHmac)) {
+      rowsById[r.messageId] = r;
       final object = incoming[r.messageId];
       if (object != null) {
         objects[r.messageId] = object;
@@ -558,6 +656,7 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     final conflict = result.state == MergeState.conflict;
     final heads = {for (final h in result.heads) h.ref};
     final ignored = {for (final v in result.ignored) v.ref};
+    String? log;
     await db.transaction(() async {
       for (final ref in objects.keys) {
         final messageId = ref;
@@ -565,8 +664,12 @@ abstract class MailObjectStoreBase implements MailObjectStore {
           await dropRow(accountId, messageId);
           continue;
         }
-        final head = objects[messageId]!.head;
+        final object = objects[messageId]!;
+        final head = object.head;
         final isHead = heads.contains(messageId);
+        // A pack replaced it: it stays marked until the server copy is gone.
+        final covered = rowsById[messageId]?.coveredBy != null &&
+            rowsById[messageId]!.pendingDelete;
         await (db.update(db.mailObjects)
               ..where(
                 (t) =>
@@ -581,13 +684,140 @@ abstract class MailObjectStoreBase implements MailObjectStore {
             kind: Value(head.kind),
             collectionId: Value(head.collectionId),
             // Not a head: superseded, or a duplicate of an accepted version.
-            pendingDelete: Value(!isHead),
+            pendingDelete: Value(!isHead || covered),
             conflictOf: Value(isHead && conflict ? display : null),
           ),
         );
+        if (isHead) log = await _project(accountId, messageId, object) ?? log;
       }
       await _saveVv(accountId, itemHmac, result.vv);
     });
+    return log;
+  }
+
+  // ── Projections (#1372) ───────────────────────────────────────────────────
+
+  /// Writes what readers query of the head [object] (row [messageId]): the
+  /// events of a log segment or pack, the values of a device-state doc.
+  /// Returns the log of a segment or pack.
+  Future<String?> _project(
+    String accountId,
+    String messageId,
+    InnerObject object,
+  ) async {
+    if (DeviceStateDoc.of(object) case final doc?) {
+      await _projectDeviceState(accountId, doc);
+      return null;
+    }
+    final log = logOfKind(object.head.kind);
+    if (log == null) return null;
+    final segment = readSegment(object);
+    if (segment == null) return null;
+    await db.batch((b) {
+      b.insertAll(
+        db.mailObjectLogEvents,
+        [
+          for (final e in segment.events)
+            MailObjectLogEventsCompanion.insert(
+              accountId: accountId,
+              log: log,
+              deviceId: e.deviceId,
+              seq: e.seq,
+              hlc: e.hlc.encode(),
+              eventJson: jsonEncode(e.json),
+              sourceMessageId: messageId,
+            ),
+        ],
+        mode: InsertMode.insertOrIgnore,
+      );
+    });
+    return log;
+  }
+
+  /// Stores each value of [doc] unless a newer one of its device is stored.
+  Future<void> _projectDeviceState(String accountId, DeviceStateDoc doc) async {
+    for (final MapEntry(:key, :value) in doc.values.entries) {
+      final stored = await (db.select(db.mailObjectDeviceStates)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.key.equals(key) &
+                  t.deviceId.equals(doc.device),
+            ))
+          .getSingleOrNull();
+      final seen = _tryHlc(stored?.hlc);
+      if (seen != null && !(value.hlc > seen)) continue;
+      await db.into(db.mailObjectDeviceStates).insertOnConflictUpdate(
+            MailObjectDeviceStatesCompanion.insert(
+              accountId: accountId,
+              key: key,
+              deviceId: doc.device,
+              hlc: value.hlc.encode(),
+              valueJson: Value(
+                value.value == null ? null : jsonEncode(value.value),
+              ),
+            ),
+          );
+    }
+  }
+
+  /// Hides the segments and packs of [log] that another pack covers
+  /// ([MailObjects.coveredBy]). Of two packs covering the same ranges (a
+  /// crash between APPEND and expunge, then a second compaction) the newer
+  /// one stays. Only rows of this device are also marked to be deleted on
+  /// the server: only the owner deletes (5.4 item 2).
+  Future<void> _coverLog(String accountId, String log) async {
+    final rows = await (db.select(db.mailObjects)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.folder.equals(MailObjectFolder.data.name) &
+                t.kind.isIn([segKind(log), packKind(log)]) &
+                t.versionId.isNotNull() &
+                t.payload.isNotNull() &
+                t.coveredBy.isNull(),
+          ))
+        .get();
+    final heads = <MailObjectRow, SegmentHead>{};
+    for (final r in rows) {
+      final object = await _openPayload(accountId, r.payload!);
+      if (object == null || object.head.deleted) continue;
+      try {
+        heads[r] = SegmentHead.fromExtra(object.head.extra);
+      } on FormatException {
+        continue;
+      }
+    }
+    final packs = [
+      for (final e in heads.entries)
+        if (isPackKind(e.key.kind)) e,
+    ];
+    if (packs.isEmpty) return;
+    final own = (await clockFor(accountId)).deviceId;
+    for (final MapEntry(key: r, value: head) in heads.entries) {
+      final by = packs.where(
+        (p) =>
+            p.key.messageId != r.messageId &&
+            p.value.coversAll(head) &&
+            // Equal coverage: the newer pack wins.
+            (!head.coversAll(p.value) ||
+                p.key.versionId!.compareTo(r.versionId!) > 0),
+      );
+      if (by.isEmpty) continue;
+      await (db.update(db.mailObjects)
+            ..where(
+              (t) =>
+                  t.accountId.equals(accountId) &
+                  t.messageId.equals(r.messageId),
+            ))
+          .write(
+        MailObjectsCompanion(
+          coveredBy: Value(by.first.key.messageId),
+          pendingDelete:
+              head.device == own ? const Value(true) : const Value.absent(),
+        ),
+      );
+    }
   }
 
   // ── Push helpers ──────────────────────────────────────────────────────────
@@ -629,6 +859,34 @@ abstract class MailObjectStoreBase implements MailObjectStore {
   @protected
   Future<bool> stillPending(String accountId, String messageId) async =>
       (await row(accountId, messageId))?.pendingUpload ?? false;
+
+  /// The [deletes] that may go on the server now: a superseded version only
+  /// once no upload of its item is pending, a covered segment or pack only
+  /// once its pack is confirmed (5.4: APPEND → confirm → expunge).
+  @protected
+  Future<List<MailObjectRow>> deletableNow(
+    String accountId,
+    List<MailObjectRow> uploads,
+    List<MailObjectRow> deletes,
+  ) async {
+    final waiting = {
+      for (final r in uploads)
+        if (await stillPending(accountId, r.messageId)) r.itemHmac,
+    };
+    return [
+      for (final r in deletes)
+        if (!(r.itemHmac != null && waiting.contains(r.itemHmac)) &&
+            await _packConfirmed(accountId, r))
+          r,
+    ];
+  }
+
+  Future<bool> _packConfirmed(String accountId, MailObjectRow r) async {
+    final pack = r.coveredBy;
+    if (pack == null) return true;
+    final stored = await row(accountId, pack);
+    return stored != null && !stored.pendingUpload;
+  }
 
   /// Marks [messageId] as on the server under [serverId] (null: the upload
   /// went through, but its id could not be learned; the next pull finds it).
@@ -843,23 +1101,27 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     }
   }
 
-  static MailObject _toModel(MailObjectRow row) => MailObject(
-        accountId: row.accountId,
-        folder: MailObjectFolder.values.byName(row.folder),
-        messageId: row.messageId,
-        itemHmac: row.itemHmac,
-        itemId: row.itemId,
-        versionId: row.versionId,
-        parents: row.parents == null
-            ? const []
-            : List<String>.from(jsonDecode(row.parents!) as List),
-        kind: row.kind,
-        collectionId: row.collectionId,
-        serverId: row.serverId,
-        sizeBytes: row.sizeBytes,
-        pendingUpload: row.pendingUpload,
-        pendingDelete: row.pendingDelete,
-        conflictOf: row.conflictOf,
-        payload: row.payload,
-      );
+  static MailObject _toModel(MailObjectRow row) => mailObjectFromRow(row);
 }
+
+/// The [MailObject] of a `mail_objects` row.
+MailObject mailObjectFromRow(MailObjectRow row) => MailObject(
+      accountId: row.accountId,
+      folder: MailObjectFolder.values.byName(row.folder),
+      messageId: row.messageId,
+      itemHmac: row.itemHmac,
+      itemId: row.itemId,
+      versionId: row.versionId,
+      parents: row.parents == null
+          ? const []
+          : List<String>.from(jsonDecode(row.parents!) as List),
+      kind: row.kind,
+      collectionId: row.collectionId,
+      serverId: row.serverId,
+      sizeBytes: row.sizeBytes,
+      pendingUpload: row.pendingUpload,
+      pendingDelete: row.pendingDelete,
+      conflictOf: row.conflictOf,
+      coveredBy: row.coveredBy,
+      payload: row.payload,
+    );

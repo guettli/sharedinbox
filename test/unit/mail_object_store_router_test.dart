@@ -70,11 +70,16 @@ void main() {
       await swallow(() => router.delete(id, 'h'));
       await swallow(() => router.appendRaw(id, Uint8List(0)));
       await swallow(() => router.deleteRaw(id, '<m@x>'));
+      await swallow(() => router.itemHmacOf(id, 'c', 'i'));
     }
     await swallow(() => router.open(_object));
     await swallow(() => router.fetchBody(_object));
     await swallow(() => router.put('j', testObject()));
+    await swallow(
+      () => router.putCovering('j', testObject(), covered: const []),
+    );
     router.observe('j', MailObjectFolder.data);
+    await swallow(() => router.rowsOfKind('j', 'blob'));
 
     const perAccount = [
       'sync',
@@ -84,8 +89,15 @@ void main() {
       'delete',
       'appendRaw',
       'deleteRaw',
+      'itemHmacOf',
     ];
-    expect(imap.calls, [...perAccount, ...perAccount, 'observe']);
-    expect(jmap.calls, [...perAccount, 'open', 'fetchBody', 'put']);
+    expect(
+      imap.calls,
+      [...perAccount, ...perAccount, 'observe', 'rowsOfKind'],
+    );
+    expect(
+      jmap.calls,
+      [...perAccount, 'open', 'fetchBody', 'put', 'putCovering'],
+    );
   });
 }
