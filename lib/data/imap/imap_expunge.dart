@@ -1,5 +1,6 @@
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/message_id_search.dart';
 
 /// Flags [uids] of the selected folder `\Deleted` and expunges exactly them.
 ///
@@ -55,4 +56,58 @@ Future<void> _restoreDeleted(
   } catch (e) {
     if (isImapConnectionLost(e)) rethrow;
   }
+}
+
+/// Whether the server of [client] is Gmail (`X-GM-EXT-1`): there an
+/// `EXPUNGE` in a label folder only removes that label, the mail stays in
+/// All Mail (ENCRYPTED-OBJECTS.md 5.5).
+bool isGmailImap(imap.ImapClient client) =>
+    client.serverInfo.supports('X-GM-EXT-1');
+
+/// Deletes [uids] of the selected folder [sourcePath] for good on Gmail:
+/// `UID MOVE` to the `\Trash` special-use folder, then `UID EXPUNGE` of the
+/// copies there ([deleteAndExpungeUids]). The copies are named by the MOVE's
+/// `COPYUID`; without one they are found in Trash by [messageIds]. Selects
+/// [sourcePath] again before it returns.
+///
+/// Returns false, and changes nothing, when the account has no `\Trash`
+/// folder.
+Future<bool> moveToTrashAndExpunge(
+  imap.ImapClient client,
+  List<int> uids, {
+  required String sourcePath,
+  Iterable<String> messageIds = const [],
+}) async {
+  final trash = (await client.listMailboxes(recursive: true))
+      .where((m) => m.isTrash)
+      .firstOrNull;
+  if (trash == null) return false;
+  final moved = await client.uidMove(
+    imap.MessageSequence.fromIds(uids, isUid: true),
+    targetMailboxPath: trash.encodedPath,
+  );
+  final copies = <int>{};
+  try {
+    copies.addAll(moved.responseCodeCopyUid?.targetSequence.toList() ?? []);
+  } catch (_) {
+    // A malformed COPYUID: find the copies by Message-ID below.
+  }
+  await client.selectMailboxByPath(trash.encodedPath);
+  try {
+    if (copies.isEmpty) {
+      for (final id in messageIds) {
+        for (final criteria in messageIdSearchCriteria(id)) {
+          final found =
+              await client.uidSearchMessages(searchCriteria: criteria);
+          final hits = found.matchingSequence?.toList() ?? const <int>[];
+          copies.addAll(hits);
+          if (hits.isNotEmpty) break;
+        }
+      }
+    }
+    if (copies.isNotEmpty) await deleteAndExpungeUids(client, copies.toList());
+  } finally {
+    await client.selectMailboxByPath(sourcePath);
+  }
+  return true;
 }

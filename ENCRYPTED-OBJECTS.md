@@ -66,6 +66,23 @@ move-target picker.
 
 Sync checkpoints live in `SyncStates` with `resourceType` `mos:keys` and
 `mos:data` (never an `IMAP:`/`JMAP:` prefix — those belong to mail sync).
+The checkpoint is JSON `{uidValidity, lastUid, uidNext, messages}`; a
+`STATUS` equal to it skips the folder. The personal NAMESPACE prefix is
+cached under `mos:namespace`; the folder listing matches app folders at the
+top level and under that prefix (e.g. `INBOX.SharedInbox.Data`).
+
+**IMAP store (#1370)**: `MailObjectStoreImap`
+(`lib/data/repositories/mail_object_store_imap.dart`). Tables (schema v82):
+`mail_objects` (one row per version, keyed by `(accountId, messageId)`;
+`payload` holds the outer RFC 5322 mail, i.e. **ciphertext**; head columns
+are filled once a key opens it), `mail_object_uids` (the UID → Message-ID /
+item-HMAC index), `mail_object_clocks` (the per-item version vector of
+5.4) and `mail_object_devices` (the DB side of the deviceId, 5.3). Until
+the beta switch, the store only pulls folders the listing recorded and
+creates folders only for a local row to upload. For the key lifecycle
+(#1366) it treats `SharedInbox/Keys` as opaque raw mails: `observe`,
+`appendRaw` (idempotent by Message-ID), `deleteRaw` (foreground) and
+`reopen` after an unlock. A key mail that vanishes is uploaded again.
 
 ## 4. Keys
 
@@ -323,6 +340,9 @@ app" and **never edited** by that reader (editing would fork history).
 
 - **Gmail** (`X-GM-EXT-1`): expunge from a label only removes the label.
   Delete = MOVE to `\Trash`, then `UID EXPUNGE` the COPYUID there.
+  Without COPYUID the copy is found in Trash by Message-ID. Without a
+  `\Trash` folder the superseded version stays on the server (harmless: the
+  merge keeps it superseded) and a warning is logged.
 - **No UIDPLUS**: no APPENDUID/COPYUID — confirm by `Message-ID` search.
 - **No reliable `SEARCH HEADER`** (Exchange/M365 reportedly): use the local
   UID → item-HMAC index filled during sync.

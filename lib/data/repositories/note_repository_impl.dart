@@ -16,6 +16,7 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
 import 'package:sharedinbox/data/imap/imap_expunge.dart';
+import 'package:sharedinbox/data/imap/missing_folder.dart';
 import 'package:sharedinbox/data/jmap/jmap_client.dart';
 
 const _notesFolder = 'Notes';
@@ -330,21 +331,19 @@ class NoteRepositoryImpl implements NoteRepository {
     imap.ImapClient client,
     String accountId,
     Object error,
-  ) async {
-    if (await confirmImapMailboxGone(client, _notesFolder, error)) return true;
-    unawaited(
-      _appLogger?.warn(
-        'note.sync.select_failed_kept',
-        'Could not open the Notes folder; it reads like "no such folder", '
-            'but the server did not say NONEXISTENT and still lists it (or '
-            'its listing could not be read): the cached notes and queued '
-            'note deletes are kept',
+  ) =>
+      appFolderGone(
+        client,
+        _notesFolder,
+        error,
         accountId: accountId,
-        error: error,
-      ),
-    );
-    return false;
-  }
+        event: 'note.sync.select_failed_kept',
+        message: 'Could not open the Notes folder; it reads like "no such '
+            'folder", but the server did not say NONEXISTENT and still lists '
+            'it (or its listing could not be read): the cached notes and '
+            'queued note deletes are kept',
+        appLogger: _appLogger,
+      );
 
   /// The Notes folder doesn't exist (yet) — the default on most servers.
   /// Clears any stale checkpoint and drops orphaned local notes so the local

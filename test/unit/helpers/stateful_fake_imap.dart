@@ -1,5 +1,7 @@
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:io' show SocketException;
+import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
@@ -21,8 +23,13 @@ class FakeServerMessage {
     String? emailId,
     this.messageIdHeader,
     this.dated = true,
+    this.raw,
   })  : flags = {...flags},
         emailId = emailId ?? 'E-$messageId';
+
+  /// The message as APPENDed (its exact bytes); null for a message the
+  /// test delivered, whose body the fake makes up.
+  final Uint8List? raw;
 
   /// The raw `Message-ID` header of the message body, when it differs from
   /// the envelope's `<messageId>` (a relay's comment after it, a different
@@ -58,6 +65,9 @@ class FakeServerFolder {
   /// it when the server advertises OBJECTID. Null: none.
   final String? mailboxId;
 
+  /// The `\Trash` special-use folder (RFC 6154), listed with that flag.
+  bool trash = false;
+
   /// A `\Noselect` folder (a shared-folders root, a placeholder parent):
   /// listed with that flag; its STATUS fails.
   bool noSelect = false;
@@ -87,6 +97,9 @@ class StatefulFakeImapServer with StaleAnswerHook {
     required Map<String, int> uidValidityByFolder,
     this.uidPlus = true,
     this.objectIds = false,
+    this.headerSearch = true,
+    this.namespacePrefix,
+    this.gmail = false,
   }) {
     for (final MapEntry(key: path, value: validity)
         in uidValidityByFolder.entries) {
@@ -96,6 +109,57 @@ class StatefulFakeImapServer with StaleAnswerHook {
 
   /// Whether connections advertise UIDPLUS (`COPYUID` on MOVE).
   final bool uidPlus;
+
+  /// Whether `SEARCH HEADER` works. When false it finds nothing (as
+  /// Exchange reportedly does), or, with [headerSearchAnswersBad], is
+  /// refused with `BAD`.
+  final bool headerSearch;
+  bool headerSearchAnswersBad = false;
+
+  /// The personal NAMESPACE prefix (RFC 2342); connections advertise
+  /// `NAMESPACE` when set ([StatefulFakeImapClient.namespace]).
+  final String? namespacePrefix;
+
+  /// A Gmail server (`X-GM-EXT-1`): an `EXPUNGE` in a folder other than
+  /// the `\Trash` folder only removes the label, the mail goes on in
+  /// [gmailAllMail]. Make the Trash folder with [addTrash].
+  final bool gmail;
+
+  static const gmailAllMail = '[Gmail]/All Mail';
+
+  /// How many `APPEND`s app connections sent.
+  int appendCount = 0;
+
+  /// Every folder an app connection SELECTed, in order.
+  final List<String> selects = [];
+
+  /// Adds the `\Trash` special-use folder [path].
+  FakeServerFolder addTrash(String path) => addFolder(path)..trash = true;
+
+  /// The messages of folder [path] (none when it is missing).
+  List<FakeServerMessage> messagesIn(String path) =>
+      folders[path]?.messages.values.toList() ?? const [];
+
+  /// Stores [raw] in [path] as `APPEND` would; its Message-ID is read from
+  /// it.
+  FakeServerMessage append(
+    String path,
+    Uint8List raw, {
+    Iterable<String> flags = const [],
+  }) {
+    final folder = folders[path]!;
+    final header =
+        imap.MimeMessage.parseFromData(raw).getHeaderValue('Message-ID');
+    final message = FakeServerMessage(
+      uid: folder.uidNext++,
+      messageId: StatefulFakeImapClient._bare(header?.trim() ?? ''),
+      modSeq: _bump(folder),
+      flags: flags,
+      raw: raw,
+    );
+    folder.messages[message.uid] = message;
+    return message;
+  }
 
   /// Whether connections advertise OBJECTID (RFC 8474): each message then
   /// has a move-stable EMAILID, by default `E-<Message-ID>`
@@ -294,6 +358,7 @@ class StatefulFakeImapServer with StaleAnswerHook {
         emailId: m.emailId,
         messageIdHeader: m.messageIdHeader,
         dated: m.dated,
+        raw: m.raw,
       );
       renumbered.messages[message.uid] = message;
     }
@@ -324,8 +389,14 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       const imap.Capability('MOVE'),
       if (server.uidPlus) const imap.Capability('UIDPLUS'),
       if (server.objectIds) const imap.Capability('OBJECTID'),
+      if (server.namespacePrefix != null) const imap.Capability('NAMESPACE'),
+      if (server.gmail) const imap.Capability('X-GM-EXT-1'),
     ];
   }
+
+  /// The personal NAMESPACE prefix, as `imapNamespaceFromServer` would
+  /// read it.
+  Future<String> namespace() async => server.namespacePrefix ?? '';
 
   /// The EMAILID of each message of the selected folder that [sequence]
   /// names, by UID, as `FETCH (EMAILID)` would answer.
@@ -394,7 +465,10 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
             encodedName: f.path.split('/').last,
             encodedPath: f.path,
             pathSeparator: '/',
-            flags: [if (f.noSelect) imap.MailboxFlag.noSelect],
+            flags: [
+              if (f.noSelect) imap.MailboxFlag.noSelect,
+              if (f.trash) imap.MailboxFlag.trash,
+            ],
           ),
     ]);
   }
@@ -451,7 +525,8 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     return box
       ..messagesExists = folder.messages.length
       ..messagesUnseen = folder.messages.values.where((m) => !m.seen).length
-      ..uidValidity = folder.uidValidity;
+      ..uidValidity = folder.uidValidity
+      ..uidNext = folder.uidNext;
   }
 
   /// `STATUS` of [box] with its `MAILBOXID`, as
@@ -496,6 +571,7 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     imap.QResyncParameters? qresync,
   }) async {
     final folder = server.folders[path];
+    server.selects.add(path);
     // A failed SELECT leaves no mailbox selected (RFC 3501 §6.3.1).
     if (server.failBefore?.call('SELECT') case final error?) {
       _selected = null;
@@ -565,6 +641,12 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     }
     final header = RegExp(r'^HEADER Message-ID "(.*)"$').firstMatch(criteria);
     if (header == null) throw UnsupportedError('fake IMAP: SEARCH $criteria');
+    if (!server.headerSearch) {
+      if (server.headerSearchAnswersBad) {
+        throw StatefulFakeImapServer.badAnswer('Unsupported search key');
+      }
+      return const [];
+    }
     final wanted = _bare(header.group(1)!);
     return [
       for (final m in messages.values)
@@ -589,16 +671,24 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
     // The whole message (a body, attachment or raw-source fetch).
     final body = items.contains('BODY.PEEK[]') || items.contains('BODY[]');
     final full = headers || body;
+    // `BODY.PEEK[HEADER.FIELDS (…)]`: the header only.
+    final fields = !full && items.contains('HEADER.FIELDS');
     final messages = [
       for (final m in _named(sequence))
         if (since == null || m.modSeq > since)
-          full ? _fullMessage(m) : _flagsMessage(m, withSize: items),
+          full
+              ? _fullMessage(m)
+              : fields
+                  ? _headerMessage(m)
+                  : _flagsMessage(m, withSize: items),
     ];
     final what = headers
         ? 'headers'
         : body
             ? 'body'
-            : items;
+            : fields
+                ? 'header fields'
+                : items;
     return _answer(
       'FETCH $what${since == null ? '' : ' CHANGEDSINCE'}',
       imap.FetchImapResult(messages, null),
@@ -623,12 +713,35 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       imap.MimeMessage()
         ..uid = m.uid
         ..flags = m.flags.toList()
-        ..size = withSize.contains('RFC822.SIZE') ? 100 : null;
+        ..size = withSize.contains('RFC822.SIZE') ? _size(m) : null;
+
+  static int _size(FakeServerMessage m) => m.raw?.length ?? 100;
+
+  /// The header of [m] with its size, as `BODY.PEEK[HEADER.FIELDS (…)]
+  /// RFC822.SIZE` answers (all header fields, a superset).
+  imap.MimeMessage _headerMessage(FakeServerMessage m) {
+    final raw = m.raw;
+    final text = raw == null
+        ? 'Message-ID: <${m.messageId}>\r\n'
+        : latin1.decode(raw).split('\r\n\r\n').first;
+    return imap.MimeMessage.parseFromText('$text\r\n\r\n')
+      ..uid = m.uid
+      ..flags = m.flags.toList()
+      ..size = _size(m);
+  }
 
   /// A message whose [FakeServerMessage.messageId] starts with
   /// [noMessageIdPrefix] has no Message-ID header (the id only names it in
   /// the test).
   imap.MimeMessage _fullMessage(FakeServerMessage m) {
+    if (m.raw case final raw?) {
+      return imap.MimeMessage()
+        ..mimeData = imap.BinaryMimeData(raw, containsHeader: true)
+        ..parse()
+        ..uid = m.uid
+        ..flags = m.flags.toList()
+        ..size = raw.length;
+    }
     final hasId = !m.messageId.startsWith(noMessageIdPrefix);
     final header = m.messageIdHeader ?? (hasId ? '<${m.messageId}>' : '');
     return imap.MimeMessage.parseFromText(
@@ -737,7 +850,42 @@ class StatefulFakeImapClient extends FakeImapClient with StoreAndMove {
       folder.messages.remove(m.uid);
       server._bump(folder);
       server.hits.add((command: 'EXPUNGE', messageId: m.messageId));
+      // Gmail: only the label goes; the mail stays in All Mail.
+      if (server.gmail && !folder.trash) {
+        final allMail = server.folders[StatefulFakeImapServer.gmailAllMail] ??
+            server.addFolder(StatefulFakeImapServer.gmailAllMail);
+        m
+          ..flags.remove(r'\Deleted')
+          ..uid = allMail.uidNext++
+          ..modSeq = server._bump(allMail);
+        allMail.messages[m.uid] = m;
+      }
     }
+  }
+
+  @override
+  Future<imap.GenericImapResult> appendMessageText(
+    String messageText, {
+    List<String>? flags,
+    imap.Mailbox? targetMailbox,
+    String? targetMailboxPath,
+    Duration? responseTimeout,
+  }) async {
+    _failBefore('APPEND');
+    final path = targetMailboxPath ?? targetMailbox?.encodedPath;
+    final folder = server.folders[path ?? _folder.path];
+    if (folder == null) throw _no('NO [TRYCREATE] Mailbox does not exist');
+    server.appendCount++;
+    final message = server.append(
+      folder.path,
+      Uint8List.fromList(utf8.encode(messageText)),
+      flags: flags ?? const [],
+    );
+    final result = imap.GenericImapResult();
+    if (server.uidPlus) {
+      result.responseCode = 'APPENDUID ${folder.uidValidity} ${message.uid}';
+    }
+    return _answer('APPEND', result);
   }
 
   @override
