@@ -863,6 +863,8 @@ final encryptedKeyServiceProvider = Provider<EncryptedKeyService>((ref) {
     betaEnabled: () async =>
         (await prefs.observePreferences().first).personalDataBeta,
     listFolders: (accountId) => mailboxes.syncMailboxes(accountId),
+    shareKeys: ref.watch(shareKeyRepositoryProvider),
+    findAccount: ref.watch(accountRepositoryProvider).getAccount,
     appLogger: ref.watch(appLoggerProvider),
   );
   ref.onDispose(service.dispose);

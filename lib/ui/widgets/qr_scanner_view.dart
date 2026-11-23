@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/theme/spacing.dart';
 
 /// Camera QR scanner with graceful fallbacks, shared by the account-sharing
 /// flow (`AccountSendScreen` / `AccountReceiveScreen`).
@@ -167,6 +168,38 @@ class _QrScannerViewState extends ConsumerState<QrScannerView> {
           ),
         if (widget.overlayBuilder != null) widget.overlayBuilder!(context),
       ],
+    );
+  }
+}
+
+/// The hint banner on top of the camera preview of a [QrScannerView]
+/// ([QrScannerView.overlayBuilder]), with an optional [action] below it.
+class QrScanHint extends StatelessWidget {
+  const QrScanHint(this.text, {super.key, this.action});
+
+  final String text;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    final hint = Text(
+      text,
+      style: const TextStyle(color: Colors.white),
+      textAlign: TextAlign.center,
+    );
+    final action = this.action;
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        color: Colors.black54,
+        padding: const EdgeInsets.symmetric(
+          vertical: AppSpacing.md,
+          horizontal: AppSpacing.lg,
+        ),
+        child: action == null ? hint : Column(children: [hint, action]),
+      ),
     );
   }
 }

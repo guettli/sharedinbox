@@ -67,6 +67,20 @@ class Account {
   /// silent until the user opts in and adds at least one rule.
   final bool notificationsEnabled;
 
+  /// The server the encrypted-data pairing matches accounts by
+  /// (`ENCRYPTED-OBJECTS.md` 4.2): the IMAP host, or the host of the JMAP
+  /// URL; lower case.
+  String get pairingServer => (type == AccountType.jmap
+          ? Uri.tryParse(jmapUrl ?? '')?.host ?? ''
+          : imapHost)
+      .trim()
+      .toLowerCase();
+
+  /// The username the pairing matches accounts by: [username], or [email]
+  /// when it is empty; lower case.
+  String get pairingUsername =>
+      (username.isEmpty ? email : username).trim().toLowerCase();
+
   const Account({
     required this.id,
     required this.displayName,

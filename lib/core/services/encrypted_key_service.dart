@@ -10,12 +10,16 @@ import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
+import 'package:sharedinbox/core/repositories/share_key_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
-import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/core/services/share_encryption_service.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Account;
 
 /// [SyncStates.resourceType] of the key-creation state of an account:
 /// JSON `{phase, ownMessageId, committed}`, never key material.
@@ -128,6 +132,9 @@ int _compareBytes(Uint8List a, Uint8List b) {
   return a.length - b.length;
 }
 
+/// A pairing request this device shows, and when its key pair expires.
+typedef PairingStart = ({String request, DateTime expiresAt});
+
 typedef _KeyState = ({KeyPhase phase, String? ownMessageId, bool committed});
 
 const _noState = (phase: KeyPhase.none, ownMessageId: null, committed: false);
@@ -147,6 +154,8 @@ class EncryptedKeyService {
     required KeyRing ring,
     required Future<bool> Function() betaEnabled,
     Future<void> Function(String accountId)? listFolders,
+    ShareKeyRepository? shareKeys,
+    Future<Account?> Function(String accountId)? findAccount,
     AppLogger? appLogger,
     DateTime Function()? now,
   })  : _db = db,
@@ -155,6 +164,8 @@ class EncryptedKeyService {
         _ring = ring,
         _betaEnabled = betaEnabled,
         _listFolders = listFolders,
+        _shareKeys = shareKeys,
+        _findAccount = findAccount,
         _appLogger = appLogger,
         _now = now ?? DateTime.now {
     ring.onWriteKeyUsed = (accountId) {
@@ -169,6 +180,11 @@ class EncryptedKeyService {
   final KeyRing _ring;
   final Future<bool> Function() _betaEnabled;
   final Future<void> Function(String accountId)? _listFolders;
+
+  /// The ephemeral key pairs of pairing; null (e.g. in the background
+  /// isolate): no pairing mail is opened.
+  final ShareKeyRepository? _shareKeys;
+  final Future<Account?> Function(String accountId)? _findAccount;
   final AppLogger? _appLogger;
   final DateTime Function() _now;
 
@@ -282,15 +298,22 @@ class EncryptedKeyService {
   /// Runs after each object sync. A no-op unless the beta switch is on and
   /// the account has a key, key mails or a setup in progress. Loads new
   /// collection keys and warns about a foreign key mail; in the
-  /// [foreground] it also settles an interrupted setup that lost the race.
-  /// The background never changes the phase and never deletes.
+  /// [foreground] it also settles an interrupted setup that lost the race
+  /// and deletes expired pairing mails. A locked device opens the pairing
+  /// mails sent to it. The background never changes the phase and never
+  /// deletes.
   Future<void> afterSync(String accountId, {required bool foreground}) async {
     if (!await _betaEnabled()) return;
     await _exclusive(accountId, () async {
       final state = await _loadState(accountId);
-      final key = await _localKey(accountId);
+      var key = await _localKey(accountId);
       final rows = await _keyRows(accountId);
       if (key == null && rows.isEmpty && state.phase == KeyPhase.none) return;
+      if (foreground) await _deleteExpiredPairings(accountId, rows);
+      if (key == null && foreground) {
+        await _acceptPairingMails(accountId, rows);
+        key = await _localKey(accountId);
+      }
       if (key != null) {
         if (await _loadCollectionKeys(accountId, key, rows)) {
           await _store.reopen(accountId);
@@ -570,22 +593,33 @@ class EncryptedKeyService {
         _logUnlockFailed(accountId, UnlockFailure.noSlotOpens.name);
         throw const UnlockFailed(UnlockFailure.noSlotOpens);
       }
-      await _keys.save(accountId, accountKey);
-      _ring.setAccountKey(accountId, accountKey);
-      final rows = await _keyRows(accountId);
-      await _loadCollectionKeys(accountId, accountKey, rows);
-      await _store.reopen(accountId);
-      final state = await _loadState(accountId);
-      if (state.phase == KeyPhase.lost) await _saveState(accountId, _noState);
-      unawaited(
-        _appLogger?.info(
-          'mos.key_unlocked',
-          'Unlocked the encrypted data with the recovery key',
-          accountId: accountId,
-        ),
-      );
+      await _adopt(accountId, accountKey, via: 'recovery');
     });
     _changed(accountId);
+  }
+
+  /// Keeps [accountKey] on this device: saves it, fills the ring, loads the
+  /// collection keys and opens what they open. Clears a lost race.
+  Future<void> _adopt(
+    String accountId,
+    AccountKey accountKey, {
+    required String via,
+  }) async {
+    await _keys.save(accountId, accountKey);
+    _ring.setAccountKey(accountId, accountKey);
+    final rows = await _keyRows(accountId);
+    await _loadCollectionKeys(accountId, accountKey, rows);
+    await _store.reopen(accountId);
+    final state = await _loadState(accountId);
+    if (state.phase == KeyPhase.lost) await _saveState(accountId, _noState);
+    unawaited(
+      _appLogger?.info(
+        'mos.key_unlocked',
+        'Unlocked the encrypted data',
+        accountId: accountId,
+        data: {'via': via},
+      ),
+    );
   }
 
   Future<AccountKey?> _openWith(
@@ -626,6 +660,241 @@ class EncryptedKeyService {
           'The recovery key did not unlock the encrypted data',
           accountId: accountId,
           data: {'reason': reason},
+        ),
+      );
+
+  // ── Pairing ───────────────────────────────────────────────────────────────
+
+  /// Pairing mails this run already rejected: not opened and logged again.
+  final _rejectedPairings = <String>{};
+
+  /// New device: a fresh key pair, stored for [ShareKeyMaterial.lifetime],
+  /// and the request to show as QR code and text (4.2).
+  Future<PairingStart> startPairing(String accountId) async {
+    final id = await _identity(accountId);
+    final pair = await _requireShareKeys().createKeyPair();
+    return (
+      request: encodePairingRequest(
+        PairingRequest(
+          keyId: pair.keyId,
+          publicKey: pair.publicKeyBytes,
+          server: id.server,
+          username: id.username,
+        ),
+      ),
+      expiresAt:
+          pair.expiresAt ?? _now().toUtc().add(ShareKeyMaterial.lifetime),
+    );
+  }
+
+  /// Unlocked device: encrypts the account key to [requestText] and stores
+  /// it as a pairing mail, uploaded like every keys-folder mail (offline
+  /// first). Returns the paste code of the same payload. Throws
+  /// [PairingRejected] for a bad request or one of another account — before
+  /// anything is encrypted — and [StateError] without a local key.
+  Future<String> sendPairing(String accountId, String requestText) async {
+    final request = parsePairingRequest(requestText);
+    if (request == null) {
+      _logPairingRejected(accountId, PairingRejection.badFormat);
+      throw const PairingRejected(PairingRejection.badFormat);
+    }
+    return _exclusive(accountId, () async {
+      final key = await _localKey(accountId);
+      if (key == null) throw StateError('this device has no key to send');
+      final id = await _identity(accountId);
+      if (request.server != id.server || request.username != id.username) {
+        _logPairingRejected(accountId, PairingRejection.wrongAccount);
+        throw const PairingRejected(PairingRejection.wrongAccount);
+      }
+      final ecies = await sealPairing(
+        request: request,
+        accountKey: key,
+        issuedAt: _now(),
+      );
+      final messageId = newMessageId();
+      await _store.appendRaw(
+        accountId,
+        buildPairingMail(messageId: messageId, ecies: ecies, date: _now()),
+      );
+      unawaited(
+        _appLogger?.info(
+          'mos.pairing_sent',
+          'Sent the encrypted-data key to a new device',
+          accountId: accountId,
+          data: {'messageId': messageId},
+        ),
+      );
+      return encodePairingCode(ecies);
+    });
+  }
+
+  /// New device: pulls the keys folder and opens a pairing mail sent to it.
+  /// The pairing view calls it while it waits. Offline: a no-op.
+  Future<void> checkPairing(String accountId) async {
+    try {
+      await _store.sync(accountId);
+    } catch (_) {
+      // Offline: the next call tries again.
+      return;
+    }
+    await afterSync(accountId, foreground: true);
+  }
+
+  /// New device: unlocks with a pasted pairing code. Throws
+  /// [PairingRejected].
+  Future<void> acceptPairingCode(String accountId, String text) async {
+    final Uint8List ecies;
+    try {
+      ecies = parsePairingCode(text);
+    } on PairingRejected catch (e) {
+      _logPairingRejected(accountId, e.reason);
+      rethrow;
+    }
+    await _exclusive(accountId, () async {
+      try {
+        await _store.sync(accountId);
+      } catch (_) {
+        // Offline first: the key mails seen before are enough.
+      }
+      final key = await _openPairing(accountId, ecies);
+      await _adopt(accountId, key, via: 'pairing');
+      _logPairingAccepted(accountId, null);
+    });
+    _changed(accountId);
+  }
+
+  /// Opens the pairing mails addressed to a key pair of this device: the
+  /// first that verifies unlocks it and is deleted. Mails of other devices
+  /// stay until they expire.
+  Future<void> _acceptPairingMails(
+    String accountId,
+    List<MailObject> rows,
+  ) async {
+    final shareKeys = _shareKeys;
+    if (shareKeys == null || _findAccount == null) return;
+    for (final (row, mail) in _pairingMails(rows)) {
+      if (_rejectedPairings.contains(row.messageId)) continue;
+      if (mail.ecies.length < idLength) continue;
+      final keyId = mail.ecies.sublist(0, idLength);
+      if (await shareKeys.findByKeyId(keyId) == null) continue;
+      final AccountKey key;
+      try {
+        key = await _openPairing(accountId, mail.ecies);
+      } on PairingRejected {
+        _rejectedPairings.add(row.messageId);
+        continue;
+      }
+      await _adopt(accountId, key, via: 'pairing');
+      await _store.deleteRaw(accountId, row.messageId);
+      _logPairingAccepted(accountId, row.messageId);
+      try {
+        await _store.sync(accountId);
+      } catch (_) {
+        // Offline: the next foreground sync deletes it.
+      }
+      return;
+    }
+  }
+
+  /// [openPairing], then the key must be the one of the winning key-mail
+  /// group (4.3) and verify its slot-list MAC. Throws [PairingRejected].
+  Future<AccountKey> _openPairing(String accountId, Uint8List ecies) async {
+    try {
+      final id = await _identity(accountId);
+      final key = await openPairing(
+        ecies: ecies,
+        keys: _requireShareKeys(),
+        server: id.server,
+        username: id.username,
+        now: _now(),
+      );
+      final entries = await _accountKeyMails(accountId);
+      final groupId = b64url(key.accountKeyId);
+      final group = [
+        for (final e in entries)
+          if (b64url(e.mail.payload.accountKeyId) == groupId) e.mail,
+      ];
+      if (keyRaceWinner(entries) != groupId ||
+          await selectWinner(group, key) == null) {
+        throw const PairingRejected(PairingRejection.keyMismatch);
+      }
+      return key;
+    } on PairingRejected catch (e) {
+      _logPairingRejected(accountId, e.reason);
+      rethrow;
+    }
+  }
+
+  /// Deletes the pairing mails older than [ShareKeyMaterial.lifetime] plus
+  /// [pairingClockSkew] (foreground only).
+  Future<void> _deleteExpiredPairings(
+    String accountId,
+    List<MailObject> rows,
+  ) async {
+    final cutoff =
+        _now().subtract(ShareKeyMaterial.lifetime + pairingClockSkew);
+    var count = 0;
+    for (final (row, mail) in _pairingMails(rows)) {
+      final date = mail.date;
+      if (date == null || !date.isBefore(cutoff)) continue;
+      await _store.deleteRaw(accountId, row.messageId);
+      count++;
+    }
+    if (count == 0) return;
+    unawaited(
+      _appLogger?.info(
+        'mos.pairing_expired_deleted',
+        'Deleted expired pairing mails',
+        accountId: accountId,
+        data: {'count': count},
+      ),
+    );
+  }
+
+  static Iterable<(MailObject, PairingMail)> _pairingMails(
+    List<MailObject> rows,
+  ) sync* {
+    for (final row in rows) {
+      final payload = row.payload;
+      if (payload == null) continue;
+      final PairingMail mail;
+      try {
+        mail = parsePairingMail(payload);
+      } on FormatException {
+        continue;
+      }
+      yield (row, mail);
+    }
+  }
+
+  /// The server and username pairing matches this account by.
+  Future<({String server, String username})> _identity(
+    String accountId,
+  ) async {
+    final account = await _findAccount?.call(accountId);
+    if (account == null) throw StateError('unknown account $accountId');
+    return (server: account.pairingServer, username: account.pairingUsername);
+  }
+
+  ShareKeyRepository _requireShareKeys() =>
+      _shareKeys ?? (throw StateError('pairing is not available here'));
+
+  void _logPairingAccepted(String accountId, String? messageId) => unawaited(
+        _appLogger?.info(
+          'mos.pairing_accepted',
+          'Unlocked the encrypted data with a key from another device',
+          accountId: accountId,
+          data: {'messageId': messageId},
+        ),
+      );
+
+  void _logPairingRejected(String accountId, PairingRejection reason) =>
+      unawaited(
+        _appLogger?.info(
+          'mos.pairing_rejected',
+          'A pairing code or mail was not accepted',
+          accountId: accountId,
+          data: {'reason': reason.name},
         ),
       );
 

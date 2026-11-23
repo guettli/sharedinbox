@@ -1,17 +1,22 @@
 // Backend tests for the key lifecycle (#1366) against a real Stalwart: key
 // mail round trip, two devices racing, unlocking a second device and a
-// keys folder deleted while unlocked. Each device has its own database,
-// secure storage, key ring and store.
+// keys folder deleted while unlocked, and pairing via the pairing mail
+// (#1367). Each device has its own database, secure storage, key ring and
+// store.
 // Run via: task test-backend
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
+import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:test/test.dart';
 
 import 'mail_object_harness.dart';
@@ -166,6 +171,59 @@ void main() {
     expect(await a.service.status(a.id), PersonalDataStatus.unlocked);
   });
 
+  /// The Message-IDs of the pairing mails on the server.
+  Future<List<String>> pairingMailsOnServer() async => [
+        for (final MapEntry(:key, :value)
+            in (await pool.rawMails(_keysPath)).entries)
+          if (_isPairingMail(value)) key,
+      ];
+
+  test(
+      'pairing via mail: the second device gets the same key, the pairing '
+      'mail goes; a stale one is deleted by the foreground sync', () async {
+    final a = await device();
+    await a.service.createKey(a.id);
+    await a.store.waitForIdle();
+    final b = await device();
+    await b.listAndSync();
+    expect(await b.service.status(b.id), PersonalDataStatus.locked);
+
+    final start = await b.service.startPairing(b.id);
+    await a.service.sendPairing(a.id, start.request);
+    await a.sync();
+    expect(await pairingMailsOnServer(), hasLength(1));
+
+    await b.service.checkPairing(b.id);
+    await b.sync();
+
+    final ka = (await a.keys.load(a.id))!;
+    final kb = (await b.keys.load(b.id))!;
+    expect(kb.accountKeyId, ka.accountKeyId);
+    expect(kb.key.bytes, ka.key.bytes);
+    expect(await b.service.status(b.id), PersonalDataStatus.unlocked);
+    expect(await pairingMailsOnServer(), isEmpty);
+    expect(b.logs.rows.map((r) => r.event), contains('mos.pairing_accepted'));
+
+    final stale = newMessageId();
+    await pool.withClient(
+      (c) => c.appendMessageText(
+        ascii.decode(
+          buildPairingMail(
+            messageId: stale,
+            ecies: Uint8List(80),
+            date: DateTime.now().subtract(const Duration(hours: 1)),
+          ),
+        ),
+        targetMailboxPath: _keysPath,
+      ),
+    );
+    await a.sync();
+    expect(await pairingMailsOnServer(), [stale]);
+    await a.service.afterSync(a.id, foreground: true);
+    await a.sync();
+    expect(await pairingMailsOnServer(), isEmpty);
+  });
+
   test('a foreign key mail after the first write only warns', () async {
     final a = await device();
     await a.service.createKey(a.id);
@@ -227,6 +285,8 @@ class _KeyDevice {
       ring: ring,
       betaEnabled: () async => true,
       listFolders: (id) => mailboxes.syncMailboxes(id),
+      shareKeys: ShareKeyRepositoryImpl(db),
+      findAccount: accounts.getAccount,
       appLogger: AppLogger(logs),
     );
   }
@@ -256,4 +316,13 @@ class _KeyDevice {
 
   Future<List<MailObject>> keyRows() =>
       store.observe(id, MailObjectFolder.keys).first;
+}
+
+bool _isPairingMail(Uint8List mail) {
+  try {
+    parsePairingMail(mail);
+    return true;
+  } on FormatException {
+    return false;
+  }
 }

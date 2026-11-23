@@ -167,22 +167,8 @@ class _AccountSendScreenState extends ConsumerState<AccountSendScreen> {
       fallbackBuilder: _buildTextFallbackView,
       logEvent: 'account.send.scanner_failed',
       screen: 'AccountSendScreen',
-      overlayBuilder: (context) => Positioned(
-        top: 0,
-        left: 0,
-        right: 0,
-        child: Container(
-          color: Colors.black54,
-          padding: const EdgeInsets.symmetric(
-            vertical: AppSpacing.md,
-            horizontal: AppSpacing.lg,
-          ),
-          child: const Text(
-            'Point the camera at the public-key QR code shown by the receiver',
-            style: TextStyle(color: Colors.white),
-            textAlign: TextAlign.center,
-          ),
-        ),
+      overlayBuilder: (context) => const QrScanHint(
+        'Point the camera at the public-key QR code shown by the receiver',
       ),
     );
   }

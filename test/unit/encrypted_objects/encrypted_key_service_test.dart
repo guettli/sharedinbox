@@ -1,15 +1,20 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
+import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
+import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/data/db/database.dart';
+import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/repositories/share_key_repository_impl.dart';
 import 'package:test/test.dart';
 
 import '../db_test_helper.dart';
@@ -20,15 +25,24 @@ import 'test_helpers.dart';
 
 const _acc = 'acc';
 
+const _account = Account(
+  id: _acc,
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  imapHost: 'mail.example.com',
+);
+
 /// One install: its own database, secure storage, store and key ring.
 class _Device {
-  _Device(this.server, {this.beta = true}) {
+  _Device(this.server, {this.beta = true, this.account = _account}) {
     service = EncryptedKeyService(
       db: db,
       store: store,
       keys: keys,
       ring: ring,
       betaEnabled: () async => beta,
+      shareKeys: ShareKeyRepositoryImpl(db),
+      findAccount: (id) async => id == _acc ? account : null,
       appLogger: AppLogger(logs),
     );
     store.keepVanished = (row) => ring.keepVanishedKeyMail(_acc, row);
@@ -36,6 +50,7 @@ class _Device {
 
   final FakeKeysServer server;
   bool beta;
+  final Account account;
   final AppDatabase db = openTestDatabase();
   final storage = FakeSecureStorage();
   late final store = FakeKeysStore(server);
@@ -60,8 +75,11 @@ void main() {
   late FakeKeysServer server;
   final devices = <_Device>[];
 
-  Future<_Device> device({bool beta = true}) async {
-    final d = _Device(server, beta: beta);
+  Future<_Device> device({
+    bool beta = true,
+    Account account = _account,
+  }) async {
+    final d = _Device(server, beta: beta, account: account);
     devices.add(d);
     await seedAccountRow(d.db, _acc);
     return d;
@@ -477,4 +495,235 @@ void main() {
       }
     }
   });
+
+  group('pairing', () {
+    List<String> pairingMailsOnServer() => [
+          for (final m in server.mails.values)
+            if (_isPairingMail(m.mail)) m.messageId,
+        ];
+
+    /// A unlocked, B locked with A's key mails.
+    Future<(_Device, _Device)> pair() async {
+      final a = await device();
+      await a.service.createKey(_acc);
+      final b = await device();
+      await b.store.sync(_acc);
+      expect(await b.status(), PersonalDataStatus.locked);
+      return (a, b);
+    }
+
+    Matcher rejected(PairingRejection reason) => throwsA(
+          isA<PairingRejected>().having((e) => e.reason, 'reason', reason),
+        );
+
+    test('via the pairing mail: B gets A’s key, the mail is deleted', () async {
+      final (a, b) = await pair();
+      final start = await b.service.startPairing(_acc);
+      expect(start.expiresAt.isAfter(DateTime.now()), isTrue);
+
+      final code = await a.service.sendPairing(_acc, start.request);
+      await a.store.sync(_acc);
+      expect(pairingMailsOnServer(), hasLength(1));
+
+      await b.service.checkPairing(_acc);
+
+      final ka = (await a.keys.load(_acc))!;
+      final kb = (await b.keys.load(_acc))!;
+      expect(kb.accountKeyId, ka.accountKeyId);
+      expect(kb.key.bytes, ka.key.bytes);
+      expect(
+        b.ring.writeKey(_acc, personalCollectionId)!.keyId,
+        a.ring.writeKey(_acc, personalCollectionId)!.keyId,
+      );
+      expect(await b.status(), PersonalDataStatus.unlocked);
+      expect(pairingMailsOnServer(), isEmpty);
+      expect(a.events, contains('mos.pairing_sent'));
+      expect(
+        b.events,
+        containsAll(['mos.pairing_accepted', 'mos.key_unlocked']),
+      );
+
+      // A drops its copy once it is gone from the server.
+      await a.store.sync(_acc);
+      expect(a.store.rows.where((r) => _isPairingMail(r.payload!)), isEmpty);
+
+      // Neither the request, the code nor the key reach the logs.
+      final logged = [
+        for (final d in [a, b])
+          for (final r in d.logs.rows) '${r.message} ${r.dataJson ?? ''}',
+      ];
+      for (final line in logged) {
+        for (final secret in [
+          start.request.substring(pairingRequestPrefix.length),
+          code.substring(pairingCodePrefix.length),
+          b64url(ka.key.bytes),
+          b64url(ka.accountKeyId),
+        ]) {
+          expect(line, isNot(contains(secret)));
+        }
+      }
+    });
+
+    test('via the paste code, offline', () async {
+      final (a, b) = await pair();
+      final start = await b.service.startPairing(_acc);
+      final code = await a.service.sendPairing(_acc, start.request);
+      b.store.offline = true;
+
+      await b.service.acceptPairingCode(_acc, code);
+
+      expect(
+        (await b.keys.load(_acc))!.key.bytes,
+        (await a.keys.load(_acc))!.key.bytes,
+      );
+      expect(await b.status(), PersonalDataStatus.unlocked);
+    });
+
+    test('a request of another account is refused before sending', () async {
+      final (a, _) = await pair();
+      final other = await device(
+        account: const Account(
+          id: _acc,
+          displayName: 'Bob',
+          email: 'bob@example.com',
+          imapHost: 'mail.example.com',
+        ),
+      );
+      final start = await other.service.startPairing(_acc);
+      final rows = a.store.rows.length;
+
+      await expectLater(
+        a.service.sendPairing(_acc, start.request),
+        rejected(PairingRejection.wrongAccount),
+      );
+      await expectLater(
+        a.service.sendPairing(_acc, 'sharedinbox.de:pubkey:v1:AAAA'),
+        rejected(PairingRejection.badFormat),
+      );
+      expect(a.store.rows, hasLength(rows));
+      expect(a.events, contains('mos.pairing_rejected'));
+    });
+
+    test('sendPairing without a local key throws', () async {
+      final (_, b) = await pair();
+      final start = await b.service.startPairing(_acc);
+      await expectLater(
+        b.service.sendPairing(_acc, start.request),
+        throwsStateError,
+      );
+    });
+
+    test('a key of a losing group or failing the MAC is not kept', () async {
+      final (a, b) = await pair();
+      final winner = (await a.keys.load(_acc))!;
+      // A later key mail of another key: a losing group.
+      final loser = AccountKey.generate();
+      final payload = KeyMailPayload(
+        accountKeyId: loser.accountKeyId,
+        slotListVersion: 1,
+        slots: [await wrapRecoverySlot(loser, RecoveryKey.generate())],
+      );
+      final loserMail = newMessageId();
+      server.append(
+        loserMail,
+        buildKeyMail(
+          messageId: loserMail,
+          mail: await payload.serialize(await loser.kSlots()),
+          date: DateTime.now(),
+        ),
+      );
+      final start = await b.service.startPairing(_acc);
+      final request = parsePairingRequest(start.request)!;
+
+      Future<Uint8List> sealed(AccountKey key) => sealPairing(
+            request: request,
+            accountKey: key,
+            issuedAt: DateTime.now(),
+          );
+
+      // Over the paste path.
+      for (final key in [
+        loser,
+        AccountKey(winner.accountKeyId, AccountKey.generate().key.bytes),
+      ]) {
+        await expectLater(
+          b.service
+              .acceptPairingCode(_acc, encodePairingCode(await sealed(key))),
+          rejected(PairingRejection.keyMismatch),
+        );
+      }
+
+      // Over the mail path: rejected once, left to expire.
+      final messageId = newMessageId();
+      server.append(
+        messageId,
+        buildPairingMail(
+          messageId: messageId,
+          ecies: await sealed(loser),
+          date: DateTime.now(),
+        ),
+      );
+      await b.service.checkPairing(_acc);
+      await b.service.checkPairing(_acc);
+
+      expect(await b.keys.load(_acc), isNull);
+      expect(await b.status(), PersonalDataStatus.locked);
+      expect(pairingMailsOnServer(), [messageId]);
+      final rejections =
+          b.logs.rows.where((r) => r.event == 'mos.pairing_rejected');
+      expect(rejections, hasLength(3));
+      expect(rejections.last.dataJson, contains('keyMismatch'));
+    });
+
+    test('expired pairing mails are deleted in the foreground only', () async {
+      final (a, _) = await pair();
+      final stale = newMessageId();
+      final fresh = newMessageId();
+      final now = DateTime.now();
+      for (final (id, date) in [
+        (stale, now.subtract(const Duration(minutes: 26))),
+        (fresh, now.subtract(const Duration(minutes: 24))),
+      ]) {
+        server.append(
+          id,
+          buildPairingMail(
+            messageId: id,
+            ecies: Uint8List.fromList(List.filled(80, 7)),
+            date: date,
+          ),
+        );
+      }
+      await a.store.sync(_acc);
+
+      await a.service.afterSync(_acc, foreground: false);
+      await a.store.sync(_acc);
+      expect(pairingMailsOnServer(), hasLength(2));
+
+      await a.service.afterSync(_acc, foreground: true);
+      await a.store.sync(_acc);
+      expect(pairingMailsOnServer(), [fresh]);
+      final deleted = a.logs.rows
+          .singleWhere((r) => r.event == 'mos.pairing_expired_deleted');
+      expect(deleted.dataJson, contains('"count":1'));
+    });
+
+    test('a vanished pairing mail is never uploaded again', () async {
+      final (a, b) = await pair();
+      final start = await b.service.startPairing(_acc);
+      await a.service.sendPairing(_acc, start.request);
+      await a.store.sync(_acc);
+      final row = a.store.rows.singleWhere((r) => _isPairingMail(r.payload!));
+
+      expect(await a.service.keepVanishedKeyMail(_acc, row), isFalse);
+    });
+  });
+}
+
+bool _isPairingMail(Uint8List mail) {
+  try {
+    parsePairingMail(mail);
+    return true;
+  } on FormatException {
+    return false;
+  }
 }
