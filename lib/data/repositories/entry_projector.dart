@@ -9,7 +9,7 @@ import 'package:sharedinbox/data/db/database.dart';
 
 /// Writes the `Entries` projection of the `entry` documents (#1373). Runs
 /// inside the store's merge transaction ([ObjectProjector]).
-class EntryProjector implements ObjectProjector {
+class EntryProjector extends ObjectProjector {
   EntryProjector(this.db);
 
   final AppDatabase db;
@@ -23,6 +23,7 @@ class EntryProjector implements ObjectProjector {
     String itemHmac,
     InnerObject? display, {
     required bool conflict,
+    required List<InnerObject> heads,
   }) async {
     final entry = display == null
         ? null

@@ -18,6 +18,7 @@ const _noCode = {
   'lib/core/db_schema_version.dart',
   'lib/core/encrypted_objects/common_passwords.dart',
   'lib/core/repositories/account_repository.dart',
+  'lib/core/repositories/card_repository.dart',
   'lib/core/repositories/draft_repository.dart',
   'lib/core/repositories/email_repository.dart',
   'lib/core/repositories/entry_repository.dart',

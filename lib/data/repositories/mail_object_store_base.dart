@@ -201,6 +201,7 @@ abstract class MailObjectStoreBase implements MailObjectStore {
       merge: merge,
       display: objects[display.ref]!,
       versions: [for (final h in merge.distinctHeads) objects[h.ref]!],
+      heads: [for (final h in merge.heads) objects[h.ref]!],
     );
   }
 
@@ -777,7 +778,10 @@ abstract class MailObjectStoreBase implements MailObjectStore {
       vv: await _loadVv(accountId, itemHmac),
     );
     final display = result.display?.versionId.encode();
-    final conflict = result.state == MergeState.conflict;
+    final projector = _projectorOf(result, objects);
+    // A kind whose heads merge by themselves is never a conflict (#1379).
+    final conflict = result.state == MergeState.conflict &&
+        !(projector?.mergesHeads ?? false);
     final heads = {for (final h in result.heads) h.ref};
     final ignored = {for (final v in result.ignored) v.ref};
     String? log;
@@ -815,31 +819,45 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         if (isHead) log = await _project(accountId, messageId, object) ?? log;
       }
       await _saveVv(accountId, itemHmac, result.vv);
-      await _applyProjector(accountId, itemHmac, result, objects);
+      if (projector != null) {
+        await _applyProjector(
+          projector,
+          accountId,
+          itemHmac,
+          [for (final h in result.heads) objects[h.ref]!],
+          conflict: conflict,
+        );
+      }
     });
     return log;
   }
 
-  /// Hands the merged item to the projector of its kind: the newest head
-  /// that is not a tombstone, so an edit racing a delete stays visible as a
-  /// conflict (5.4); none once every head is a tombstone.
-  Future<void> _applyProjector(
-    String accountId,
-    String itemHmac,
+  /// The projector of the kind of the item's newest head, if any.
+  ObjectProjector? _projectorOf(
     MergeResult result,
     Map<String, InnerObject> objects,
-  ) async {
-    if (result.heads.isEmpty) return;
-    final heads = [for (final h in result.heads) objects[h.ref]!];
-    final projector = _projectors[heads.last.head.kind];
-    if (projector == null) return;
-    await projector.apply(
-      accountId,
-      itemHmac,
-      heads.where((h) => !h.head.deleted).lastOrNull,
-      conflict: result.state == MergeState.conflict,
-    );
+  ) {
+    if (result.heads.isEmpty) return null;
+    return _projectors[objects[result.heads.last.ref]!.head.kind];
   }
+
+  /// Hands the merged item to [projector]: the newest head that is not a
+  /// tombstone, so an edit racing a delete stays visible as a conflict
+  /// (5.4); none once every head is a tombstone. [heads]: all of them.
+  Future<void> _applyProjector(
+    ObjectProjector projector,
+    String accountId,
+    String itemHmac,
+    List<InnerObject> heads, {
+    required bool conflict,
+  }) =>
+      projector.apply(
+        accountId,
+        itemHmac,
+        heads.where((h) => !h.head.deleted).lastOrNull,
+        conflict: conflict,
+        heads: heads,
+      );
 
   // ── Projections (#1372) ───────────────────────────────────────────────────
 

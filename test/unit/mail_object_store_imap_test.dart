@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
@@ -33,10 +34,16 @@ const _account = Account(
 /// One install of the app: its own database, secure storage and store, all
 /// talking to the shared fake [server].
 class _Device with MailObjectDeviceOps, ListingObjectDevice {
-  _Device(this.server, {this.background = false, this.unlocked = true});
+  _Device(
+    this.server, {
+    this.background = false,
+    this.unlocked = true,
+    this.projectors = const [],
+  });
 
   final StatefulFakeImapServer server;
   final bool background;
+  final List<ObjectProjector> projectors;
 
   /// Whether this device holds the collection key.
   bool unlocked;
@@ -67,6 +74,7 @@ class _Device with MailObjectDeviceOps, ListingObjectDevice {
     appLogger: AppLogger(logs),
     pushPending: !background,
     onStep: (step) async => onStep?.call(step),
+    projectors: projectors,
   );
 
   void Function(String step)? onStep;
@@ -81,8 +89,14 @@ class _Device with MailObjectDeviceOps, ListingObjectDevice {
     StatefulFakeImapServer server, {
     bool background = false,
     bool unlocked = true,
+    List<ObjectProjector> projectors = const [],
   }) async {
-    final device = _Device(server, background: background, unlocked: unlocked);
+    final device = _Device(
+      server,
+      background: background,
+      unlocked: unlocked,
+      projectors: projectors,
+    );
     addTearDown(device.db.close);
     await device.accounts.addAccount(_account, 'pw');
     return device;
@@ -241,6 +255,33 @@ void main() {
       expect(item.merge.state, MergeState.conflict);
     }
     expect(server.messagesIn(_dataPath), hasLength(2));
+  });
+
+  test(
+      'a kind whose heads merge by themselves is never a conflict; its '
+      'projector gets every head', () async {
+    final server = _server();
+    final projector = _MergingProjector();
+    final a = await _Device.open(server, projectors: [projector]);
+    final b = await _Device.open(server, projectors: [projector]);
+    final v1 = await a.putNew(body: 'one');
+    await b.list();
+    await b.sync();
+
+    await a.putEdit(v1.itemHmac!, 'A');
+    await b.putEdit(v1.itemHmac!, 'B');
+    await a.sync();
+
+    final rows = await a.rows();
+    expect(rows, hasLength(2));
+    expect(rows.map((r) => r.conflictOf), everyElement(isNull));
+    expect(await a.store.observeConflicts(_acc).first, isEmpty);
+    final last = projector.calls.last;
+    expect(last.conflict, isFalse);
+    expect(last.heads, hasLength(2));
+    final item = (await a.store.item(_acc, v1.itemHmac!))!;
+    expect(item.merge.state, MergeState.conflict);
+    expect(item.heads, hasLength(2));
   });
 
   for (final (headerSearch, how) in [
@@ -622,4 +663,26 @@ void main() {
       contains('deck-1'),
     );
   });
+}
+
+/// A projector of the test kind whose heads merge by themselves (like
+/// `card-batch`); records its calls.
+class _MergingProjector extends ObjectProjector {
+  final calls = <({bool conflict, List<InnerObject> heads})>[];
+
+  @override
+  String get kind => 'entry';
+
+  @override
+  bool get mergesHeads => true;
+
+  @override
+  Future<void> apply(
+    String accountId,
+    String itemHmac,
+    InnerObject? display, {
+    required bool conflict,
+    required List<InnerObject> heads,
+  }) async =>
+      calls.add((conflict: conflict, heads: heads));
 }

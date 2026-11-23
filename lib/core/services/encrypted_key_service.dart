@@ -605,15 +605,33 @@ class EncryptedKeyService {
     }
   }
 
+  /// A write key for [collectionId] (e.g. a new deck, #1379): unless one
+  /// is known, a new collection key, its collection-key mail appended and
+  /// the key set as the write key. Other devices load it from the mail
+  /// ([_loadCollectionKeys]). Throws [StateError] while locked.
+  Future<void> ensureCollection(String accountId, String collectionId) =>
+      _exclusive(accountId, () async {
+        final key = await _localKey(accountId);
+        if (key == null) throw StateError('no account key: locked');
+        await _ensureCollection(accountId, key, collectionId);
+      });
+
   /// The `personal` collection key: created by the race winner only.
   Future<void> _ensurePersonalCollection(
     String accountId,
     AccountKey accountKey,
+  ) =>
+      _ensureCollection(accountId, accountKey, personalCollectionId);
+
+  Future<void> _ensureCollection(
+    String accountId,
+    AccountKey accountKey,
+    String collectionId,
   ) async {
     final rows = await _keyRows(accountId);
     await _loadCollectionKeys(accountId, accountKey, rows);
-    if (_ring.hasWriteKey(accountId, personalCollectionId)) return;
-    final key = CollectionKey.generate(personalCollectionId);
+    if (_ring.hasWriteKey(accountId, collectionId)) return;
+    final key = CollectionKey.generate(collectionId);
     await _store.appendRaw(
       accountId,
       buildCollectionKeyMail(
@@ -623,7 +641,11 @@ class EncryptedKeyService {
       ),
     );
     _ring.setWriteKey(accountId, key);
-    await _store.sync(accountId);
+    try {
+      await _store.sync(accountId);
+    } catch (_) {
+      // Offline: the collection-key mail goes up with the next sync.
+    }
     await _store.reopen(accountId);
   }
 

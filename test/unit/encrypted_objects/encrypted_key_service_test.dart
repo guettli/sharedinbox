@@ -470,6 +470,41 @@ void main() {
     expect(b.store.reopens, 0, reason: 'nothing new since loadKeys');
   });
 
+  test(
+      'ensureCollection adds a collection key once, offline too; another '
+      'device loads it', () async {
+    final a = await device();
+    final created = await a.service.createKey(_acc) as KeyCreated;
+    expect(server.mails, hasLength(2));
+
+    await a.service.ensureCollection(_acc, 'deck-x');
+    await a.service.ensureCollection(_acc, 'deck-x');
+    expect(server.mails, hasLength(3));
+    expect(a.ring.hasWriteKey(_acc, 'deck-x'), isTrue);
+
+    a.store.offline = true;
+    await a.service.ensureCollection(_acc, 'deck-y');
+    expect(a.ring.hasWriteKey(_acc, 'deck-y'), isTrue);
+    expect(server.mails, hasLength(3));
+    a.store.offline = false;
+    await a.store.sync(_acc);
+    expect(server.mails, hasLength(4));
+
+    final b = await device();
+    await b.store.sync(_acc);
+    await expectLater(
+      b.service.ensureCollection(_acc, 'deck-z'),
+      throwsStateError,
+    );
+    await b.service.unlockWithRecoveryKey(_acc, created.formatted);
+    for (final deck in ['deck-x', 'deck-y']) {
+      expect(
+        b.ring.writeKey(_acc, deck)!.keyId,
+        a.ring.writeKey(_acc, deck)!.keyId,
+      );
+    }
+  });
+
   test('watchStatus follows the setup', () async {
     final a = await device();
     final statuses = a.service.watchStatus(_acc);
