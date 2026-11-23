@@ -229,6 +229,7 @@ class UserPreferencesScreen extends ConsumerWidget {
                     .updatePersonalDataBeta(enabled: value),
               ),
             ),
+            if (prefs.personalDataBeta) _DefaultItemsAccountTile(prefs),
             const Divider(),
             _EncryptionSection(),
           ],
@@ -241,6 +242,40 @@ class UserPreferencesScreen extends ConsumerWidget {
     const options = [50, 100, 200, 500];
     return options.reduce(
       (a, b) => (a - mb).abs() <= (b - mb).abs() ? a : b,
+    );
+  }
+}
+
+/// "Default account for new items" (#1357): where quick-added todos and
+/// entries go. None: the open account, else the first unlocked one.
+class _DefaultItemsAccountTile extends ConsumerWidget {
+  const _DefaultItemsAccountTile(this.prefs);
+
+  final UserPreferences prefs;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accounts = ref.watch(allAccountsProvider).value ?? const [];
+    final selected = prefs.defaultItemsAccountId;
+    return ListTile(
+      title: const Text('Default account for new items'),
+      subtitle: AccessibleDropdown(
+        child: DropdownButton<String?>(
+          key: const Key('defaultItemsAccountDropdown'),
+          isExpanded: true,
+          value: accounts.any((a) => a.id == selected) ? selected : null,
+          items: [
+            const DropdownMenuItem(child: Text('Open account')),
+            for (final a in accounts)
+              DropdownMenuItem(value: a.id, child: Text(a.email)),
+          ],
+          onChanged: (value) => unawaited(
+            ref
+                .read(userPreferencesRepositoryProvider)
+                .updateDefaultItemsAccountId(value),
+          ),
+        ),
+      ),
     );
   }
 }

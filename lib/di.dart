@@ -861,6 +861,40 @@ final entriesProvider = StreamProvider.autoDispose
       .observeEntries(accountId, query: query);
 });
 
+/// Today as a local date; overridden in tests.
+final todayProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
+/// The ids of the accounts whose personal data is unlocked on this device
+/// (#1357), in account order.
+final unlockedPersonalDataAccountsProvider =
+    FutureProvider.autoDispose<List<String>>((ref) async {
+  final accounts = await ref.watch(allAccountsProvider.future);
+  final unlocked = <String>[];
+  for (final a in accounts) {
+    final status = await ref.watch(personalDataStatusProvider(a.id).future);
+    if (status == PersonalDataStatus.unlocked ||
+        status == PersonalDataStatus.foreignKeyWarning) {
+      unlocked.add(a.id);
+    }
+  }
+  return unlocked;
+});
+
+/// The todos of every unlocked account matching a filter on a day
+/// (`YYYY-MM-DD`), see `EntryRepository.observeTodos` (#1357).
+final todosProvider = StreamProvider.autoDispose
+    .family<List<Entry>, (TodoFilter filter, String today)>((ref, args) async* {
+  final (filter, today) = args;
+  final repo = ref.watch(entryRepositoryProvider);
+  final accountIds =
+      await ref.watch(unlockedPersonalDataAccountsProvider.future);
+  yield* repo.observeTodos(
+    accountIds: accountIds.toSet(),
+    filter: filter,
+    today: today,
+  );
+});
+
 /// The encrypted objects of an account in conflict, any kind (#1374).
 final conflictsProvider =
     StreamProvider.autoDispose.family<List<ConflictItem>, String>(

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/models/entry.dart';
+
 import 'entries_fakes.dart';
 
 Future<FakeEntryRepository> _pump(
@@ -141,5 +143,48 @@ void main() {
       repo.updates.single,
       (itemId: 'e1', title: 'Edited', body: '- [x] a'),
     );
+  });
+
+  testWidgets('the Todo switch adds a task, saved at once; off removes it',
+      (tester) async {
+    final repo = await _pump(tester);
+    expect(find.byKey(const Key('entryDone')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('entryTodoSwitch')));
+    await tester.pumpAndSettle();
+    expect(repo.taskUpdates.single.task!.done, isFalse);
+    expect(repo.entries.single.task, isNotNull);
+    expect(find.byKey(const Key('entryDone')), findsOneWidget);
+    expect(find.text('No due date'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('entryDone')));
+    await tester.pumpAndSettle();
+    expect(repo.taskUpdates.last.task!.done, isTrue);
+
+    await tester.tap(find.byKey(const Key('entryTodoSwitch')));
+    await tester.pumpAndSettle();
+    expect(repo.taskUpdates.last.task, isNull);
+    expect(find.byKey(const Key('entryDone')), findsNothing);
+    // Title and body are not saved by it.
+    expect(repo.updates, isEmpty);
+  });
+
+  testWidgets('the due date is picked and cleared', (tester) async {
+    final repo = await _pump(tester);
+    await tester.tap(find.byKey(const Key('entryTodoSwitch')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('entryDueDate')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    final due = repo.taskUpdates.last.task!.due;
+    expect(due, isoDate(DateTime.now()));
+    expect(find.text('Due $due'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('entryDueDateClear')));
+    await tester.pumpAndSettle();
+    expect(repo.taskUpdates.last.task!.due, isNull);
+    expect(find.text('No due date'), findsOneWidget);
   });
 }

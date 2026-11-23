@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
+import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
@@ -38,6 +40,40 @@ class EntryRepositoryImpl implements EntryRepository {
   }
 
   @override
+  Stream<List<Entry>> observeTodos({
+    required Set<String> accountIds,
+    required TodoFilter filter,
+    required String today,
+  }) {
+    final q = _db.select(_db.entries)
+      ..where((t) => t.taskJson.isNotNull() & t.accountId.isIn(accountIds));
+    return q.watch().map(
+          (rows) => [
+            for (final e in rows.map(_toModel))
+              if (e.task?.matches(filter, today) ?? false) e,
+          ]..sort(filter == TodoFilter.done ? _newestFirst : _byDue),
+        );
+  }
+
+  static int _newestFirst(Entry a, Entry b) =>
+      b.updatedAt.compareTo(a.updatedAt);
+
+  /// By due date (none last), priority (none last), then newest first.
+  static int _byDue(Entry a, Entry b) {
+    final due = _nullsLast(a.task!.due, b.task!.due);
+    if (due != 0) return due;
+    final priority = _nullsLast<num>(a.task!.priority, b.task!.priority);
+    if (priority != 0) return priority;
+    return _newestFirst(a, b);
+  }
+
+  static int _nullsLast<T extends Comparable<T>>(T? a, T? b) {
+    if (a == null) return b == null ? 0 : 1;
+    if (b == null) return -1;
+    return a.compareTo(b);
+  }
+
+  @override
   Future<Entry?> entry(String accountId, String itemId) async {
     final row = await _row(accountId, itemId);
     return row == null ? null : _toModel(row);
@@ -48,11 +84,15 @@ class EntryRepositoryImpl implements EntryRepository {
     String accountId, {
     String? title,
     required String body,
+    EntryTask? task,
+    List<String> links = const [],
   }) async {
     final object = newEntryObject(
       title: title,
       body: body,
       clock: await _store.clockFor(accountId),
+      task: task,
+      links: links,
     );
     await _store.put(accountId, object);
     return (await entry(accountId, object.head.itemId))!;
@@ -64,19 +104,44 @@ class EntryRepositoryImpl implements EntryRepository {
     String itemId, {
     String? title,
     required String body,
-  }) async {
+  }) =>
+      _edit(
+        accountId,
+        itemId,
+        (current, clock) => editEntryObject(
+          base: current.display,
+          merge: current.merge,
+          clock: clock,
+          title: title,
+          body: body,
+        ),
+      );
+
+  @override
+  Future<void> setTask(String accountId, String itemId, EntryTask? task) =>
+      _edit(
+        accountId,
+        itemId,
+        (current, clock) => editEntryTask(
+          base: current.display,
+          merge: current.merge,
+          clock: clock,
+          task: task,
+        ),
+      );
+
+  /// Writes the version [next] makes of the entry's current state.
+  Future<void> _edit(
+    String accountId,
+    String itemId,
+    InnerObject Function(MailObjectItem current, HlcClock clock) next,
+  ) async {
     final hmac = await _hmacOf(accountId, itemId);
     final current = await _store.item(accountId, hmac);
     if (current == null) throw StateError('entry $itemId cannot be opened');
     await _store.put(
       accountId,
-      editEntryObject(
-        base: current.display,
-        merge: current.merge,
-        clock: await _store.clockFor(accountId),
-        title: title,
-        body: body,
-      ),
+      next(current, await _store.clockFor(accountId)),
     );
   }
 

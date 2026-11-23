@@ -38,7 +38,44 @@ class EntryTask {
         'done': done,
         if (doneAt != null) 'doneAt': doneAt,
       };
+
+  /// A copy with [done] set (dropping [doneAt]) and/or [due] replaced;
+  /// `clearDue` removes it.
+  EntryTask copyWith({bool? done, String? due, bool clearDue = false}) =>
+      EntryTask(
+        due: clearDue ? null : due ?? this.due,
+        priority: priority,
+        done: done ?? this.done,
+        doneAt: done == null ? doneAt : null,
+      );
+
+  /// Whether it shows under [filter]; [today] is the local `YYYY-MM-DD`.
+  bool matches(TodoFilter filter, String today) {
+    final d = due;
+    return switch (filter) {
+      TodoFilter.open => !done,
+      TodoFilter.today => !done && d != null && d.compareTo(today) <= 0,
+      TodoFilter.done => done,
+    };
+  }
 }
+
+/// The filters of the Todos view (ENCRYPTED-OBJECTS.md §6, #1357).
+enum TodoFilter {
+  /// Not done.
+  open,
+
+  /// Not done and due today or overdue.
+  today,
+
+  /// Done.
+  done,
+}
+
+/// [date] as a local `YYYY-MM-DD`, the format of `task.due`.
+String isoDate(DateTime date) => '${date.year.toString().padLeft(4, '0')}-'
+    '${date.month.toString().padLeft(2, '0')}-'
+    '${date.day.toString().padLeft(2, '0')}';
 
 /// One entry (note, todo, journal entry) of the encrypted personal data
 /// (ENCRYPTED-OBJECTS.md §6), as its projection shows it.

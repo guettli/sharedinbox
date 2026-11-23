@@ -201,4 +201,141 @@ void main() {
     );
     expect(entryFromObject(card, accountId: 'a', itemHmac: 'h'), isNull);
   });
+
+  group('editEntryTask (#1357)', () {
+    InnerObject todo() => InnerObject(
+          head: ObjectHead(
+            itemId: 'e1',
+            collectionId: personalCollectionId,
+            versionId: hlcAt(1000, 'devB'),
+            kind: entryKind,
+            extra: const {
+              'title': 'Invoice',
+              'tags': ['work'],
+              'links': ['<inv@x>'],
+              'task': {
+                'done': true,
+                'doneAt': '2026-11-20T10:00:00Z',
+                'due': '2026-11-21',
+                'remind': 'P1D',
+              },
+              'future': 1,
+            },
+          ),
+          parts: [
+            ObjectPart(
+              contentType: 'text/markdown; charset=utf-8',
+              bytes: Uint8List.fromList(utf8.encode('pay')),
+            ),
+            imagePart(),
+          ],
+        );
+
+    test('keeps title, body, other fields and unknown task keys', () async {
+      final base = todo();
+      final task = EntryTask.fromJson(base.head.extra['task'])!;
+      final next = editEntryTask(
+        base: base,
+        merge: await mergeOf([base]),
+        clock: clockAt(2000),
+        task: task.copyWith(due: '2026-12-24'),
+      );
+      expect(next.head.parents, [base.head.versionId]);
+      expect(next.head.extra['title'], 'Invoice');
+      expect(next.head.extra['tags'], ['work']);
+      expect(next.head.extra['links'], ['<inv@x>']);
+      expect(next.head.extra['future'], 1);
+      expect(next.parts, hasLength(2));
+      expect(next.head.extra['task'], {
+        'remind': 'P1D',
+        'due': '2026-12-24',
+        'done': true,
+        'doneAt': '2026-11-20T10:00:00Z',
+      });
+    });
+
+    test('an untick drops doneAt; null drops the task', () async {
+      final base = todo();
+      final task = EntryTask.fromJson(base.head.extra['task'])!;
+      final unticked = editEntryTask(
+        base: base,
+        merge: await mergeOf([base]),
+        clock: clockAt(2000),
+        task: task.copyWith(done: false),
+      );
+      expect(unticked.head.extra['task'], {
+        'remind': 'P1D',
+        'due': '2026-11-21',
+        'done': false,
+      });
+
+      final none = editEntryTask(
+        base: unticked,
+        merge: await mergeOf([unticked]),
+        clock: clockAt(3000),
+        task: null,
+      );
+      expect(none.head.extra.containsKey('task'), isFalse);
+      expect(none.head.extra['title'], 'Invoice');
+      final entry = entryFromObject(none, accountId: 'a', itemHmac: 'h')!;
+      expect(entry.task, isNull);
+    });
+
+    test('two devices ticking the same version write identical content',
+        () async {
+      final base = newEntryObject(
+        body: 'Call Bob',
+        clock: clockAt(1000, 'devC'),
+        task: const EntryTask(due: '2026-11-23'),
+      );
+      final merge = await mergeOf([base]);
+      final task = EntryTask.fromJson(base.head.extra['task'])!;
+      final a = editEntryTask(
+        base: base,
+        merge: merge,
+        clock: clockAt(2000),
+        task: task.copyWith(done: true),
+      );
+      final b = editEntryTask(
+        base: base,
+        merge: merge,
+        clock: clockAt(2500, 'devB'),
+        task: task.copyWith(done: true),
+      );
+      expect(a.head.versionId, isNot(b.head.versionId));
+      expect(await contentDigestOf(a), await contentDigestOf(b));
+      final both = await mergeOf([base, a, b]);
+      expect(both.state, MergeState.live);
+      expect(both.distinctHeads, hasLength(1));
+    });
+
+    test('a new todo carries its task and links', () {
+      final object = newEntryObject(
+        title: 'Invoice',
+        body: '',
+        clock: clockAt(1000),
+        task: const EntryTask(),
+        links: ['<inv@x>'],
+      );
+      final entry = entryFromObject(object, accountId: 'a', itemHmac: 'h')!;
+      expect(entry.task!.done, isFalse);
+      expect(entry.links, ['<inv@x>']);
+    });
+  });
+
+  test('the todo filters', () {
+    const today = '2026-11-23';
+    bool shows(EntryTask t, TodoFilter f) => t.matches(f, today);
+    const open = EntryTask();
+    const overdue = EntryTask(due: '2026-11-22');
+    const dueToday = EntryTask(due: today);
+    const later = EntryTask(due: '2026-11-24');
+    const done = EntryTask(done: true, due: '2026-11-22');
+    const all = [open, overdue, dueToday, later, done];
+    List<bool> under(TodoFilter f) => [for (final t in all) shows(t, f)];
+    expect(under(TodoFilter.open), [true, true, true, true, false]);
+    expect(under(TodoFilter.today), [false, true, true, false, false]);
+    expect(under(TodoFilter.done), [false, false, false, false, true]);
+    expect(isoDate(DateTime(2026, 1, 5, 23, 59)), '2026-01-05');
+  });
 }

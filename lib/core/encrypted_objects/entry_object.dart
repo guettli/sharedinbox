@@ -24,10 +24,13 @@ ObjectPart _markdownPart(String body) => ObjectPart(
     );
 
 /// A new entry in the personal collection; an empty [title] is left out.
+/// A [task] makes it a todo; [links] are the Message-IDs of its mails.
 InnerObject newEntryObject({
   String? title,
   required String body,
   required HlcClock clock,
+  EntryTask? task,
+  List<String> links = const [],
 }) =>
     InnerObject(
       head: ObjectHead(
@@ -38,7 +41,8 @@ InnerObject newEntryObject({
         extra: {
           if (title != null && title.trim().isNotEmpty) 'title': title,
           'tags': const <String>[],
-          'links': const <String>[],
+          'links': links,
+          if (task != null) 'task': task.toJson(),
         },
       ),
       parts: [_markdownPart(body)],
@@ -105,8 +109,49 @@ InnerObject editEntryObject({
     fields: {if (hasTitle) 'title': title},
     parts: parts,
   );
-  if (hasTitle || !next.head.extra.containsKey('title')) return next;
-  final head = next.head;
+  if (hasTitle) return next;
+  return _withoutField(next, 'title');
+}
+
+/// The `task` keys this app knows; others are kept on an edit (§5.2).
+const _taskKeys = {'due', 'priority', 'done', 'doneAt'};
+
+/// An edit of [base] (a head of [merge]) setting its `task` (null: none,
+/// so no longer a todo). Title, body, parts, other fields and unknown `task`
+/// keys are kept. A tick writes no `doneAt`, so two devices ticking the same
+/// version write identical content, which merges as one head.
+InnerObject editEntryTask({
+  required InnerObject base,
+  required MergeResult merge,
+  required HlcClock clock,
+  required EntryTask? task,
+}) {
+  if (task == null) {
+    return _withoutField(
+      edit(base: base, merge: merge, clock: clock),
+      'task',
+    );
+  }
+  final old = base.head.extra['task'];
+  return edit(
+    base: base,
+    merge: merge,
+    clock: clock,
+    fields: {
+      'task': {
+        if (old is Map)
+          for (final MapEntry(:key, :value) in old.entries)
+            if (key is String && !_taskKeys.contains(key)) key: value,
+        ...task.toJson(),
+      },
+    },
+  );
+}
+
+/// [object] without the head field [key].
+InnerObject _withoutField(InnerObject object, String key) {
+  if (!object.head.extra.containsKey(key)) return object;
+  final head = object.head;
   return InnerObject(
     head: ObjectHead(
       v: head.v,
@@ -115,8 +160,8 @@ InnerObject editEntryObject({
       versionId: head.versionId,
       parents: head.parents,
       kind: head.kind,
-      extra: {...head.extra}..remove('title'),
+      extra: {...head.extra}..remove(key),
     ),
-    parts: next.parts,
+    parts: object.parts,
   );
 }

@@ -970,6 +970,9 @@ class UserPreferences extends Table {
   // Added in schema v83: the "Personal data (beta)" switch (#1366).
   BoolColumn get personalDataBeta =>
       boolean().withDefault(const Constant(false))();
+  // Added in schema v86: the account new todos and entries go to (#1357);
+  // null = the open account, else the first unlocked one.
+  TextColumn get defaultItemsAccountId => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -2540,6 +2543,14 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(entries);
       }
       await _createEntriesIndex();
+    }
+    if (from < 86 && await _tableExists(this, 'user_preferences')) {
+      // The default account for new items (#1357).
+      await _addColumnIfMissing(
+        m,
+        userPreferences,
+        userPreferences.defaultItemsAccountId,
+      );
     }
   }
 

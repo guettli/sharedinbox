@@ -10,8 +10,24 @@ abstract class EntryRepository {
 
   Future<Entry?> entry(String accountId, String itemId);
 
+  /// The todos (entries with a `task`) of [accountIds] that match [filter]
+  /// on [today] (local `YYYY-MM-DD`): open and today ones by due date
+  /// (none last), priority and newest first; done ones newest first.
+  Stream<List<Entry>> observeTodos({
+    required Set<String> accountIds,
+    required TodoFilter filter,
+    required String today,
+  });
+
+  /// A [task] makes it a todo; [links] are the Message-IDs of its mails.
   /// Throws `NoWriteKeyException` while the account is locked.
-  Future<Entry> create(String accountId, {String? title, required String body});
+  Future<Entry> create(
+    String accountId, {
+    String? title,
+    required String body,
+    EntryTask? task,
+    List<String> links = const [],
+  });
 
   /// Sets [title] (empty: none) and [body]; every other field is kept. Also
   /// resolves a conflict.
@@ -21,6 +37,10 @@ abstract class EntryRepository {
     String? title,
     required String body,
   });
+
+  /// Sets the `task` (null: no longer a todo): tick, untick, due date.
+  /// Every other field is kept.
+  Future<void> setTask(String accountId, String itemId, EntryTask? task);
 
   Future<void> delete(String accountId, String itemId);
 }

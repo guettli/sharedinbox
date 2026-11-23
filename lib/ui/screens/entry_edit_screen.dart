@@ -16,7 +16,8 @@ import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
 /// Edits the title and the Markdown body of one entry (#1373). Opens in a
 /// rendered preview when the body is not empty (#1376); ticking a task-list
 /// checkbox there saves at once. Other fields are kept; saving also resolves
-/// a conflict.
+/// a conflict. A task section makes it a todo with a due date and a done
+/// tick (#1357); each change there saves at once.
 class EntryEditScreen extends ConsumerStatefulWidget {
   const EntryEditScreen({
     super.key,
@@ -35,6 +36,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   final _title = TextEditingController();
   final _body = TextEditingController();
   Entry? _entry;
+  EntryTask? _task;
   bool _loaded = false;
   bool _busy = false;
   bool _preview = false;
@@ -52,6 +54,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
     if (!mounted) return;
     setState(() {
       _entry = entry;
+      _task = entry?.task;
       _loaded = true;
       _title.text = entry?.title ?? '';
       _body.text = entry?.body ?? '';
@@ -127,6 +130,8 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
           controller: _title,
           decoration: const InputDecoration(labelText: 'Title'),
         ),
+        const SizedBox(height: AppSpacing.sm),
+        ..._taskSection(),
         const SizedBox(height: AppSpacing.lg),
         if (_preview)
           EntryMarkdown(
@@ -148,6 +153,83 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
           ),
       ],
     );
+  }
+
+  /// The "Todo" switch and, while on, the due date and the done tick.
+  List<Widget> _taskSection() {
+    final task = _task;
+    final due = task?.due;
+    return [
+      SwitchListTile(
+        key: const Key('entryTodoSwitch'),
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Todo'),
+        value: task != null,
+        onChanged:
+            _busy ? null : (on) => _setTask(on ? const EntryTask() : null),
+      ),
+      if (task != null) ...[
+        ListTile(
+          key: const Key('entryDueDate'),
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.event),
+          title: Text(due == null ? 'No due date' : 'Due $due'),
+          onTap: _busy ? null : () => _pickDue(task),
+          trailing: due == null
+              ? null
+              : IconButton(
+                  key: const Key('entryDueDateClear'),
+                  icon: const Icon(Icons.clear),
+                  tooltip: 'Clear due date',
+                  onPressed: _busy
+                      ? null
+                      : () => _setTask(task.copyWith(clearDue: true)),
+                ),
+        ),
+        CheckboxListTile(
+          key: const Key('entryDone'),
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          title: const Text('Done'),
+          value: task.done,
+          onChanged:
+              _busy ? null : (v) => _setTask(task.copyWith(done: v ?? false)),
+        ),
+      ],
+    ];
+  }
+
+  Future<void> _pickDue(EntryTask task) async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.tryParse(task.due ?? '') ?? now,
+      firstDate: DateTime(now.year - 10),
+      lastDate: DateTime(now.year + 10),
+    );
+    if (picked == null || !mounted) return;
+    await _setTask(task.copyWith(due: isoDate(picked)));
+  }
+
+  /// Saves [task] (null: not a todo) at once; title and body stay unsaved.
+  Future<void> _setTask(EntryTask? task) async {
+    if (_busy) return;
+    final old = _task;
+    setState(() {
+      _task = task;
+      _busy = true;
+    });
+    try {
+      await ref
+          .read(entryRepositoryProvider)
+          .setTask(widget.accountId, widget.itemId, task);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _task = old);
+      context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   /// Opens the conflict view; the entry is loaded again on return.

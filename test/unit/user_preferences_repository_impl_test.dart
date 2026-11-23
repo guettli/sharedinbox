@@ -98,6 +98,21 @@ void main() {
       await db.close();
     });
 
+    test('the default account for new items round-trips', () async {
+      final db = openTestDatabase();
+      final repo = UserPreferencesRepositoryImpl(db);
+
+      Future<String?> stored() async =>
+          (await repo.observePreferences().first).defaultItemsAccountId;
+      expect(await stored(), isNull);
+      await repo.updateDefaultItemsAccountId('acc-2');
+      expect(await stored(), 'acc-2');
+      await repo.updateDefaultItemsAccountId(null);
+      expect(await stored(), isNull);
+
+      await db.close();
+    });
+
     test('trusted image senders: add, observe, remove, lowercase-normalize',
         () async {
       final db = openTestDatabase();
@@ -134,5 +149,26 @@ void main() {
 
       await db.close();
     });
+  });
+
+  test('resolveNewItemAccount: preferred, else open, else first unlocked', () {
+    const preferB = UserPreferences(defaultItemsAccountId: 'b');
+    expect(
+      resolveNewItemAccount(preferB, ['a', 'b'], currentAccountId: 'a'),
+      'b',
+    );
+    expect(
+      resolveNewItemAccount(preferB, ['a', 'c'], currentAccountId: 'c'),
+      'c',
+    );
+    expect(
+      resolveNewItemAccount(preferB, ['a', 'c'], currentAccountId: 'x'),
+      'a',
+    );
+    expect(resolveNewItemAccount(const UserPreferences(), ['a']), 'a');
+    expect(
+      resolveNewItemAccount(preferB, const [], currentAccountId: 'b'),
+      isNull,
+    );
   });
 }

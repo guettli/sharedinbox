@@ -3,7 +3,9 @@
 // an entry created, edited and deleted on one shows on the other. Each
 // device has its own database, secure storage, key ring, store with the
 // entry projection, and entry repository. Concurrent edits on both are a
-// conflict on both; resolving it on one (#1374) clears it on both.
+// conflict on both; resolving it on one (#1374) clears it on both. The same
+// todo ticked on both at once is identical content: done, no conflict
+// (#1357).
 // Run via: task test-backend
 
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
@@ -158,6 +160,40 @@ void main() {
       expect(await d.store.observeConflicts(d.id).first, isEmpty);
     }
     expect(await itemsOnServer(), [created.itemHmac]);
+  });
+
+  test('a todo ticked on A and B at once is done on both, no conflict',
+      () async {
+    final (a, b) = await twoDevices();
+    final created = await a.repo.create(
+      a.id,
+      body: 'Call Bob',
+      task: const EntryTask(due: '2026-11-23'),
+    );
+    await a.store.waitForIdle();
+    await a.listAndSync();
+    await b.listAndSync();
+    expect((await b.entries()).single.task!.done, isFalse);
+
+    for (final d in [a, b]) {
+      final todo = (await d.entries()).single;
+      await d.repo.setTask(d.id, todo.itemId, todo.task!.copyWith(done: true));
+      await d.store.waitForIdle();
+    }
+    for (var round = 0; round < 2; round++) {
+      await a.listAndSync();
+      await b.listAndSync();
+    }
+
+    for (final d in [a, b]) {
+      final todo = (await d.entries()).single;
+      expect(todo.task!.done, isTrue);
+      expect(todo.task!.due, '2026-11-23');
+      expect(todo.hasConflict, isFalse);
+      expect(await d.store.observeConflicts(d.id).first, isEmpty);
+      final item = (await d.store.item(d.id, created.itemHmac))!;
+      expect(item.merge.distinctHeads, hasLength(1));
+    }
   });
 
   test('"keep both" on A leaves two entries on both', () async {
