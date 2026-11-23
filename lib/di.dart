@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
+import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
@@ -23,6 +24,7 @@ import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/net/resettable_client.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
@@ -70,6 +72,7 @@ import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/card_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
@@ -873,6 +876,31 @@ final conflictItemProvider = FutureProvider.autoDispose
     .family<MailObjectItem?, (String accountId, String itemHmac)>((ref, args) {
   final (accountId, itemHmac) = args;
   return ref.watch(mailObjectStoreProvider).item(accountId, itemHmac);
+});
+
+/// The flash cards and decks of the encrypted personal data (#1379); a new
+/// deck gets its collection key from the key lifecycle.
+final cardRepositoryProvider = Provider<CardRepository>(
+  (ref) => CardRepositoryImpl(
+    ref.watch(dbProvider),
+    ref.watch(mailObjectStoreProvider),
+    ensureCollection: (accountId, collectionId) => ref
+        .read(encryptedKeyServiceProvider)
+        .ensureCollection(accountId, collectionId),
+  ),
+);
+
+/// The decks of an account, by name.
+final decksProvider =
+    StreamProvider.autoDispose.family<List<Deck>, String>((ref, accountId) {
+  return ref.watch(cardRepositoryProvider).observeDecks(accountId);
+});
+
+/// The cards of a deck that are not deleted.
+final deckCardsProvider = StreamProvider.autoDispose
+    .family<List<FlashCard>, (String accountId, String deckId)>((ref, args) {
+  final (accountId, deckId) = args;
+  return ref.watch(cardRepositoryProvider).observeCards(accountId, deckId);
 });
 
 /// Log segments and packs of the encrypted-object store (#1372).

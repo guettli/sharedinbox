@@ -3,13 +3,12 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
-import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
 
 /// Writes the `Entries` projection of the `entry` documents (#1373). Runs
 /// inside the store's merge transaction ([ObjectProjector]).
-class EntryProjector implements ObjectProjector {
+class EntryProjector extends ObjectProjector {
   EntryProjector(this.db);
 
   final AppDatabase db;
@@ -21,16 +20,16 @@ class EntryProjector implements ObjectProjector {
   Future<void> apply(
     String accountId,
     String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
-  }) async {
+    ProjectedItem item,
+  ) async {
+    final display = item.display;
     final entry = display == null
         ? null
         : entryFromObject(
             display,
             accountId: accountId,
             itemHmac: itemHmac,
-            conflict: conflict,
+            conflict: item.conflict,
           );
     if (entry == null) {
       await (db.delete(db.entries)

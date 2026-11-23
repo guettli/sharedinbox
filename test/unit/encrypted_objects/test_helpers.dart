@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
+import 'package:sharedinbox/core/models/card.dart';
 
 /// `start, start+1, …` as [length] bytes.
 Uint8List seqBytes(int start, int length) =>
@@ -149,3 +150,12 @@ InnerObject plannedEntryObject(
         ),
       ],
     );
+
+/// [n] cards `Q<i>` / `A<i>` with the cardIds `c0000`, `c0001`, … (#1379).
+List<NewCard> numberedCards(int n) => [
+      for (var i = 0; i < n; i++)
+        NewCard(
+          CardContent(front: 'Q$i', back: 'A$i'),
+          cardId: 'c${i.toString().padLeft(4, '0')}',
+        ),
+    ];

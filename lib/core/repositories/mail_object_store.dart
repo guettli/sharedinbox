@@ -35,18 +35,37 @@ typedef KeepVanishedKeyMail = Future<bool> Function(
 /// with the merge (#1373). The store calls it inside the transaction that
 /// writes an item's head columns, so the projection cannot diverge from the
 /// merge: on a local write, a pull and a reopen after an unlock.
-abstract interface class ObjectProjector {
+abstract class ObjectProjector {
   String get kind;
 
-  /// Projects item [itemHmac]: [display] is its newest head that is not a
-  /// tombstone, or null when the item is deleted (the row goes).
-  /// [conflict]: it has several heads with different content.
-  Future<void> apply(
-    String accountId,
-    String itemHmac,
-    InnerObject? display, {
-    required bool conflict,
+  /// True for a kind whose heads merge by themselves (`card-batch`, #1379:
+  /// per member the highest `h`): an explicit exception to the conflict
+  /// view of 5.4. Its heads never get a `conflictOf` and [apply] gets
+  /// `conflict: false`; superseding, the rollback guard and the expunge
+  /// after a collapse stay as they are.
+  bool get mergesHeads => false;
+
+  /// Projects item [itemHmac] as the merge sees it ([ProjectedItem]).
+  Future<void> apply(String accountId, String itemHmac, ProjectedItem item);
+}
+
+/// What the merge hands an [ObjectProjector] for one item.
+class ProjectedItem {
+  const ProjectedItem({
+    this.display,
+    this.conflict = false,
+    this.heads = const [],
   });
+
+  /// The newest head that is not a tombstone, or null when the item is
+  /// deleted (the row goes).
+  final InnerObject? display;
+
+  /// It has several heads with different content.
+  final bool conflict;
+
+  /// Every opened head, tombstones included, oldest first.
+  final List<InnerObject> heads;
 }
 
 /// An item as the merge of its opened versions sees it.
@@ -55,6 +74,7 @@ class MailObjectItem {
     required this.merge,
     required this.display,
     required this.versions,
+    this.heads = const [],
   });
 
   final MergeResult merge;
@@ -66,6 +86,10 @@ class MailObjectItem {
   /// One opened head per [MergeResult.distinctHeads], in the same order
   /// (oldest first): the versions of the conflict view.
   final List<InnerObject> versions;
+
+  /// Every opened head ([MergeResult.heads]), oldest first: what a writer
+  /// collapsing them merges (e.g. the members of a `card-batch`).
+  final List<InnerObject> heads;
 }
 
 /// Thrown by [MailObjectStore.put] when no write key for the collection is

@@ -173,6 +173,14 @@
       "hlcMax": "1700000000001-0000-8PHy8_T19vf4-fr7_P3-_w"
     }
   },
+  "cardBatch": {
+    "deviceId": "8PHy8_T19vf4-fr7_P3-_w",
+    "jsonl": "{\"b\":\"dog\",\"c\":\"card-1\",\"f\":\"Hund\",\"h\":\"1700000000000-0000-8PHy8_T19vf4-fr7_P3-_w\",\"tags\":[\"de\"]}\n{\"b\":\"cat\",\"c\":\"card-2\",\"f\":\"Katze\",\"h\":\"1700000000000-0001-8PHy8_T19vf4-fr7_P3-_w\",\"tags\":[]}\n{\"b\":\"mouse\",\"c\":\"card-3\",\"ease\":2.5,\"f\":\"Maus\",\"h\":\"1700000000001-0000-8PHy8_T19vf4-fr7_P3-_w\",\"tags\":[\"de\",\"animal\"]}\n",
+    "gzip": "1f8b0800000000000203ab564a52b2524ac94f57d2514a06b292138b52740d819c3420c7a3342f05c8cc00320dcd0d1040174c580478545ac487185a96a599e8a61599c70718ebc69703d59724a6172b59452ba5a42ac5d67255836d484e2c41b6c1086a83776249552a2e2b0c095a01373e37bfb43815d9026320273511286665a4670ab1cb37b1b4188b5586c4fb464729312f33373107e42d00a6c5119f39010000",
+    "head": {
+      "count": 3
+    }
+  },
   "passkeySlot": {
     "accountKey": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "accountKeyId": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
