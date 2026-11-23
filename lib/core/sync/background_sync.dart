@@ -25,6 +25,7 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
@@ -126,6 +127,7 @@ Future<void> _doBackgroundSync() async {
     // (ENCRYPTED-OBJECTS.md 5.5).
     final ring = KeyRing();
     final mailboxRepo = MailboxRepositoryImpl(db, accountRepo);
+    final projectors = [EntryProjector(db)];
     final objectStore = MailObjectStoreRouter(
       accountRepo,
       imap: MailObjectStoreImap(
@@ -137,6 +139,7 @@ Future<void> _doBackgroundSync() async {
         writeKey: ring.writeKey,
         keepVanishedKeyMail: ring.keepVanishedKeyMail,
         pushPending: false,
+        projectors: projectors,
       ),
       jmap: MailObjectStoreJmap(
         db,
@@ -147,6 +150,7 @@ Future<void> _doBackgroundSync() async {
         writeKey: ring.writeKey,
         keepVanishedKeyMail: ring.keepVanishedKeyMail,
         pushPending: false,
+        projectors: projectors,
       ),
     );
     final prefs = UserPreferencesRepositoryImpl(db);

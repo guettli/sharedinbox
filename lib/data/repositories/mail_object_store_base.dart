@@ -59,11 +59,13 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     bool pushPending = true,
     DateTime Function()? now,
     this.onStep,
+    List<ObjectProjector> projectors = const [],
   })  : _keyLookup = keyLookup,
         _writeKey = writeKey,
         _keepVanishedKey = keepVanishedKeyMail,
         pushEnabled = pushPending,
         now = now ?? DateTime.now,
+        _projectors = {for (final p in projectors) p.kind: p},
         _resolver = DeviceIdentityResolver(storage, MailObjectDevicesDb(db));
 
   @protected
@@ -88,6 +90,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
   final CollectionKeyLookup _keyLookup;
   final WriteKeyLookup _writeKey;
   final KeepVanishedKeyMail _keepVanishedKey;
+
+  /// The projection of each document kind that has one, by kind (#1373).
+  final Map<String, ObjectProjector> _projectors;
   final DeviceIdentityResolver _resolver;
   final Map<String, HlcClock> _clocks = {};
 
@@ -152,8 +157,30 @@ abstract class MailObjectStoreBase implements MailObjectStore {
   }
 
   @override
-  Future<void> reopen(String accountId) =>
-      _exclusive(accountId, () => openPending(accountId));
+  Future<void> reopen(String accountId) => _exclusive(accountId, () async {
+        await openPending(accountId);
+        await _reproject(accountId);
+      });
+
+  /// Projects again every item of a kind with a projection: fills rows an
+  /// older install pulled before its table existed (#1373).
+  Future<void> _reproject(String accountId) async {
+    if (_projectors.isEmpty) return;
+    final hmacs = await (db.selectOnly(db.mailObjects, distinct: true)
+          ..addColumns([db.mailObjects.itemHmac])
+          ..where(
+            db.mailObjects.accountId.equals(accountId) &
+                db.mailObjects.folder.equals(MailObjectFolder.data.name) &
+                db.mailObjects.kind.isIn(_projectors.keys) &
+                db.mailObjects.versionId.isNotNull() &
+                db.mailObjects.pendingDelete.equals(false),
+          ))
+        .map((r) => r.read(db.mailObjects.itemHmac))
+        .get();
+    for (final hmac in hmacs) {
+      if (hmac != null) await _remerge(accountId, hmac);
+    }
+  }
 
   @override
   Future<MailObjectItem?> item(String accountId, String itemHmac) async {
@@ -691,8 +718,30 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         if (isHead) log = await _project(accountId, messageId, object) ?? log;
       }
       await _saveVv(accountId, itemHmac, result.vv);
+      await _applyProjector(accountId, itemHmac, result, objects);
     });
     return log;
+  }
+
+  /// Hands the merged item to the projector of its kind: the newest head
+  /// that is not a tombstone, so an edit racing a delete stays visible as a
+  /// conflict (5.4); none once every head is a tombstone.
+  Future<void> _applyProjector(
+    String accountId,
+    String itemHmac,
+    MergeResult result,
+    Map<String, InnerObject> objects,
+  ) async {
+    if (result.heads.isEmpty) return;
+    final heads = [for (final h in result.heads) objects[h.ref]!];
+    final projector = _projectors[heads.last.head.kind];
+    if (projector == null) return;
+    await projector.apply(
+      accountId,
+      itemHmac,
+      heads.where((h) => !h.head.deleted).lastOrNull,
+      conflict: result.state == MergeState.conflict,
+    );
   }
 
   // ── Projections (#1372) ───────────────────────────────────────────────────

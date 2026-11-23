@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
@@ -498,6 +499,14 @@ class _UnlockedViewState extends State<_UnlockedView> {
             'Encrypted personal data of this account can be read and written '
             'here.',
           ),
+        ),
+        ListTile(
+          key: const Key('entriesTile'),
+          leading: const Icon(Icons.notes),
+          title: const Text('Entries'),
+          subtitle: const Text('Notes, todos and journal'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => context.push('/accounts/${widget.accountId}/entries'),
         ),
         const SizedBox(height: AppSpacing.lg),
         OutlinedButton.icon(

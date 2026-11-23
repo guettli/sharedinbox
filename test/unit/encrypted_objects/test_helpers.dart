@@ -22,6 +22,10 @@ final testAccountKey = AccountKey(seqBytes(0xa0, 16), seqBytes(0x00, 32));
 final testDeckKey =
     CollectionKey('deck-1', seqBytes(0xb0, 16), seqBytes(0x20, 32));
 
+/// Fixed key of the personal collection (entries) shared by the unit tests.
+final testPersonalKey =
+    CollectionKey(personalCollectionId, seqBytes(0xc0, 16), seqBytes(0x40, 32));
+
 /// Deterministic [RandomBytes]: each call returns the next counter value
 /// repeated, so every draw differs.
 RandomBytes counterRandom([int seed = 1]) {

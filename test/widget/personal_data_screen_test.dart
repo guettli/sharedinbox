@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
 
+import 'entries_fakes.dart';
 import 'helpers.dart';
 
 /// The key lifecycle as the screen sees it: a status stream and scripted
@@ -96,6 +97,7 @@ Future<_FakeKeyService> _pump(
       overrides: [
         ...baseOverrides(accounts: [kTestAccount]),
         encryptedKeyServiceProvider.overrideWithValue(service),
+        entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
       ],
     ),
   );
@@ -226,6 +228,15 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('recoveryKeyField')), findsOneWidget);
+  });
+
+  testWidgets('unlocked: the Entries tile opens the entries home',
+      (tester) async {
+    await _pump(tester, PersonalDataStatus.unlocked);
+    await tester.tap(find.byKey(const Key('entriesTile')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    expect(find.text('No entries yet.'), findsOneWidget);
   });
 
   testWidgets('a foreign key mail shows a warning', (tester) async {
