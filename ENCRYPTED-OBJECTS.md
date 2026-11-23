@@ -84,6 +84,31 @@ creates folders only for a local row to upload. For the key lifecycle
 `appendRaw` (idempotent by Message-ID), `deleteRaw` (foreground) and
 `reopen` after an unlock. A key mail that vanishes is uploaded again.
 
+**JMAP store (#1371)**: `MailObjectStoreJmap`
+(`lib/data/repositories/mail_object_store_jmap.dart`); the transport-free
+part (local-first writes, merge, version vector, HLC, vanished and missing
+folders) is `MailObjectStoreBase`, and `MailObjectStoreRouter` sends each
+call to the store of the account's type. Same tables, no UID index:
+`mail_objects.serverId` holds the JMAP email id. The folders are found by
+`Mailbox/get` (top-level `SharedInbox`, children `Keys`/`Data`), recorded by
+mailbox id, and made with `Mailbox/set` only for a row to upload. The
+checkpoint under `mos:keys`/`mos:data` is `{mailboxId, queryState,
+emailState}`: a pull asks `Email/queryChanges` (inMailbox) and
+`Email/changes` (followed while `hasMoreChanges`); without a checkpoint, for
+another mailbox id, or on `cannotCalculateChanges` / `tooManyChanges` /
+`unsupportedFilter` / `invalidArguments` (Stalwart, for a state it cannot
+parse) it lists the mailbox again (`mos.full_resync`): rows the
+listing lacks are gone (5.4), rows are matched by Message-ID, so nothing is
+uploaded twice. Upload: blob upload + `Email/import` with `$seen`, no
+`receivedAt`; first a `header` filter on the Message-ID (each hit checked
+exactly), and `alreadyExists` confirms with its `existingId`. A superseded
+version (and a duplicate email of a version) is destroyed in an `Email/set`
+of its own, after the import of its successor was confirmed. `maxSizeUpload`
+is cached under `mos:maxSizeUpload`; `put` seals at most what fits into it
+after base64 and headers (`ObjectTooLargeException`), and a row too large
+for the server stays local (`mos.push.too_large`). The background isolate
+only pulls.
+
 ## 4. Keys
 
 ### 4.1 Hierarchy

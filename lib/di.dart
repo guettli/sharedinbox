@@ -65,6 +65,8 @@ import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -801,16 +803,33 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
   );
 });
 
-/// The encrypted-object store (#1370). No keys until the key lifecycle
-/// (#1366): rows stay unopened and writes throw `NoWriteKeyException`.
+/// The encrypted-object store (#1370 IMAP, #1371 JMAP). No keys until the
+/// key lifecycle (#1366): rows stay unopened and writes throw
+/// `NoWriteKeyException`.
 final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
-  return MailObjectStoreImap(
-    ref.watch(dbProvider),
-    ref.watch(accountRepositoryProvider),
-    ref.watch(mailboxRepositoryProvider),
-    ref.watch(secureStorageProvider),
-    imapConnect: ref.watch(imapConnectProvider),
-    appLogger: ref.watch(appLoggerProvider),
+  final db = ref.watch(dbProvider);
+  final accounts = ref.watch(accountRepositoryProvider);
+  final mailboxes = ref.watch(mailboxRepositoryProvider);
+  final storage = ref.watch(secureStorageProvider);
+  final appLogger = ref.watch(appLoggerProvider);
+  return MailObjectStoreRouter(
+    accounts,
+    imap: MailObjectStoreImap(
+      db,
+      accounts,
+      mailboxes,
+      storage,
+      imapConnect: ref.watch(imapConnectProvider),
+      appLogger: appLogger,
+    ),
+    jmap: MailObjectStoreJmap(
+      db,
+      accounts,
+      mailboxes,
+      storage,
+      httpClient: ref.watch(httpClientProvider),
+      appLogger: appLogger,
+    ),
   );
 });
 

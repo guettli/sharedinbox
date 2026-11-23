@@ -47,7 +47,8 @@ class MailObject {
   final String? kind;
   final String? collectionId;
 
-  /// The IMAP UID; null until the server confirmed the mail.
+  /// The IMAP UID or the JMAP email id; null until the server confirmed
+  /// the mail.
   final String? serverId;
   final int sizeBytes;
   final bool pendingUpload;
