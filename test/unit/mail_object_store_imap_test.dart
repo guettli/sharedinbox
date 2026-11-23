@@ -20,7 +20,6 @@ import 'recording_app_log_repository.dart';
 
 const _acc = 'acc-1';
 const _dataPath = 'SharedInbox/Data';
-const _keysPath = 'SharedInbox/Keys';
 
 const _account = Account(
   id: _acc,
@@ -32,7 +31,7 @@ const _account = Account(
 
 /// One install of the app: its own database, secure storage and store, all
 /// talking to the shared fake [server].
-class _Device with MailObjectDeviceOps {
+class _Device with MailObjectDeviceOps, ListingObjectDevice {
   _Device(this.server, {this.background = false, this.unlocked = true});
 
   final StatefulFakeImapServer server;
@@ -85,9 +84,28 @@ class _Device with MailObjectDeviceOps {
   }
 
   /// A folder listing, as the mail sync does before the store runs.
+  @override
   Future<void> list() => mailboxes.syncMailboxes(_acc);
 
   List<String> events() => [for (final r in logs.rows) r.event];
+}
+
+/// [FakeObjectServer] over the fake IMAP server.
+class _ImapView implements FakeObjectServer {
+  _ImapView(this.server);
+
+  final StatefulFakeImapServer server;
+
+  @override
+  void addElsewhere(String path, Uint8List raw) =>
+      server.append(path, raw, flags: [r'\Seen']);
+
+  @override
+  List<Uint8List> rawIn(String path) =>
+      [for (final m in server.messagesIn(path)) m.raw!];
+
+  @override
+  int get uploadCount => server.appendCount;
 }
 
 StatefulFakeImapServer _server({
@@ -152,21 +170,10 @@ void main() {
 
   test('a second device pulls, opens and merges an object', () async {
     final server = _server();
-    final a = await _Device.open(server);
-    final b = await _Device.open(server);
-    final put = await a.putNew(body: 'from A');
-
-    await b.list();
-    await b.sync();
-
-    final row = (await b.rows()).single;
-    expect(row.versionId, put.versionId);
-    expect(row.itemHmac, put.itemHmac);
-    expect(row.payload, put.payload);
-    expect(await b.bodyOf(put.itemHmac!), 'from A');
-    final observed = await b.store.observe(_acc, MailObjectFolder.data).first;
-    expect(observed.single.messageId, put.messageId);
-    expect(await b.store.open(observed.single), isNotNull);
+    await expectSecondDevicePulls(
+      await _Device.open(server),
+      await _Device.open(server),
+    );
   });
 
   test(
@@ -462,36 +469,10 @@ void main() {
 
   test('keys folder: raw mails round-trip, idempotent by Message-ID', () async {
     final server = _server();
-    final a = await _Device.open(server);
-    final b = await _Device.open(server);
-    final mail = Uint8List.fromList(
-      ascii.encode(
-        'Message-ID: <key-1@sharedinbox.invalid>\r\n'
-        'Subject: SharedInbox key\r\n\r\nkey material\r\n',
-      ),
-    );
-
-    await a.store.appendRaw(_acc, mail);
-    await a.store.appendRaw(_acc, mail);
-    await a.store.waitForIdle();
-
-    expect(server.appendCount, 1);
-    expect(server.messagesIn(_keysPath).single.raw, mail);
-    await b.list();
-    await b.sync();
-    final pulled =
-        (await b.store.observe(_acc, MailObjectFolder.keys).first).single;
-    expect(pulled.payload, mail);
-    expect(pulled.itemHmac, isNull);
-
-    await a.store.deleteRaw(_acc, '<key-1@sharedinbox.invalid>');
-    await a.store.waitForIdle();
-
-    expect(server.messagesIn(_keysPath), isEmpty);
-    expect(await a.rows(MailObjectFolder.keys), isEmpty);
-    await expectLater(
-      a.store.appendRaw(_acc, Uint8List.fromList(ascii.encode('x'))),
-      throwsArgumentError,
+    await expectKeyMailsRoundTrip(
+      await _Device.open(server),
+      await _Device.open(server),
+      _ImapView(server),
     );
   });
 
@@ -547,32 +528,15 @@ void main() {
 
   test('a duplicate UID of one version is expunged', () async {
     final server = _server();
-    final a = await _Device.open(server);
-    final put = await a.putNew();
-    server.append(_dataPath, put.payload!, flags: [r'\Seen']);
-
-    await a.sync();
-    await a.sync();
-
-    expect(server.messagesIn(_dataPath), hasLength(1));
-    expect(await a.rows(), hasLength(1));
+    await expectDuplicateRemoved(await _Device.open(server), _ImapView(server));
   });
 
   test('mails that are no objects are left alone', () async {
     final server = _server();
-    final a = await _Device.open(server);
-    await a.putNew();
-    server.append(
-      _dataPath,
-      Uint8List.fromList(
-        ascii.encode('Message-ID: <x@test>\r\nSubject: hi\r\n\r\nhi\r\n'),
-      ),
+    await expectNonObjectsLeftAlone(
+      await _Device.open(server),
+      _ImapView(server),
     );
-
-    await a.sync();
-
-    expect(await a.rows(), hasLength(1));
-    expect(server.messagesIn(_dataPath), hasLength(2));
   });
 
   group('parsePersonalNamespace', () {

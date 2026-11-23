@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'jmap_test_server.dart';
+import 'mail_object_device.dart';
 
 const _base = 'https://jmap.example.com';
 
@@ -59,7 +60,7 @@ typedef _Change = ({int state, String id, bool destroyed, Set<String> boxes});
 /// A JMAP server with real state (mailboxes, emails, blobs, change log) for
 /// the encrypted-object store (RFC 8620/8621, the subset the store uses).
 /// Every request is recorded in [requests].
-class StatefulFakeJmapServer {
+class StatefulFakeJmapServer implements FakeObjectServer {
   StatefulFakeJmapServer({this.maxSizeUpload}) {
     _mailboxes['inbox'] = {
       'id': 'inbox',
@@ -81,7 +82,7 @@ class StatefulFakeJmapServer {
   int _state = 1;
   int _nextId = 1;
 
-  /// States before this one cannot be calculated from.
+  /// States up to this one cannot be calculated from.
   int _horizon = 0;
 
   /// The method names of every API request, one list per request.
@@ -160,6 +161,16 @@ class StatefulFakeJmapServer {
   /// Another client adds [raw] to the mailbox at [path].
   FakeJmapEmail add(String path, Uint8List raw) =>
       _create(raw, {mailboxIdOf(path)!});
+
+  @override
+  void addElsewhere(String path, Uint8List raw) => add(path, raw);
+
+  @override
+  List<Uint8List> rawIn(String path) =>
+      [for (final m in messagesIn(path)) m.raw];
+
+  @override
+  int get uploadCount => importCount;
 
   /// Another client destroys the email whose Message-ID is [bare].
   void destroyElsewhere(String bare) => _destroy(find(bare)!.id);
@@ -407,7 +418,7 @@ class StatefulFakeJmapServer {
     final s = token as String? ?? '';
     if (!s.startsWith(prefix)) return null;
     final n = int.tryParse(s.substring(prefix.length));
-    if (n == null || n < _horizon) return null;
+    if (n == null || n <= _horizon) return null;
     return n;
   }
 

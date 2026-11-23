@@ -466,14 +466,7 @@ class MailObjectStoreImap extends MailObjectStoreBase {
     final duplicates =
         exists ? await _duplicateUids(accountId, folder) : const <int>[];
     if (pending.isEmpty && duplicates.isEmpty) return;
-    final uploads = [
-      for (final r in pending)
-        if (r.pendingUpload && !r.pendingDelete && r.payload != null) r,
-    ];
-    final deletes = [
-      for (final r in pending)
-        if (r.pendingDelete) r,
-    ];
+    final (:uploads, :deletes) = splitPending(pending);
     final path = layout.path(folder);
     if (!exists) {
       if (uploads.isEmpty) {

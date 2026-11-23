@@ -599,6 +599,23 @@ abstract class MailObjectStoreBase implements MailObjectStore {
             ..orderBy([(t) => OrderingTerm.asc(t.versionId)]))
           .get();
 
+  /// [pending] split into the rows to upload and the rows to delete on the
+  /// server.
+  @protected
+  ({List<MailObjectRow> uploads, List<MailObjectRow> deletes}) splitPending(
+    List<MailObjectRow> pending,
+  ) =>
+      (
+        uploads: [
+          for (final r in pending)
+            if (r.pendingUpload && !r.pendingDelete && r.payload != null) r,
+        ],
+        deletes: [
+          for (final r in pending)
+            if (r.pendingDelete) r,
+        ],
+      );
+
   @protected
   Future<bool> stillPending(String accountId, String messageId) async =>
       (await row(accountId, messageId))?.pendingUpload ?? false;

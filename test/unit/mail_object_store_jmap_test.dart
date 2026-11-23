@@ -1,6 +1,3 @@
-import 'dart:convert';
-
-import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
@@ -20,7 +17,6 @@ import 'recording_app_log_repository.dart';
 
 const _acc = 'acc-j';
 const _dataPath = 'SharedInbox/Data';
-const _keysPath = 'SharedInbox/Keys';
 
 const _account = Account(
   id: _acc,
@@ -31,7 +27,7 @@ const _account = Account(
 );
 
 /// One install of the app on the shared fake [server].
-class _Device with MailObjectDeviceOps {
+class _Device with MailObjectDeviceOps, ListingObjectDevice {
   _Device(this.server, {this.background = false});
 
   final StatefulFakeJmapServer server;
@@ -73,6 +69,7 @@ class _Device with MailObjectDeviceOps {
   }
 
   /// A mailbox listing, as the mail sync does before the store runs.
+  @override
   Future<void> list() => mailboxes.syncMailboxes(_acc);
 
   List<String> events() => [for (final r in logs.rows) r.event];
@@ -118,18 +115,11 @@ void main() {
 
   test('a second device pulls, opens and merges an object', () async {
     final server = StatefulFakeJmapServer();
-    final a = await _Device.open(server);
-    final b = await _Device.open(server);
-    final put = await a.putNew(body: 'from A');
-
-    await b.list();
-    await b.sync();
-
-    final row = (await b.rows()).single;
-    expect(row.versionId, put.versionId);
-    expect(row.payload, put.payload);
-    expect(row.serverId, server.find(bareMessageId(put.messageId))!.id);
-    expect(await b.bodyOf(put.itemHmac!), 'from A');
+    final row = await expectSecondDevicePulls(
+      await _Device.open(server),
+      await _Device.open(server),
+    );
+    expect(row.serverId, server.messagesIn(_dataPath).single.id);
   });
 
   test(
@@ -417,32 +407,11 @@ void main() {
 
   test('keys folder: raw mails round-trip, idempotent by Message-ID', () async {
     final server = StatefulFakeJmapServer();
-    final a = await _Device.open(server);
-    final b = await _Device.open(server);
-    final mail = Uint8List.fromList(
-      ascii.encode(
-        'Message-ID: <key-1@sharedinbox.invalid>\r\n'
-        'Subject: SharedInbox key\r\n\r\nkey material\r\n',
-      ),
+    await expectKeyMailsRoundTrip(
+      await _Device.open(server),
+      await _Device.open(server),
+      server,
     );
-
-    await a.store.appendRaw(_acc, mail);
-    await a.store.appendRaw(_acc, mail);
-    await a.store.waitForIdle();
-
-    expect(server.importCount, 1);
-    expect(server.messagesIn(_keysPath).single.raw, mail);
-    await b.list();
-    await b.sync();
-    final pulled =
-        (await b.store.observe(_acc, MailObjectFolder.keys).first).single;
-    expect(pulled.payload, mail);
-
-    await a.store.deleteRaw(_acc, '<key-1@sharedinbox.invalid>');
-    await a.store.waitForIdle();
-
-    expect(server.messagesIn(_keysPath), isEmpty);
-    expect(await a.rows(MailObjectFolder.keys), isEmpty);
   });
 
   test('a mail destroyed without a tombstone is uploaded again, byte for byte',
@@ -493,32 +462,12 @@ void main() {
 
   test('a duplicate email of one version is destroyed', () async {
     final server = StatefulFakeJmapServer();
-    final a = await _Device.open(server);
-    final put = await a.putNew();
-    server.add(_dataPath, put.payload!);
-
-    await a.sync();
-    await a.sync();
-
-    expect(server.messagesIn(_dataPath), hasLength(1));
-    expect(await a.rows(), hasLength(1));
+    await expectDuplicateRemoved(await _Device.open(server), server);
   });
 
   test('mails that are no objects are left alone', () async {
     final server = StatefulFakeJmapServer();
-    final a = await _Device.open(server);
-    await a.putNew();
-    server.add(
-      _dataPath,
-      Uint8List.fromList(
-        ascii.encode('Message-ID: <x@test>\r\nSubject: hi\r\n\r\nhi\r\n'),
-      ),
-    );
-
-    await a.sync();
-
-    expect(await a.rows(), hasLength(1));
-    expect(server.messagesIn(_dataPath), hasLength(2));
+    await expectNonObjectsLeftAlone(await _Device.open(server), server);
   });
 
   test('an IMAP account is not synced by the JMAP store', () async {

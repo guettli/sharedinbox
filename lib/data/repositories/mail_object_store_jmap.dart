@@ -36,8 +36,11 @@ const _queryPage = 500;
 const _getChunk = 100;
 
 /// Method errors after which a full listing replaces the incremental pull.
+/// Stalwart answers a state it cannot parse with `invalidArguments`; the
+/// listing stores fresh states, so that recovers too.
 const _resyncErrors = {
   'cannotCalculateChanges',
+  'invalidArguments',
   'tooManyChanges',
   'unsupportedFilter',
   'unsupportedSort',
@@ -578,14 +581,7 @@ class MailObjectStoreJmap extends MailObjectStoreBase {
     final duplicates =
         _duplicates.remove(_key(accountId, folder)) ?? const <String>{};
     if (pending.isEmpty && duplicates.isEmpty) return;
-    final uploads = [
-      for (final r in pending)
-        if (r.pendingUpload && !r.pendingDelete && r.payload != null) r,
-    ];
-    final deletes = [
-      for (final r in pending)
-        if (r.pendingDelete) r,
-    ];
+    final (:uploads, :deletes) = splitPending(pending);
     var mailboxId = layout.ids[folder];
     if (mailboxId == null) {
       if (uploads.isEmpty) {
