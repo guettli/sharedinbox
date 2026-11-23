@@ -3,11 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
-import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/di.dart';
 
 import 'entries_fakes.dart';
-import 'helpers.dart';
 
 /// Opens the conflict view of `hmac-1` with [versions] as its heads, on a
 /// screen [width] logical pixels wide.
@@ -20,21 +17,7 @@ Future<FakeConflictStore> _pump(
   tester.view.physicalSize = Size(width, 2400);
   addTearDown(tester.view.reset);
   final store = FakeConflictStore({'hmac-1': conflictItemOf(versions)});
-  await tester.pumpWidget(
-    buildApp(
-      initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
-      overrides: [
-        ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
-        entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
-        mailObjectStoreProvider.overrideWithValue(store),
-      ],
-    ),
-  );
-  await tester.pumpAndSettle();
+  await pumpEntriesApp(tester, repo: FakeEntryRepository(), store: store);
   // From the entries screen, so the view has a route to go back to.
   await tester.tap(find.byKey(const Key('entriesConflictsBadge')));
   await tester.pumpAndSettle();

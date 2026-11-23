@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
@@ -12,6 +13,9 @@ import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/entry_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
+import 'package:sharedinbox/di.dart';
+
+import 'helpers.dart';
 
 /// In-memory [EntryRepository]: entries newest first, search by substring.
 class FakeEntryRepository implements EntryRepository {
@@ -255,4 +259,28 @@ MailObjectItem conflictItemOf(List<InnerObject> versions) {
     display: versions[merge.display!.ref! as int],
     versions: [for (final h in merge.distinctHeads) versions[h.ref! as int]],
   );
+}
+
+/// Pumps the app on the entries screen with personal data unlocked, backed by
+/// [repo] and [store], and waits for it to settle.
+Future<void> pumpEntriesApp(
+  WidgetTester tester, {
+  required EntryRepository repo,
+  required MailObjectStore store,
+}) async {
+  await tester.pumpWidget(
+    buildApp(
+      initialLocation: '/accounts/acc-1/entries',
+      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
+      overrides: [
+        ...baseOverrides(accounts: [kTestAccount]),
+        encryptedKeyServiceProvider.overrideWithValue(
+          FixedStatusKeyService(PersonalDataStatus.unlocked),
+        ),
+        entryRepositoryProvider.overrideWithValue(repo),
+        mailObjectStoreProvider.overrideWithValue(store),
+      ],
+    ),
+  );
+  await tester.pumpAndSettle();
 }

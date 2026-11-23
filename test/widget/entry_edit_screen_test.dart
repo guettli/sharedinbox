@@ -1,11 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:sharedinbox/core/services/encrypted_key_service.dart';
-import 'package:sharedinbox/di.dart';
-
 import 'entries_fakes.dart';
-import 'helpers.dart';
 
 Future<FakeEntryRepository> _pump(
   WidgetTester tester, {
@@ -15,22 +11,11 @@ Future<FakeEntryRepository> _pump(
   final repo = FakeEntryRepository([
     testEntry('e1', title: 'Old title', body: body, conflict: true),
   ]);
-  await tester.pumpWidget(
-    buildApp(
-      initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
-      overrides: [
-        ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
-        entryRepositoryProvider.overrideWithValue(repo),
-        mailObjectStoreProvider
-            .overrideWithValue(store ?? FakeConflictStore({})),
-      ],
-    ),
+  await pumpEntriesApp(
+    tester,
+    repo: repo,
+    store: store ?? FakeConflictStore({}),
   );
-  await tester.pumpAndSettle();
   await tester.tap(find.text('Old title'));
   await tester.pumpAndSettle();
   return repo;
