@@ -6,6 +6,7 @@ import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
+import 'package:sharedinbox/ui/widgets/journal_view.dart';
 
 import 'entries_fakes.dart';
 import 'helpers.dart';
@@ -86,7 +87,7 @@ void main() {
     }
     await tester.tap(find.byKey(const Key('entriesTab_journal')));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('journalTabPlaceholder')), findsOneWidget);
+    expect(find.byType(JournalView), findsOneWidget);
   });
 
   testWidgets('the filters show open, due today or overdue, and done todos',

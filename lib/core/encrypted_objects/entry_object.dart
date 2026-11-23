@@ -27,14 +27,15 @@ ObjectPart _markdownPart(String body) => ObjectPart(
     );
 
 /// A new entry in the personal collection; an empty [title] is left out.
-/// A [task] makes it a todo; [links] are the Message-IDs of its mails.
-/// [itemId] defaults to a random one; [createdAt] (e.g. of a migrated
+/// A [task] makes it a todo, a [date] (`YYYY-MM-DD`) a journal entry;
+/// [links] are the Message-IDs of its mails. [itemId] defaults to a random one; [createdAt] (e.g. of a migrated
 /// note) is written as the `createdAt` field.
 InnerObject newEntryObject({
   String? title,
   required String body,
   required HlcClock clock,
   EntryTask? task,
+  String? date,
   List<String> links = const [],
   String? itemId,
   DateTime? createdAt,
@@ -49,6 +50,7 @@ InnerObject newEntryObject({
           if (title != null && title.trim().isNotEmpty) 'title': title,
           'tags': const <String>[],
           'links': links,
+          if (date != null) 'date': date,
           if (task != null) 'task': task.toJson(),
           if (createdAt != null)
             'createdAt': createdAt.toUtc().toIso8601String(),
@@ -130,14 +132,16 @@ List<String> _strings(Object? json) => [
     ];
 
 /// An edit of [base] (a head of [merge]) setting [title] (empty: none) and
-/// [body]. Other fields and parts are kept; `parents = all heads`, so it
-/// also resolves a conflict.
+/// [body]. A [date] `String` sets the `date`, null removes it, the default
+/// [keepDate] keeps it. Other fields and parts are kept; `parents = all
+/// heads`, so it also resolves a conflict.
 InnerObject editEntryObject({
   required InnerObject base,
   required MergeResult merge,
   required HlcClock clock,
   String? title,
   required String body,
+  Object? date = keepDate,
 }) {
   final parts = [...base.parts];
   final markdown = parts.indexWhere(_isMarkdown);
@@ -148,11 +152,15 @@ InnerObject editEntryObject({
     base: base,
     merge: merge,
     clock: clock,
-    fields: {if (hasTitle) 'title': title},
+    fields: {
+      if (hasTitle) 'title': title,
+      if (date is String) 'date': date,
+    },
     parts: parts,
   );
-  if (hasTitle) return next;
-  return _withoutField(next, 'title');
+  final dated = date == null ? _withoutField(next, 'date') : next;
+  if (hasTitle) return dated;
+  return _withoutField(dated, 'title');
 }
 
 /// The `task` keys this app knows; others are kept on an edit (§5.2).

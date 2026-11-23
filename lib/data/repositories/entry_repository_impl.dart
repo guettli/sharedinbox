@@ -91,6 +91,18 @@ class EntryRepositoryImpl implements EntryRepository {
         );
   }
 
+  @override
+  Stream<List<Entry>> observeJournal(String accountId) {
+    final q = _db.select(_db.entries)
+      ..where((t) => t.accountId.equals(accountId) & t.date.isNotNull())
+      ..orderBy([
+        (t) => OrderingTerm.desc(t.date),
+        (t) => OrderingTerm.asc(t.updatedAt),
+        (t) => OrderingTerm.asc(t.itemId),
+      ]);
+    return q.watch().map((rows) => rows.map(_toModel).toList());
+  }
+
   static int _newestFirst(Entry a, Entry b) => b.sortDate.compareTo(a.sortDate);
 
   /// By due date (none last), priority (none last), then newest first.
@@ -120,6 +132,7 @@ class EntryRepositoryImpl implements EntryRepository {
     String? title,
     required String body,
     EntryTask? task,
+    String? date,
     List<String> links = const [],
   }) async {
     final object = newEntryObject(
@@ -127,6 +140,7 @@ class EntryRepositoryImpl implements EntryRepository {
       body: body,
       clock: await _store.clockFor(accountId),
       task: task,
+      date: date,
       links: links,
     );
     await _store.put(accountId, object);
@@ -139,6 +153,7 @@ class EntryRepositoryImpl implements EntryRepository {
     String itemId, {
     String? title,
     required String body,
+    Object? date = keepDate,
   }) =>
       _edit(
         accountId,
@@ -149,6 +164,7 @@ class EntryRepositoryImpl implements EntryRepository {
           clock: clock,
           title: title,
           body: body,
+          date: date,
         ),
       );
 

@@ -636,6 +636,16 @@ while that account is unlocked. Otherwise they go to the open account, and
 otherwise to the first unlocked one. "Create todo" on a mail creates the todo
 in that mail's account, with `links: [messageId]`.
 
+**Journal** (#1358): the Journal tab (`lib/ui/widgets/journal_view.dart`)
+shows one day of one account at a time, today first. Its entries are the
+ones whose `date` is that day, oldest edit first. It can go a day back or
+forward, jump to the previous or next day with entries, pick a day in a
+calendar and go back to today. The grouping by day is in
+`lib/core/utils/journal_days.dart`; a `date` that is not a real `YYYY-MM-DD`
+is not shown. "New entry" sets `date` to the day shown. In the editor, a date
+chip sets or changes it, and "Remove from journal" removes the field; an edit
+that does not touch it keeps it.
+
 Legacy plaintext notes (`Notes` folder, `X-SharedInbox-Note-*` headers) are
 migrated into entries with `links: [messageId]` (#1375). Only mails with
 `X-SharedInbox-Note-Id` are touched — Apple Notes uses a `Notes` folder too;

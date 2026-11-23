@@ -907,6 +907,12 @@ final entriesProvider = StreamProvider.autoDispose
       .observeEntries(accountId, query: query);
 });
 
+/// The journal entries of an account, newest day first (#1358).
+final journalProvider = StreamProvider.autoDispose.family<List<Entry>, String>(
+  (ref, accountId) =>
+      ref.watch(entryRepositoryProvider).observeJournal(accountId),
+);
+
 /// Today as a local date; overridden in tests.
 final todayProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 

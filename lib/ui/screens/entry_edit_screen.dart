@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/journal_days.dart';
 import 'package:sharedinbox/core/utils/markdown_tasks.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/entries_screen.dart';
@@ -17,7 +20,8 @@ import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
 /// rendered preview when the body is not empty (#1376); ticking a task-list
 /// checkbox there saves at once. Other fields are kept; saving also resolves
 /// a conflict. A task section makes it a todo with a due date and a done
-/// tick (#1357); each change there saves at once.
+/// tick (#1357); each change there saves at once. A date chip puts it in
+/// the journal or takes it out (#1358); it is saved with the text.
 class EntryEditScreen extends ConsumerStatefulWidget {
   const EntryEditScreen({
     super.key,
@@ -37,6 +41,9 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   final _body = TextEditingController();
   Entry? _entry;
   EntryTask? _task;
+
+  /// The journal day (`YYYY-MM-DD`), null: not in the journal.
+  String? _date;
   bool _loaded = false;
   bool _busy = false;
   bool _preview = false;
@@ -55,6 +62,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
     setState(() {
       _entry = entry;
       _task = entry?.task;
+      _date = entry?.date;
       _loaded = true;
       _title.text = entry?.title ?? '';
       _body.text = entry?.body ?? '';
@@ -125,6 +133,10 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
               child: const Text('Resolve…'),
             ),
           ),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: _dateChip(),
+        ),
         TextField(
           key: const Key('entryEditTitle'),
           controller: _title,
@@ -153,6 +165,42 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
           ),
       ],
     );
+  }
+
+  /// The journal day, or a way to add one.
+  Widget _dateChip() {
+    final date = _date;
+    if (date == null) {
+      return ActionChip(
+        key: const Key('entryEditAddDate'),
+        avatar: const Icon(Icons.event_note),
+        label: const Text('Add to journal'),
+        onPressed: _pickDate,
+      );
+    }
+    final day = parseJournalDate(date);
+    return InputChip(
+      key: const Key('entryEditDate'),
+      avatar: const Icon(Icons.event_note),
+      label: Text(day == null ? date : DateFormat.yMMMEd().format(day)),
+      onPressed: _pickDate,
+      deleteButtonTooltipMessage: 'Remove from journal',
+      deleteIcon: const Icon(Icons.close, key: Key('entryEditRemoveDate')),
+      onDeleted: () => setState(() => _date = null),
+    );
+  }
+
+  Future<void> _pickDate() async {
+    final now = ref.read(todayProvider)();
+    final initial = parseJournalDate(_date) ?? now;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(min(initial.year, now.year - 100)),
+      lastDate: DateTime(max(initial.year, now.year + 100), 12, 31),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _date = isoDate(picked));
   }
 
   /// The "Todo" switch and, while on, the due date and the done tick.
@@ -249,6 +297,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
             widget.itemId,
             title: _title.text,
             body: _body.text,
+            date: _date,
           );
       if (!mounted) return;
       context.pop();
@@ -274,6 +323,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
             widget.itemId,
             title: _title.text,
             body: _body.text,
+            date: _date,
           );
     } catch (e) {
       if (!mounted) return;
