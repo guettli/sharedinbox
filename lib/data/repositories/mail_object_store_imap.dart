@@ -1019,7 +1019,12 @@ class MailObjectStoreImap implements MailObjectStore {
     MailObjectRow row,
   ) async {
     final existing = await _serverUids(
-        client, accountId, folder, uidValidity, row.messageId);
+      client,
+      accountId,
+      folder,
+      uidValidity,
+      row.messageId,
+    );
     if (existing.isNotEmpty) {
       await _confirm(
         accountId,

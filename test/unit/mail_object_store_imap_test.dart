@@ -96,8 +96,10 @@ class _Device {
     await store.waitForIdle();
   }
 
-  Future<MailObject> putNew(
-      {String body = 'hello', String itemId = 'i1'}) async {
+  Future<MailObject> putNew({
+    String body = 'hello',
+    String itemId = 'i1',
+  }) async {
     final clock = await store.clockFor(_acc);
     final put = await store.put(
       _acc,

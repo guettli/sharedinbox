@@ -1767,7 +1767,9 @@ void main() {
       final fresh = AppDatabase(NativeDatabase(dbFile));
       await seedAccountRow(fresh, 'acc-x'); // creates the schema
       expect(
-          await present(fresh), containsAll([...tables, 'mail_objects_item']));
+        await present(fresh),
+        containsAll([...tables, 'mail_objects_item']),
+      );
       await fresh.close();
 
       // A v81 database: none of the tables.

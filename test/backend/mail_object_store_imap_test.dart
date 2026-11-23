@@ -244,8 +244,10 @@ void main() {
     await a.sync();
 
     expect((await onServer()).keys, [v1.messageId]);
-    expect(logs.rows.map((r) => r.event),
-        isNot(contains('mos.vanished_reupload')));
+    expect(
+      logs.rows.map((r) => r.event),
+      isNot(contains('mos.vanished_reupload')),
+    );
     final row = (await a.row(v1.messageId))!;
     expect(row.serverId, isNotNull);
     expect(row.pendingUpload, isFalse);
@@ -331,7 +333,10 @@ class _Device {
     final put = await store.put(
       account.id,
       testObject(
-          itemId: newItemIdForTest(), versionId: clock.send(), body: body),
+        itemId: newItemIdForTest(),
+        versionId: clock.send(),
+        body: body,
+      ),
     );
     await store.waitForIdle();
     return put;
