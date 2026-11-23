@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
+import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
@@ -23,6 +25,9 @@ class _FakeKeyService implements EncryptedKeyService {
   final pairingCodes = <String>[];
   final pairingRequests = <String>[];
   int pairingChecks = 0;
+  bool hasPassphrase = false;
+  Object? passphraseError;
+  final passphrases = <String>[];
 
   void setStatus(PersonalDataStatus s) {
     _status = s;
@@ -79,6 +84,26 @@ class _FakeKeyService implements EncryptedKeyService {
   }
 
   @override
+  Future<bool> hasPassphraseSlot(String accountId) async => hasPassphrase;
+
+  @override
+  Future<void> addPassphraseSlot(String accountId, String passphrase) async {
+    passphrases.add(passphrase);
+    final error = passphraseError;
+    if (error != null) throw error;
+    hasPassphrase = true;
+  }
+
+  @override
+  Future<void> unlockWithPassphrase(String accountId, String passphrase) async {
+    passphrases.add(passphrase);
+    if (passphrase != 'good') {
+      throw const UnlockFailed(UnlockFailure.noSlotOpens);
+    }
+    setStatus(PersonalDataStatus.unlocked);
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -86,9 +111,10 @@ Future<_FakeKeyService> _pump(
   WidgetTester tester,
   PersonalDataStatus status, {
   bool beta = true,
+  bool hasPassphrase = false,
   String location = '/accounts/acc-1/personal-data',
 }) async {
-  final service = _FakeKeyService(status);
+  final service = _FakeKeyService(status)..hasPassphrase = hasPassphrase;
   await tester.pumpWidget(
     buildApp(
       initialLocation: location,
@@ -214,6 +240,93 @@ void main() {
     expect(find.byKey(const Key('pairingSent')), findsOneWidget);
     expect(find.byKey(const Key('pairingCodeQrCode')), findsOneWidget);
     expect(find.text('${pairingCodePrefix}reply'), findsOneWidget);
+  });
+
+  testWidgets(
+      'add a passphrase: the brute-force warning, weak ones cannot be saved, '
+      'offline says it needs a connection', (tester) async {
+    final service = await _pump(tester, PersonalDataStatus.unlocked);
+    expect(find.byKey(const Key('passphraseRemove')), findsNothing);
+    await tester.tap(find.byKey(const Key('passphraseAdd')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('passphraseBruteForceWarning')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('offline without limit'), findsOneWidget);
+
+    FilledButton save() =>
+        tester.widget(find.byKey(const Key('passphraseSave')));
+    final field = find.byKey(const Key('passphraseNewField'));
+    final confirm = find.byKey(const Key('passphraseConfirmField'));
+
+    await tester.enterText(field, 'short');
+    await tester.enterText(confirm, 'short');
+    await tester.pump();
+    expect(
+      find.text('Use at least $minPassphraseLength characters.'),
+      findsOneWidget,
+    );
+    expect(save().onPressed, isNull);
+
+    await tester.enterText(field, 'password1234');
+    await tester.enterText(confirm, 'password1234');
+    await tester.pump();
+    expect(find.text('This is a common password.'), findsOneWidget);
+    expect(save().onPressed, isNull);
+
+    const good = 'violet tractor sings beneath copper rain';
+    await tester.enterText(field, good);
+    await tester.enterText(confirm, '${good}s');
+    await tester.pump();
+    expect(find.text('The passphrases differ.'), findsOneWidget);
+    expect(save().onPressed, isNull);
+
+    await tester.enterText(confirm, good);
+    await tester.pump();
+    expect(save().onPressed, isNotNull);
+
+    service.passphraseError =
+        const KeyMailOfflineException(SocketException('offline'));
+    await tester.tap(find.byKey(const Key('passphraseSave')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('needs a connection'), findsOneWidget);
+
+    service.passphraseError = null;
+    await tester.tap(find.byKey(const Key('passphraseSave')));
+    await tester.pumpAndSettle();
+    expect(service.passphrases, [good, good]);
+    expect(find.byKey(const Key('passphraseBruteForceWarning')), findsNothing);
+    expect(find.byKey(const Key('passphraseChange')), findsOneWidget);
+    expect(find.byKey(const Key('passphraseRemove')), findsOneWidget);
+  });
+
+  testWidgets('the passphrase unlock shows only with a passphrase slot',
+      (tester) async {
+    await _pump(tester, PersonalDataStatus.locked);
+    expect(find.byKey(const Key('recoveryKeyField')), findsOneWidget);
+    expect(find.byKey(const Key('passphraseField')), findsNothing);
+
+    final service =
+        await _pump(tester, PersonalDataStatus.locked, hasPassphrase: true);
+    final field = find.byKey(const Key('passphraseField'));
+    await tester.scrollUntilVisible(
+      field,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.enterText(field, 'bad');
+    await tester.ensureVisible(find.byKey(const Key('passphraseUnlock')));
+    await tester.tap(find.byKey(const Key('passphraseUnlock')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('passphrase does not unlock'), findsOneWidget);
+
+    await tester.enterText(field, 'good');
+    await tester.tap(find.byKey(const Key('passphraseUnlock')));
+    await tester.pumpAndSettle();
+    expect(service.passphrases, ['bad', 'good']);
+    expect(find.text('Unlocked on this device'), findsOneWidget);
   });
 
   testWidgets('a lost race asks for the other device’s recovery key',
