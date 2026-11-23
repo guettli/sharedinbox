@@ -91,8 +91,7 @@ class EntryRepositoryImpl implements EntryRepository {
         );
   }
 
-  static int _newestFirst(Entry a, Entry b) =>
-      b.sortDate.compareTo(a.sortDate);
+  static int _newestFirst(Entry a, Entry b) => b.sortDate.compareTo(a.sortDate);
 
   /// By due date (none last), priority (none last), then newest first.
   static int _byDue(Entry a, Entry b) {

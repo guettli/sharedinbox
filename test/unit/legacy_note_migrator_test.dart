@@ -355,8 +355,7 @@ void main() {
     expect(await a.noteRows(), isEmpty);
   });
 
-  test('two devices migrating at once write one entry, no conflict',
-      () async {
+  test('two devices migrating at once write one entry, no conflict', () async {
     final server = _server();
     _putNote(server, 'n1', '<m1@x>', 'shared note');
     final a = await _Device.open(server);

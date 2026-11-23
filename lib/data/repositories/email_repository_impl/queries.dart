@@ -351,24 +351,22 @@ extension _Queries on EmailRepositoryImpl {
     if (needle.isEmpty) return [];
     final pattern = '%${likeEscape(needle)}%';
     final (conditions, vars) = _searchConditions(accountId, mailboxPath);
-    final rows = await _db
-        .customSelect(
-          'SELECT DISTINCT e.* FROM entries n'
-          ' JOIN entry_links l ON l.account_id = n.account_id'
-          ' AND l.item_hmac = n.item_hmac'
-          ' JOIN emails e ON e.account_id = l.account_id'
-          ' AND e.message_id = l.message_id'
-          r" WHERE (n.title LIKE ? ESCAPE '\' OR n.body LIKE ? ESCAPE '\')"
-          '$conditions ORDER BY $_emailListOrderSql LIMIT ?',
-          variables: [
-            Variable<String>(pattern),
-            Variable<String>(pattern),
-            ...vars,
-            Variable<int>(limit),
-          ],
-          readsFrom: {_db.emails, _db.entries, _db.entryLinks},
-        )
-        .get();
+    final rows = await _db.customSelect(
+      'SELECT DISTINCT e.* FROM entries n'
+      ' JOIN entry_links l ON l.account_id = n.account_id'
+      ' AND l.item_hmac = n.item_hmac'
+      ' JOIN emails e ON e.account_id = l.account_id'
+      ' AND e.message_id = l.message_id'
+      r" WHERE (n.title LIKE ? ESCAPE '\' OR n.body LIKE ? ESCAPE '\')"
+      '$conditions ORDER BY $_emailListOrderSql LIMIT ?',
+      variables: [
+        Variable<String>(pattern),
+        Variable<String>(pattern),
+        ...vars,
+        Variable<int>(limit),
+      ],
+      readsFrom: {_db.emails, _db.entries, _db.entryLinks},
+    ).get();
     final emailRows =
         await Future.wait(rows.map((r) => _db.emails.mapFromRow(r)));
     return emailRows.map(_toModel).toList();

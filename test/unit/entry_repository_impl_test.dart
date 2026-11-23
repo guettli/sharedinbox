@@ -569,9 +569,9 @@ void main() {
       expect(await linked(a, ['<m2@x>']), ['on both']);
       expect(await linked(a, ['<other@x>']), isEmpty);
       expect(await linked(a, []), isEmpty);
-      final old = (await a.repo.observeEntriesForMessages(_acc, ['<m1@x>'])
-              .first)
-          .first;
+      final old =
+          (await a.repo.observeEntriesForMessages(_acc, ['<m1@x>']).first)
+              .first;
       expect(old.createdAt, DateTime.utc(2020, 3, 4, 5, 6, 7));
       expect(old.sortDate, old.createdAt);
       // The list is newest first by createdAt, else by the last edit.

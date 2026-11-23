@@ -50,7 +50,8 @@ InnerObject newEntryObject({
           'tags': const <String>[],
           'links': links,
           if (task != null) 'task': task.toJson(),
-          if (createdAt != null) 'createdAt': createdAt.toUtc().toIso8601String(),
+          if (createdAt != null)
+            'createdAt': createdAt.toUtc().toIso8601String(),
         },
       ),
       parts: [_markdownPart(body)],
@@ -111,7 +112,8 @@ Entry? entryFromObject(
     date: date is String ? date : null,
     task: EntryTask.fromJson(extra['task']),
     links: _strings(extra['links']),
-    createdAt: createdAt is String ? DateTime.tryParse(createdAt)?.toUtc() : null,
+    createdAt:
+        createdAt is String ? DateTime.tryParse(createdAt)?.toUtc() : null,
     versionId: head.versionId.encode(),
     updatedAt: DateTime.fromMillisecondsSinceEpoch(
       head.versionId.wallMs,

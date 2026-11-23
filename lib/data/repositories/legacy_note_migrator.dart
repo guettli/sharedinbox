@@ -198,7 +198,8 @@ class LegacyNoteMigrator implements LegacyNoteMigration {
     bool onServer = false,
   }) async {
     final q = _db.select(_db.mailObjects)
-      ..where((t) => t.accountId.equals(accountId) & t.itemHmac.equals(itemHmac))
+      ..where(
+          (t) => t.accountId.equals(accountId) & t.itemHmac.equals(itemHmac))
       ..limit(1);
     if (onServer) {
       q.where((t) => t.pendingUpload.equals(false) & t.serverId.isNotNull());

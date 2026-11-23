@@ -69,8 +69,7 @@ class Accounts extends Table {
   // Added in schema v88: when the user confirmed on this device that the
   // account's legacy plaintext notes move into encrypted entries (#1375).
   // Local only, never synced; null = not confirmed.
-  DateTimeColumn get legacyNotesMigrationConfirmedAt =>
-      dateTime().nullable()();
+  DateTimeColumn get legacyNotesMigrationConfirmedAt => dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

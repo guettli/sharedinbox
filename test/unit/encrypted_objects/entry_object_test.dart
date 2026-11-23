@@ -382,8 +382,7 @@ void main() {
       expect(entry.sortDate, entry.createdAt);
     });
 
-    test('createdAt survives an edit; an invalid one reads as null',
-        () async {
+    test('createdAt survives an edit; an invalid one reads as null', () async {
       final object = await migrated(clockAt(1700000000000));
       final edited = editEntryObject(
         base: object,
