@@ -11,6 +11,7 @@ import 'package:sharedinbox/core/models/mailbox.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
@@ -372,6 +373,24 @@ void main() {
       addTearDown(m.dispose);
 
       expect(await collect(m), ['1']);
+    });
+
+    test('an IMAP cycle syncs the object store; its failure is swallowed',
+        () async {
+      final objects = _FailingObjectStore();
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        FakeMailboxRepositoryWithInbox(),
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        objects: objects,
+        // Never connects: the loop waits here in place of a real IDLE.
+        imapConnect: (_, __, ___) => Completer<imap.ImapClient>().future,
+      );
+      addTearDown(m.dispose);
+
+      expect(await collect(m), ['1']);
+      expect(objects.synced, ['1']);
     });
 
     test('fires after a successful JMAP cycle', () async {
@@ -1191,4 +1210,18 @@ class _LevelRecordingAppLog implements AppLogRepository {
     }
     return Future<int?>.value();
   }
+}
+
+/// A [MailObjectStore] whose sync always fails (#1370).
+class _FailingObjectStore implements MailObjectStore {
+  final synced = <String>[];
+
+  @override
+  Future<void> sync(String accountId) async {
+    synced.add(accountId);
+    throw StateError('object store broken');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

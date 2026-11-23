@@ -19,6 +19,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
@@ -63,6 +64,7 @@ import 'package:sharedinbox/data/repositories/app_log_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
@@ -422,6 +424,7 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     imapConnect: ref.watch(imapConnectProvider),
     drafts: ref.watch(draftRepositoryProvider),
     notes: ref.watch(noteRepositoryProvider),
+    objects: ref.watch(mailObjectStoreProvider),
     onNewMail: dispatcher.dispatchForAccount,
   );
   ref.onDispose(manager.dispose);
@@ -793,6 +796,19 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
   return NoteRepositoryImpl(
     ref.watch(dbProvider),
     ref.watch(accountRepositoryProvider),
+    imapConnect: ref.watch(imapConnectProvider),
+    appLogger: ref.watch(appLoggerProvider),
+  );
+});
+
+/// The encrypted-object store (#1370). No keys until the key lifecycle
+/// (#1366): rows stay unopened and writes throw `NoWriteKeyException`.
+final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
+  return MailObjectStoreImap(
+    ref.watch(dbProvider),
+    ref.watch(accountRepositoryProvider),
+    ref.watch(mailboxRepositoryProvider),
+    ref.watch(secureStorageProvider),
     imapConnect: ref.watch(imapConnectProvider),
     appLogger: ref.watch(appLoggerProvider),
   );

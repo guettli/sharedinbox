@@ -14,6 +14,7 @@ import 'package:sharedinbox/core/repositories/account_repository.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/repositories/draft_repository.dart';
 import 'package:sharedinbox/core/repositories/email_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/mailbox_repository.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/sync_log_repository.dart';
@@ -248,6 +249,7 @@ class AccountSyncManager {
     AppLogger? appLogger,
     DraftRepository? drafts,
     NoteRepository? notes,
+    MailObjectStore? objects,
     OnNewMailCallback? onNewMail,
     ImapIdleTimings imapIdleTimings = const ImapIdleTimings(),
   })  : _imapConnect = imapConnect,
@@ -256,6 +258,7 @@ class AccountSyncManager {
         _appLogger = appLogger ?? AppLogger(const NoOpAppLogRepository()),
         _drafts = drafts,
         _notes = notes,
+        _objects = objects,
         _onNewMail = onNewMail;
 
   final AccountRepository _accounts;
@@ -267,6 +270,7 @@ class AccountSyncManager {
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
+  final MailObjectStore? _objects;
   final OnNewMailCallback? _onNewMail;
 
   final Map<String, _SyncLoop> _active = {};
@@ -770,6 +774,7 @@ class AccountSyncManager {
           _appLogger,
           _drafts,
           _notes,
+          _objects,
           _onNewMail,
           idleTimings: _imapIdleTimings,
           onSyncStart: () => _emitSyncing(id, syncing: true),
@@ -864,6 +869,7 @@ class _AccountSync with _KickableWait {
     this._appLogger,
     this._drafts,
     this._notes,
+    this._objects,
     this._onNewMail, {
     required ImapIdleTimings idleTimings,
     void Function()? onSyncStart,
@@ -882,6 +888,7 @@ class _AccountSync with _KickableWait {
   final AppLogger _appLogger;
   final DraftRepository? _drafts;
   final NoteRepository? _notes;
+  final MailObjectStore? _objects;
   final OnNewMailCallback? _onNewMail;
   final void Function()? _onSyncStart;
   final void Function({required bool success})? _onSyncEnd;
@@ -1142,6 +1149,7 @@ class _AccountSync with _KickableWait {
     // rules. Runs unawaited so a notification failure never aborts the cycle.
     unawaited(_onNewMail?.call(account.id));
     await _syncNotesQuietly();
+    await _syncObjectsQuietly();
     final stats = _SyncStats(
       emailsFetched: folders.emailResult.fetched,
       emailsSkipped: folders.emailResult.skipped,
@@ -1171,6 +1179,26 @@ class _AccountSync with _KickableWait {
         _appLogger.warn(
           'sync.notes.failed',
           'Note sync failed: $e',
+          accountId: account.id,
+          error: e,
+          stack: st,
+        ),
+      );
+    }
+  }
+
+  /// Syncs the encrypted-object store (#1370). Like notes, a failure there
+  /// must not stop mail sync: logged and swallowed.
+  Future<void> _syncObjectsQuietly() async {
+    final objects = _objects;
+    if (objects == null) return;
+    try {
+      await objects.sync(account.id);
+    } catch (e, st) {
+      unawaited(
+        _appLogger.warn(
+          'sync.mos.failed',
+          'Encrypted-object sync failed: $e',
           accountId: account.id,
           error: e,
           stack: st,

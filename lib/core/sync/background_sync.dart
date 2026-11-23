@@ -13,6 +13,7 @@ import 'package:sharedinbox/core/filter/filter_matcher.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/account_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/core/services/body_cache_service.dart';
@@ -21,6 +22,8 @@ import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
+import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
@@ -113,6 +116,15 @@ Future<void> _doBackgroundSync() async {
     // which serializes it. Two isolates pushing at once could upload a note
     // twice or drop a delete while the other's upload is in flight.
     final noteRepo = NoteRepositoryImpl(db, accountRepo, pushPending: false);
+    // Pull only, for the same reason; it also never deletes on the server
+    // (ENCRYPTED-OBJECTS.md 5.5).
+    final objectStore = MailObjectStoreImap(
+      db,
+      accountRepo,
+      MailboxRepositoryImpl(db, accountRepo),
+      const FlutterSecureStorageImpl(),
+      pushPending: false,
+    );
     final accounts = await accountRepo.observeAccounts().first;
     await initNotifications();
     for (final account in accounts) {
@@ -122,6 +134,7 @@ Future<void> _doBackgroundSync() async {
         await _checkAccount(db, accountRepo, account);
       }
       await _syncNotesForAccount(noteRepo, account);
+      await _syncObjectsForAccount(objectStore, account);
     }
   } finally {
     await db.close();
@@ -140,6 +153,22 @@ Future<void> _syncNotesForAccount(
   } catch (e, st) {
     log(
       'background notes sync failed for ${account.email}',
+      error: e,
+      stackTrace: st,
+    );
+  }
+}
+
+/// Pulls the encrypted-object store; failures are swallowed like notes'.
+Future<void> _syncObjectsForAccount(
+  MailObjectStore store,
+  model.Account account,
+) async {
+  try {
+    await store.sync(account.id);
+  } catch (e, st) {
+    log(
+      'background encrypted-object sync failed for ${account.email}',
       error: e,
       stackTrace: st,
     );

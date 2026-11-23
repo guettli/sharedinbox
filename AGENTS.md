@@ -162,7 +162,9 @@ phone is needed. See [EXPLORATORY-TESTING.md](EXPLORATORY-TESTING.md).
 
 - Schema in `lib/data/db/database.dart`.
 - After any schema change run: `dart run build_runner build --delete-conflicting-outputs`
-- Generated `database.g.dart` is committed — do not hand-edit it.
+- Generated `*.g.dart` (incl. `database.g.dart`) is gitignored and rebuilt by
+  codegen (CI does it too) — do not hand-edit it. Only `drift_schemas/` dumps
+  are committed.
 
 ## enough_mail
 

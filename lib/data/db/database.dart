@@ -634,6 +634,94 @@ class AppDataFolders extends Table {
   Set<Column> get primaryKey => {accountId, path};
 }
 
+/// One mail of the encrypted-object store (ENCRYPTED-OBJECTS.md §3, 5.1,
+/// #1370): a version of a document in `SharedInbox/Data`, or a raw mail of
+/// `SharedInbox/Keys`. [payload] is the outer RFC 5322 mail as stored on the
+/// server — ciphertext; plaintext only lives in projections.
+// Added in schema v82.
+@DataClassName('MailObjectRow')
+class MailObjects extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  // `keys` or `data`.
+  TextColumn get folder => text()();
+  // The version's Message-ID (with angle brackets), chosen before upload.
+  TextColumn get messageId => text()();
+  // `X-SharedInbox-Item` (base64url); null for `keys` rows.
+  TextColumn get itemHmac => text().nullable()();
+  // The head, filled once a key could open the mail.
+  TextColumn get itemId => text().nullable()();
+  TextColumn get versionId => text().nullable()();
+  // JSON list of versionIds.
+  TextColumn get parents => text().nullable()();
+  TextColumn get kind => text().nullable()();
+  TextColumn get collectionId => text().nullable()();
+  // The IMAP UID (as a string); null until the server confirmed the mail.
+  TextColumn get serverId => text().nullable()();
+  IntColumn get sizeBytes => integer().withDefault(const Constant(0))();
+  // Written (or to be re-uploaded) locally, not confirmed by the server yet.
+  BoolColumn get pendingUpload =>
+      boolean().withDefault(const Constant(false))();
+  // Superseded: its server copy goes in a foreground sync, then the row.
+  BoolColumn get pendingDelete =>
+      boolean().withDefault(const Constant(false))();
+  // For each head of an item in conflict: the versionId of the head shown.
+  TextColumn get conflictOf => text().nullable()();
+  // Null: the body (over 256 KiB) was not fetched yet.
+  BlobColumn get payload => blob().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, messageId};
+}
+
+/// The server's UIDs of the encrypted-object folders as the last pull saw
+/// them (ENCRYPTED-OBJECTS.md 5.5): finds a version by Message-ID on a
+/// server without `SEARCH HEADER`, and tells which mails vanished.
+// Added in schema v82.
+@DataClassName('MailObjectUidRow')
+class MailObjectUids extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get folder => text()();
+  IntColumn get uidValidity => integer()();
+  IntColumn get uid => integer()();
+  TextColumn get messageId => text()();
+  TextColumn get itemHmac => text().nullable()();
+  IntColumn get sizeBytes => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {accountId, folder, uid};
+}
+
+/// The rollback guard of an item (ENCRYPTED-OBJECTS.md 5.4): JSON
+/// `{deviceId: max HLC seen}`. Outlives the versions it saw.
+// Added in schema v82.
+@DataClassName('MailObjectClockRow')
+class MailObjectClocks extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get itemHmac => text()();
+  TextColumn get vvJson => text()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, itemHmac};
+}
+
+/// This install's deviceId per account and its high-water marks
+/// (ENCRYPTED-OBJECTS.md 5.3); the DB side of `DeviceIdentityResolver`.
+// Added in schema v82.
+@DataClassName('MailObjectDeviceRow')
+class MailObjectDevices extends Table {
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get deviceId => text()();
+  TextColumn get hlcHigh => text().nullable()();
+  IntColumn get seqHigh => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {accountId};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -823,6 +911,10 @@ class UserPreferences extends Table {
     NotificationRules,
     NotifiedEmails,
     AppDataFolders,
+    MailObjects,
+    MailObjectUids,
+    MailObjectClocks,
+    MailObjectDevices,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1315,6 +1407,7 @@ class AppDatabase extends _$AppDatabase {
           await _createPendingChangesResourceIndex();
           await _createLocationOverlaySchema();
           await _createThreadIndex();
+          await _createMailObjectsIndex();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2299,7 +2392,29 @@ class AppDatabase extends _$AppDatabase {
       // The app's own data folders, hidden and not mail-synced (#1364).
       await m.createTable(appDataFolders);
     }
+    if (from < 82) {
+      // The encrypted-object store (#1370). Each step re-runnable (#1084).
+      if (!await _tableExists(this, 'mail_objects')) {
+        await m.createTable(mailObjects);
+      }
+      await _createMailObjectsIndex();
+      if (!await _tableExists(this, 'mail_object_uids')) {
+        await m.createTable(mailObjectUids);
+      }
+      if (!await _tableExists(this, 'mail_object_clocks')) {
+        await m.createTable(mailObjectClocks);
+      }
+      if (!await _tableExists(this, 'mail_object_devices')) {
+        await m.createTable(mailObjectDevices);
+      }
+    }
   }
+
+  /// Schema v82: the versions of one item, which every merge reads.
+  Future<void> _createMailObjectsIndex() => customStatement(
+        'CREATE INDEX IF NOT EXISTS mail_objects_item ON mail_objects '
+        '(account_id, item_hmac);',
+      );
 
   /// Schema v80: the index of a folder's thread, which every thread refresh
   /// (`refreshThreadAggregate`) reads. Created by the v18 upgrade only

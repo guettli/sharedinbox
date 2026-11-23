@@ -16,6 +16,8 @@ import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/db/mailbox_fold.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/imap/imap_errors.dart';
+import 'package:sharedinbox/data/imap/imap_namespace.dart';
+import 'package:sharedinbox/data/imap/mail_object_folders.dart';
 import 'package:sharedinbox/data/imap/mailbox_id_status.dart';
 import 'package:sharedinbox/data/imap/mailbox_path_codec.dart';
 import 'package:sharedinbox/data/imap/message_id_search.dart';
@@ -209,11 +211,13 @@ class MailboxRepositoryImpl implements MailboxRepository {
     this._accounts, {
     ImapConnectFn imapConnect = connectImap,
     StatusWithMailboxIdFn statusWithMailboxId = statusWithMailboxIdFromServer,
+    ImapNamespaceFn namespace = imapNamespaceFromServer,
     http.Client? httpClient,
     AppLogger? appLogger,
     DateTime Function()? now,
   })  : _imapConnect = imapConnect,
         _statusWithMailboxId = statusWithMailboxId,
+        _namespace = namespace,
         _httpClient = httpClient ?? http.Client(),
         _appLogger = appLogger,
         _now = now ?? DateTime.now,
@@ -223,6 +227,23 @@ class MailboxRepositoryImpl implements MailboxRepository {
   final AccountRepository _accounts;
   final ImapConnectFn _imapConnect;
   final StatusWithMailboxIdFn _statusWithMailboxId;
+  final ImapNamespaceFn _namespace;
+
+  /// The personal NAMESPACE prefix ([imapNamespacePrefix], cached), asked
+  /// only once the listing has a `SharedInbox` below the top level: only
+  /// then can the store's folders sit under a prefix (#1370).
+  Future<String> _namespacePrefix(
+    String accountId,
+    imap.ImapClient client,
+    Set<String> serverPaths,
+  ) async {
+    if (!serverPaths.any(
+      (p) => p != appDataRootName && p.endsWith(appDataRootName),
+    )) {
+      return storedImapNamespacePrefix(_db, accountId);
+    }
+    return imapNamespacePrefix(_db, accountId, client, _namespace);
+  }
 
   /// Connections whose server advertises OBJECTID but refused a STATUS
   /// with `MAILBOXID` that went through without it ([_status]).
@@ -665,7 +686,11 @@ class MailboxRepositoryImpl implements MailboxRepository {
       await _writer.rebuildDisplayPaths(account.id);
       await registerAppDataFolders(
         account.id,
-        imapAppDataFolderPaths(serverPaths, separator),
+        imapAppDataFolderPaths(
+          serverPaths,
+          separator,
+          prefix: await _namespacePrefix(account.id, client, serverPaths),
+        ),
       );
       await _afterListing(account.id, listSeq, trusted: trusted);
       // Every folder of this listing is stored now: a mail gone from one
@@ -2545,12 +2570,20 @@ const appDataChildNames = ['Keys', 'Data'];
 
 /// The app data folders among the IMAP paths [listed]: `SharedInbox` and
 /// its `Keys` and `Data` subfolders, joined with the server's hierarchy
-/// [separator] (#1364). By full path only: a `Work/SharedInbox` or an
-/// unknown `SharedInbox/Foo` is an ordinary folder.
-Set<String> imapAppDataFolderPaths(Iterable<String> listed, String separator) {
+/// [separator] (#1364), at the top level or under the personal NAMESPACE
+/// [prefix] (e.g. `INBOX.`, #1370). By full path only: a `Work/SharedInbox`
+/// or an unknown `SharedInbox/Foo` is an ordinary folder.
+Set<String> imapAppDataFolderPaths(
+  Iterable<String> listed,
+  String separator, {
+  String prefix = '',
+}) {
   final wanted = {
-    appDataRootName,
-    for (final child in appDataChildNames) '$appDataRootName$separator$child',
+    for (final p in {'', prefix}) ...{
+      '$p$appDataRootName',
+      for (final child in appDataChildNames)
+        '$p$appDataRootName$separator$child',
+    },
   };
   return {
     for (final path in listed)
