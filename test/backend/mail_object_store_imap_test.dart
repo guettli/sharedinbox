@@ -29,19 +29,15 @@ import 'stalwart_harness.dart';
 const _dataPath = 'SharedInbox/Data';
 
 void main() {
-  late StalwartEnv env;
-  late StalwartTestUser user;
-  late Account account;
+  late PoolImapAccount pool;
 
   setUpAll(() {
     configureSqliteForTests();
-    env = StalwartEnv.fromPlatform();
-    user = pickPoolUser(env: env);
-    account = user.imapAccount(id: 'test', env: env);
+    pool = PoolImapAccount();
   });
 
   Future<T> withClient<T>(Future<T> Function(imap.ImapClient c) body) async {
-    final client = await connectImap(env: env, user: user);
+    final client = await pool.connect();
     try {
       return await body(client);
     } finally {
@@ -97,9 +93,9 @@ void main() {
       });
 
   Future<_Device> device({AppLogger? appLogger}) async {
-    final d = _Device(account, appLogger: appLogger);
+    final d = _Device(pool.account, appLogger: appLogger);
     addTearDown(d.db.close);
-    await d.accounts.addAccount(account, user.password);
+    await d.accounts.addAccount(pool.account, pool.user.password);
     return d;
   }
 

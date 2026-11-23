@@ -144,6 +144,26 @@ StalwartTestUser pickPoolUser({
   );
 }
 
+/// The env, pool user and IMAP [Account] of a single-account backend test.
+/// Construct it in `setUpAll`, so env vars are read once per file.
+class PoolImapAccount {
+  PoolImapAccount({String id = 'test'})
+      : this._env(StalwartEnv.fromPlatform(), id);
+
+  PoolImapAccount._env(StalwartEnv env, String id)
+      : this._(env, pickPoolUser(env: env), id);
+
+  PoolImapAccount._(this.env, this.user, String id)
+      : account = user.imapAccount(id: id, env: env);
+
+  final StalwartEnv env;
+  final StalwartTestUser user;
+  final Account account;
+
+  /// A logged-in IMAP client for [user].
+  Future<ImapClient> connect() => connectImap(env: env, user: user);
+}
+
 /// Plain-text IMAP connect for the local dev Stalwart (no TLS cert).
 Future<ImapClient> connectImap({
   required StalwartEnv env,

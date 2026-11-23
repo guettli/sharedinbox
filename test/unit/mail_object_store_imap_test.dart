@@ -297,32 +297,22 @@ void main() {
     expect(server.messagesIn(_dataPath), hasLength(2));
   });
 
-  test('without UIDPLUS the APPEND is confirmed by a Message-ID search',
-      () async {
-    final server = _server(uidPlus: false);
-    final a = await _Device.open(server);
+  for (final (headerSearch, how) in [
+    (true, 'a Message-ID search'),
+    (false, 'indexing the new UIDs (no SEARCH HEADER)'),
+  ]) {
+    test('without UIDPLUS the APPEND is confirmed by $how', () async {
+      final server = _server(uidPlus: false, headerSearch: headerSearch);
+      final a = await _Device.open(server);
 
-    final put = await a.putNew();
-    await a.sync();
+      final put = await a.putNew();
+      await a.sync();
 
-    final stored = server.messagesIn(_dataPath).single;
-    expect((await a.row(put.messageId))!.serverId, '${stored.uid}');
-    expect(server.appendCount, 1);
-  });
-
-  test(
-      'without UIDPLUS and SEARCH HEADER the APPEND is confirmed by '
-      'indexing the new UIDs', () async {
-    final server = _server(uidPlus: false, headerSearch: false);
-    final a = await _Device.open(server);
-
-    final put = await a.putNew();
-    await a.sync();
-
-    final stored = server.messagesIn(_dataPath).single;
-    expect((await a.row(put.messageId))!.serverId, '${stored.uid}');
-    expect(server.appendCount, 1);
-  });
+      final stored = server.messagesIn(_dataPath).single;
+      expect((await a.row(put.messageId))!.serverId, '${stored.uid}');
+      expect(server.appendCount, 1);
+    });
+  }
 
   test(
       'without SEARCH HEADER an APPEND whose answer got lost is not '
