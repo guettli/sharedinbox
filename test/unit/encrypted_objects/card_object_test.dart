@@ -157,7 +157,7 @@ void main() {
       deckId: _deck,
       cardId: 'c1',
       content: const CardContent(front: 'a', back: 'a'),
-      clock: _clockAt(1000, 'devA'),
+      clock: _clockAt(1000),
     );
     final b = newCardObject(
       deckId: _deck,
@@ -220,8 +220,7 @@ void main() {
     expect(objects.map(_bodySize), everyElement(lessThan(maxBatchBodyBytes)));
   });
 
-  test('cards of about 1 KiB split by the body limit, each body ≤ 200 KiB',
-      () {
+  test('cards of about 1 KiB split by the body limit, each body ≤ 200 KiB', () {
     final cards = _noisy(600, 1000);
     final objects = cardBatchObjects(
       deckId: _deck,
@@ -299,16 +298,22 @@ void main() {
         );
     const fromA = CardContent(front: 'A', back: 'A');
     const fromB = CardContent(front: 'B', back: 'B');
-    final a = headWith([
-      members[0].copyWith(h: hlcAt(5000, 'devA'), content: fromA),
-      members[1].copyWith(h: hlcAt(5000, 'devA'), content: fromA),
-      members[2],
-    ], hlcAt(5001, 'devA'));
-    final b = headWith([
-      members[0],
-      members[1].copyWith(h: hlcAt(6000, 'devB'), content: fromB),
-      members[2].copyWith(h: hlcAt(6000, 'devB'), content: fromB),
-    ], hlcAt(6001, 'devB'));
+    final a = headWith(
+      [
+        members[0].copyWith(h: hlcAt(5000), content: fromA),
+        members[1].copyWith(h: hlcAt(5000), content: fromA),
+        members[2],
+      ],
+      hlcAt(5001),
+    );
+    final b = headWith(
+      [
+        members[0],
+        members[1].copyWith(h: hlcAt(6000, 'devB'), content: fromB),
+        members[2].copyWith(h: hlcAt(6000, 'devB'), content: fromB),
+      ],
+      hlcAt(6001, 'devB'),
+    );
 
     final ab = mergeBatchMembers([a, b]);
     final ba = mergeBatchMembers([b, a]);

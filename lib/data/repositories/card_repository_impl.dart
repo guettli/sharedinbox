@@ -191,10 +191,7 @@ class CardRepositoryImpl implements CardRepository {
       merge: current.merge,
       members: [
         for (final m in members)
-          if (changes[m.cardId] case final content?)
-            changed(m, content)
-          else
-            m,
+          if (changes[m.cardId] case final content?) changed(m, content) else m,
         for (final MapEntry(key: cardId, value: content) in changes.entries)
           if (!known.contains(cardId))
             CardBatchMember(cardId: cardId, h: clock.send(), content: content),
@@ -274,7 +271,8 @@ class CardRepositoryImpl implements CardRepository {
         itemHmac: r.itemHmac,
         name: r.name,
         versionId: r.versionId,
-        updatedAt: DateTime.fromMillisecondsSinceEpoch(r.updatedAt, isUtc: true),
+        updatedAt:
+            DateTime.fromMillisecondsSinceEpoch(r.updatedAt, isUtc: true),
         hasConflict: r.hasConflict,
       );
 }
