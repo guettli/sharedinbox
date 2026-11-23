@@ -535,6 +535,48 @@ void main() {
     });
   });
 
+  test('the journal: dated entries, newest day first; date on create/update',
+      () async {
+    final a = await _Device.open(_server());
+    Future<Entry> add(String body, String? date) async {
+      final e = await a.repo.create(_acc, body: body, date: date);
+      await a.store.waitForIdle();
+      return e;
+    }
+
+    Future<List<(String, String?)>> journal() async => [
+          for (final e in await a.repo.observeJournal(_acc).first)
+            (e.body, e.date),
+        ];
+
+    await add('note', null);
+    final first = await add('morning', '2026-11-23');
+    await add('friday', '2026-11-20');
+    await add('lunch', '2026-11-23');
+    expect(first.date, '2026-11-23');
+    expect(await journal(), [
+      ('morning', '2026-11-23'),
+      ('lunch', '2026-11-23'),
+      ('friday', '2026-11-20'),
+    ]);
+
+    // An update without a date keeps it.
+    await a.update(first.itemId, 'morning!');
+    expect((await a.repo.entry(_acc, first.itemId))!.date, '2026-11-23');
+
+    await a.repo.update(_acc, first.itemId, body: 'x', date: '2026-11-21');
+    await a.store.waitForIdle();
+    expect((await journal())[1], ('x', '2026-11-21'));
+
+    await a.repo.update(_acc, first.itemId, body: 'x', date: null);
+    await a.store.waitForIdle();
+    expect((await a.repo.entry(_acc, first.itemId))!.date, isNull);
+    expect(await journal(), [
+      ('lunch', '2026-11-23'),
+      ('friday', '2026-11-20'),
+    ]);
+  });
+
   group('links and createdAt (#1375)', () {
     Future<List<String>> linked(_Device d, List<String> ids) async => [
           for (final e

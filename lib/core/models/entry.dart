@@ -77,6 +77,13 @@ String isoDate(DateTime date) => '${date.year.toString().padLeft(4, '0')}-'
     '${date.month.toString().padLeft(2, '0')}-'
     '${date.day.toString().padLeft(2, '0')}';
 
+/// The default `date` of an entry edit: keep the current one.
+const Object keepDate = _KeepDate();
+
+class _KeepDate {
+  const _KeepDate();
+}
+
 /// One entry (note, todo, journal entry) of the encrypted personal data
 /// (ENCRYPTED-OBJECTS.md §6), as its projection shows it.
 class Entry {

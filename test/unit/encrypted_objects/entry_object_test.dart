@@ -129,6 +129,67 @@ void main() {
     expect(cleared.head.extra['future'], {'x': 1});
   });
 
+  test('a journal date: new, kept by an edit, set and removed (#1358)',
+      () async {
+    final created = newEntryObject(
+      body: 'diary',
+      clock: clockAt(1000),
+      date: '2026-11-23',
+    );
+    expect(
+      entryFromObject(created, accountId: 'a', itemHmac: 'h')!.date,
+      '2026-11-23',
+    );
+    expect(
+      newEntryObject(body: 'x', clock: clockAt(1000)).head.extra,
+      isNot(contains('date')),
+    );
+    final base = InnerObject(
+      head: ObjectHead(
+        itemId: created.head.itemId,
+        collectionId: personalCollectionId,
+        versionId: created.head.versionId,
+        kind: entryKind,
+        extra: {...created.head.extra, 'future': 1},
+      ),
+      parts: created.parts,
+    );
+
+    final kept = editEntryObject(
+      base: base,
+      merge: await mergeOf([base]),
+      clock: clockAt(2000),
+      body: 'more',
+    );
+    expect(kept.head.extra['date'], '2026-11-23');
+    expect(kept.head.extra['future'], 1);
+
+    final moved = editEntryObject(
+      base: kept,
+      merge: await mergeOf([kept]),
+      clock: clockAt(3000),
+      body: 'more',
+      date: '2026-11-20',
+    );
+    expect(moved.head.extra['date'], '2026-11-20');
+
+    final removed = editEntryObject(
+      base: moved,
+      merge: await mergeOf([moved]),
+      clock: clockAt(4000),
+      title: 'T',
+      body: 'more',
+      date: null,
+    );
+    expect(removed.head.extra.containsKey('date'), isFalse);
+    expect(removed.head.extra['title'], 'T');
+    expect(removed.head.extra['future'], 1);
+    expect(
+      entryFromObject(removed, accountId: 'a', itemHmac: 'h')!.date,
+      isNull,
+    );
+  });
+
   test('an edit of two heads names both as parents', () async {
     final a = testObject(
       itemId: 'e1',

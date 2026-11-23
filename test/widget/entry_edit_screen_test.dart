@@ -8,10 +8,11 @@ import 'entries_fakes.dart';
 Future<FakeEntryRepository> _pump(
   WidgetTester tester, {
   String body = 'old body',
+  String? date,
   FakeConflictStore? store,
 }) async {
   final repo = FakeEntryRepository([
-    testEntry('e1', title: 'Old title', body: body, conflict: true),
+    testEntry('e1', title: 'Old title', body: body, conflict: true, date: date),
   ]);
   await pumpEntriesApp(
     tester,
@@ -61,7 +62,7 @@ void main() {
 
     expect(
       repo.updates.single,
-      (itemId: 'e1', title: 'New', body: 'line 1\nline 2'),
+      (itemId: 'e1', title: 'New', body: 'line 1\nline 2', date: null),
     );
     // Back on the list, which shows the saved entry.
     expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
@@ -141,7 +142,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       repo.updates.single,
-      (itemId: 'e1', title: 'Edited', body: '- [x] a'),
+      (itemId: 'e1', title: 'Edited', body: '- [x] a', date: null),
     );
   });
 
@@ -186,5 +187,54 @@ void main() {
     await tester.pumpAndSettle();
     expect(repo.taskUpdates.last.task!.due, isNull);
     expect(find.text('No due date'), findsOneWidget);
+  });
+
+  group('journal date (#1358)', () {
+    Future<void> save(WidgetTester tester) async {
+      await tester.tap(find.byKey(const Key('entryEditSave')));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the chip shows the date; removing it saves no date',
+        (tester) async {
+      final repo = await _pump(tester, date: '2026-11-20');
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('entryEditDate')),
+          matching: find.text('Fri, Nov 20, 2026'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('entryEditRemoveDate')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('entryEditDate')), findsNothing);
+      expect(find.byKey(const Key('entryEditAddDate')), findsOneWidget);
+
+      await save(tester);
+      expect(repo.updates.single.date, isNull);
+    });
+
+    testWidgets('tapping the chip picks another day', (tester) async {
+      final repo = await _pump(tester, date: '2026-11-20');
+      await tester.tap(find.byKey(const Key('entryEditDate')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('23'));
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      await save(tester);
+      expect(repo.updates.single.date, '2026-11-23');
+    });
+
+    testWidgets('"Add to journal" then save passes the picked date',
+        (tester) async {
+      final repo = await _pump(tester);
+      await tester.tap(find.byKey(const Key('entryEditAddDate')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('entryEditDate')), findsOneWidget);
+      await save(tester);
+      expect(repo.updates.single.date, isoDate(DateTime.now()));
+    });
   });
 }

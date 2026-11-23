@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
 
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
@@ -12,6 +11,8 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
+import 'package:sharedinbox/ui/widgets/entry_tile.dart';
+import 'package:sharedinbox/ui/widgets/journal_view.dart';
 import 'package:sharedinbox/ui/widgets/quick_add_field.dart';
 import 'package:sharedinbox/ui/widgets/todos_view.dart';
 
@@ -34,13 +35,11 @@ Widget _notesTab(String accountId) => _NotesTab(accountId: accountId);
 
 Widget _todosTab(String accountId) => TodosView(accountId: accountId);
 
-Widget _journalTab(String accountId) => const Center(
-      key: Key('journalTabPlaceholder'),
-      child: Text('Journal comes soon.'),
-    );
+Widget _journalTab(String accountId) => JournalView(accountId: accountId);
 
 /// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): tabs for notes (search,
-/// quick-add and the list, newest first), todos (#1357) and the journal.
+/// quick-add and the list, newest first), todos (#1357) and the journal
+/// (#1358).
 /// Behind the "Personal data (beta)" switch, and only while the account is
 /// unlocked on this device.
 class EntriesScreen extends ConsumerWidget {
@@ -164,7 +163,7 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
         }
         return ListView.builder(
           itemCount: list.length,
-          itemBuilder: (_, i) => _EntryTile(
+          itemBuilder: (_, i) => EntryTile(
             entry: list[i],
             onTap: () => context.push(
               '/accounts/${widget.accountId}/entries/${list[i].itemId}',
@@ -203,68 +202,6 @@ class _NotesTabState extends ConsumerState<_NotesTab> {
       if (!mounted) return;
       context.showAppSnackBar('Could not delete: ${userErrorMessage(e)}');
     }
-  }
-}
-
-class _EntryTile extends StatelessWidget {
-  const _EntryTile({
-    required this.entry,
-    required this.onTap,
-    required this.onDelete,
-    required this.onResolve,
-  });
-
-  final Entry entry;
-  final VoidCallback onTap;
-  final VoidCallback onDelete;
-  final VoidCallback onResolve;
-
-  @override
-  Widget build(BuildContext context) {
-    final preview = entry.preview;
-    final updated =
-        DateFormat.yMMMd().add_Hm().format(entry.updatedAt.toLocal());
-    return ListTile(
-      key: Key('entry_${entry.itemId}'),
-      title: Text(
-        entry.displayTitle.isEmpty ? '(empty)' : entry.displayTitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Text(
-        preview.isEmpty ? updated : '$preview\n$updated',
-        maxLines: 3,
-        overflow: TextOverflow.ellipsis,
-      ),
-      isThreeLine: preview.isNotEmpty,
-      onTap: onTap,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (entry.hasConflict)
-            IconButton(
-              key: Key('entryConflict_${entry.itemId}'),
-              tooltip: 'Edited on several devices — resolve',
-              icon: Icon(
-                Icons.call_split,
-                color: Theme.of(context).colorScheme.error,
-              ),
-              onPressed: onResolve,
-            ),
-          PopupMenuButton<String>(
-            key: Key('entryMenu_${entry.itemId}'),
-            onSelected: (_) => onDelete(),
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'delete',
-                key: Key('entryDelete'),
-                child: Text('Delete'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
   }
 }
 

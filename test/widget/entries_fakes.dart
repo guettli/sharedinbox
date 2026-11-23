@@ -25,7 +25,8 @@ class FakeEntryRepository implements EntryRepository {
   final List<Entry> _entries;
   final _changes = StreamController<void>.broadcast();
   int _next = 0;
-  final updates = <({String itemId, String? title, String body})>[];
+  final updates =
+      <({String itemId, String? title, String body, String? date})>[];
   final taskUpdates = <({String accountId, String itemId, EntryTask? task})>[];
 
   /// The accounts [create] was called for, in order.
@@ -95,6 +96,17 @@ class FakeEntryRepository implements EntryRepository {
       ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
   @override
+  Stream<List<Entry>> observeJournal(String accountId) async* {
+    yield _journal(accountId);
+    yield* _changes.stream.map((_) => _journal(accountId));
+  }
+
+  List<Entry> _journal(String accountId) => [
+        for (final e in _entries)
+          if (e.accountId == accountId && e.date != null) e,
+      ];
+
+  @override
   Future<Entry?> entry(String accountId, String itemId) async {
     for (final e in _entries) {
       if (e.itemId == itemId) return e;
@@ -108,6 +120,7 @@ class FakeEntryRepository implements EntryRepository {
     String? title,
     required String body,
     EntryTask? task,
+    String? date,
     List<String> links = const [],
   }) async {
     final fail = failCreateWith;
@@ -121,6 +134,7 @@ class FakeEntryRepository implements EntryRepository {
       itemHmac: 'hmac-new-$n',
       title: title,
       body: body,
+      date: date,
       task: task,
       links: links,
       versionId: 'v-new-$n',
@@ -137,10 +151,12 @@ class FakeEntryRepository implements EntryRepository {
     String itemId, {
     String? title,
     required String body,
+    Object? date = keepDate,
   }) async {
-    updates.add((itemId: itemId, title: title, body: body));
     final i = _entries.indexWhere((e) => e.itemId == itemId);
     final old = _entries[i];
+    final newDate = date == keepDate ? old.date : date as String?;
+    updates.add((itemId: itemId, title: title, body: body, date: newDate));
     _entries[i] = Entry(
       accountId: old.accountId,
       itemId: old.itemId,
@@ -148,6 +164,7 @@ class FakeEntryRepository implements EntryRepository {
       title: title,
       body: body,
       tags: old.tags,
+      date: newDate,
       task: old.task,
       links: old.links,
       versionId: '${old.versionId}+',
@@ -168,6 +185,7 @@ class FakeEntryRepository implements EntryRepository {
       title: old.title,
       body: old.body,
       tags: old.tags,
+      date: old.date,
       task: task,
       links: old.links,
       versionId: '${old.versionId}+',
@@ -207,6 +225,7 @@ Entry testEntry(
   bool conflict = false,
   int minute = 0,
   EntryTask? task,
+  String? date,
   String accountId = 'acc-1',
 }) =>
     Entry(
@@ -219,6 +238,7 @@ Entry testEntry(
       updatedAt: DateTime.utc(2026, 11, 23, 10, minute),
       hasConflict: conflict,
       task: task,
+      date: date,
     );
 
 /// A [MailObjectStore] serving the versions of items in conflict (#1374);
