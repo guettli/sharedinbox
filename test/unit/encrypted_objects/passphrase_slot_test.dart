@@ -187,7 +187,7 @@ void main() {
       expect(check('ab12ab12ab12ab12'), PassphraseWeakness.repetitive);
       expect(check('123456789012345'), PassphraseWeakness.repetitive);
       expect(check('abcdefghijklmnop'), PassphraseWeakness.repetitive);
-      expect(check('qwertyuiop98765'), PassphraseWeakness.repetitive);
+      expect(check('qwertasdfg98765'), PassphraseWeakness.repetitive);
       expect(check('zyxwvutsrqponm'), PassphraseWeakness.repetitive);
       expect(
         check('my mail is Alice.Smith'),

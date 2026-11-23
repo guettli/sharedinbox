@@ -552,7 +552,12 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
   Future<bool> _loadHasPassphrase() =>
       _service.hasPassphraseSlot(widget.accountId);
 
-  void _reload() => setState(() => _hasPassphrase = _loadHasPassphrase());
+  void _reload() {
+    final hasPassphrase = _loadHasPassphrase();
+    setState(() {
+      _hasPassphrase = hasPassphrase;
+    });
+  }
 
   Future<void> _setPassphrase({required bool change}) async {
     final account = ref.read(accountByIdProvider(widget.accountId)).value;
