@@ -18,7 +18,9 @@
 //                          stalwart-dev/start when using random ports)
 //   STALWART_POOL_SIZE   — pool size override (default 32, must match config)
 
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
@@ -162,6 +164,57 @@ class PoolImapAccount {
 
   /// A logged-in IMAP client for [user].
   Future<ImapClient> connect() => connectImap(env: env, user: user);
+
+  /// Runs [body] with a logged-in client, logging out afterwards.
+  Future<T> withClient<T>(Future<T> Function(ImapClient c) body) async {
+    final client = await connect();
+    try {
+      return await body(client);
+    } finally {
+      await client.logout();
+    }
+  }
+
+  /// The raw bytes of every mail in [path], by Message-ID.
+  Future<Map<String, Uint8List>> rawMails(String path) => withClient((c) async {
+        await c.selectMailboxByPath(path);
+        final uids = (await c.uidSearchMessages(searchCriteria: 'ALL'))
+                .matchingSequence
+                ?.toList() ??
+            const <int>[];
+        if (uids.isEmpty) return {};
+        final fetched = await c.uidFetchMessages(
+          MessageSequence.fromIds(uids, isUid: true),
+          '(UID BODY.PEEK[])',
+        );
+        return {
+          for (final m in fetched.messages)
+            m.getHeaderValue('Message-ID')!.trim(): switch (m.mimeData) {
+              final BinaryMimeData d => d.data,
+              final TextMimeData t => utf8.encode(t.text),
+              _ => Uint8List(0),
+            },
+        };
+      });
+
+  /// Deletes [paths] (`/`-separated, subfolders first), ignoring missing
+  /// ones: an earlier run's app folders.
+  Future<void> deleteFolders(List<String> paths) => withClient((c) async {
+        for (final path in paths) {
+          try {
+            await c.deleteMailbox(
+              Mailbox(
+                encodedName: path,
+                encodedPath: path,
+                flags: const [],
+                pathSeparator: '/',
+              ),
+            );
+          } catch (_) {
+            // Not there.
+          }
+        }
+      });
 }
 
 /// Plain-text IMAP connect for the local dev Stalwart (no TLS cert).

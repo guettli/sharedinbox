@@ -2702,6 +2702,20 @@
       "start_line": 161,
       "end_line": 173,
       "key": "1a375d39abb8b6e8"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/core/sync/background_sync.dart",
+      "start_line": 131,
+      "end_line": 141,
+      "key": "d4dc9d597b2af015"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/core/sync/background_sync.dart",
+      "start_line": 141,
+      "end_line": 151,
+      "key": "d4dc9d597b2af015"
     }
   ]
 }

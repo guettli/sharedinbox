@@ -19,6 +19,14 @@ typedef WriteKeyLookup = CollectionKey? Function(
   String collectionId,
 );
 
+/// Whether the keys-folder mail [row], gone from the server, is uploaded
+/// again (4.3). The key lifecycle keeps the mails of the key this device
+/// holds and drops others, e.g. a race loser's or a replaced slot list.
+typedef KeepVanishedKeyMail = Future<bool> Function(
+  String accountId,
+  MailObject row,
+);
+
 /// An item as the merge of its opened versions sees it.
 class MailObjectItem {
   const MailObjectItem({required this.merge, required this.display});

@@ -393,6 +393,28 @@ void main() {
       expect(objects.synced, ['1']);
     });
 
+    test('the key hook runs after the object sync; its failure is swallowed',
+        () async {
+      final objects = _FailingObjectStore();
+      final hooked = <String>[];
+      final m = AccountSyncManager(
+        _OkAccountRepository(),
+        FakeMailboxRepositoryWithInbox(),
+        FakeEmailRepository(),
+        syncLog: FakeSyncLogRepository(),
+        objects: objects,
+        onObjectsSynced: (accountId) async {
+          hooked.add(accountId);
+          throw StateError('key check broken');
+        },
+        imapConnect: (_, __, ___) => Completer<imap.ImapClient>().future,
+      );
+      addTearDown(m.dispose);
+
+      expect(await collect(m), ['1']);
+      expect(hooked, ['1']);
+    });
+
     test('fires after a successful JMAP cycle', () async {
       final m = AccountSyncManager(
         _OkAccountRepository(type: AccountType.jmap),

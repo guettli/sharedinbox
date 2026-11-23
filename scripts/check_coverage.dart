@@ -107,6 +107,9 @@ const _excluded = <String, String>{
   'lib/ui/screens/mailbox_list_screen.dart': 'Widget-only mailbox tree view',
   'lib/ui/screens/message_debug_screen.dart':
       'Widget-only debug UI displaying raw message data',
+  'lib/ui/screens/personal_data_screen.dart':
+      'Widget-only setup / unlock wizard; the key lifecycle it drives is '
+          'unit-tested in encrypted_key_service_test.dart',
   'lib/ui/screens/notifications_screen.dart':
       'Widget-only per-account notification-rules settings screen; the rule '
           'matching/serialization logic it drives is unit-tested in '

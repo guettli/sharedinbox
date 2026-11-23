@@ -28,6 +28,14 @@ class RecoveryKeyFormatException implements Exception {
   String toString() => 'RecoveryKeyFormatException: ${reason.name}';
 }
 
+/// [input] as [RecoveryKey.parse] reads it: upper case, without spaces, `-`
+/// and `_`, `O` as `0`, `I` and `L` as `1`.
+String normalizeRecoveryInput(String input) => input
+    .toUpperCase()
+    .replaceAll(RegExp(r'[\s\-_]'), '')
+    .replaceAll('O', '0')
+    .replaceAll(RegExp('[IL]'), '1');
+
 class RecoveryKey {
   RecoveryKey(Uint8List raw) : raw = Uint8List.fromList(raw) {
     if (raw.length != _rawLength) {
@@ -41,11 +49,7 @@ class RecoveryKey {
   /// Parses a recovery key as typed by a user: case-insensitive; spaces, `-`
   /// and `_` are ignored; `O` reads as `0`, `I` and `L` as `1`.
   static Future<RecoveryKey> parse(String input) async {
-    final normalized = input
-        .toUpperCase()
-        .replaceAll(RegExp(r'[\s\-_]'), '')
-        .replaceAll('O', '0')
-        .replaceAll(RegExp('[IL]'), '1');
+    final normalized = normalizeRecoveryInput(input);
     for (final unit in normalized.split('')) {
       if (!crockfordAlphabet.contains(unit)) {
         throw const RecoveryKeyFormatException(

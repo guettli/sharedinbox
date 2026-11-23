@@ -4,6 +4,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/models/mailbox.dart';
@@ -37,6 +39,7 @@ import 'package:sharedinbox/core/services/body_cache_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/connectivity_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
+import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/services/encrypted_report_service.dart';
 import 'package:sharedinbox/core/services/image_shrink_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
@@ -427,6 +430,9 @@ final syncManagerProvider = Provider<AccountSyncManager>((ref) {
     drafts: ref.watch(draftRepositoryProvider),
     notes: ref.watch(noteRepositoryProvider),
     objects: ref.watch(mailObjectStoreProvider),
+    onObjectsSynced: (accountId) => ref
+        .read(encryptedKeyServiceProvider)
+        .afterSync(accountId, foreground: true),
     onNewMail: dispatcher.dispatchForAccount,
   );
   ref.onDispose(manager.dispose);
@@ -803,10 +809,15 @@ final noteRepositoryProvider = Provider<NoteRepository>((ref) {
   );
 });
 
-/// The encrypted-object store (#1370 IMAP, #1371 JMAP). No keys until the
-/// key lifecycle (#1366): rows stay unopened and writes throw
-/// `NoWriteKeyException`.
+/// The unlocked keys of this device, shared by the object store and the
+/// key lifecycle (#1366).
+final keyRingProvider = Provider<KeyRing>((ref) => KeyRing());
+
+/// The encrypted-object store (#1370 IMAP, #1371 JMAP). Opens and writes
+/// with the keys the key lifecycle put into the [keyRingProvider] (#1366);
+/// without them rows stay unopened and writes throw `NoWriteKeyException`.
 final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
+  final ring = ref.watch(keyRingProvider);
   final db = ref.watch(dbProvider);
   final accounts = ref.watch(accountRepositoryProvider);
   final mailboxes = ref.watch(mailboxRepositoryProvider);
@@ -820,6 +831,9 @@ final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
       mailboxes,
       storage,
       imapConnect: ref.watch(imapConnectProvider),
+      keyLookup: ring.lookup,
+      writeKey: ring.writeKey,
+      keepVanishedKeyMail: ring.keepVanishedKeyMail,
       appLogger: appLogger,
     ),
     jmap: MailObjectStoreJmap(
@@ -828,9 +842,37 @@ final mailObjectStoreProvider = Provider<MailObjectStore>((ref) {
       mailboxes,
       storage,
       httpClient: ref.watch(httpClientProvider),
+      keyLookup: ring.lookup,
+      writeKey: ring.writeKey,
+      keepVanishedKeyMail: ring.keepVanishedKeyMail,
       appLogger: appLogger,
     ),
   );
+});
+
+/// Key mail, key-creation race and unlock of the encrypted personal data
+/// (#1366), behind the "Personal data (beta)" switch.
+final encryptedKeyServiceProvider = Provider<EncryptedKeyService>((ref) {
+  final prefs = ref.watch(userPreferencesRepositoryProvider);
+  final mailboxes = ref.watch(mailboxRepositoryProvider);
+  final service = EncryptedKeyService(
+    db: ref.watch(dbProvider),
+    store: ref.watch(mailObjectStoreProvider),
+    keys: AccountKeyStore(ref.watch(secureStorageProvider)),
+    ring: ref.watch(keyRingProvider),
+    betaEnabled: () async =>
+        (await prefs.observePreferences().first).personalDataBeta,
+    listFolders: (accountId) => mailboxes.syncMailboxes(accountId),
+    appLogger: ref.watch(appLoggerProvider),
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// The key status of one account for the personal-data screen.
+final personalDataStatusProvider = StreamProvider.autoDispose
+    .family<PersonalDataStatus, String>((ref, accountId) {
+  return ref.watch(encryptedKeyServiceProvider).watchStatus(accountId);
 });
 
 final installedVersionsProvider = FutureProvider<Map<String, DateTime>>((ref) {

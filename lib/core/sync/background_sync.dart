@@ -9,6 +9,8 @@ import 'package:flutter/widgets.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/filter/filter_matcher.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/user_preferences.dart';
@@ -17,6 +19,7 @@ import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/repositories/notification_rule_repository.dart';
 import 'package:sharedinbox/core/services/body_cache_service.dart';
+import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/services/notification_service.dart';
 import 'package:sharedinbox/core/utils/logger.dart';
 import 'package:sharedinbox/data/db/database.dart';
@@ -28,6 +31,7 @@ import 'package:sharedinbox/data/repositories/mail_object_store_router.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 import 'package:workmanager/workmanager.dart';
@@ -120,6 +124,7 @@ Future<void> _doBackgroundSync() async {
     final noteRepo = NoteRepositoryImpl(db, accountRepo, pushPending: false);
     // Pull only, for the same reason; it also never deletes on the server
     // (ENCRYPTED-OBJECTS.md 5.5).
+    final ring = KeyRing();
     final mailboxRepo = MailboxRepositoryImpl(db, accountRepo);
     final objectStore = MailObjectStoreRouter(
       accountRepo,
@@ -128,6 +133,9 @@ Future<void> _doBackgroundSync() async {
         accountRepo,
         mailboxRepo,
         const FlutterSecureStorageImpl(),
+        keyLookup: ring.lookup,
+        writeKey: ring.writeKey,
+        keepVanishedKeyMail: ring.keepVanishedKeyMail,
         pushPending: false,
       ),
       jmap: MailObjectStoreJmap(
@@ -135,8 +143,20 @@ Future<void> _doBackgroundSync() async {
         accountRepo,
         mailboxRepo,
         const FlutterSecureStorageImpl(),
+        keyLookup: ring.lookup,
+        writeKey: ring.writeKey,
+        keepVanishedKeyMail: ring.keepVanishedKeyMail,
         pushPending: false,
       ),
+    );
+    final prefs = UserPreferencesRepositoryImpl(db);
+    final keyService = EncryptedKeyService(
+      db: db,
+      store: objectStore,
+      keys: const AccountKeyStore(FlutterSecureStorageImpl()),
+      ring: ring,
+      betaEnabled: () async =>
+          (await prefs.observePreferences().first).personalDataBeta,
     );
     final accounts = await accountRepo.observeAccounts().first;
     await initNotifications();
@@ -147,7 +167,7 @@ Future<void> _doBackgroundSync() async {
         await _checkAccount(db, accountRepo, account);
       }
       await _syncNotesForAccount(noteRepo, account);
-      await _syncObjectsForAccount(objectStore, account);
+      await _syncObjectsForAccount(objectStore, keyService, account);
     }
   } finally {
     await db.close();
@@ -172,13 +192,18 @@ Future<void> _syncNotesForAccount(
   }
 }
 
-/// Pulls the encrypted-object store; failures are swallowed like notes'.
+/// Pulls the encrypted-object store with the keys of this device; the key
+/// check after it is read-only here (#1366). Failures are swallowed like
+/// notes'.
 Future<void> _syncObjectsForAccount(
   MailObjectStore store,
+  EncryptedKeyService keys,
   model.Account account,
 ) async {
   try {
+    await keys.loadKeys(account.id);
     await store.sync(account.id);
+    await keys.afterSync(account.id, foreground: false);
   } catch (e, st) {
     log(
       'background encrypted-object sync failed for ${account.email}',

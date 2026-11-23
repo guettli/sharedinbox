@@ -75,6 +75,7 @@ class MailObjectStoreImap extends MailObjectStoreBase {
     ImapNamespaceFn namespace = imapNamespaceFromServer,
     super.keyLookup,
     super.writeKey,
+    super.keepVanishedKeyMail,
     super.appLogger,
     super.pushPending,
     super.now,

@@ -117,5 +117,19 @@ void main() {
 
       expect(repo.afterMailViewAction, AfterMailViewAction.showMailbox);
     });
+
+    testWidgets('the Personal data (beta) switch is off and turns on', (
+      tester,
+    ) async {
+      await _pumpPreferences(tester);
+      await _scrollTo(tester, 'Personal data (beta)');
+      final tile = find.byKey(const Key('personalDataBetaSwitch'));
+      expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+
+      final repo = await _tapAndGetRepo(tester, 'Personal data (beta)');
+
+      expect(repo.personalDataBeta, isTrue);
+      expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    });
   });
 }

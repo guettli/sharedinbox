@@ -34,6 +34,7 @@ String mailObjectCheckpointKey(MailObjectFolder folder) => 'mos:${folder.name}';
 // No key until the key lifecycle (#1366) provides them.
 CollectionKey? _noKey(String _, Uint8List __) => null;
 CollectionKey? _noWriteKey(String _, String __) => null;
+Future<bool> _keepAll(String _, MailObject __) async => true;
 
 /// The transport-independent part of a [MailObjectStore] (#1370, #1371):
 /// local-first writes, open and merge, the version vector, the HLC, and what
@@ -51,12 +52,14 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     SecureStorage storage, {
     CollectionKeyLookup keyLookup = _noKey,
     WriteKeyLookup writeKey = _noWriteKey,
+    KeepVanishedKeyMail keepVanishedKeyMail = _keepAll,
     this.appLogger,
     bool pushPending = true,
     DateTime Function()? now,
     this.onStep,
   })  : _keyLookup = keyLookup,
         _writeKey = writeKey,
+        _keepVanishedKey = keepVanishedKeyMail,
         pushEnabled = pushPending,
         now = now ?? DateTime.now,
         _resolver = DeviceIdentityResolver(storage, MailObjectDevicesDb(db));
@@ -82,6 +85,7 @@ abstract class MailObjectStoreBase implements MailObjectStore {
 
   final CollectionKeyLookup _keyLookup;
   final WriteKeyLookup _writeKey;
+  final KeepVanishedKeyMail _keepVanishedKey;
   final DeviceIdentityResolver _resolver;
   final Map<String, HlcClock> _clocks = {};
 
@@ -396,8 +400,8 @@ abstract class MailObjectStoreBase implements MailObjectStore {
           .get();
 
   /// Mails gone from the server. A superseded version (or one no key opens
-  /// here) is dropped; a head, and a key mail, is uploaded again from the
-  /// local copy, never deleted (5.4, 4.3).
+  /// here) is dropped; a head, and a key mail the key lifecycle keeps, is
+  /// uploaded again from the local copy, never deleted (5.4, 4.3).
   @protected
   Future<void> markGone(
     String accountId,
@@ -406,7 +410,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
   ) async {
     for (final r in gone) {
       final keep = !r.pendingDelete &&
-          (folder == MailObjectFolder.keys || r.versionId != null);
+          (folder == MailObjectFolder.keys
+              ? await _keepVanishedKey(accountId, _toModel(r))
+              : r.versionId != null);
       if (!keep) {
         await dropRow(accountId, r.messageId);
         continue;
@@ -460,7 +466,11 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     await clearCheckpoint(accountId, folder);
     var reupload = 0;
     for (final r in await rows(accountId, folder)) {
-      if (r.pendingDelete || r.payload == null) {
+      if (r.pendingDelete ||
+          r.payload == null ||
+          (folder == MailObjectFolder.keys &&
+              !r.pendingUpload &&
+              !await _keepVanishedKey(accountId, _toModel(r)))) {
         await dropRow(accountId, r.messageId);
         continue;
       }

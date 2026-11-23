@@ -33,6 +33,7 @@ import 'package:sharedinbox/ui/screens/message_debug_screen.dart';
 import 'package:sharedinbox/ui/screens/notifications_screen.dart';
 import 'package:sharedinbox/ui/screens/outbox_screen.dart';
 import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
+import 'package:sharedinbox/ui/screens/personal_data_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
 import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
@@ -178,6 +179,12 @@ final router = GoRouter(
               builder: (ctx, state) => AccountCompareScreen(
                 accountIdA: state.pathParameters['accountId']!,
                 accountIdB: state.pathParameters['otherId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/personal-data',
+              builder: (ctx, state) => PersonalDataScreen(
+                accountId: state.pathParameters['accountId']!,
               ),
             ),
             GoRoute(

@@ -109,6 +109,7 @@ class MailObjectStoreJmap extends MailObjectStoreBase {
     http.Client? httpClient,
     super.keyLookup,
     super.writeKey,
+    super.keepVanishedKeyMail,
     super.appLogger,
     super.pushPending,
     super.now,

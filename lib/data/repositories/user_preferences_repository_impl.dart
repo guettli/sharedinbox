@@ -61,6 +61,16 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   }
 
   @override
+  Future<void> updatePersonalDataBeta({required bool enabled}) async {
+    await _db.into(_db.userPreferences).insertOnConflictUpdate(
+          UserPreferencesCompanion(
+            id: const Value(_rowId),
+            personalDataBeta: Value(enabled),
+          ),
+        );
+  }
+
+  @override
   Stream<List<String>> observeTrustedImageSenders() {
     return (_db.select(_db.imageTrustedSenders)
           ..orderBy([(t) => OrderingTerm.desc(t.addedAt)]))
@@ -98,6 +108,7 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
       ),
       prefetchMode: pref.PrefetchMode.fromString(row.prefetchMode),
       bodyCacheLimitMb: row.bodyCacheLimitMb,
+      personalDataBeta: row.personalDataBeta,
     );
   }
 }
