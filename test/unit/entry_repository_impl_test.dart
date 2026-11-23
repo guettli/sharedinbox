@@ -8,7 +8,6 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
-import 'package:sharedinbox/data/db/database.dart' show EntryLinkRow;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
@@ -543,8 +542,8 @@ void main() {
             e.body,
         ];
 
-    Future<List<EntryLinkRow>> linkRows(_Device d) =>
-        d.db.select(d.db.entryLinks).get();
+    Future<int> linkRows(_Device d) async =>
+        (await d.db.select(d.db.entryLinks).get()).length;
 
     test('the entries of mails, oldest first; links follow edits and deletes',
         () async {
@@ -579,7 +578,7 @@ void main() {
         [for (final e in await a.entries()) e.body],
         ['unlinked', 'on both', 'old note'],
       );
-      expect(await linkRows(a), hasLength(3));
+      expect(await linkRows(a), 3);
 
       // An edit keeps the links and the createdAt.
       await a.update(old.itemId, 'old note, edited');
@@ -593,7 +592,7 @@ void main() {
       await a.repo.delete(_acc, both.itemId);
       await a.store.waitForIdle();
       expect(await linked(a, ['<m2@x>']), isEmpty);
-      expect(await linkRows(a), hasLength(1));
+      expect(await linkRows(a), 1);
     });
 
     test('the links of another device arrive with its entry', () async {
