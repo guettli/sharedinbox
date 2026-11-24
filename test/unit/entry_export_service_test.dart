@@ -5,16 +5,14 @@ import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/entry_export.dart';
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
-import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/inner_mime.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
-import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
-import 'package:sharedinbox/core/repositories/entry_repository.dart';
-import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/repositories/entry_export_service.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
+
+import '../widget/entries_fakes.dart';
 
 const _account = Account(
   id: 'acc-1',
@@ -23,31 +21,6 @@ const _account = Account(
   imapHost: 'imap.example.com',
   smtpHost: 'smtp.example.com',
 );
-
-class _Entries implements EntryRepository {
-  _Entries(this.entries);
-
-  final List<Entry> entries;
-
-  @override
-  Future<List<Entry>> allEntries(String accountId) async => entries;
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
-class _Store implements MailObjectStore {
-  _Store(this.items);
-
-  final Map<String, MailObjectItem> items;
-
-  @override
-  Future<MailObjectItem?> item(String accountId, String itemHmac) async =>
-      items[itemHmac];
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
 
 class _Blobs implements MailObjectBlobStore {
   _Blobs(this.blobs);
@@ -77,47 +50,7 @@ InnerObject _version(
   String body = '',
   bool deleted = false,
 }) =>
-    InnerObject(
-      head: ObjectHead(
-        itemId: itemId,
-        collectionId: personalCollectionId,
-        versionId: Hlc(
-          DateTime.utc(2026, 11, 23, 10, minute).millisecondsSinceEpoch,
-          0,
-          device,
-        ),
-        deleted: deleted,
-        kind: entryKind,
-      ),
-      parts: [
-        if (!deleted)
-          ObjectPart(
-            contentType: 'text/markdown; charset=utf-8',
-            bytes: Uint8List.fromList(utf8.encode(body)),
-          ),
-      ],
-    );
-
-MailObjectItem _item(List<InnerObject> versions) {
-  final merge = mergeItem(
-    known: [
-      for (final (i, v) in versions.indexed)
-        ObjectVersion(
-          versionId: v.head.versionId,
-          deleted: v.head.deleted,
-          contentDigest: 'digest-$i',
-          ref: i,
-        ),
-    ],
-    incoming: const [],
-    vv: const {},
-  );
-  return MailObjectItem(
-    merge: merge,
-    display: versions[merge.display!.ref! as int],
-    versions: [for (final h in merge.distinctHeads) versions[h.ref! as int]],
-  );
-}
+    entryVersion(device, minute, body: body, deleted: deleted, itemId: itemId);
 
 Entry _entryOf(InnerObject v, {bool conflict = false}) => entryFromObject(
       v,
@@ -135,9 +68,9 @@ void main() {
     final png = Uint8List.fromList([1, 2, 3]);
     final blobs = _Blobs({'have': (contentType: 'image/png', bytes: png)});
     final service = EntryExportServiceImpl(
-      _Entries([_entryOf(plain), _entryOf(live, conflict: true)]),
-      _Store({
-        'hmac-conf': _item([tomb, other, live]),
+      FakeEntryRepository([_entryOf(plain), _entryOf(live, conflict: true)]),
+      FakeConflictStore({
+        'hmac-conf': conflictItemOf([tomb, other, live]),
       }),
       blobs,
       now: () => DateTime(2026, 11, 23, 11, 12, 13),
@@ -182,8 +115,8 @@ void main() {
   test('an entry whose item is gone exports its displayed head only', () async {
     final live = _version('conf', 'devA', 3, body: 'mine');
     final service = EntryExportServiceImpl(
-      _Entries([_entryOf(live, conflict: true)]),
-      _Store(const {}),
+      FakeEntryRepository([_entryOf(live, conflict: true)]),
+      FakeConflictStore({}),
       _Blobs(const {}),
     );
     final result = await service.export(_account);

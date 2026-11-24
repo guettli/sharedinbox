@@ -316,17 +316,18 @@ class FakeConflictStore implements MailObjectStore {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// A version of entry `item-1` by [device] at minute [minute].
+/// A version of entry [itemId] by [device] at minute [minute].
 InnerObject entryVersion(
   String device,
   int minute, {
   String body = '',
   String? title,
   bool deleted = false,
+  String itemId = 'item-1',
 }) =>
     InnerObject(
       head: ObjectHead(
-        itemId: 'item-1',
+        itemId: itemId,
         collectionId: personalCollectionId,
         versionId: Hlc(
           DateTime.utc(2026, 11, 23, 10, minute).millisecondsSinceEpoch,
