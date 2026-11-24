@@ -561,7 +561,7 @@ void main() {
       await repo.setDeckOptions(
         _acc,
         'deck-1',
-        const DeckOptions(newPerDay: 2, dayStartHour: 4),
+        const DeckOptions(newPerDay: 2),
       );
       // 03:00 still belongs to the study day of yesterday.
       a.now = DateTime.utc(2026, 11, 2, 3);

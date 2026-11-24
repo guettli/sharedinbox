@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/models/email.dart';
-import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/study_screen.dart';
@@ -31,7 +29,7 @@ Future<FakeCardRepository> _openMenu(
         mailboxRepositoryProvider.overrideWithValue(FakeMailboxRepository()),
         emailRepositoryProvider.overrideWithValue(
           FakeEmailRepository(
-            emailDetail: testEmail(id: 'acc-1:42', subject: 'Invoice'),
+            emailDetail: testEmail(subject: 'Invoice'),
             emailBody: const EmailBody(
               emailId: 'acc-1:42',
               textBody: _body,
