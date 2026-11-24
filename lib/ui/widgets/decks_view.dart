@@ -59,13 +59,12 @@ class _DecksViewState extends ConsumerState<DecksView> {
                 icon: const Icon(Icons.add),
                 label: const Text('New deck'),
               ),
-              if (importer != null)
-                OutlinedButton.icon(
-                  key: const Key('decksImport'),
-                  onPressed: _importing ? null : () => _import(importer),
-                  icon: const Icon(Icons.file_open_outlined),
-                  label: const Text('Import…'),
-                ),
+              OutlinedButton.icon(
+                key: const Key('decksImport'),
+                onPressed: _importing ? null : () => _import(importer),
+                icon: const Icon(Icons.file_open_outlined),
+                label: const Text('Import…'),
+              ),
             ],
           ),
         ),

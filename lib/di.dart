@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/entry_export.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
 import 'package:sharedinbox/core/import/card_import.dart';
@@ -74,6 +75,7 @@ import 'package:sharedinbox/data/db/database.dart'
     hide Email, EmailBody, UserPreferences;
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/import/card_importer.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -83,6 +85,7 @@ import 'package:sharedinbox/data/repositories/card_schedule_writer.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/entry_export_service.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/legacy_note_migrator.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
@@ -984,15 +987,20 @@ final cardRepositoryProvider = Provider<CardRepository>(
   ),
 );
 
+/// Imports Anki `.apkg` and CSV files into the decks (#1383).
+final cardImporterProvider = Provider<CardImporter>(
+  (ref) => CardImporterImpl(
+    ref.watch(cardRepositoryProvider),
+    ref.watch(mailObjectBlobStoreProvider),
+    appLogger: ref.watch(appLoggerProvider),
+  ),
+);
+
 /// The decks of an account, by name.
 final decksProvider =
     StreamProvider.autoDispose.family<List<Deck>, String>((ref, accountId) {
   return ref.watch(cardRepositoryProvider).observeDecks(accountId);
 });
-
-/// Imports Anki `.apkg` and CSV files into the decks (#1383). Null until
-/// the importer lands (PR #1422): the deck overview then hides "Import…".
-final cardImporterProvider = Provider<CardImporter?>((ref) => null);
 
 /// A file picked for a card import: its name and bytes.
 typedef PickedImportFile = ({String name, Uint8List bytes});
@@ -1047,6 +1055,15 @@ final mailObjectBlobStoreProvider = Provider<MailObjectBlobStore>(
   (ref) => MailObjectBlobStore(
     ref.watch(dbProvider),
     ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// The plaintext export of the entries of an account (#1356).
+final entryExportServiceProvider = Provider<EntryExportService>(
+  (ref) => EntryExportServiceImpl(
+    ref.watch(entryRepositoryProvider),
+    ref.watch(mailObjectStoreProvider),
+    ref.watch(mailObjectBlobStoreProvider),
   ),
 );
 

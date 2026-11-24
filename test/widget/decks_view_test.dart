@@ -48,7 +48,9 @@ Future<FakeCardRepository> _pump(
             },
           ),
         ),
-        cardImporterProvider.overrideWithValue(importer),
+        cardImporterProvider.overrideWithValue(
+          importer ?? FakeCardImporter(),
+        ),
         pickImportFileProvider.overrideWithValue(() async => picked),
         todayProvider.overrideWithValue(() => DateTime(2026, 11, 23, 9)),
       ],
@@ -82,8 +84,7 @@ void main() {
     expect(_textOf(tester, 'deckDue_deck-2'), '0 due');
     expect(find.byKey(const Key('deckConflict_deck-2')), findsOneWidget);
     expect(find.byKey(const Key('deckConflict_deck-1')), findsNothing);
-    // Without an importer (#1383) there is no Import….
-    expect(find.byKey(const Key('decksImport')), findsNothing);
+    expect(find.byKey(const Key('decksImport')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('deckTile_deck-1')));
     await tester.pumpAndSettle();

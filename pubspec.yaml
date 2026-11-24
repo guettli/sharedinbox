@@ -69,6 +69,11 @@ dependencies:
 
   # Public-key encryption for secure account sharing (ECIES: X25519 + AES-256-GCM)
   cryptography: ^2.7.0
+  # Synchronous SHA-256 for the stable ids of imported cards and media (#1383).
+  crypto: ^3.0.7
+
+  # Reads Anki .apkg (ZIP) files for the flash-card import (#1383).
+  archive: ^4.0.9
 
   # QR code scanning (camera) for secure account import
   mobile_scanner: ^7.2.0
@@ -108,6 +113,9 @@ dependencies:
   # App version metadata for crash reports
   package_info_plus: ^10.1.0
   share_plus: ^13.1.0
+  # Front matter of the plaintext export of personal data (#1356); its ZIP
+  # uses `archive` above.
+  yaml: ^3.1.3
   device_info_plus: ^13.1.0
 
   # @visibleForTesting annotation used in lib/data/repositories.

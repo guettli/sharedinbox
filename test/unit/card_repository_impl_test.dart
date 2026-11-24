@@ -1,93 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
-import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/models/card.dart';
-import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/card_projector.dart';
-import 'package:sharedinbox/data/repositories/card_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
-import 'db_test_helper.dart';
 import 'encrypted_objects/test_helpers.dart';
+import 'helpers/card_test_device.dart';
 import 'helpers/fake_object_account.dart';
-import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 
 const _acc = fakeObjectAccountId;
 const _dataPath = fakeObjectDataPath;
-
-/// One install with the card projections, talking to the shared fake
-/// [server].
-class _CardDevice {
-  _CardDevice(this.server, this.keys);
-
-  final StatefulFakeImapServer server;
-  final SharedCollectionKeys keys;
-  final db = openTestDatabase();
-  final storage = FakeSecureStorage();
-  late final accounts = AccountRepositoryImpl(db, storage);
-  late final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-  );
-  late final store = MailObjectStoreImap(
-    db,
-    accounts,
-    mailboxes,
-    storage,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-    keyLookup: (_, keyId) => keys.lookup(keyId),
-    writeKey: (_, collectionId) => keys.byCollection[collectionId],
-    projectors: [
-      CardDocProjector(db),
-      CardBatchProjector(db),
-      DeckProjector(db),
-    ],
-  );
-  late final repo = CardRepositoryImpl(
-    db,
-    store,
-    ensureCollection: (_, collectionId) async {
-      keys.byCollection[collectionId] ??= CollectionKey.generate(collectionId);
-    },
-  );
-
-  static Future<String> _namespace(Object client) =>
-      (client as StatefulFakeImapClient).namespace();
-
-  static Future<_CardDevice> open(
-    StatefulFakeImapServer server,
-    SharedCollectionKeys keys,
-  ) async {
-    final device = _CardDevice(server, keys);
-    addTearDown(() async {
-      await device.store.waitForIdle();
-      await device.db.close();
-    });
-    await device.accounts.addAccount(fakeObjectAccount, 'pw');
-    return device;
-  }
-
-  Future<void> sync() async {
-    await mailboxes.syncMailboxes(_acc);
-    await store.sync(_acc);
-    await store.waitForIdle();
-  }
-
-  Future<List<FlashCard>> cards(String deckId) =>
-      repo.observeCards(_acc, deckId).first;
-
-  Future<Map<String, String>> fronts(String deckId) async =>
-      {for (final c in await cards(deckId)) c.cardId: c.front};
-
-  Future<List<MailObject>> heads(String kind) => store.rowsOfKind(_acc, kind);
-}
 
 void main() {
   late StatefulFakeImapServer server;
@@ -96,9 +18,9 @@ void main() {
     (s, k) => (server, keys) = (s, k),
   );
 
-  Future<(_CardDevice, _CardDevice, Deck)> twoDevicesWithDeck() async {
-    final a = await _CardDevice.open(server, keys);
-    final b = await _CardDevice.open(server, keys);
+  Future<(CardTestDevice, CardTestDevice, Deck)> twoDevicesWithDeck() async {
+    final a = await CardTestDevice.open(server, keys);
+    final b = await CardTestDevice.open(server, keys);
     final deck = await a.repo.createDeck(_acc, 'Spanish');
     await a.store.waitForIdle();
     return (a, b, deck);

@@ -15,6 +15,10 @@ abstract class CardRepository {
   /// The card [cardId], or null when unknown or deleted.
   Future<FlashCard?> card(String accountId, String cardId);
 
+  /// Whether [cardId] is unknown, deleted or shown (an import keeps a
+  /// deleted card deleted).
+  Future<CardState> cardState(String accountId, String cardId);
+
   /// A new deck: its own collection (and collection key) with a `deck` doc
   /// holding [name].
   Future<Deck> createDeck(String accountId, String name);

@@ -1,21 +1,29 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/entry_export.dart';
 import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/user_preferences.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
+import 'package:sharedinbox/core/utils/mime_filename.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
+import 'package:sharedinbox/ui/utils/save_file_as.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
@@ -631,6 +639,7 @@ class _UnlockedView extends ConsumerStatefulWidget {
 
 class _UnlockedViewState extends ConsumerState<_UnlockedView> {
   bool _sending = false;
+  bool _exporting = false;
   late Future<bool> _hasPassphrase = _loadHasPassphrase();
 
   EncryptedKeyService get _service => ref.read(encryptedKeyServiceProvider);
@@ -802,6 +811,113 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
     }
   }
 
+  Future<void> _export() async {
+    final account = ref.read(accountByIdProvider(widget.accountId)).value;
+    if (account == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('exportPlaintextWarning'),
+        title: const Text('Export unencrypted?'),
+        content: const Text(
+          'The export is NOT encrypted. Anyone who gets the file can read '
+          'every note, todo and journal entry in it. Store it safely.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('exportConfirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Export unencrypted'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _exporting = true);
+    try {
+      final result = await ref.read(entryExportServiceProvider).export(account);
+      if (!mounted) return;
+      if (!await _acceptMissingImages(result.missingImages.length)) return;
+      if (!mounted) return;
+      final saved = await _saveExport(result);
+      if (saved == null || !mounted) return;
+      context.showAppSnackBar(
+        saved,
+        event: 'personalData.exported',
+        accountId: widget.accountId,
+        data: {
+          'entries': result.entries,
+          'conflictVersions': result.conflictVersions,
+          'images': result.images,
+          'missing': result.missingImages.length,
+        },
+      );
+    } catch (e, stack) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Export failed: ${userErrorMessage(e)}',
+        level: AppLogLevel.error,
+        event: 'personalData.export_failed',
+        accountId: widget.accountId,
+        error: e,
+        stack: stack,
+      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  /// Whether to save an export missing [missing] images.
+  Future<bool> _acceptMissingImages(int missing) async {
+    if (missing == 0) return true;
+    final images = missing == 1 ? '1 image' : '$missing images';
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('exportMissingImages'),
+        title: const Text('Export is incomplete'),
+        content: Text(
+          '$images could not be loaded (not on this device and could not be '
+          'downloaded). The export will not include them, so it is not a '
+          'complete backup. Go online and export again to include them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('exportSaveAnyway'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Save anyway'),
+          ),
+        ],
+      ),
+    );
+    return accepted == true;
+  }
+
+  /// Saves the ZIP: "Save as…" on Linux, the share sheet elsewhere.
+  /// Returns the message to show, or null when cancelled.
+  Future<String?> _saveExport(EntryExportResult result) async {
+    if (supportsSaveAs) {
+      final picker = ref.read(saveLocationPickerProvider);
+      final target = await picker(safeFileName(result.fileName));
+      if (target == null) return null;
+      await File(target).writeAsBytes(result.zip, flush: true);
+      return 'Exported to $target';
+    }
+    final dir = await getTemporaryDirectory();
+    final path = p.join(dir.path, safeFileName(result.fileName));
+    await File(path).writeAsBytes(result.zip, flush: true);
+    await SharePlus.instance.share(ShareParams(files: [XFile(path)]));
+    return 'Export ready';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_sending) {
@@ -844,6 +960,20 @@ class _UnlockedViewState extends ConsumerState<_UnlockedView> {
           subtitle: const Text('Notes, todos and journal'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => context.push('/accounts/${widget.accountId}/entries'),
+        ),
+        ListTile(
+          key: const Key('exportPersonalData'),
+          leading: const Icon(Icons.download),
+          title: const Text('Export personal data'),
+          subtitle: const Text('Entries and images as a ZIP of Markdown files'),
+          trailing: _exporting
+              ? const SizedBox.square(
+                  dimension: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : null,
+          enabled: !_exporting,
+          onTap: _export,
         ),
         _LegacyNotesCard(accountId: widget.accountId),
         const SizedBox(height: AppSpacing.lg),

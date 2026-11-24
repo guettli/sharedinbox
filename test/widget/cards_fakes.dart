@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:sharedinbox/core/flashcards/fsrs.dart';
+import 'package:sharedinbox/core/flashcards/fsrs.dart' hide CardState;
 import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/core/flashcards/review_params.dart';
 import 'package:sharedinbox/core/import/card_import.dart';
@@ -80,6 +80,13 @@ class FakeCardRepository implements CardRepository {
   @override
   Future<FlashCard?> card(String accountId, String cardId) async =>
       _cards.where((c) => c.cardId == cardId).firstOrNull;
+
+  @override
+  Future<CardState> cardState(String accountId, String cardId) async {
+    final card = _cards.where((c) => c.cardId == cardId).firstOrNull;
+    if (card == null) return const CardUnknown();
+    return CardLive(card);
+  }
 
   @override
   Future<Deck> createDeck(String accountId, String name) async {

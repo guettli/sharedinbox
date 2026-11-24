@@ -9,19 +9,18 @@ import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/legacy_note_migrator.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'encrypted_objects/test_helpers.dart';
+import 'helpers/fake_imap_install.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 import 'recording_app_log_repository.dart';
@@ -39,7 +38,7 @@ const _account = Account(
 
 /// One install: notes, the store with the entry projection and the
 /// migrator, all on its own database and talking to the shared [server].
-class _Device {
+class _Device with FakeImapInstall {
   _Device(this.server, {this.mode = NotesMode.entries});
 
   final StatefulFakeImapServer server;
@@ -47,33 +46,30 @@ class _Device {
   /// What the key lifecycle would say ([NotesMode]); [NotesMode.entries]
   /// holds the personal collection key.
   NotesMode mode;
+  @override
   final db = openTestDatabase();
+  @override
   final storage = FakeSecureStorage();
   final logs = RecordingAppLogRepository();
-  late final accounts = AccountRepositoryImpl(db, storage);
-  late final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-  );
-  late final store = MailObjectStoreImap(
-    db,
-    accounts,
-    mailboxes,
-    storage,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-    keyLookup: (_, keyId) => mode == NotesMode.entries &&
-            constantTimeEquals(keyId, testPersonalKey.keyId)
-        ? testPersonalKey
-        : null,
-    writeKey: (_, collectionId) =>
-        mode == NotesMode.entries && collectionId == personalCollectionId
-            ? testPersonalKey
-            : null,
-    projectors: [EntryProjector(db)],
-  );
+
+  @override
+  StatefulFakeImapClient connectImap() => server.connect();
+
+  @override
+  CollectionKey? lookupKey(String _, Uint8List keyId) =>
+      mode == NotesMode.entries &&
+              constantTimeEquals(keyId, testPersonalKey.keyId)
+          ? testPersonalKey
+          : null;
+
+  @override
+  CollectionKey? writeKeyFor(String _, String collectionId) =>
+      mode == NotesMode.entries && collectionId == personalCollectionId
+          ? testPersonalKey
+          : null;
+
+  @override
+  late final List<MailObjectProjector> projectors = [EntryProjector(db)];
   late final notes = NoteRepositoryImpl(
     db,
     accounts,
@@ -88,9 +84,6 @@ class _Device {
     appLogger: AppLogger(logs),
   );
   late final entries = EntryRepositoryImpl(db, store);
-
-  static Future<String> _namespace(Object client) =>
-      (client as StatefulFakeImapClient).namespace();
 
   static Future<_Device> open(
     StatefulFakeImapServer server, {

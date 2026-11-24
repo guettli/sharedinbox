@@ -18,6 +18,10 @@ abstract class EntryRepository {
 
   Future<Entry?> entry(String accountId, String itemId);
 
+  /// Every entry of [accountId], in no particular order (the export,
+  /// #1356).
+  Future<List<Entry>> allEntries(String accountId);
+
   /// The todos (entries with a `task`) of [accountIds] that match [filter]
   /// on [today] (local `YYYY-MM-DD`): open and today ones by due date
   /// (none last), priority and newest first; done ones newest first.
