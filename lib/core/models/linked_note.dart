@@ -14,6 +14,7 @@ class LinkedNote {
     this.isEntry = false,
     this.hasConflict = false,
     this.pendingUpload = false,
+    this.task,
   });
 
   /// The note id, or the entry's itemId when [isEntry].
@@ -33,6 +34,10 @@ class LinkedNote {
 
   /// A legacy note saved on this device only so far.
   final bool pendingUpload;
+
+  /// Set when the entry is a todo (e.g. "Create todo" on the mail): the
+  /// mail shows its done tick and due date.
+  final EntryTask? task;
 }
 
 LinkedNote linkedNoteOf(EmailNote n) => LinkedNote(
@@ -70,6 +75,7 @@ Future<List<LinkedNote>> mergeLinkedNotes(
         createdAt: e.sortDate.toLocal(),
         isEntry: true,
         hasConflict: e.hasConflict,
+        task: e.task,
       ),
   ];
   for (final n in notes) {

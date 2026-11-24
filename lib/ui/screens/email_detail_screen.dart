@@ -38,6 +38,7 @@ import 'package:sharedinbox/ui/utils/open_file.dart';
 import 'package:sharedinbox/ui/utils/save_file_as.dart';
 import 'package:sharedinbox/ui/utils/send_briefly.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
+import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
 import 'package:sharedinbox/ui/widgets/conversation_tree.dart';
 import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
@@ -1557,7 +1558,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             return Column(
               children: [
                 for (final note in list)
-                  _buildNoteRow(ctx, note, header, threadEmails),
+                  _buildNoteRow(
+                    ctx,
+                    note,
+                    header,
+                    threadEmails,
+                    locked: locked,
+                  ),
               ],
             );
           },
@@ -1597,27 +1604,47 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
         ],
       );
 
+  /// While [locked], an entry's tick is off and deleting it asks to unlock.
   Widget _buildNoteRow(
     BuildContext ctx,
     LinkedNote note,
     Email header,
-    List<Email> threadEmails,
-  ) {
+    List<Email> threadEmails, {
+    required bool locked,
+  }) {
     final created = DateFormat('MMM d, HH:mm').format(note.createdAt);
     final base = note.messageId == header.messageId
         ? created
         : '$created · ${_relatedMailLabel(note.messageId, threadEmails)}';
     // Saved locally; it goes to the server on the next successful sync.
+    final task = note.task;
+    final due = task?.due;
+    final dated = due == null ? base : '$base · due $due';
     final subtitle = switch (note) {
-      LinkedNote(pendingUpload: true) => '$base · not synced yet',
-      LinkedNote(hasConflict: true) => '$base · conflict',
-      _ => base,
+      LinkedNote(pendingUpload: true) => '$dated · not synced yet',
+      LinkedNote(hasConflict: true) => '$dated · conflict',
+      _ => dated,
     };
     return ListTile(
       key: Key('note-${note.id}'),
       dense: true,
       contentPadding: EdgeInsets.zero,
-      title: Text(note.text),
+      leading: task == null
+          ? null
+          : Checkbox(
+              key: Key('noteTodoDone-${note.id}'),
+              value: task.done,
+              onChanged: locked
+                  ? null
+                  : (done) =>
+                      unawaited(_setLinkedTodoDone(note, task, done ?? false)),
+            ),
+      title: Text(
+        note.text,
+        style: task?.done ?? false
+            ? const TextStyle(decoration: TextDecoration.lineThrough)
+            : null,
+      ),
       subtitle: Text(
         subtitle,
         style: Theme.of(ctx).textTheme.bodySmall,
@@ -1631,16 +1658,50 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline, size: AppIconSize.md),
         tooltip: 'Delete note',
-        onPressed: () => unawaited(_deleteNote(note)),
+        onPressed: () => unawaited(_deleteNote(note, locked: locked)),
       ),
     );
   }
 
-  Future<void> _deleteNote(LinkedNote note) async {
+  /// Ticks or unticks the todo [note] from the mail; saved at once, like
+  /// in the Todos tab.
+  Future<void> _setLinkedTodoDone(
+    LinkedNote note,
+    EntryTask task,
+    bool done,
+  ) async {
+    try {
+      await ref
+          .read(entryRepositoryProvider)
+          .setTask(note.accountId, note.id, task.copyWith(done: done));
+    } on NoWriteKeyException {
+      if (!mounted) return;
+      context.showAppSnackBar('Unlock personal data to tick this todo');
+    } catch (e) {
+      if (!mounted) return;
+      context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
+    }
+  }
+
+  Future<void> _deleteNote(LinkedNote note, {required bool locked}) async {
     if (!note.isEntry) {
       await ref.read(noteRepositoryProvider).deleteNote(note.id);
       return;
     }
+    if (locked) {
+      context.showAppSnackBar('Unlock personal data to delete this note');
+      return;
+    }
+    // An encrypted entry may be a todo or a long text, and deleting it
+    // cannot be undone: ask first, like the Entries tab does.
+    final first = note.text.split('\n').first.trim();
+    final confirmed = await showConfirmDelete(
+      context,
+      title: note.task == null ? 'Delete note?' : 'Delete todo?',
+      content: first.isEmpty ? 'Delete it?' : 'Delete "$first"?',
+      confirmKey: const Key('noteDeleteConfirm'),
+    );
+    if (!confirmed || !mounted) return;
     try {
       await ref.read(entryRepositoryProvider).delete(note.accountId, note.id);
     } on NoWriteKeyException {
