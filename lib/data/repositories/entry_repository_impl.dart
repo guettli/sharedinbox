@@ -127,6 +127,14 @@ class EntryRepositoryImpl implements EntryRepository {
   }
 
   @override
+  Future<List<Entry>> allEntries(String accountId) async {
+    final rows = await (_db.select(_db.entries)
+          ..where((t) => t.accountId.equals(accountId)))
+        .get();
+    return rows.map(_toModel).toList();
+  }
+
+  @override
   Future<Entry> create(
     String accountId, {
     String? title,

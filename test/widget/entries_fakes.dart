@@ -115,6 +115,12 @@ class FakeEntryRepository implements EntryRepository {
   }
 
   @override
+  Future<List<Entry>> allEntries(String accountId) async => [
+        for (final e in _entries)
+          if (e.accountId == accountId) e,
+      ];
+
+  @override
   Future<Entry> create(
     String accountId, {
     String? title,

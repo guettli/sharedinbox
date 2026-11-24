@@ -145,6 +145,17 @@ void main() {
     expect([for (final e in await a.entries()) e.body], ['two', 'one']);
   });
 
+  test('allEntries returns every entry of the account', () async {
+    final a = await _Device.open(_server());
+    await a.create('one');
+    await a.create('two', title: 'Two');
+    expect(
+      {for (final e in await a.repo.allEntries(_acc)) e.body},
+      {'one', 'two'},
+    );
+    expect(await a.repo.allEntries('other'), isEmpty);
+  });
+
   test('an edit keeps the fields another device wrote', () async {
     final server = _server();
     final a = await _Device.open(server);
