@@ -8,8 +8,9 @@ import 'package:sharedinbox/core/flashcards/fsrs.dart';
 /// - [fsrsParamsKey]: `{weights, desiredRetention, maximumInterval,
 ///   enableFuzz}` for every deck.
 /// - [deckOptionsKey]: `{learningSteps, relearningSteps, dayStartHour,
-///   desiredRetention?}` of one deck; steps in seconds. Its
-///   `desiredRetention` overrides the global one.
+///   newPerDay, desiredRetention?}` of one deck; steps in seconds. Its
+///   `desiredRetention` overrides the global one; `newPerDay` caps the new
+///   cards studied per study day (#1381).
 ///
 /// A missing or invalid field falls back to its default ([FsrsParams]).
 
@@ -25,14 +26,44 @@ class DeckOptions {
     this.learningSteps = const [Duration(minutes: 1), Duration(minutes: 10)],
     this.relearningSteps = const [Duration(minutes: 10)],
     this.dayStartHour = 4,
+    this.newPerDay = defaultNewPerDay,
     this.desiredRetention,
   });
+
+  /// The options of deck [deckId] in the effective device state [state];
+  /// a missing or invalid field falls back to its default.
+  factory DeckOptions.of(Map<String, Object?> state, String deckId) {
+    final json = state[deckOptionsKey(deckId)];
+    if (json is! Map) return const DeckOptions();
+    final hour = json['dayStartHour'];
+    final perDay = json['newPerDay'];
+    const defaults = DeckOptions();
+    return DeckOptions(
+      learningSteps: _steps(json['learningSteps']) ?? defaults.learningSteps,
+      relearningSteps:
+          _steps(json['relearningSteps']) ?? defaults.relearningSteps,
+      dayStartHour:
+          hour is int && hour >= 0 && hour < 24 ? hour : defaults.dayStartHour,
+      newPerDay: perDay is int && perDay >= 0 ? perDay : defaultNewPerDay,
+      desiredRetention: switch (json['desiredRetention']) {
+        final num r => r.toDouble(),
+        _ => null,
+      },
+    );
+  }
+
+  /// New cards per study day unless a deck says otherwise.
+  static const defaultNewPerDay = 20;
 
   final List<Duration> learningSteps;
   final List<Duration> relearningSteps;
 
   /// Local hour (0–23) at which a study day starts.
   final int dayStartHour;
+
+  /// At most this many new cards are studied per study day (a new card
+  /// counts on its first rating).
+  final int newPerDay;
 
   /// Overrides the global `desiredRetention` when set.
   final double? desiredRetention;
@@ -41,6 +72,7 @@ class DeckOptions {
         'learningSteps': [for (final s in learningSteps) s.inSeconds],
         'relearningSteps': [for (final s in relearningSteps) s.inSeconds],
         'dayStartHour': dayStartHour,
+        'newPerDay': newPerDay,
         if (desiredRetention != null) 'desiredRetention': desiredRetention,
       };
 }

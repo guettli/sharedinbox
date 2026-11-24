@@ -11,6 +11,7 @@ import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/confirm_delete_dialog.dart';
+import 'package:sharedinbox/ui/widgets/decks_view.dart';
 import 'package:sharedinbox/ui/widgets/entry_tile.dart';
 import 'package:sharedinbox/ui/widgets/journal_view.dart';
 import 'package:sharedinbox/ui/widgets/quick_add_field.dart';
@@ -23,12 +24,13 @@ typedef EntriesTab = (
   Widget Function(String accountId) builder,
 );
 
-/// The tabs of the entries home (#1357); Journal (#1358) and Cards change a
-/// builder or add a record here.
+/// The tabs of the entries home (#1357), with the Journal (#1358) and the
+/// decks of the flash cards (#1381).
 const entriesTabs = <EntriesTab>[
   ('Notes', Key('entriesTab_notes'), _notesTab),
   ('Todos', Key('entriesTab_todos'), _todosTab),
   ('Journal', Key('entriesTab_journal'), _journalTab),
+  ('Cards', Key('entriesTab_cards'), _cardsTab),
 ];
 
 Widget _notesTab(String accountId) => _NotesTab(accountId: accountId);
@@ -37,9 +39,11 @@ Widget _todosTab(String accountId) => TodosView(accountId: accountId);
 
 Widget _journalTab(String accountId) => JournalView(accountId: accountId);
 
+Widget _cardsTab(String accountId) => DecksView(accountId: accountId);
+
 /// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): tabs for notes (search,
-/// quick-add and the list, newest first), todos (#1357) and the journal
-/// (#1358).
+/// quick-add and the list, newest first), todos (#1357), the journal
+/// (#1358) and the flash card decks (#1381).
 /// Behind the "Personal data (beta)" switch, and only while the account is
 /// unlocked on this device.
 class EntriesScreen extends ConsumerWidget {

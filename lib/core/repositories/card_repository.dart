@@ -21,6 +21,13 @@ abstract class CardRepository {
 
   Future<void> renameDeck(String accountId, String deckId, String name);
 
+  /// How many cards of deck [deckId] are not deleted.
+  Future<int> cardCount(String accountId, String deckId);
+
+  /// Deletes deck [deckId]: a `card` tombstone for each of its cards, then
+  /// a `deck` tombstone. The collection-key mail stays (#1381).
+  Future<void> deleteDeck(String accountId, String deckId);
+
   /// Adds [cards] to deck [deckId] as `card-batch` docs (at most 500 cards
   /// and 200 KiB of body each). Returns the cardIds, in order.
   Future<List<String>> importCards(

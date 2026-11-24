@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -9,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
+import 'package:sharedinbox/core/import/card_import.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -986,6 +988,42 @@ final cardRepositoryProvider = Provider<CardRepository>(
 final decksProvider =
     StreamProvider.autoDispose.family<List<Deck>, String>((ref, accountId) {
   return ref.watch(cardRepositoryProvider).observeDecks(accountId);
+});
+
+/// Imports Anki `.apkg` and CSV files into the decks (#1383). Null until
+/// the importer lands (PR #1422): the deck overview then hides "Import…".
+final cardImporterProvider = Provider<CardImporter?>((ref) => null);
+
+/// A file picked for a card import: its name and bytes.
+typedef PickedImportFile = ({String name, Uint8List bytes});
+
+/// Opens the platform file picker for an `.apkg` or `.csv`; null when the
+/// user cancels. A provider so widget tests can pick without a platform.
+final pickImportFileProvider = Provider<Future<PickedImportFile?> Function()>(
+  (ref) => () async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['apkg', 'csv'],
+    );
+    final file = result?.files.firstOrNull;
+    if (file == null) return null;
+    return (name: file.name, bytes: await file.readAsBytes());
+  },
+);
+
+/// The deck a card was last added to, per account; in memory only.
+final lastCardDeckProvider = Provider<Map<String, String>>((ref) => {});
+
+/// What is left to study per deck of an account (#1381). Recomputed every
+/// minute, so learning cards show up once they are due.
+final deckCountsProvider = StreamProvider.autoDispose
+    .family<Map<String, DeckCounts>, String>((ref, accountId) {
+  final timer = Timer(const Duration(minutes: 1), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  final now = ref.watch(todayProvider)();
+  return ref
+      .watch(reviewRepositoryProvider)
+      .observeDeckCounts(accountId, now.millisecondsSinceEpoch);
 });
 
 /// The cards of a deck that are not deleted.

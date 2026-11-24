@@ -271,6 +271,65 @@ void main() {
     );
   });
 
+  test(
+      'deleteDeck tombstones every card (batch members and docs) and the '
+      'deck; the other device sees it gone', () async {
+    final (a, b, deck) = await twoDevicesWithDeck();
+    final keep = await a.repo.createDeck(_acc, 'Keep');
+    await a.repo.importCards(_acc, deck.deckId, numberedCards(3));
+    await a.repo.addCard(
+      _acc,
+      deck.deckId,
+      const NewCard(CardContent(front: 'solo', back: 'b'), cardId: 'solo'),
+    );
+    await a.repo.deleteCard(_acc, 'c0001');
+    await a.repo.addCard(
+      _acc,
+      keep.deckId,
+      const NewCard(CardContent(front: 'k', back: 'b'), cardId: 'kept'),
+    );
+    await a.store.waitForIdle();
+    expect(await a.repo.cardCount(_acc, deck.deckId), 3);
+    await b.sync();
+    expect(await b.cards(deck.deckId), hasLength(3));
+
+    await a.repo.deleteDeck(_acc, deck.deckId);
+    await a.store.waitForIdle();
+    expect(await a.cards(deck.deckId), isEmpty);
+    expect(await a.repo.cardCount(_acc, deck.deckId), 0);
+    expect(
+      [for (final d in await a.repo.observeDecks(_acc).first) d.name],
+      ['Keep'],
+    );
+    // The collection key stays.
+    expect(keys.byCollection, contains(deck.deckId));
+
+    await b.sync();
+    expect(await b.cards(deck.deckId), isEmpty);
+    expect(
+      [for (final d in await b.repo.observeDecks(_acc).first) d.name],
+      ['Keep'],
+    );
+    expect((await b.cards(keep.deckId)).single.cardId, 'kept');
+    expect(
+      () => a.repo.deleteDeck(_acc, deck.deckId),
+      throwsStateError,
+    );
+  });
+
+  test('deleteDeck without the deck key throws and writes nothing', () async {
+    final (a, _, deck) = await twoDevicesWithDeck();
+    await a.repo.importCards(_acc, deck.deckId, numberedCards(2));
+    await a.store.waitForIdle();
+    keys.byCollection.clear();
+    await expectLater(
+      a.repo.deleteDeck(_acc, deck.deckId),
+      throwsA(isA<NoWriteKeyException>()),
+    );
+    expect(await a.repo.cardCount(_acc, deck.deckId), 2);
+    expect(await a.repo.observeDecks(_acc).first, hasLength(1));
+  });
+
   test('a device without the deck key cannot edit its cards', () async {
     final (a, _, deck) = await twoDevicesWithDeck();
     await a.repo.importCards(_acc, deck.deckId, numberedCards(1));
