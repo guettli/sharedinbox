@@ -1019,16 +1019,16 @@
     {
       "tool": "jscpd",
       "file": "test/backend/mail_object_store_imap_test.dart",
-      "start_line": 24,
-      "end_line": 34,
-      "key": "7838e029425024ce"
+      "start_line": 25,
+      "end_line": 36,
+      "key": "21a4d55efe5c2f02"
     },
     {
       "tool": "jscpd",
       "file": "test/backend/mail_object_store_jmap_test.dart",
-      "start_line": 24,
-      "end_line": 33,
-      "key": "7838e029425024ce"
+      "start_line": 25,
+      "end_line": 35,
+      "key": "21a4d55efe5c2f02"
     },
     {
       "tool": "jscpd",
