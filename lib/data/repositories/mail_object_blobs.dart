@@ -33,19 +33,29 @@ class MailObjectBlobStore {
   /// Stores [bytes] as a new blob of [collectionId] and returns its itemId.
   /// Throws [ObjectTooLargeException] over 8 MiB (or a smaller JMAP
   /// `maxSizeUpload`), and `NoWriteKeyException`.
+  ///
+  /// A given [itemId] (an import passes a content address, `mediaBlobId`)
+  /// that is already a blob of [collectionId] is not written again.
   Future<String> putBlob(
     String accountId,
     String collectionId,
     Uint8List bytes,
-    String contentType,
-  ) async {
-    final itemId = newItemId();
+    String contentType, {
+    String? itemId,
+  }) async {
+    if (itemId != null) {
+      final hmac = await store.itemHmacOf(accountId, collectionId, itemId);
+      if (hmac != null && await store.item(accountId, hmac) != null) {
+        return itemId;
+      }
+    }
+    final id = itemId ?? newItemId();
     final clock = await store.clockFor(accountId);
     await store.put(
       accountId,
       InnerObject(
         head: ObjectHead(
-          itemId: itemId,
+          itemId: id,
           collectionId: collectionId,
           versionId: clock.send(),
           kind: mailObjectBlobKind,
@@ -53,9 +63,9 @@ class MailObjectBlobStore {
         parts: [ObjectPart(contentType: contentType, bytes: bytes)],
       ),
     );
-    await _cache(accountId, itemId, contentType, bytes);
+    await _cache(accountId, id, contentType, bytes);
     await evict(accountId);
-    return itemId;
+    return id;
   }
 
   /// The bytes of blob [itemId] of [collectionId]: from the cache, else

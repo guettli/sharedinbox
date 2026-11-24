@@ -60,6 +60,14 @@ class CardRepositoryImpl implements CardRepository {
   }
 
   @override
+  Future<CardState> cardState(String accountId, String cardId) async {
+    final row = await _cardRow(accountId, cardId);
+    if (row == null) return const CardUnknown();
+    if (row.deleted) return CardDeleted(row.collectionId);
+    return CardLive(_toCard(row));
+  }
+
+  @override
   Future<Deck> createDeck(String accountId, String name) async {
     final deckId = newDeckId();
     await _ensureCollection(accountId, deckId);
