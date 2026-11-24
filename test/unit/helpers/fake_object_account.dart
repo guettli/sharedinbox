@@ -57,3 +57,23 @@ void setUpFakeObjectServer(
     ),
   );
 }
+
+/// The fake server and keys of the running test, set by
+/// [setUpPersonalObjectServer].
+class FakeObjectServerFixture {
+  late StatefulFakeImapServer server;
+  late SharedCollectionKeys keys;
+}
+
+/// [setUpFakeObjectServer] with a key for the personal collection; the
+/// returned fixture holds the server and keys of each test.
+FakeObjectServerFixture setUpPersonalObjectServer() {
+  final fixture = FakeObjectServerFixture();
+  setUpFakeObjectServer(
+    (s, k) => fixture
+      ..server = s
+      ..keys = k,
+    collections: const [personalCollectionId],
+  );
+  return fixture;
+}

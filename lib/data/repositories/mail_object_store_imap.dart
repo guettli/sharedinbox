@@ -634,6 +634,7 @@ class MailObjectStoreImap extends MailObjectStoreBase {
     List<int> uids,
     List<String> messageIds,
   ) async {
+    await onStep?.call('expunge');
     if (isGmailImap(client)) {
       final done = await moveToTrashAndExpunge(
         client,

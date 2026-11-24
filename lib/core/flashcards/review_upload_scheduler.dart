@@ -14,11 +14,13 @@ import 'package:sharedinbox/core/services/app_logger.dart';
 /// - a regular sync cycle ([synced]).
 ///
 /// Requests are debounced ([debounce]) and coalesced: one flush per account
-/// at a time, and one more after it when requested meanwhile.
+/// at a time, and one more after it when requested meanwhile. Right after
+/// each flush the log is [compact]ed when due (#1382).
 class ReviewUploadScheduler {
   ReviewUploadScheduler({
     required this.flush,
     required this.pendingAccounts,
+    this.compact,
     this.debounce = const Duration(seconds: 2),
     this.idle = const Duration(minutes: 5),
     this.maxPending = 300,
@@ -30,6 +32,9 @@ class ReviewUploadScheduler {
 
   /// The accounts with pending reviews.
   final Future<Iterable<String>> Function() pendingAccounts;
+
+  /// Compacts the review log of an account when due (`ReviewCompactor`).
+  final Future<void> Function(String accountId)? compact;
 
   final Duration debounce;
   final Duration idle;
@@ -118,6 +123,19 @@ class ReviewUploadScheduler {
               'review.upload_failed',
               'Could not write the pending reviews for upload; retrying on '
                   'the next trigger',
+              accountId: accountId,
+              data: {'error': e.toString()},
+            ),
+          );
+        }
+        try {
+          await compact?.call(accountId);
+        } catch (e) {
+          unawaited(
+            appLogger?.warn(
+              'review.compact_failed',
+              'Could not compact the uploaded reviews; retrying after the '
+                  'next flush',
               accountId: accountId,
               data: {'error': e.toString()},
             ),

@@ -174,7 +174,7 @@ class RigDevice with MailObjectDeviceOps {
           onStep: _step,
         );
 
-  late final log = MailObjectLog(db, store);
+  late final log = MailObjectLog(db, store, deviceState: state);
   late final blobs = MailObjectBlobStore(
     db,
     store,

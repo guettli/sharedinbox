@@ -960,9 +960,12 @@ abstract class MailObjectStoreBase implements MailObjectStore {
 
   /// Hides the segments and packs of [log] that another pack covers
   /// ([MailObjects.coveredBy]). Of two packs covering the same ranges (a
-  /// crash between APPEND and expunge, then a second compaction) the newer
-  /// one stays. Only rows of this device are also marked to be deleted on
-  /// the server: only the owner deletes (5.4 item 2).
+  /// crash between APPEND and expunge, then a second compaction; or two
+  /// devices adopting the same lost device) the one with the higher
+  /// `generation` stays, then the newer one. A covered row is also marked
+  /// to be deleted on the server when a pack of this device covers it: the
+  /// writer of the pack deletes what it covers, every other device only
+  /// hides it (5.4 item 2).
   Future<void> _coverLog(String accountId, String log) async {
     final rows = await (db.select(db.mailObjects)
           ..where(
@@ -992,15 +995,18 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     if (packs.isEmpty) return;
     final own = (await clockFor(accountId)).deviceId;
     for (final MapEntry(key: r, value: head) in heads.entries) {
-      final by = packs.where(
-        (p) =>
-            p.key.messageId != r.messageId &&
-            p.value.coversAll(head) &&
-            // Equal coverage: the newer pack wins.
-            (!head.coversAll(p.value) ||
-                p.key.versionId!.compareTo(r.versionId!) > 0),
-      );
+      final by = packs
+          .where(
+            (p) =>
+                p.key.messageId != r.messageId &&
+                p.value.coversAll(head) &&
+                // Equal coverage: the higher generation, then the newer
+                // pack wins.
+                (!head.coversAll(p.value) || _beats(p.key, p.value, r, head)),
+          )
+          .toList();
       if (by.isEmpty) continue;
+      final mine = by.where((p) => p.value.device == own).firstOrNull;
       await (db.update(db.mailObjects)
             ..where(
               (t) =>
@@ -1009,12 +1015,25 @@ abstract class MailObjectStoreBase implements MailObjectStore {
             ))
           .write(
         MailObjectsCompanion(
-          coveredBy: Value(by.first.key.messageId),
+          coveredBy: Value((mine ?? by.first).key.messageId),
           pendingDelete:
-              head.device == own ? const Value(true) : const Value.absent(),
+              mine != null ? const Value(true) : const Value.absent(),
         ),
       );
     }
+  }
+
+  /// Whether pack [p] (head [ph]) wins over [r] (head [rh]) of the same
+  /// coverage.
+  static bool _beats(
+    MailObjectRow p,
+    SegmentHead ph,
+    MailObjectRow r,
+    SegmentHead rh,
+  ) {
+    final byGeneration = (ph.generation ?? 0).compareTo(rh.generation ?? 0);
+    if (byGeneration != 0) return byGeneration > 0;
+    return p.versionId!.compareTo(r.versionId!) > 0;
   }
 
   // ── Push helpers ──────────────────────────────────────────────────────────

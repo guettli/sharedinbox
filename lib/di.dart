@@ -96,6 +96,7 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/outbox_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/review_compactor.dart';
 import 'package:sharedinbox/data/repositories/review_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/review_uploader.dart';
 import 'package:sharedinbox/data/repositories/search_history_repository_impl.dart';
@@ -1099,13 +1100,21 @@ final reviewUploaderProvider = Provider<ReviewUploader>(
   ),
 );
 
+/// Compacts the review log after each flush (#1382).
+final reviewCompactorProvider = Provider<ReviewCompactor>(
+  (ref) => ReviewCompactor(ref.watch(mailObjectLogProvider)),
+);
+
 /// When the pending reviews are written for upload (#1380): app to the
-/// background, session end, 5 min idle, 300 pending, a sync cycle.
+/// background, session end, 5 min idle, 300 pending, a sync cycle; each
+/// flush is followed by a compaction when due (#1382).
 final reviewUploadSchedulerProvider = Provider<ReviewUploadScheduler>((ref) {
   final uploader = ref.watch(reviewUploaderProvider);
+  final compactor = ref.watch(reviewCompactorProvider);
   final scheduler = ReviewUploadScheduler(
     flush: uploader.flush,
     pendingAccounts: uploader.pendingAccounts,
+    compact: compactor.maybeCompact,
     appLogger: ref.watch(appLoggerProvider),
   );
   void paused() => unawaited(scheduler.appPaused());
