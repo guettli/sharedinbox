@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
@@ -8,14 +10,12 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/entry.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'encrypted_objects/test_helpers.dart';
+import 'helpers/fake_imap_install.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 
@@ -31,7 +31,7 @@ const _account = Account(
 
 /// One install: its own database and store with the entry projection, all
 /// talking to the shared fake [server].
-class _Device {
+class _Device with FakeImapInstall {
   _Device(this.server, {this.unlocked = true});
 
   final StatefulFakeImapServer server;
@@ -39,41 +39,30 @@ class _Device {
   /// Whether this device holds the personal collection key.
   bool unlocked;
   bool offline = false;
+  @override
   final db = openTestDatabase();
+  @override
   final storage = FakeSecureStorage();
-  late final accounts = AccountRepositoryImpl(db, storage);
-  late final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => _connect(),
-    namespace: _namespace,
-  );
-  late final store = MailObjectStoreImap(
-    db,
-    accounts,
-    mailboxes,
-    storage,
-    imapConnect: (_, __, ___) async => _connect(),
-    namespace: _namespace,
-    keyLookup: (_, keyId) =>
-        unlocked && constantTimeEquals(keyId, testPersonalKey.keyId)
-            ? testPersonalKey
-            : null,
-    writeKey: (_, collectionId) =>
-        unlocked && collectionId == personalCollectionId
-            ? testPersonalKey
-            : null,
-    projectors: [EntryProjector(db)],
-  );
-  late final repo = EntryRepositoryImpl(db, store);
 
-  StatefulFakeImapClient _connect() {
+  @override
+  StatefulFakeImapClient connectImap() {
     if (offline) throw StateError('offline');
     return server.connect();
   }
 
-  static Future<String> _namespace(Object client) =>
-      (client as StatefulFakeImapClient).namespace();
+  @override
+  CollectionKey? lookupKey(String _, Uint8List keyId) =>
+      unlocked && constantTimeEquals(keyId, testPersonalKey.keyId)
+          ? testPersonalKey
+          : null;
+
+  @override
+  CollectionKey? writeKeyFor(String _, String collectionId) =>
+      unlocked && collectionId == personalCollectionId ? testPersonalKey : null;
+
+  @override
+  late final List<MailObjectProjector> projectors = [EntryProjector(db)];
+  late final repo = EntryRepositoryImpl(db, store);
 
   static Future<_Device> open(
     StatefulFakeImapServer server, {

@@ -2,100 +2,33 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sharedinbox/core/encrypted_objects/keys.dart';
-import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/import/import_ids.dart';
-import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/import/card_importer.dart';
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/card_projector.dart';
-import 'package:sharedinbox/data/repositories/card_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
-import '../db_test_helper.dart';
-import '../helpers/fake_secure_storage.dart';
+import '../helpers/card_test_device.dart';
+import '../helpers/fake_object_account.dart';
 import '../helpers/stateful_fake_imap.dart';
 
-const _acc = 'acc-1';
-const _dataPath = 'SharedInbox/Data';
-
-const _account = Account(
-  id: _acc,
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
-);
+const _acc = fakeObjectAccountId;
+const _dataPath = fakeObjectDataPath;
 
 Uint8List _fixture(String name) =>
     File('test/fixtures/anki/$name').readAsBytesSync();
 
-/// One install with the card projections and the blob store over a fake
-/// IMAP server; collection keys are made on demand.
-class _Device {
-  _Device(this.server);
+/// A [CardTestDevice] with the blob store and the importer.
+class _Device extends CardTestDevice {
+  _Device(StatefulFakeImapServer server)
+      : super(server, SharedCollectionKeys());
 
-  final StatefulFakeImapServer server;
-  final keys = <String, CollectionKey>{};
-  final db = openTestDatabase();
-  final storage = FakeSecureStorage();
-  late final accounts = AccountRepositoryImpl(db, storage);
-  late final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-  );
-  late final store = MailObjectStoreImap(
-    db,
-    accounts,
-    mailboxes,
-    storage,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-    keyLookup: (_, keyId) {
-      for (final k in keys.values) {
-        if (constantTimeEquals(k.keyId, keyId)) return k;
-      }
-      return null;
-    },
-    writeKey: (_, collectionId) => keys[collectionId],
-    projectors: [
-      CardDocProjector(db),
-      CardBatchProjector(db),
-      DeckProjector(db),
-    ],
-  );
-  late final repo = CardRepositoryImpl(
-    db,
-    store,
-    ensureCollection: (_, collectionId) async {
-      keys[collectionId] ??= CollectionKey.generate(collectionId);
-    },
-  );
   late final blobs = MailObjectBlobStore(db, store);
   late final importer = CardImporterImpl(repo, blobs);
 
-  static Future<String> _namespace(Object client) =>
-      (client as StatefulFakeImapClient).namespace();
-
-  static Future<_Device> open(StatefulFakeImapServer server) async {
-    final device = _Device(server);
-    addTearDown(() async {
-      await device.store.waitForIdle();
-      await device.db.close();
-    });
-    await device.accounts.addAccount(_account, 'pw');
-    return device;
-  }
-
   Future<List<FlashCard>> allCards() async => [
         for (final d in await repo.observeDecks(_acc).first)
-          ...await repo.observeCards(_acc, d.deckId).first,
+          ...await cards(d.deckId),
       ];
 
   Future<int> serverMessages() async {
@@ -105,15 +38,11 @@ class _Device {
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
   late _Device device;
-
-  setUp(() async {
-    device = await _Device.open(
-      StatefulFakeImapServer(uidValidityByFolder: {'INBOX': 1}),
-    );
-  });
+  setUpFakeObjectServer(
+    (server, _) => device = _Device(server),
+  );
+  setUp(() => device.init<_Device>());
 
   test('basic.apkg: 7 cards in 1 deck, the image blob in that deck', () async {
     final result = await device.importer.importApkg(
