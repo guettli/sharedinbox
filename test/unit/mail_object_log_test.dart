@@ -217,6 +217,40 @@ void main() {
     expect([for (final r in await a.rows()) r.messageId], [pack.messageId]);
   });
 
+  test(
+      'appendStamped(device:) writes the head of another deviceId; the '
+      'versionId stays own, and the owner rule does not compact it (#1385)',
+      () async {
+    final rig = ObjectRig(ObjectTransport.imap);
+    final a = await rig.device();
+    const imported = 'import:abc';
+    final row = await a.log.appendStamped(
+      a.accountId,
+      _log,
+      testDeckKey.collectionId,
+      [
+        for (final seq in [1700000000000, 1700000005000])
+          LogEvent(seq: seq, hlc: Hlc(seq, 0, imported), json: {'n': seq}),
+      ],
+      device: imported,
+    );
+    await a.store.waitForIdle();
+
+    final segment = readSegment((await a.store.open(row))!)!;
+    expect(segment.head.device, imported);
+    expect(segment.head.covers, [
+      const LogRange(imported, 1700000000000, 1700000000000),
+      const LogRange(imported, 1700000005000, 1700000005000),
+    ]);
+    final own = (await a.store.clockFor(a.accountId)).deviceId;
+    expect(Hlc.parse(row.versionId!).deviceId, own);
+    expect(
+      [for (final e in await a.log.events(a.accountId, _log)) e.deviceId],
+      [imported, imported],
+    );
+    expect(await a.log.compact(a.accountId, _log, _period), isEmpty);
+  });
+
   test('two packs over the same ranges: the newer stays, events once',
       () async {
     final rig = ObjectRig(ObjectTransport.imap);

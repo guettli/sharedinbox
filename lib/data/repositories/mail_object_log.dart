@@ -183,13 +183,16 @@ class MailObjectLog {
 
   /// Writes the events [stamped], already stamped with this device's `s`
   /// and `h` (e.g. ratings stored before, #1380), as one segment of [log]
-  /// in [collectionId].
+  /// in [collectionId]. [device] is the `device` of the segment head
+  /// (default: this device), e.g. the deviceId of an imported review
+  /// history (#1385); the segment's versionId is still this device's.
   Future<MailObject> appendStamped(
     String accountId,
     String log,
     String collectionId,
-    List<LogEvent> stamped,
-  ) async {
+    List<LogEvent> stamped, {
+    String? device,
+  }) async {
     if (stamped.isEmpty) {
       throw ArgumentError.value(stamped, 'stamped', 'empty');
     }
@@ -203,7 +206,7 @@ class MailObjectLog {
         collectionId: collectionId,
         versionId: versionId,
         head: SegmentHead.of(
-          clock.deviceId,
+          device ?? clock.deviceId,
           stamped,
           period: periodOf(versionId),
         ),

@@ -76,6 +76,7 @@ import 'package:sharedinbox/data/db/database.dart'
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
 import 'package:sharedinbox/data/import/card_importer.dart';
+import 'package:sharedinbox/data/import/review_importer.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -993,6 +994,7 @@ final cardImporterProvider = Provider<CardImporter>(
   (ref) => CardImporterImpl(
     ref.watch(cardRepositoryProvider),
     ref.watch(mailObjectBlobStoreProvider),
+    ReviewImporter(ref.watch(dbProvider), ref.watch(mailObjectLogProvider)),
     appLogger: ref.watch(appLoggerProvider),
   ),
 );
