@@ -810,6 +810,29 @@ the projections, writes through the store); #1379.
   collection — never in the collection-key mail, whose fields are plaintext
   on the server. The `Decks` projection lists them. Deleting a deck comes
   with the deck UI (#1381).
+- **Import** (#1383, `lib/core/import/`, `lib/data/import/`; the UI is
+  #1381): an Anki `.apkg` is a ZIP whose collection is read from
+  `collection.anki21`, else `collection.anki2` (newer exports hold a dummy
+  `anki2` next to the real one), in the legacy schema 11 (note types and
+  decks as JSON in `col`). Each row of `cards` is a card: the front is the
+  question template (`qfmt`) of its `ord`, the back the answer template
+  (`afmt`) without `{{FrontSide}}` and the `<hr id=answer>` after it, with
+  `{{Field}}`, `{{text:Field}}`, `{{#F}}…{{/F}}` and `{{^F}}…{{/F}}`. The deck
+  is the Anki deck name (the `::` hierarchy stays in it), the tags those of
+  the note. HTML becomes Markdown: `<br>`, `<div>`, `<p>` line breaks,
+  `<b>`/`<strong>` `**`, `<i>`/`<em>` `*`, `<img src>` `![](si-img:<blobId>)`,
+  entities decoded, other tags stripped, `[sound:…]` dropped. A CSV file has
+  the columns `front, back, tags, deck` (RFC 4180, optional header, empty
+  deck = `Default`). Ids are base64url of the first 16 bytes of a SHA-256:
+  cardId = `"anki-card\0" + guid + "\0" + ord` or `"csv-card\0" + deck +
+  "\0" + front`, blob itemId = `"blob\0" + bytes` (content-addressed: a blob
+  that is already in the deck's collection is not written again). A
+  re-import looks each cardId up: a deleted card stays deleted (the
+  tombstone wins), an unchanged one is not written, a changed one gets a new
+  batch member in the deck it is in (its fresh `h` wins: the file's content
+  replaces a local edit), an unknown one is added. Cloze notes, `anki21b`
+  (#1384), the review history (#1385) and sound and video media are not
+  imported yet.
 
 Reviews, schedules and upload are implemented in #1380:
 

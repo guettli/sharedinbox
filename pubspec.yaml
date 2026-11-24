@@ -69,6 +69,11 @@ dependencies:
 
   # Public-key encryption for secure account sharing (ECIES: X25519 + AES-256-GCM)
   cryptography: ^2.7.0
+  # Synchronous SHA-256 for the stable ids of imported cards and media (#1383).
+  crypto: ^3.0.7
+
+  # Reads Anki .apkg (ZIP) files for the flash-card import (#1383).
+  archive: ^4.0.9
 
   # QR code scanning (camera) for secure account import
   mobile_scanner: ^7.2.0
