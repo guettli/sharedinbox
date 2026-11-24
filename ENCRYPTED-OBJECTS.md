@@ -675,6 +675,70 @@ the folder itself is never deleted or renamed.
   mails (`entry_links`) next to the notes not migrated yet; note search
   covers both.
 
+### 6.1 Plaintext export (#1356)
+
+Personal data → "Export personal data" writes every entry of one unlocked
+account, decrypted, into a ZIP: a backup against the server deleting data
+(section 2) and the input of a later "import from export". The user is warned
+first that the file is **not encrypted**. Linux saves it with the save dialog;
+Android and iOS hand it to the share sheet.
+
+```text
+sharedinbox-export-<accountEmail>-<YYYYMMDD-HHMMSS>.zip
+  README.txt            # "This export is NOT encrypted" + format pointer
+  manifest.json         # {format: "sharedinbox-export", version: 1,
+                        #  exportedAt, accountId, accountEmail,
+                        #  entries: <n>, conflictVersions: <n>,
+                        #  images: <n>, missingImages: [<blobItemId>…]}
+  entries/<itemId>.md                         # the displayed head
+  entries/<itemId>.conflict-<versionId>.md    # every other distinct head
+  images/<blobItemId>.<ext>   # ext from content type: png, jpg, gif, webp, else bin
+```
+
+- **Deterministic**: file names come from ids only, never from titles. In a
+  file name every character of an id outside `[A-Za-z0-9_-]` becomes `_`
+  (the real `versionId` is in the front matter). Files are sorted by path and
+  every ZIP entry gets the mtime `exportedAt`, so only `manifest.exportedAt`
+  and the ZIP name differ between two exports of the same data.
+- **Entry file**: a YAML front matter, then the Markdown body. Keys in this
+  order, absent ones left out:
+
+  ```markdown
+  ---
+  itemId: "…"
+  versionId: "…"
+  title: "…"
+  tags: ["a", "b"]
+  date: "YYYY-MM-DD"
+  task: {"done": false, "due": "…", "priority": 1, "doneAt": "…"}
+  links: ["<msgid@host>"]
+  createdAt: "…ISO 8601 UTC…"
+  updatedAt: "…ISO 8601 UTC…"
+  conflict: true
+  ---
+  <body markdown>
+  ```
+
+  Every string is JSON-quoted (a JSON string is a valid YAML double-quoted
+  scalar); `task` has the keys of `EntryTask.toJson()`. `conflict: true` is on
+  every file of an item in conflict.
+- **Conflicts**: no version is dropped. The displayed head is
+  `<itemId>.md`; every other distinct head is
+  `<itemId>.conflict-<versionId>.md`. A tombstone head (edit vs delete) has
+  only `itemId`, `versionId`, `updatedAt`, `conflict: true` and
+  `deleted: true`, and an empty body.
+- **Images**: `![alt](si-img:<id>)` becomes `![alt](../images/<id>.<ext>)`, so
+  plain Markdown viewers show it; an importer maps it back, the file name being
+  the blob id. A blob that is neither here nor downloadable keeps its
+  `si-img:` link and is listed in `missingImages`; the user is told the export
+  is not a complete backup before it is saved.
+
+Implemented in `lib/core/encrypted_objects/entry_export.dart` (layout, front
+matter, `parseExportedEntry` as the inverse) and
+`lib/data/repositories/entry_export_service.dart` (collects the entries, the
+other heads from `MailObjectStore.item` and the blobs). Cards and the review
+log are added by the cards issues.
+
 ## 7. Flash cards
 
 - **Card** documents (`kind: card`): front/back Markdown, tags, `collectionId`

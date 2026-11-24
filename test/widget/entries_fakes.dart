@@ -115,6 +115,12 @@ class FakeEntryRepository implements EntryRepository {
   }
 
   @override
+  Future<List<Entry>> allEntries(String accountId) async => [
+        for (final e in _entries)
+          if (e.accountId == accountId) e,
+      ];
+
+  @override
   Future<Entry> create(
     String accountId, {
     String? title,
@@ -214,6 +220,13 @@ class FixedStatusKeyService implements EncryptedKeyService {
   Stream<PersonalDataStatus> watchStatus(String accountId) =>
       Stream.value(byAccount[accountId] ?? fixed);
 
+  // The unlocked Personal data screen asks for these while it builds.
+  @override
+  bool get passkeysAvailable => false;
+
+  @override
+  Future<bool> hasPassphraseSlot(String accountId) async => false;
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -310,17 +323,18 @@ class FakeConflictStore implements MailObjectStore {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-/// A version of entry `item-1` by [device] at minute [minute].
+/// A version of entry [itemId] by [device] at minute [minute].
 InnerObject entryVersion(
   String device,
   int minute, {
   String body = '',
   String? title,
   bool deleted = false,
+  String itemId = 'item-1',
 }) =>
     InnerObject(
       head: ObjectHead(
-        itemId: 'item-1',
+        itemId: itemId,
         collectionId: personalCollectionId,
         versionId: Hlc(
           DateTime.utc(2026, 11, 23, 10, minute).millisecondsSinceEpoch,

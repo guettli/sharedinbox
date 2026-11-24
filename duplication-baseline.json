@@ -2758,6 +2758,20 @@
       "start_line": 145,
       "end_line": 155,
       "key": "664338cc7aa886ab"
+    },
+    {
+      "tool": "jscpd",
+      "file": "lib/data/repositories/entry_repository_impl.dart",
+      "start_line": 135,
+      "end_line": 146,
+      "key": "649ddaa0676505d9"
+    },
+    {
+      "tool": "jscpd",
+      "file": "test/widget/entries_fakes.dart",
+      "start_line": 121,
+      "end_line": 132,
+      "key": "649ddaa0676505d9"
     }
   ]
 }

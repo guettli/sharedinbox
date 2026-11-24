@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/entry_export.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
@@ -81,6 +82,7 @@ import 'package:sharedinbox/data/repositories/card_schedule_writer.dart';
 import 'package:sharedinbox/data/repositories/draft_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/email_state_writer.dart';
+import 'package:sharedinbox/data/repositories/entry_export_service.dart';
 import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/legacy_note_migrator.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
@@ -1009,6 +1011,15 @@ final mailObjectBlobStoreProvider = Provider<MailObjectBlobStore>(
   (ref) => MailObjectBlobStore(
     ref.watch(dbProvider),
     ref.watch(mailObjectStoreProvider),
+  ),
+);
+
+/// The plaintext export of the entries of an account (#1356).
+final entryExportServiceProvider = Provider<EntryExportService>(
+  (ref) => EntryExportServiceImpl(
+    ref.watch(entryRepositoryProvider),
+    ref.watch(mailObjectStoreProvider),
+    ref.watch(mailObjectBlobStoreProvider),
   ),
 );
 
