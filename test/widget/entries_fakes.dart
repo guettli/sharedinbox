@@ -220,6 +220,13 @@ class FixedStatusKeyService implements EncryptedKeyService {
   Stream<PersonalDataStatus> watchStatus(String accountId) =>
       Stream.value(byAccount[accountId] ?? fixed);
 
+  // The unlocked Personal data screen asks for these while it builds.
+  @override
+  bool get passkeysAvailable => false;
+
+  @override
+  Future<bool> hasPassphraseSlot(String accountId) async => false;
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

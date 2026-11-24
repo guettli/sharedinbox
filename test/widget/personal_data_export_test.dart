@@ -78,6 +78,13 @@ Future<void> _waitForSnackBar(WidgetTester tester) async {
   }
 }
 
+/// The tile spinner keeps running behind the dialog, so pumpAndSettle
+/// would time out: pump past the dialog's entrance instead.
+Future<void> _pumpUntilMissingImagesDialog(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 500));
+}
+
 /// Runs [body] as on Linux, where the export uses "Save as…". Reset inside
 /// the body: the post-test invariant check runs before tearDown callbacks.
 Future<void> _onLinux(Future<void> Function() body) async {
@@ -139,7 +146,7 @@ void main() {
       });
       await _startExport(tester);
       await tester.tap(find.byKey(const Key('exportConfirm')));
-      await tester.pumpAndSettle();
+      await _pumpUntilMissingImagesDialog(tester);
 
       expect(find.byKey(const Key('exportMissingImages')), findsOneWidget);
       expect(
@@ -166,7 +173,7 @@ void main() {
       });
       await _startExport(tester);
       await tester.tap(find.byKey(const Key('exportConfirm')));
-      await tester.pumpAndSettle();
+      await _pumpUntilMissingImagesDialog(tester);
       expect(
         find.textContaining('1 image could not be loaded'),
         findsOneWidget,
