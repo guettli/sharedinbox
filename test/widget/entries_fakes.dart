@@ -36,6 +36,13 @@ class FakeEntryRepository implements EntryRepository {
   /// Thrown by the next [create], if set.
   Object? failCreateWith;
 
+  /// Thrown by [update] while set.
+  Object? failUpdateWith;
+
+  /// Awaited by [update] and [setTask] before they write, while set: makes
+  /// them slow.
+  Future<void>? gate;
+
   List<Entry> get entries => List.unmodifiable(_entries);
 
   /// An entry another device (or the note migration) wrote arrives.
@@ -160,6 +167,9 @@ class FakeEntryRepository implements EntryRepository {
     required String body,
     Object? date = keepDate,
   }) async {
+    await gate;
+    final fail = failUpdateWith;
+    if (fail != null) throw fail;
     final i = _entries.indexWhere((e) => e.itemId == itemId);
     final old = _entries[i];
     final newDate = date == keepDate ? old.date : date as String?;
@@ -182,6 +192,7 @@ class FakeEntryRepository implements EntryRepository {
 
   @override
   Future<void> setTask(String accountId, String itemId, EntryTask? task) async {
+    await gate;
     taskUpdates.add((accountId: accountId, itemId: itemId, task: task));
     final i = _entries.indexWhere((e) => e.itemId == itemId);
     final old = _entries[i];

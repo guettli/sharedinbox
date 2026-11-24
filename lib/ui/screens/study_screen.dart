@@ -20,6 +20,7 @@ import 'package:sharedinbox/ui/screens/entries_screen.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
+import 'package:sharedinbox/ui/widgets/new_card_dialog.dart';
 
 /// Showing the next card after a rating should take less than this
 /// (ENCRYPTED-OBJECTS.md §10); a debug build warns in the app log.
@@ -304,6 +305,7 @@ class _StudyScreenState extends ConsumerState<StudyScreen> {
     if (!_ready || queue == null) {
       return const Center(child: CircularProgressIndicator());
     }
+    if (_content!.isEmpty) return _empty(context);
     final nowMs = _now();
     final cardId = queue.current(nowMs);
     final card = cardId == null ? null : _content![cardId];
@@ -398,6 +400,38 @@ class _StudyScreenState extends ConsumerState<StudyScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  /// A deck without cards: says so, instead of "All done for now", and
+  /// offers to add one.
+  Widget _empty(BuildContext context) {
+    return Center(
+      key: const Key('studyEmpty'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'No cards in this deck yet',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          FilledButton.icon(
+            key: const Key('studyAddCard'),
+            icon: const Icon(Icons.add),
+            label: const Text('Add card'),
+            onPressed: () => unawaited(
+              addCardWithDialog(
+                context,
+                ref,
+                accountId: widget.accountId,
+                deckId: widget.deckId,
+                offerStudy: false,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

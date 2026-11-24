@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sharedinbox/core/flashcards/fsrs.dart';
+import 'package:sharedinbox/core/models/card.dart' show FlashCard;
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/di.dart';
 
@@ -37,6 +38,7 @@ Future<FakeReviewRepository> _pump(
   List<(String, CardSchedule)>? due,
   List<String> newIds = const ['n1', 'n2'],
   int newLeft = 20,
+  List<FlashCard>? cards,
 }) async {
   final reviews = FakeReviewRepository(
     due:
@@ -56,7 +58,7 @@ Future<FakeReviewRepository> _pump(
         cardRepositoryProvider.overrideWithValue(
           FakeCardRepository(
             decks: [testDeck('deck-1', 'Spanish')],
-            cards: _cards,
+            cards: cards ?? _cards,
           ),
         ),
         reviewRepositoryProvider.overrideWithValue(reviews),
@@ -74,6 +76,16 @@ IconButton _undoButton(WidgetTester tester) =>
     tester.widget<IconButton>(find.byKey(const Key('studyUndo')));
 
 void main() {
+  testWidgets('a deck without cards says so and offers Add card',
+      (tester) async {
+    await _pump(tester, due: const [], newIds: const [], cards: const []);
+    expect(find.byKey(const Key('studyEmpty')), findsOneWidget);
+    expect(find.byKey(const Key('studyDone')), findsNothing);
+    await tester.tap(find.byKey(const Key('studyAddCard')));
+    await tester.pumpAndSettle();
+    expect(find.text('New card'), findsOneWidget);
+  });
+
   testWidgets('the front first; Show answer reveals the back and 4 ratings',
       (tester) async {
     await _pump(tester);

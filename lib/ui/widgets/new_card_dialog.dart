@@ -18,13 +18,15 @@ const _newDeck = '';
 /// Asks for a new card of [accountId] and adds it (#1381): a deck (preset
 /// [deckId], else the deck last used here), the front (empty, focused), the
 /// back (preset [back], e.g. text selected in a mail) and tags. Then
-/// "Card added" with a way to study the deck.
+/// "Card added" with a way to study the deck, unless [offerStudy] is false
+/// (already on its study screen).
 Future<void> addCardWithDialog(
   BuildContext context,
   WidgetRef ref, {
   required String accountId,
   String? deckId,
   String back = '',
+  bool offerStudy = true,
 }) async {
   final router = GoRouter.of(context);
   final messenger = context.appMessenger();
@@ -47,6 +49,10 @@ Future<void> addCardWithDialog(
     return;
   } catch (e) {
     messenger.show('Could not add the card: ${userErrorMessage(e)}');
+    return;
+  }
+  if (!offerStudy) {
+    messenger.show('Card added');
     return;
   }
   messenger.show(

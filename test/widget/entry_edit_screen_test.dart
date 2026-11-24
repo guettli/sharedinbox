@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -127,6 +128,123 @@ void main() {
     // Back on the list, which shows the saved entry.
     expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
     expect(find.text('New'), findsOneWidget);
+  });
+
+  group('leaving with unsaved edits', () {
+    testWidgets('back saves the edited title and body', (tester) async {
+      final repo = await _pump(tester);
+      await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('entryEditTitle')), 'New');
+      await tester.enterText(find.byKey(const Key('entryEditBody')), 'typed');
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(
+        repo.updates.single,
+        (itemId: 'e1', title: 'New', body: 'typed', date: null),
+      );
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+      expect(find.text('New'), findsOneWidget);
+    });
+
+    testWidgets('back without edits saves nothing', (tester) async {
+      final repo = await _pump(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(repo.updates, isEmpty);
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    });
+
+    testWidgets('back after removing the journal day saves it', (tester) async {
+      final repo = await _pump(tester, date: '2026-03-14');
+      await tester.tap(find.byKey(const Key('entryEditRemoveDate')));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(repo.updates.single.date, isNull);
+    });
+
+    testWidgets('back after a checkbox toggle saves nothing more',
+        (tester) async {
+      final repo = await _pump(tester, body: '- [ ] a');
+      await tester.tap(find.byKey(const Key('entryTask_0')));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(repo.updates, hasLength(1));
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    });
+
+    testWidgets('system back (Android) saves too', (tester) async {
+      final repo = await _pump(tester);
+      await tester.enterText(find.byKey(const Key('entryEditTitle')), 'New');
+      await tester.pump();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(repo.updates.single.title, 'New');
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    });
+
+    testWidgets('back twice during a slow save saves once', (tester) async {
+      final repo = await _pump(tester);
+      final slow = Completer<void>();
+      repo.gate = slow.future;
+      await tester.enterText(find.byKey(const Key('entryEditTitle')), 'New');
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pump();
+      slow.complete();
+      await tester.pumpAndSettle();
+      expect(repo.updates, hasLength(1));
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    });
+
+    testWidgets('back waits for a running Todo change, then leaves',
+        (tester) async {
+      final repo = await _pump(tester);
+      final slow = Completer<void>();
+      repo.gate = slow.future;
+      await tester.tap(find.byKey(const Key('entryTodoSwitch')));
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pump();
+      expect(find.text('Entry'), findsOneWidget);
+      slow.complete();
+      await tester.pumpAndSettle();
+      expect(repo.taskUpdates, hasLength(1));
+      expect(repo.updates, isEmpty);
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+    });
+
+    testWidgets('a failed save asks: keep editing stays, discard leaves',
+        (tester) async {
+      final repo = await _pump(tester);
+      repo.failUpdateWith = Exception('offline');
+      await tester.enterText(find.byKey(const Key('entryEditTitle')), 'New');
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('Could not save'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('entryEditKeepEditing')));
+      await tester.pumpAndSettle();
+      expect(find.text('Entry'), findsOneWidget);
+      expect(find.text('New'), findsOneWidget);
+      expect(find.textContaining('Could not save:'), findsOneWidget);
+      expect(repo.updates, isEmpty);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('entryEditDiscard')));
+      await tester.pumpAndSettle();
+      expect(repo.updates, isEmpty);
+      expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+      expect(find.text('Old title'), findsOneWidget);
+    });
   });
 
   testWidgets('delete from the edit screen asks, then goes back',

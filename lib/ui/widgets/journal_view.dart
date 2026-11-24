@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -17,7 +18,8 @@ import 'package:sharedinbox/ui/widgets/entry_tile.dart';
 /// The journal (entries with a `date`) of one account, one day at a time
 /// (#1358): a day back or forward, a jump to the previous or next day with
 /// entries, a calendar and back to today. "New entry" writes an entry for
-/// the day shown and opens it.
+/// the day shown and opens it; if it is still blank when the user comes
+/// back, it is deleted again.
 class JournalView extends ConsumerStatefulWidget {
   const JournalView({super.key, required this.accountId});
 
@@ -164,7 +166,8 @@ class _JournalViewState extends ConsumerState<JournalView> {
     _show(picked);
   }
 
-  /// Writes an empty entry for [date] and opens it.
+  /// Writes an empty entry for [date] and opens it. Deletes it again if
+  /// the user comes back without having put anything in it.
   Future<void> _add(String date) async {
     setState(() => _busy = true);
     try {
@@ -174,11 +177,34 @@ class _JournalViewState extends ConsumerState<JournalView> {
       if (!mounted) return;
       await context
           .push('/accounts/${widget.accountId}/entries/${entry.itemId}');
+      await _deleteIfBlank(entry.itemId);
     } on NoWriteKeyException {
       if (!mounted) return;
       context.showAppSnackBar('Unlock personal data to add entries.');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Deletes entry [itemId] if it is still blank. A failure (e.g. locked
+  /// meanwhile) only leaves the blank entry behind, so it is logged, not
+  /// shown.
+  Future<void> _deleteIfBlank(String itemId) async {
+    final repo = ref.read(entryRepositoryProvider);
+    try {
+      final entry = await repo.entry(widget.accountId, itemId);
+      if (entry == null || !entry.isBlank || entry.hasConflict) return;
+      await repo.delete(widget.accountId, itemId);
+    } catch (e, stack) {
+      unawaited(
+        ref.read(appLoggerProvider).warn(
+              'journal.blank_entry.delete_failed',
+              'Could not delete a blank new journal entry',
+              accountId: widget.accountId,
+              error: e,
+              stack: stack,
+            ),
+      );
     }
   }
 }
