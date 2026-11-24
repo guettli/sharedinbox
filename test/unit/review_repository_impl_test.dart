@@ -9,8 +9,10 @@ import 'package:sharedinbox/core/flashcards/fsrs.dart';
 import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/core/flashcards/review_params.dart';
 import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
+import 'package:sharedinbox/core/flashcards/study_queue.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
+import 'package:sharedinbox/core/repositories/review_repository.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/card_projector.dart';
@@ -24,6 +26,7 @@ import 'package:sharedinbox/data/repositories/review_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/review_uploader.dart';
 
 import 'db_test_helper.dart';
+import 'flashcards/fake_time_zones.dart';
 import 'helpers/fake_object_account.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
@@ -460,6 +463,132 @@ void main() {
     expect(await due(now), isEmpty);
     expect(await due(now + 60000), ['c1']);
     expect(await due(now + 600000), ['c1', 'c2']);
+  });
+
+  group('study counts (#1381)', () {
+    const utc = FixedOffsetTimeZone(Duration.zero);
+    const minute = 60000;
+
+    /// A repository on [a]'s store whose study day is in UTC.
+    ReviewRepositoryImpl utcRepo(_ReviewDevice a) => ReviewRepositoryImpl(
+          a.db,
+          a.store,
+          deviceState: a.deviceState,
+          schedules: CardScheduleWriter(a.db, tz: utc),
+          now: () => a.now,
+        );
+
+    Future<void> card(
+      _ReviewDevice a,
+      String cardId,
+      String deckId, {
+      String h = 'h',
+      bool deleted = false,
+    }) =>
+        a.db.into(a.db.cards).insert(
+              CardsCompanion.insert(
+                accountId: _acc,
+                cardId: cardId,
+                collectionId: deckId,
+                sourceItemHmac: 'hm-$cardId',
+                sourceKind: CardSourceKind.doc.name,
+                h: h,
+                deleted: Value(deleted),
+              ),
+            );
+
+    test(
+        'due, learning within the learn-ahead window and new per deck; '
+        'deleted cards are not counted', () async {
+      final a = await _ReviewDevice.open(server, keys);
+      final repo = utcRepo(a);
+      for (final id in ['c1', 'c2', 'c3', 'c5']) {
+        await card(a, id, 'deck-1');
+      }
+      await card(a, 'gone', 'deck-1', deleted: true);
+      await card(a, 'goneRated', 'deck-1', deleted: true);
+      await card(a, 'c4', 'deck-2');
+      await repo.rate(_acc, 'c1', Rating.good); // learning, due in 10 min
+      await repo.rate(_acc, 'c2', Rating.again); // learning, due in 1 min
+      await repo.rate(_acc, 'c3', Rating.easy); // review, due in days
+      await repo.rate(_acc, 'goneRated', Rating.again);
+      final now = a.now.millisecondsSinceEpoch;
+
+      Future<Map<String, DeckCounts>> counts(int at) =>
+          repo.observeDeckCounts(_acc, at).first;
+      expect(await counts(now), {
+        'deck-1': (due: 0, learning: 2, newCards: 1),
+        'deck-2': (due: 0, learning: 0, newCards: 1),
+      });
+      // c1 is due 10 min from now: counted from 20 min before.
+      final c1Ahead = now + 10 * minute - learnAhead.inMilliseconds;
+      expect((await counts(c1Ahead))['deck-1']!.learning, 2);
+      expect((await counts(c1Ahead - 1))['deck-1']!.learning, 1);
+      final later = now + const Duration(days: 30).inMilliseconds;
+      expect(
+        (await counts(later))['deck-1'],
+        (due: 1, learning: 2, newCards: 1),
+      );
+    });
+
+    test(
+        'the new cards: never reviewed, not deleted, in creation order, '
+        'and an undo makes a card new again', () async {
+      final a = await _ReviewDevice.open(server, keys);
+      final repo = utcRepo(a);
+      await card(a, 'b', 'deck-1', h: 'h2');
+      await card(a, 'a', 'deck-1', h: 'h3');
+      await card(a, 'c', 'deck-1', h: 'h1');
+      await card(a, 'gone', 'deck-1', h: 'h0', deleted: true);
+      await card(a, 'other', 'deck-2', h: 'h0');
+      expect(await repo.observeNew(_acc, 'deck-1').first, ['c', 'b', 'a']);
+
+      final event = await repo.rate(_acc, 'b', Rating.good);
+      expect(await repo.observeNew(_acc, 'deck-1').first, ['c', 'a']);
+      await repo.undo(_acc, deviceId: event.deviceId, seq: event.seq);
+      expect(await repo.observeNew(_acc, 'deck-1').first, ['c', 'b', 'a']);
+    });
+
+    test(
+        'newPerDay counts the first ratings since the study day started at '
+        'dayStartHour; an undone first rating does not count', () async {
+      final a = await _ReviewDevice.open(server, keys);
+      final repo = utcRepo(a);
+      for (final id in ['n1', 'n2', 'n3', 'n4']) {
+        await card(a, id, 'deck-1');
+      }
+      expect(await repo.newLeftToday(_acc, 'deck-1'), 20);
+      await repo.setDeckOptions(
+        _acc,
+        'deck-1',
+        const DeckOptions(newPerDay: 2),
+      );
+      // 03:00 still belongs to the study day of yesterday.
+      a.now = DateTime.utc(2026, 11, 2, 3);
+      await repo.rate(_acc, 'n1', Rating.good);
+      expect(await repo.newLeftToday(_acc, 'deck-1'), 1);
+
+      a.now = DateTime.utc(2026, 11, 2, 4);
+      expect(await repo.newLeftToday(_acc, 'deck-1'), 2);
+      final n2 = await repo.rate(_acc, 'n2', Rating.good);
+      // Not a first rating: n1 is not new any more.
+      await repo.rate(_acc, 'n1', Rating.good);
+      expect(await repo.newLeftToday(_acc, 'deck-1'), 1);
+      final now = a.now.millisecondsSinceEpoch;
+      expect(
+        (await repo.observeDeckCounts(_acc, now).first)['deck-1']!.newCards,
+        1,
+      );
+
+      await repo.undo(_acc, deviceId: n2.deviceId, seq: n2.seq);
+      expect(await repo.newLeftToday(_acc, 'deck-1'), 2);
+      // n2, n3 and n4 are new; at most 2 of them today.
+      expect(
+        (await repo.observeDeckCounts(_acc, now).first)['deck-1']!.newCards,
+        2,
+      );
+      expect((await repo.deckParams(_acc, 'deck-1')).dayStartHour, 4);
+    });
   });
 
   group('ReviewLogProjector', () {

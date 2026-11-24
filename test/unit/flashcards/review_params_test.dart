@@ -133,4 +133,37 @@ void main() {
     expect(keys, hasLength(8));
     expect(paramsKeyOf(FsrsParams()), paramsKeyOf(base));
   });
+
+  test('DeckOptions: newPerDay defaults to 20 and round-trips', () {
+    expect(DeckOptions.of(const {}, 'd').newPerDay, 20);
+    const options = DeckOptions(
+      learningSteps: [Duration(minutes: 5)],
+      dayStartHour: 6,
+      newPerDay: 7,
+      desiredRetention: 0.8,
+    );
+    final read = DeckOptions.of(
+      {deckOptionsKey('d'): options.toJson()},
+      'd',
+    );
+    expect(read.newPerDay, 7);
+    expect(read.dayStartHour, 6);
+    expect(read.learningSteps, options.learningSteps);
+    expect(read.relearningSteps, const DeckOptions().relearningSteps);
+    expect(read.desiredRetention, 0.8);
+    // An invalid value falls back to the default.
+    for (final bad in [-1, 2.5, 'x', null]) {
+      expect(
+        DeckOptions.of(
+          {
+            deckOptionsKey('d'): {'newPerDay': bad, 'dayStartHour': 30},
+          },
+          'd',
+        ),
+        isA<DeckOptions>()
+            .having((o) => o.newPerDay, 'newPerDay', 20)
+            .having((o) => o.dayStartHour, 'dayStartHour', 4),
+      );
+    }
+  });
 }

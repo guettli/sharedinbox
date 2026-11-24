@@ -814,8 +814,11 @@ the projections, writes through the store); #1379.
   folder; other devices load it like the `personal` key). The deck name is
   encrypted in a `deck` doc (itemId = collectionId) inside the deck's own
   collection — never in the collection-key mail, whose fields are plaintext
-  on the server. The `Decks` projection lists them. Deleting a deck comes
-  with the deck UI (#1381).
+  on the server. The `Decks` projection lists them. **Deleting a deck**
+  (#1381) writes a `card` tombstone for every card of it (a batch member
+  gets its first `card` doc as the tombstone), then a `deck` tombstone; the
+  `Decks` projection drops a deck whose heads are all tombstones. The
+  collection-key mail stays. Like every write it needs the deck's write key.
 - **Import** (#1383, `lib/core/import/`, `lib/data/import/`; the UI is
   #1381): an Anki `.apkg` is a ZIP whose collection is read from
   `collection.anki21`, else `collection.anki2` (newer exports hold a dummy
@@ -847,8 +850,10 @@ Reviews, schedules and upload are implemented in #1380:
   - `fsrs.params` = `{weights, desiredRetention, maximumInterval,
     enableFuzz}`, for every deck;
   - `deck.<deckId>.options` = `{learningSteps, relearningSteps,
-    dayStartHour, desiredRetention?}` (steps in seconds); a deck value
-    overrides the global one.
+    dayStartHour, newPerDay, desiredRetention?}` (steps in seconds); a deck
+    value overrides the global one. `newPerDay` (default 20, #1381) caps
+    the new cards studied per study day: a card counts on its first counted
+    (not undone) review since the study day started at `dayStartHour`.
   A missing or invalid field falls back to its default
   (`lib/core/flashcards/review_params.dart`).
 - **Tables** (schema v89): `review_log` holds every review and undo seen on
@@ -944,6 +949,23 @@ search (local). Conflict badge → conflict list → conflict view: one card
 per version (two columns from 600 dp, stacked below), each with a diff against
 the newest, "Keep this" / "Keep deleted", and "Keep both" (more than two live
 versions: "Keep all (n)") only when another live version exists (#1374).
+
+**Cards UI** (#1381): the Cards tab lists the decks with what is left to
+study — reviews due, (re)learning cards due within 20 min, new cards up to
+what is left of `newPerDay` today (`ReviewRepository.observeDeckCounts`) —
+with New deck, Import… (`.apkg` / `.csv`, the importer of #1383) and per
+deck Rename, Add card and Delete (a confirm dialog with the card count).
+The study screen (`StudyQueue`, all in memory) shows (re)learning cards due,
+then reviews due, then new cards in creation order, then — once nothing else
+is left — learning cards due within the 20-min **learn-ahead** window. Front
+→ "Show answer" (Space) → Again / Hard / Good / Easy (1–4), each with the
+interval it gives. A rating moves to the next card at once and is then
+stored locally (no network); Undo (U, Ctrl+Z) is a stack over the session
+and brings back the card front first. Leaving the screen ends the session
+(upload trigger). A debug build logs `study.next_card` with the ms from the
+tap to the next card's frame and warns above 50 ms. In the mail detail
+screen, "Create card" (menu, or in Select text) makes the selection (or the
+whole text) the back of a new card; the front starts empty and focused.
 
 ## 10. Success criteria
 

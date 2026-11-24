@@ -2,6 +2,11 @@ import 'package:sharedinbox/core/flashcards/fsrs.dart';
 import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/core/flashcards/review_params.dart';
 
+/// What deck is left to study (#1381): reviews due, (re)learning cards due
+/// within the learn-ahead window (`learnAhead`), and new cards up to what is
+/// left of `newPerDay` today.
+typedef DeckCounts = ({int due, int learning, int newCards});
+
 /// The flash card reviews of the encrypted personal data
 /// (ENCRYPTED-OBJECTS.md §7, #1380). A rating or an undo is one local
 /// insert and a recompute of that card's schedule; it never touches the
@@ -46,6 +51,25 @@ abstract class ReviewRepository {
     String deckId,
     int nowMs,
   );
+
+  /// The cards of deck [deckId] never reviewed (no counted review), not
+  /// deleted, in creation order (`h`). Not capped by `newPerDay`.
+  Stream<List<String>> observeNew(String accountId, String deckId);
+
+  /// [DeckCounts] per deckId of every deck of [accountId] with a card, at
+  /// [nowMs]. Deleted cards are not counted.
+  Stream<Map<String, DeckCounts>> observeDeckCounts(
+    String accountId,
+    int nowMs,
+  );
+
+  /// The effective scheduler params of deck [deckId].
+  Future<FsrsParams> deckParams(String accountId, String deckId);
+
+  /// How many new cards of deck [deckId] may still be studied today:
+  /// `newPerDay` less the cards whose first counted review is in the
+  /// current study day (it starts at the deck's `dayStartHour`).
+  Future<int> newLeftToday(String accountId, String deckId);
 
   /// A study session of [accountId] ended: its reviews are uploaded soon.
   void endSession(String accountId);

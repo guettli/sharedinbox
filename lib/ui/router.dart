@@ -44,6 +44,7 @@ import 'package:sharedinbox/ui/screens/sent_queue_screen.dart';
 import 'package:sharedinbox/ui/screens/shrink_image_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_script_edit_screen.dart';
 import 'package:sharedinbox/ui/screens/sieve_scripts_screen.dart';
+import 'package:sharedinbox/ui/screens/study_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_log_screen.dart';
 import 'package:sharedinbox/ui/screens/sync_state_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
@@ -195,6 +196,13 @@ final router = GoRouter(
               path: ':accountId/entries',
               builder: (ctx, state) => EntriesScreen(
                 accountId: state.pathParameters['accountId']!,
+              ),
+            ),
+            GoRoute(
+              path: ':accountId/decks/:deckId/study',
+              builder: (ctx, state) => StudyScreen(
+                accountId: state.pathParameters['accountId']!,
+                deckId: state.pathParameters['deckId']!,
               ),
             ),
             GoRoute(

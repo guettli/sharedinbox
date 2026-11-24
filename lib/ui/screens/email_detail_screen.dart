@@ -43,6 +43,7 @@ import 'package:sharedinbox/ui/widgets/email_headers_dialog.dart';
 import 'package:sharedinbox/ui/widgets/error_boundary.dart';
 import 'package:sharedinbox/ui/widgets/foldable_quote_text.dart';
 import 'package:sharedinbox/ui/widgets/image_viewer_screen.dart';
+import 'package:sharedinbox/ui/widgets/new_card_dialog.dart';
 import 'package:sharedinbox/ui/widgets/secure_email_webview.dart';
 import 'package:sharedinbox/ui/widgets/snooze_picker.dart';
 import 'package:sharedinbox/ui/widgets/text_prompt_dialog.dart';
@@ -347,8 +348,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   }
 
   /// Menu entries that cannot run without the message body.
-  static bool _isBodyAction(String value) =>
-      const {'forward', 'select_text', 'headers', 'structure'}.contains(value);
+  static bool _isBodyAction(String value) => _bodyActions.contains(value);
+
+  static const _bodyActions = {
+    'forward',
+    'select_text',
+    'create_card',
+    'headers',
+    'structure',
+  };
 
   /// Menu entries that need the message's row (account, folder, sender).
   static const _headerActions = {
@@ -360,6 +368,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     'headers',
     'debug_mail',
     'create_todo',
+    'create_card',
   };
 
   /// Says why a menu entry that needs the message's row did nothing: the
@@ -694,6 +703,12 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                   value: 'create_todo',
                   child: Text('Create todo'),
                 ),
+              if (personalDataBeta)
+                const PopupMenuItem(
+                  key: Key('emailCreateCard'),
+                  value: 'create_card',
+                  child: Text('Create card'),
+                ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'headers',
@@ -745,7 +760,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
               } else if (value == 'create_todo' && header != null) {
                 unawaited(_createTodo(context, header));
               } else if (value == 'select_text' && body != null) {
-                _showSelectText(context, body);
+                _showSelectText(
+                  context,
+                  body,
+                  cardsIn: personalDataBeta ? header?.accountId : null,
+                );
+              } else if (value == 'create_card' &&
+                  body != null &&
+                  header != null) {
+                _showSelectText(context, body, cardsIn: header.accountId);
               } else if (value == 'mark_unread') {
                 // Always back to the list, whatever "After mail action" says:
                 // opening the next mail would mark it read although the user
@@ -2381,7 +2404,15 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// this offers a deterministic way to select and copy the body on every
   /// platform. HTML is stripped to plain text via [htmlToPlain]; text-only
   /// messages are shown as-is.
-  void _showSelectText(BuildContext context, EmailBody body) {
+  ///
+  /// With [cardsIn] (an account, while "Personal data (beta)" is on) it also
+  /// offers "Create card": the selection (or the whole text) becomes the
+  /// back of a new flash card in that account (#1381).
+  void _showSelectText(
+    BuildContext context,
+    EmailBody body, {
+    String? cardsIn,
+  }) {
     final html = body.htmlBody;
     final text = html != null && html.trim().isNotEmpty
         ? htmlToPlain(html)
@@ -2395,6 +2426,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       return;
     }
 
+    var selected = '';
     unawaited(
       showDialog<void>(
         context: context,
@@ -2405,11 +2437,31 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
             child: SingleChildScrollView(
               child: SelectableText(
                 text,
+                key: const Key('selectTextBody'),
                 style: Theme.of(ctx).textTheme.bodyMedium,
+                onSelectionChanged: (selection, _) =>
+                    selected = selection.textInside(text),
               ),
             ),
           ),
           actions: [
+            if (cardsIn != null)
+              TextButton(
+                key: const Key('selectTextCreateCard'),
+                onPressed: () {
+                  final back = selected.trim().isEmpty ? text : selected;
+                  Navigator.pop(ctx);
+                  unawaited(
+                    addCardWithDialog(
+                      context,
+                      ref,
+                      accountId: cardsIn,
+                      back: back.trim(),
+                    ),
+                  );
+                },
+                child: const Text('Create card'),
+              ),
             TextButton(
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: text));

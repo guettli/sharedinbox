@@ -68,6 +68,7 @@ import 'package:sharedinbox/ui/screens/pending_changes_screen.dart';
 import 'package:sharedinbox/ui/screens/personal_data_screen.dart';
 import 'package:sharedinbox/ui/screens/push_settings_screen.dart';
 import 'package:sharedinbox/ui/screens/search_screen.dart';
+import 'package:sharedinbox/ui/screens/study_screen.dart';
 import 'package:sharedinbox/ui/screens/trusted_image_senders_screen.dart';
 import 'package:sharedinbox/ui/screens/user_preferences_screen.dart';
 
@@ -994,6 +995,13 @@ Widget buildApp({
             path: ':accountId/entries',
             builder: (ctx, state) => EntriesScreen(
               accountId: state.pathParameters['accountId']!,
+            ),
+          ),
+          GoRoute(
+            path: ':accountId/decks/:deckId/study',
+            builder: (ctx, state) => StudyScreen(
+              accountId: state.pathParameters['accountId']!,
+              deckId: state.pathParameters['deckId']!,
             ),
           ),
           GoRoute(
