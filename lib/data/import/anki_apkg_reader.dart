@@ -129,8 +129,7 @@ AnkiImport _readCollection(String path, _ApkgMedia media) {
       final template = _template(model, ord);
       if (template == null) continue;
       final fields = _fields(model, note['flds'] as String);
-      final frontHtml =
-          renderAnkiTemplate('${template['qfmt'] ?? ''}', fields);
+      final frontHtml = renderAnkiTemplate('${template['qfmt'] ?? ''}', fields);
       final backHtml = renderAnkiBack('${template['afmt'] ?? ''}', fields);
       final front = ankiHtmlToMarkdown(frontHtml, media.resolve);
       final back = ankiHtmlToMarkdown(backHtml, media.resolve);

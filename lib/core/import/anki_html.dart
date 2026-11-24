@@ -131,7 +131,8 @@ String decodeHtmlEntities(String s) => s.replaceAllMapped(
         final e = m.group(1)!;
         if (!e.startsWith('#')) return _namedEntities[e] ?? m.group(0)!;
         final hex = e.length > 1 && (e[1] == 'x' || e[1] == 'X');
-        final code = int.tryParse(e.substring(hex ? 2 : 1), radix: hex ? 16 : 10);
+        final code =
+            int.tryParse(e.substring(hex ? 2 : 1), radix: hex ? 16 : 10);
         if (code == null || code > 0x10FFFF) return m.group(0)!;
         return String.fromCharCode(code);
       },
