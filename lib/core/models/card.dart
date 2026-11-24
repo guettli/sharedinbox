@@ -87,6 +87,29 @@ class FlashCard {
   List<String> get tags => content.tags;
 }
 
+/// What this device knows of a cardId: [CardUnknown], [CardDeleted] (a
+/// winning tombstone) or [CardLive].
+sealed class CardState {
+  const CardState();
+}
+
+class CardUnknown extends CardState {
+  const CardUnknown();
+}
+
+class CardDeleted extends CardState {
+  const CardDeleted(this.deckId);
+
+  /// The `collectionId` of the deck it was in.
+  final String deckId;
+}
+
+class CardLive extends CardState {
+  const CardLive(this.card);
+
+  final FlashCard card;
+}
+
 /// A deck: a collection with its own key (ENCRYPTED-OBJECTS.md 4.1) whose
 /// name sits in a `deck` document inside it.
 class Deck {

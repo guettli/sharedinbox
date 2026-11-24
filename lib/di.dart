@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
 import 'package:sharedinbox/core/flashcards/review_upload_scheduler.dart';
+import 'package:sharedinbox/core/import/card_import.dart';
 import 'package:sharedinbox/core/models/account.dart' as model;
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/email.dart';
@@ -72,6 +73,7 @@ import 'package:sharedinbox/data/db/database.dart'
     hide Email, EmailBody, UserPreferences;
 import 'package:sharedinbox/data/db/local_sieve_repository.dart';
 import 'package:sharedinbox/data/imap/imap_client_factory.dart';
+import 'package:sharedinbox/data/import/card_importer.dart';
 import 'package:sharedinbox/data/jmap/sieve_repository.dart';
 import 'package:sharedinbox/data/passkey/credential_manager_prf_provider.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -979,6 +981,15 @@ final cardRepositoryProvider = Provider<CardRepository>(
     ensureCollection: (accountId, collectionId) => ref
         .read(encryptedKeyServiceProvider)
         .ensureCollection(accountId, collectionId),
+  ),
+);
+
+/// Imports Anki `.apkg` and CSV files into the decks (#1383).
+final cardImporterProvider = Provider<CardImporter>(
+  (ref) => CardImporterImpl(
+    ref.watch(cardRepositoryProvider),
+    ref.watch(mailObjectBlobStoreProvider),
+    appLogger: ref.watch(appLoggerProvider),
   ),
 );
 

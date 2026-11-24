@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Fail if binary files (other than images and fonts) are staged for commit.
+# Fail if binary files (other than images, fonts and Anki .apkg fixtures) are staged for commit.
 # Prevents accidental inclusion of build artifacts, databases, compiled binaries.
 set -euo pipefail
 
-ALLOWED_EXTENSIONS='(png|jpg|jpeg|gif|webp|svg|ico|ttf|otf|woff|woff2)'
+ALLOWED_EXTENSIONS='(png|jpg|jpeg|gif|webp|svg|ico|ttf|otf|woff|woff2|apkg)'
 
 # git diff --numstat shows "-  -  path" for binary files
 BINARY=$(git diff --cached --numstat | awk '$1=="-" && $2=="-" {print $3}')
