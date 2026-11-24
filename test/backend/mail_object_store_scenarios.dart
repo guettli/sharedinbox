@@ -9,14 +9,18 @@ import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:http/http.dart' as http;
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/core/utils/markdown_images.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/entry_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 import 'package:sharedinbox/data/repositories/mail_object_device_state.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
@@ -34,7 +38,7 @@ import 'stalwart_harness.dart';
 
 const objectDataPath = 'SharedInbox/Data';
 
-/// Builds the store of [device].
+/// Builds the store of [device], with the entry projection.
 typedef ObjectStoreFactory = MailObjectStoreBase Function(
   BackendObjectDevice device,
 );
@@ -73,6 +77,7 @@ class BackendObjectDevice with MailObjectDeviceOps {
   late final MailObjectStoreBase store;
   late final log = MailObjectLog(db, store);
   late final blobs = MailObjectBlobStore(db, store, budgetBytes: blobBudget);
+  late final entries = EntryRepositoryImpl(db, store);
   late final state =
       DeviceStateStore(db, store, collectionId: testDeckKey.collectionId);
   bool offline = false;
@@ -421,6 +426,42 @@ void mailObjectStoreScenarios({
     expect((await b.row(pulled.messageId))!.payload, isNull);
 
     expect((await b.blobs.blob(b.accountId, _deck, itemId))!.bytes, image);
+  });
+
+  test(
+      'an entry with an image (#1377) round trips on two devices; an image '
+      'over 8 MiB is refused and nothing reaches the server', () async {
+    final a = await device();
+    final b = await device();
+    // Over 256 KiB: B downloads it on demand.
+    final image = Uint8List(300 * 1024)..fillRange(0, 300 * 1024, 5);
+    final imageId = await a.blobs
+        .putBlob(a.accountId, personalCollectionId, image, 'image/jpeg');
+    final created = await a.entries
+        .create(a.accountId, body: 'x\n${siImageMarkdown(imageId)}\n');
+    await a.store.waitForIdle();
+    await a.listAndSync();
+
+    await b.listAndSync();
+    final onB = (await b.entries.entry(b.accountId, created.itemId))!;
+    expect(siImageIds(onB.body), [imageId]);
+    final got = (await b.blobs.blob(
+      b.accountId,
+      personalCollectionId,
+      siImageIds(onB.body).single,
+    ))!;
+    expect(got.bytes, image);
+    expect(got.contentType, 'image/jpeg');
+
+    final before = (await onServer()).keys.toSet();
+    final huge = Uint8List(maxEnvelopeBytes + 1);
+    await expectLater(
+      a.blobs.putBlob(a.accountId, personalCollectionId, huge, 'image/jpeg'),
+      throwsA(isA<ObjectTooLargeException>()),
+    );
+    await a.store.waitForIdle();
+    await a.sync();
+    expect((await onServer()).keys.toSet(), before);
   });
 
   test(

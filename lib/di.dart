@@ -201,6 +201,22 @@ final pickAttachmentFilesProvider =
   },
 );
 
+/// An image the user picked: its path, name and bytes.
+typedef PickedImageFile = ({String path, String name, Uint8List bytes});
+
+/// Opens the platform file picker for one image (an entry's "Insert
+/// image", #1377); null when the user cancels. A provider so widget tests
+/// can pick without a platform.
+final pickImageFileProvider = Provider<Future<PickedImageFile?> Function()>(
+  (ref) => () async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    final file = result?.files.firstOrNull;
+    final path = file?.path;
+    if (file == null || path == null) return null;
+    return (path: path, name: file.name, bytes: await file.readAsBytes());
+  },
+);
+
 /// App version (from `package_info_plus`) used to stamp the outgoing
 /// `User-Agent` header. Overridden once at startup in `main()._bootApp` with
 /// the real platform value; the `'dev'` default keeps widget/unit tests that

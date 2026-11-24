@@ -616,8 +616,14 @@ new entry, read, edit keeping unknown fields and parts),
 `lib/data/repositories/entry_repository_impl.dart` (reads the projection,
 writes through the store). The body is rendered by `lib/ui/widgets/entry_markdown.dart`;
 `lib/core/utils/markdown_tasks.dart` finds and toggles task-list items, and a
-toggle saves a new version. `si-img:` images show a placeholder until #1377;
-no image URL is ever fetched. **A projection is written only by the store's
+toggle saves a new version. "Insert image" on the edit screen (#1377)
+shrinks a picked image (`ShrinkImageDialog`), stores it as a blob of the
+personal collection (also offline: the blob is cached at once and uploaded
+later) and inserts `![](si-img:<id>)` (`lib/core/utils/markdown_images.dart`);
+an image over the size limit (5.1) is refused with its size. `si-img:` images
+are resolved from the blob cache, downloaded on demand, with a placeholder
+while loading and one to retry when offline. `cid:` images stay a placeholder,
+and no image URL is ever fetched. **A projection is written only by the store's
 merge**: the store calls the `ObjectProjector` of the item's kind inside the
 transaction that writes the item's head columns, on a local write, a pull and
 a reopen after an unlock (which also re-projects every item of the kind). It

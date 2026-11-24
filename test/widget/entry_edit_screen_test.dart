@@ -1,7 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/services/image_shrink_service.dart';
+import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
+import 'package:sharedinbox/di.dart';
 
 import 'entries_fakes.dart';
 
@@ -10,6 +17,7 @@ Future<FakeEntryRepository> _pump(
   String body = 'old body',
   String? date,
   FakeConflictStore? store,
+  List<Override> overrides = const [],
 }) async {
   final repo = FakeEntryRepository([
     testEntry('e1', title: 'Old title', body: body, conflict: true, date: date),
@@ -18,11 +26,63 @@ Future<FakeEntryRepository> _pump(
     tester,
     repo: repo,
     store: store ?? FakeConflictStore({}),
+    overrides: overrides,
   );
   await tester.tap(find.text('Old title'));
   await tester.pumpAndSettle();
   return repo;
 }
+
+/// Blobs in memory; [putBlob] throws [error] if set.
+class _FakeBlobStore implements MailObjectBlobStore {
+  _FakeBlobStore({this.error});
+
+  final Object? error;
+  final puts = <({String collectionId, Uint8List bytes, String type})>[];
+
+  @override
+  Future<String> putBlob(
+    String accountId,
+    String collectionId,
+    Uint8List bytes,
+    String contentType, {
+    String? itemId,
+  }) async {
+    final e = error;
+    if (e != null) throw e;
+    puts.add((collectionId: collectionId, bytes: bytes, type: contentType));
+    return 'img${puts.length}';
+  }
+
+  @override
+  Future<({String contentType, Uint8List bytes})?> blob(
+    String accountId,
+    String collectionId,
+    String itemId,
+  ) async =>
+      null;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Offers no shrinking, so a picked image is inserted as it is.
+class _NoShrink extends ImageShrinkService {
+  const _NoShrink();
+
+  @override
+  bool isShrinkable(String contentType) => false;
+}
+
+final _pixels = Uint8List.fromList([1, 2, 3]);
+
+List<Override> _imageOverrides(_FakeBlobStore blobs, String name) => [
+      mailObjectBlobStoreProvider.overrideWithValue(blobs),
+      imageShrinkServiceProvider.overrideWithValue(const _NoShrink()),
+      pickImageFileProvider.overrideWithValue(
+        () async => (path: '/tmp/$name', name: name, bytes: _pixels),
+      ),
+    ];
 
 void main() {
   testWidgets('"Resolve…" opens the conflict view, then reloads',
@@ -235,6 +295,83 @@ void main() {
       expect(find.byKey(const Key('entryEditDate')), findsOneWidget);
       await save(tester);
       expect(repo.updates.single.date, isoDate(DateTime.now()));
+    });
+  });
+
+  group('insert image (#1377)', () {
+    Future<void> insert(WidgetTester tester) async {
+      await tester.tap(find.byKey(const Key('entryEditInsertImage')));
+      await tester.pumpAndSettle();
+    }
+
+    String body(WidgetTester tester) => tester
+        .widget<TextField>(find.byKey(const Key('entryEditBody')))
+        .controller!
+        .text;
+
+    testWidgets('uploads the image as a blob and adds its line at the cursor',
+        (tester) async {
+      final blobs = _FakeBlobStore();
+      final repo = await _pump(
+        tester,
+        body: 'ab',
+        overrides: _imageOverrides(blobs, 'p.png'),
+      );
+      await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+      await tester.pumpAndSettle();
+      final field = find.byKey(const Key('entryEditBody'));
+      tester.widget<TextField>(field).controller!.selection =
+          const TextSelection.collapsed(offset: 1);
+
+      await insert(tester);
+      expect(blobs.puts.single.collectionId, 'personal');
+      expect(blobs.puts.single.bytes, _pixels);
+      expect(blobs.puts.single.type, 'image/png');
+      expect(body(tester), 'a\n![](si-img:img1)\nb');
+
+      await tester.tap(find.byKey(const Key('entryEditSave')));
+      await tester.pumpAndSettle();
+      expect(repo.updates.single.body, 'a\n![](si-img:img1)\nb');
+    });
+
+    testWidgets('in the preview the image is appended and the editor opens',
+        (tester) async {
+      final blobs = _FakeBlobStore();
+      await _pump(tester, overrides: _imageOverrides(blobs, 'p.png'));
+      expect(find.byKey(const Key('entryPreview')), findsOneWidget);
+
+      await insert(tester);
+      expect(body(tester), 'old body\n![](si-img:img1)\n');
+    });
+
+    testWidgets('an image over the size limit shows the limit, body unchanged',
+        (tester) async {
+      final blobs = _FakeBlobStore(
+        error: const ObjectTooLargeException(9 * 1024 * 1024, 8 << 20),
+      );
+      await _pump(tester, overrides: _imageOverrides(blobs, 'p.png'));
+      await insert(tester);
+      expect(
+        find.text(
+          'Image is 9.0 MiB after shrinking; the limit is 8.0 MiB. '
+          'Shrink it more and try again.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('entryEditPreviewToggle')));
+      await tester.pumpAndSettle();
+      expect(body(tester), 'old body');
+    });
+
+    testWidgets('a picture that is not a photo is refused', (tester) async {
+      final blobs = _FakeBlobStore();
+      await _pump(tester, overrides: _imageOverrides(blobs, 'logo.svg'));
+      await insert(tester);
+      expect(
+        find.text('Only photos and pictures can be inserted.'),
+        findsOneWidget,
+      );
+      expect(blobs.puts, isEmpty);
     });
   });
 }

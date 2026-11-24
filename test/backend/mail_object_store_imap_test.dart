@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
 import 'package:test/test.dart';
 
@@ -26,6 +27,7 @@ MailObjectStoreImap _store(BackendObjectDevice d) => MailObjectStoreImap(
       writeKey: d.keys.writeKey,
       appLogger: d.appLogger,
       onStep: d.step,
+      projectors: [EntryProjector(d.db)],
     );
 
 void main() {

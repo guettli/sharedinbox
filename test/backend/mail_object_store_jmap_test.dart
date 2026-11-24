@@ -7,6 +7,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
+import 'package:sharedinbox/data/repositories/entry_projector.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_base.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_jmap.dart';
 import 'package:test/test.dart';
@@ -26,6 +27,7 @@ MailObjectStoreJmap _store(BackendObjectDevice d) => MailObjectStoreJmap(
       writeKey: d.keys.writeKey,
       appLogger: d.appLogger,
       onStep: d.step,
+      projectors: [EntryProjector(d.db)],
     );
 
 void main() {

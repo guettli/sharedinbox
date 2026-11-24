@@ -1,20 +1,32 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import 'package:sharedinbox/core/encrypted_objects/envelope.dart'
+    show ObjectTooLargeException;
+import 'package:sharedinbox/core/encrypted_objects/keys.dart'
+    show personalCollectionId;
 import 'package:sharedinbox/core/models/entry.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart'
+    show NoWriteKeyException;
+import 'package:sharedinbox/core/services/image_shrink_service.dart';
+import 'package:sharedinbox/core/utils/attachment_files.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/core/utils/journal_days.dart';
+import 'package:sharedinbox/core/utils/markdown_images.dart';
 import 'package:sharedinbox/core/utils/markdown_tasks.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/ui/screens/entries_screen.dart';
 import 'package:sharedinbox/ui/theme/spacing.dart';
 import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
+import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
 
 /// Edits the title and the Markdown body of one entry (#1373). Opens in a
 /// rendered preview when the body is not empty (#1376); ticking a task-list
@@ -22,6 +34,8 @@ import 'package:sharedinbox/ui/widgets/entry_markdown.dart';
 /// a conflict. A task section makes it a todo with a due date and a done
 /// tick (#1357); each change there saves at once. A date chip puts it in
 /// the journal or takes it out (#1358); it is saved with the text.
+/// "Insert image" uploads a picked, shrunk image as a blob and adds its
+/// `si-img:` line to the text (#1377).
 class EntryEditScreen extends ConsumerStatefulWidget {
   const EntryEditScreen({
     super.key,
@@ -47,6 +61,9 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   bool _loaded = false;
   bool _busy = false;
   bool _preview = false;
+
+  /// The settings of the last shrink, the start of the next.
+  ImageShrinkSettings _shrinkSettings = ImageShrinkSettings.defaults;
 
   @override
   void initState() {
@@ -90,6 +107,13 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
               icon: Icon(_preview ? Icons.edit : Icons.visibility),
               tooltip: _preview ? 'Edit' : 'Preview',
               onPressed: () => setState(() => _preview = !_preview),
+            ),
+          if (entry != null)
+            IconButton(
+              key: const Key('entryEditInsertImage'),
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              tooltip: 'Insert image',
+              onPressed: _busy ? null : _insertImage,
             ),
           if (entry != null)
             IconButton(
@@ -150,6 +174,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
             key: const Key('entryPreview'),
             body: _body.text,
             onToggleTask: _toggleTask,
+            loadImage: _loadImage,
           )
         else
           TextField(
@@ -279,6 +304,104 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       if (mounted) setState(() => _busy = false);
     }
   }
+
+  Future<({String contentType, Uint8List bytes})?> _loadImage(
+    String itemId,
+  ) =>
+      ref
+          .read(mailObjectBlobStoreProvider)
+          .blob(widget.accountId, personalCollectionId, itemId);
+
+  /// Picks an image, offers to shrink it, and inserts it.
+  Future<void> _insertImage() async {
+    final picked = await ref.read(pickImageFileProvider)();
+    if (picked == null || !mounted) return;
+    final contentType = guessAttachmentType(picked.name);
+    final service = ref.read(imageShrinkServiceProvider);
+    if (!service.isShrinkable(contentType)) {
+      if (!_isRasterImage(contentType)) {
+        context.showAppSnackBar('Only photos and pictures can be inserted.');
+        return;
+      }
+      await _insertImageBytes(picked.bytes, contentType);
+      return;
+    }
+    final shrunk = await ShrinkImageDialog.show(
+      context,
+      path: picked.path,
+      service: service,
+      initialSettings: _shrinkSettings,
+    );
+    if (!mounted) return;
+    if (shrunk == null) {
+      await _insertImageBytes(picked.bytes, contentType);
+      return;
+    }
+    _shrinkSettings = shrunk.settings;
+    await _insertImageBytes(shrunk.bytes, 'image/jpeg');
+  }
+
+  static bool _isRasterImage(String contentType) =>
+      contentType.startsWith('image/') && !contentType.startsWith('image/svg');
+
+  /// Stores [bytes] as a blob (also offline: it is uploaded later) and
+  /// inserts its image line at the cursor, or at the end in the preview.
+  /// The entry itself is saved by [_save].
+  Future<void> _insertImageBytes(Uint8List bytes, String contentType) async {
+    setState(() => _busy = true);
+    try {
+      final itemId = await ref.read(mailObjectBlobStoreProvider).putBlob(
+            widget.accountId,
+            personalCollectionId,
+            bytes,
+            contentType,
+          );
+      if (!mounted) return;
+      final selection = _body.selection;
+      final offset =
+          _preview || !selection.isValid ? -1 : selection.extentOffset;
+      final (text, cursor) = insertSiImage(_body.text, offset, itemId);
+      setState(() {
+        _body.value = TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: cursor),
+        );
+        _preview = false;
+      });
+    } on ObjectTooLargeException catch (e, stack) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Image is ${_mib(e.size)} MiB after shrinking; the limit is '
+        '${_mib(e.limit)} MiB. Shrink it more and try again.',
+        level: AppLogLevel.warn,
+        event: 'entry.image.too_large',
+        error: e,
+        stack: stack,
+      );
+    } on NoWriteKeyException catch (e, stack) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Personal data is locked.',
+        level: AppLogLevel.warn,
+        event: 'entry.image.locked',
+        error: e,
+        stack: stack,
+      );
+    } catch (e, stack) {
+      if (!mounted) return;
+      context.showAppSnackBar(
+        'Could not insert the image: ${userErrorMessage(e)}',
+        level: AppLogLevel.warn,
+        event: 'entry.image.failed',
+        error: e,
+        stack: stack,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  static String _mib(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(1);
 
   /// Opens the conflict view; the entry is loaded again on return.
   Future<void> _resolve(Entry entry) async {
