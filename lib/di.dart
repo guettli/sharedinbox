@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -999,6 +1000,38 @@ final cardImporterProvider = Provider<CardImporter>(
 final decksProvider =
     StreamProvider.autoDispose.family<List<Deck>, String>((ref, accountId) {
   return ref.watch(cardRepositoryProvider).observeDecks(accountId);
+});
+
+/// A file picked for a card import: its name and bytes.
+typedef PickedImportFile = ({String name, Uint8List bytes});
+
+/// Opens the platform file picker for an `.apkg` or `.csv`; null when the
+/// user cancels. A provider so widget tests can pick without a platform.
+final pickImportFileProvider = Provider<Future<PickedImportFile?> Function()>(
+  (ref) => () async {
+    final result = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['apkg', 'csv'],
+    );
+    final file = result?.files.firstOrNull;
+    if (file == null) return null;
+    return (name: file.name, bytes: await file.readAsBytes());
+  },
+);
+
+/// The deck a card was last added to, per account; in memory only.
+final lastCardDeckProvider = Provider<Map<String, String>>((ref) => {});
+
+/// What is left to study per deck of an account (#1381). Recomputed every
+/// minute, so learning cards show up once they are due.
+final deckCountsProvider = StreamProvider.autoDispose
+    .family<Map<String, DeckCounts>, String>((ref, accountId) {
+  final timer = Timer(const Duration(minutes: 1), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  final now = ref.watch(todayProvider)();
+  return ref
+      .watch(reviewRepositoryProvider)
+      .observeDeckCounts(accountId, now.millisecondsSinceEpoch);
 });
 
 /// The cards of a deck that are not deleted.

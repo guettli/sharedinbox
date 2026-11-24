@@ -113,8 +113,8 @@ dependencies:
   # App version metadata for crash reports
   package_info_plus: ^10.1.0
   share_plus: ^13.1.0
-  # The plaintext export of personal data (#1356): ZIP and front matter.
-  archive: ^4.0.9
+  # Front matter of the plaintext export of personal data (#1356); its ZIP
+  # uses `archive` above.
   yaml: ^3.1.3
   device_info_plus: ^13.1.0
 

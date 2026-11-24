@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/envelope.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
+import 'package:sharedinbox/core/encrypted_objects/merge.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
@@ -98,6 +99,49 @@ class CardRepositoryImpl implements CardRepository {
       ),
     );
   }
+
+  @override
+  Future<int> cardCount(String accountId, String deckId) async {
+    final count = _db.cards.cardId.count();
+    return (await (_db.selectOnly(_db.cards)
+              ..addColumns([count])
+              ..where(_liveCardsOf(accountId, deckId)))
+            .map((r) => r.read(count))
+            .getSingle()) ??
+        0;
+  }
+
+  @override
+  Future<void> deleteDeck(String accountId, String deckId) async {
+    final row = await _deckRow(accountId, deckId);
+    if (row == null) throw StateError('unknown deck $deckId');
+    if (await _store.itemHmacOf(accountId, deckId, deckId) == null) {
+      throw NoWriteKeyException(deckId);
+    }
+    final cardIds = await (_db.selectOnly(_db.cards)
+          ..addColumns([_db.cards.cardId])
+          ..where(_liveCardsOf(accountId, deckId)))
+        .map((r) => r.read(_db.cards.cardId)!)
+        .get();
+    for (final cardId in cardIds) {
+      await _writeCardDoc(accountId, cardId, null);
+    }
+    final current = await _store.item(accountId, row.itemHmac);
+    if (current == null) throw StateError('deck $deckId cannot be opened');
+    await _store.put(
+      accountId,
+      tombstone(
+        base: current.display,
+        merge: current.merge,
+        clock: await _store.clockFor(accountId),
+      ),
+    );
+  }
+
+  Expression<bool> _liveCardsOf(String accountId, String deckId) =>
+      _db.cards.accountId.equals(accountId) &
+      _db.cards.collectionId.equals(deckId) &
+      _db.cards.deleted.equals(false);
 
   @override
   Future<List<String>> importCards(
