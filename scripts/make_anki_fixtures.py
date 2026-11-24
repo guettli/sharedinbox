@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the Anki import fixtures of #1383 in test/fixtures/anki/.
+"""Builds the Anki import fixtures of #1383 and #1385 in test/fixtures/anki/.
 
 Standard library only (sqlite3, zipfile, json). The collections use the
 legacy schema 11 (note types and decks as JSON in `col`), as Anki writes
@@ -8,8 +8,8 @@ into `collection.anki2` / `collection.anki21`.
 Usage:
     python3 scripts/make_anki_fixtures.py
 
-Writes basic.apkg, basic_v2.apkg, both.apkg, anki21b_only.apkg and
-test/fixtures/cards.csv. The tests depend on their content: change both
+Writes basic.apkg, basic_v2.apkg, both.apkg, anki21b_only.apkg,
+reviews.apkg and test/fixtures/cards.csv. The tests depend on their content: change both
 together.
 """
 
@@ -92,7 +92,45 @@ NOTES = [
 ]
 
 
-def _collection(path, notes, decks=None):
+# The review history fixture (#1385): `col.crt` and the revlog.
+REVIEWS_CRT = 1700000000
+REVIEW_NOTES = [
+    ('rv-1', BASIC, ['eins', 'one'], ''),
+    ('rv-2', BASIC, ['zwei', 'two'], ''),
+    ('rv-3', BASIC, ['drei', 'three'], ''),
+    ('rv-cloze', CLOZE, ['{{c1::vier}} ist vier', ''], ''),
+]
+_T0 = 1735689600000  # 2025-01-01T00:00:00Z
+_MIN = 60 * 1000
+_HOUR = 60 * _MIN
+_DAY = 24 * _HOUR
+# (id, cid, ease, ivl, time, type); cards 1-3 are rv-1..rv-3, 4 the cloze.
+REVLOG = [
+    # rv-1: learn, review, lapse, relearn, filtered, rescheduled.
+    (_T0, 1, 3, -600, 5000, 0),
+    (_T0 + 10 * _MIN, 1, 3, 1, 4000, 0),
+    (_T0 + _DAY, 1, 3, 3, 3000, 1),
+    (_T0 + 4 * _DAY, 1, 1, -600, 8000, 1),
+    (_T0 + 4 * _DAY + 10 * _MIN, 1, 3, 1, 6000, 2),
+    (_T0 + 5 * _DAY, 1, 4, 5, 2000, 3),
+    (_T0 + 6 * _DAY, 1, 0, 10, 0, 5),
+    # rv-2: two reviews, a reset, a review, a manual "set due", a review.
+    (_T0 + _HOUR, 2, 2, -600, 7000, 0),
+    (_T0 + 2 * _DAY, 2, 3, 2, 3000, 1),
+    (_T0 + 3 * _DAY, 2, 0, 0, 0, 4),
+    (_T0 + 3 * _DAY + _HOUR, 2, 3, -600, 4000, 0),
+    (_T0 + 4 * _DAY + 1000, 2, 0, 5, 0, 4),
+    (_T0 + 5 * _DAY + _HOUR, 2, 3, 1, 3000, 0),
+    # rv-3: two reviews.
+    (_T0 + 2 * _HOUR, 3, 3, -600, 2500, 0),
+    (_T0 + 3 * _DAY + 2 * _HOUR, 3, 4, 4, 1500, 1),
+    # The cloze card and a cid without a card.
+    (_T0 + _DAY + _HOUR, 4, 3, -600, 3000, 0),
+    (_T0 + _DAY + 2 * _HOUR, 99, 3, 1, 3000, 1),
+]
+
+
+def _collection(path, notes, decks=None, crt=0, revlog=()):
     db = sqlite3.connect(path)
     db.executescript('''
         CREATE TABLE col (id integer primary key, crt integer not null,
@@ -120,8 +158,9 @@ def _collection(path, notes, decks=None):
     ''')
     models = _models()
     db.execute(
-        'INSERT INTO col VALUES (1, 0, 0, 0, 11, 0, 0, 0, ?, ?, ?, ?, ?)',
-        ('{}', json.dumps(models), json.dumps(decks or _decks()), '{}', '{}'),
+        'INSERT INTO col VALUES (1, ?, 0, 0, 11, 0, 0, 0, ?, ?, ?, ?, ?)',
+        (crt, '{}', json.dumps(models), json.dumps(decks or _decks()), '{}',
+         '{}'),
     )
     did = DECK if decks is None else int(next(iter(decks)))
     card_id = 1
@@ -137,15 +176,20 @@ def _collection(path, notes, decks=None):
                 (card_id, i, did, ord_, card_id, ''),
             )
             card_id += 1
+    for id_, cid, ease, ivl, time, type_ in revlog:
+        db.execute(
+            'INSERT INTO revlog VALUES (?, ?, 0, ?, ?, 0, 2500, ?, ?)',
+            (id_, cid, ease, ivl, time, type_),
+        )
     db.commit()
     db.close()
     with open(path, 'rb') as f:
         return f.read()
 
 
-def _collection_bytes(notes, decks=None):
+def _collection_bytes(notes, decks=None, crt=0, revlog=()):
     with tempfile.TemporaryDirectory() as d:
-        return _collection(os.path.join(d, 'c.db'), notes, decks)
+        return _collection(os.path.join(d, 'c.db'), notes, decks, crt, revlog)
 
 
 def _apkg(name, entries):
@@ -185,6 +229,12 @@ def main():
     # does not matter, only that it is the only collection.
     _apkg('anki21b_only.apkg', [('collection.anki21b', b'\x28\xb5\x2f\xfd'),
                                 ('meta', b'\x08\x03')])
+
+    _apkg('reviews.apkg', [
+        ('collection.anki2',
+         _collection_bytes(REVIEW_NOTES, crt=REVIEWS_CRT, revlog=REVLOG)),
+        ('media', '{}'),
+    ])
 
     csv = (
         '\ufeffFront,Back,Tags,Deck\r\n'

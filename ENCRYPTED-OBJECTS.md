@@ -450,7 +450,9 @@ app" and **never edited** by that reader (editing would fork history).
 ### 5.3 Identity and clocks (used by all features)
 
 - **deviceId**: 16 random bytes per install per account (22 chars
-  base64url); stored in the DB *and* in a secure-storage marker that also
+  base64url; the deviceId of an imported review history, `import:…` (7),
+  is the exception: no install owns it, so it has no clock and no marker);
+  stored in the DB *and* in a secure-storage marker that also
   holds the HLC and `seq` high-water marks. Marker missing or not matching the
   DB (DB restored by Android auto backup; iOS keychain surviving a reinstall
   with a rolled-back DB) → **new deviceId**. Before the first write, advance
@@ -864,8 +866,26 @@ the projections, writes through the store); #1379.
   tombstone wins), an unchanged one is not written, a changed one gets a new
   batch member in the deck it is in (its fresh `h` wins: the file's content
   replaces a local edit), an unknown one is added. Cloze notes, `anki21b`
-  (#1384), the review history (#1385) and sound and video media are not
-  imported yet.
+  (#1384) and sound and video media are not imported yet.
+- **Review history** (`revlog`, #1385): the rows of the imported cards
+  become review events of the deviceId `import:` + base64url of the first
+  16 bytes of SHA-256(`"anki-col\0" + col.crt`), the same for every
+  import of one collection. Each event has `s` = `t` = the revlog id
+  (epoch ms, unique per collection), `h` = the HLC `(id, 0, deviceId)` (so
+  the history sorts before later local reviews), `r` = `ease` and `ms` =
+  `time`. Per card, the rows up to and including its last reset (a manual
+  row `type = 4, ease = 0, ivl = 0`, as for Anki's own FSRS) are dropped;
+  of the rest only `type` 0–3 (learn, review, relearn, filtered) with
+  `ease` 1–4 are events, manual and rescheduled rows are skipped. A card
+  deleted here gets no events. Events already in `review_log` (same
+  `(deviceId, seq)`) are dropped before writing, so a re-import writes
+  nothing; the rest go as `review-seg` segments of at most 1 000 events in
+  the `personal` collection (`MailObjectLog.appendStamped` with `device` =
+  the import deviceId; the versionId is the importing device's). Their
+  local put stores the rows and recomputes the schedules, which are then
+  the replay of the imported events (not Anki's stored `ivl`). No device
+  owns these segments: the uploader never writes them again and only the
+  takeover rule (#1382) may compact them.
 
 Reviews, schedules and upload are implemented in #1380:
 

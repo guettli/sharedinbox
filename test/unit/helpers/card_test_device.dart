@@ -1,6 +1,6 @@
-// One install with the card projections over a StatefulFakeImapServer,
-// shared by the card repository (#1379) and the card importer (#1383)
-// tests.
+// One install with the card and review projections over a
+// StatefulFakeImapServer, shared by the card repository (#1379) and the
+// card importer (#1383, #1385) tests.
 
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/models/card.dart';
@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/repositories/card_projector.dart';
 import 'package:sharedinbox/data/repositories/card_repository_impl.dart';
+import 'package:sharedinbox/data/repositories/review_log_projector.dart';
 
 import 'fake_object_account.dart';
 import 'shared_keys_device.dart';
@@ -15,7 +16,7 @@ import 'stateful_fake_imap.dart';
 
 const _acc = fakeObjectAccountId;
 
-/// One install with the card projections, talking to the shared fake
+/// One install with the card and review projections, talking to the shared fake
 /// [server]; [keys] are made on demand when a deck is created.
 class CardTestDevice extends SharedKeysDevice {
   CardTestDevice(super.server, super.keys);
@@ -25,6 +26,7 @@ class CardTestDevice extends SharedKeysDevice {
     CardDocProjector(db),
     CardBatchProjector(db),
     DeckProjector(db),
+    ReviewLogProjector(db),
   ];
 
   late final repo = CardRepositoryImpl(

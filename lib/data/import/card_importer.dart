@@ -9,6 +9,7 @@ import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/repositories/card_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/import/anki_apkg_reader.dart';
+import 'package:sharedinbox/data/import/review_importer.dart';
 import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 
 /// [CardImporter] over the [CardRepository] and the [MailObjectBlobStore]
@@ -17,13 +18,19 @@ import 'package:sharedinbox/data/repositories/mail_object_blobs.dart';
 /// member (whose fresh `h` wins over the old version) in the deck it is in,
 /// an unknown one is added to the deck of its name (created if needed).
 /// Images are stored once per deck under their content address, before
-/// the cards that show them.
+/// the cards that show them. The review history of an `.apkg` goes to the
+/// [ReviewImporter] after the cards, without the events of deleted cards.
 class CardImporterImpl implements CardImporter {
-  CardImporterImpl(this._cards, this._blobs, {AppLogger? appLogger})
-      : _appLogger = appLogger;
+  CardImporterImpl(
+    this._cards,
+    this._blobs,
+    this._reviews, {
+    AppLogger? appLogger,
+  }) : _appLogger = appLogger;
 
   final CardRepository _cards;
   final MailObjectBlobStore _blobs;
+  final ReviewImporter _reviews;
   final AppLogger? _appLogger;
 
   @override
@@ -45,7 +52,18 @@ class CardImporterImpl implements CardImporter {
         {'count': anki.droppedSounds},
       );
     }
-    final result = await _import(accountId, anki.cards, anki.media);
+    final (result, deleted) = await _import(accountId, anki.cards, anki.media);
+    final reviews = [
+      for (final r in anki.reviews)
+        if (!deleted.contains(r.cardId)) r,
+    ];
+    final written = reviews.isEmpty
+        ? (added: 0, known: 0)
+        : await _reviews.importReviews(
+            accountId,
+            anki.reviewDeviceId,
+            reviews,
+          );
     return ImportResult(
       added: result.added,
       updated: result.updated,
@@ -55,6 +73,10 @@ class CardImporterImpl implements CardImporter {
       skippedEmpty: anki.skippedEmpty,
       missingMedia: anki.missingMedia.length + result.missingMedia,
       droppedSounds: anki.droppedSounds,
+      reviewsAdded: written.added,
+      reviewsKnown: written.known,
+      skippedReviews:
+          anki.skippedReviews + anki.reviews.length - reviews.length,
       decks: result.decks,
     );
   }
@@ -62,7 +84,7 @@ class CardImporterImpl implements CardImporter {
   @override
   Future<ImportResult> importCsv(String accountId, String text) async {
     final csv = parseCsvCards(text);
-    final result = await _import(accountId, csv.cards, const {});
+    final (result, _) = await _import(accountId, csv.cards, const {});
     return ImportResult(
       added: result.added,
       updated: result.updated,
@@ -73,7 +95,8 @@ class CardImporterImpl implements CardImporter {
     );
   }
 
-  Future<ImportResult> _import(
+  /// Writes [imported]; returns what it did and the cardIds deleted here.
+  Future<(ImportResult, Set<String>)> _import(
     String accountId,
     List<ImportedCard> imported,
     Map<String, ({Uint8List bytes, String contentType})> media,
@@ -97,12 +120,12 @@ class CardImporterImpl implements CardImporter {
     var added = 0;
     var updated = 0;
     var unchanged = 0;
-    var deleted = 0;
+    final deleted = <String>{};
     for (final c in byId.values) {
       final String deckId;
       switch (await _cards.cardState(accountId, c.cardId)) {
         case CardDeleted():
-          deleted++;
+          deleted.add(c.cardId);
           continue;
         case CardLive(:final card) when card.content == c.content:
           unchanged++;
@@ -158,13 +181,16 @@ class CardImporterImpl implements CardImporter {
       await _cards.importCards(accountId, deckId, cards);
     }
 
-    return ImportResult(
-      added: added,
-      updated: updated,
-      unchanged: unchanged,
-      skippedDeleted: deleted,
-      missingMedia: tooLarge,
-      decks: {for (final c in byId.values) c.deckName}.toList(),
+    return (
+      ImportResult(
+        added: added,
+        updated: updated,
+        unchanged: unchanged,
+        skippedDeleted: deleted.length,
+        missingMedia: tooLarge,
+        decks: {for (final c in byId.values) c.deckName}.toList(),
+      ),
+      deleted,
     );
   }
 

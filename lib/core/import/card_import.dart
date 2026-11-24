@@ -28,6 +28,9 @@ class ImportResult {
     this.skippedEmpty = 0,
     this.missingMedia = 0,
     this.droppedSounds = 0,
+    this.reviewsAdded = 0,
+    this.reviewsKnown = 0,
+    this.skippedReviews = 0,
     this.decks = const [],
   });
 
@@ -55,6 +58,16 @@ class ImportResult {
   /// `[sound:…]` references, dropped.
   final int droppedSounds;
 
+  /// Review events of the history (#1385) that were not known yet.
+  final int reviewsAdded;
+
+  /// Review events known already (a re-import): not written.
+  final int reviewsKnown;
+
+  /// Review history rows that are no review event: manual and rescheduled
+  /// rows, rows up to a reset, rows of cards not imported or deleted here.
+  final int skippedReviews;
+
   /// The names of the decks the cards went to.
   final List<String> decks;
 
@@ -63,7 +76,8 @@ class ImportResult {
       'unchanged: $unchanged, skippedDeleted: $skippedDeleted, '
       'skippedCloze: $skippedCloze, skippedEmpty: $skippedEmpty, '
       'missingMedia: $missingMedia, droppedSounds: $droppedSounds, '
-      'decks: $decks)';
+      'reviewsAdded: $reviewsAdded, reviewsKnown: $reviewsKnown, '
+      'skippedReviews: $skippedReviews, decks: $decks)';
 }
 
 /// The `.apkg` holds only a format this app cannot read yet (for example
@@ -78,9 +92,10 @@ class UnsupportedAnkiFormatException implements Exception {
 }
 
 /// Imports flash cards from Anki `.apkg` and CSV files into the decks of an
-/// account (ENCRYPTED-OBJECTS.md §7, #1383). Importing the same file again
-/// adds nothing twice: unchanged cards stay, changed ones are updated, and
-/// cards deleted here stay deleted. Works offline (the normal sync uploads
+/// account (ENCRYPTED-OBJECTS.md §7, #1383), and the review history of an
+/// `.apkg` (#1385). Importing the same file again adds nothing twice:
+/// unchanged cards stay, changed ones are updated, cards deleted here stay
+/// deleted, and known review events are not written again. Works offline (the normal sync uploads
 /// the cards); throws `NoWriteKeyException` while the account is locked.
 abstract class CardImporter {
   /// Imports an Anki `.apkg` (`collection.anki21` or `collection.anki2`).

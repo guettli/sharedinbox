@@ -36,6 +36,25 @@ ReviewLogCompanion reviewLogCompanion(
         ),
     };
 
+/// The [seqs] of [deviceId] already in `review_log`. Keep [seqs] below
+/// SQLite's limit of 999 host parameters.
+Future<Set<int>> knownReviewSeqs(
+  AppDatabase db,
+  String accountId,
+  String deviceId,
+  List<int> seqs,
+) async =>
+    (await (db.selectOnly(db.reviewLog)
+              ..addColumns([db.reviewLog.seq])
+              ..where(
+                db.reviewLog.accountId.equals(accountId) &
+                    db.reviewLog.deviceId.equals(deviceId) &
+                    db.reviewLog.seq.isIn(seqs),
+              ))
+            .map((r) => r.read(db.reviewLog.seq)!)
+            .get())
+        .toSet();
+
 /// The event of a `review_log` row.
 CardEvent cardEventOf(ReviewLogRow r) {
   if (r.op == 'undo') {

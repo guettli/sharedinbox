@@ -3,7 +3,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/core/import/anki_html.dart';
+import 'package:sharedinbox/core/import/anki_revlog.dart';
 import 'package:sharedinbox/core/import/anki_template.dart';
 import 'package:sharedinbox/core/import/card_import.dart';
 import 'package:sharedinbox/core/import/import_ids.dart';
@@ -13,11 +15,14 @@ import 'package:sqlite3/sqlite3.dart' show OpenMode, sqlite3;
 /// The deck of a card whose deck is not in the collection.
 const ankiDefaultDeck = 'Default';
 
-/// The cards and images of an `.apkg` (#1383).
+/// The cards, images and review history of an `.apkg` (#1383, #1385).
 class AnkiImport {
   const AnkiImport({
     required this.cards,
     required this.media,
+    required this.reviewDeviceId,
+    this.reviews = const [],
+    this.skippedReviews = 0,
     this.skippedCloze = 0,
     this.skippedEmpty = 0,
     this.droppedSounds = 0,
@@ -38,6 +43,15 @@ class AnkiImport {
 
   /// Referenced images that are not in the file.
   final List<String> missingMedia;
+
+  /// The deviceId of the review history ([ankiImportDeviceId]).
+  final String reviewDeviceId;
+
+  /// The review history of [cards] ([ankiReviewEvents]), in `seq` order.
+  final List<ReviewEvent> reviews;
+
+  /// Rows of the `revlog` that are not [reviews].
+  final int skippedReviews;
 }
 
 const _imageTypes = {
@@ -57,7 +71,8 @@ const _imageTypes = {
 /// Every row of `cards` becomes a card: the front is the note rendered
 /// with the question template, the back with the answer template without
 /// the front, both converted to Markdown ([ankiHtmlToMarkdown]). Cloze
-/// notes are skipped. Only images a card references are read.
+/// notes are skipped. Only images a card references are read. The
+/// `revlog` rows of the imported cards become [AnkiImport.reviews].
 ///
 /// Throws [UnsupportedAnkiFormatException] for an `.apkg` with only
 /// `collection.anki21b` (#1384) and [FormatException] for a file that is
@@ -94,7 +109,7 @@ Future<AnkiImport> readApkg(Uint8List bytes) async {
 AnkiImport _readCollection(String path, _ApkgMedia media) {
   final db = sqlite3.open(path, mode: OpenMode.readOnly);
   try {
-    final col = db.select('SELECT models, decks FROM col LIMIT 1');
+    final col = db.select('SELECT crt, models, decks FROM col LIMIT 1');
     if (col.isEmpty) throw const FormatException('the collection has no col');
     final models = _jsonMap(col.first['models']);
     final decks = _jsonMap(col.first['decks']);
@@ -110,12 +125,13 @@ AnkiImport _readCollection(String path, _ApkgMedia media) {
         r['id'] as int: r,
     };
     final cards = <ImportedCard>[];
+    final cardIdByCid = <int, String>{};
     var cloze = 0;
     var empty = 0;
     var sounds = 0;
     final missing = <String>{};
     for (final c in db.select(
-      'SELECT nid, ord, did FROM cards ORDER BY nid, ord',
+      'SELECT id, nid, ord, did FROM cards ORDER BY nid, ord',
     )) {
       final note = notes[c['nid'] as int];
       if (note == null) continue;
@@ -142,9 +158,11 @@ AnkiImport _readCollection(String path, _ApkgMedia media) {
         continue;
       }
       final deck = decks['${c['did']}'];
+      final cardId = ankiCardId(note['guid'] as String, ord);
+      cardIdByCid[c['id'] as int] = cardId;
       cards.add(
         ImportedCard(
-          cardId: ankiCardId(note['guid'] as String, ord),
+          cardId: cardId,
           deckName: deck is Map && deck['name'] is String
               ? deck['name'] as String
               : ankiDefaultDeck,
@@ -159,9 +177,26 @@ AnkiImport _readCollection(String path, _ApkgMedia media) {
         ),
       );
     }
+    final deviceId = ankiImportDeviceId(col.first['crt'] as int? ?? 0);
+    final reviews = ankiReviewEvents(deviceId, [
+      for (final r in db.select(
+        'SELECT id, cid, ease, time, type, ivl FROM revlog ORDER BY id',
+      ))
+        AnkiRevlogRow(
+          id: r['id'] as int,
+          cardId: cardIdByCid[r['cid'] as int],
+          ease: r['ease'] as int,
+          time: r['time'] as int,
+          type: r['type'] as int,
+          ivl: r['ivl'] as int,
+        ),
+    ]);
     return AnkiImport(
       cards: cards,
       media: media.used,
+      reviewDeviceId: deviceId,
+      reviews: reviews.events,
+      skippedReviews: reviews.skipped,
       skippedCloze: cloze,
       skippedEmpty: empty,
       droppedSounds: sounds,

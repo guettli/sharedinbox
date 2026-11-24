@@ -18,6 +18,13 @@ String ankiCardId(String noteGuid, int ord) =>
 String csvCardId(String deck, String front) =>
     _id([utf8.encode('csv-card\u0000$deck\u0000$front')]);
 
+/// The deviceId of the review history of the Anki collection created at
+/// [crt] (`col.crt`, #1385): `import:` + the stable id of it. Importing
+/// the same collection again gives the same deviceId, so its events dedupe
+/// by `(deviceId, seq)`.
+String ankiImportDeviceId(int crt) =>
+    'import:${_id([utf8.encode('anki-col\u0000$crt')])}';
+
 /// The itemId of a media blob, from its content: the same image is stored
 /// once.
 String mediaBlobId(Uint8List bytes) => _id([utf8.encode('blob\u0000'), bytes]);
