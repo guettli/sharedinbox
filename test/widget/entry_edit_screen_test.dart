@@ -45,8 +45,9 @@ class _FakeBlobStore implements MailObjectBlobStore {
     String accountId,
     String collectionId,
     Uint8List bytes,
-    String contentType,
-  ) async {
+    String contentType, {
+    String? itemId,
+  }) async {
     final e = error;
     if (e != null) throw e;
     puts.add((collectionId: collectionId, bytes: bytes, type: contentType));
