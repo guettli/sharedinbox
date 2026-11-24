@@ -9,13 +9,19 @@
 import 'dart:io';
 
 import 'package:enough_mail/enough_mail.dart' as imap;
+import 'package:flutter/foundation.dart' show debugPrintSynchronously;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/main.dart' as app;
+import 'package:sharedinbox/ui/screens/email_list_screen.dart';
+import 'package:sharedinbox/ui/widgets/thread_tile.dart';
 
 /// Plaintext IMAP connection — Stalwart dev server has no TLS certificate.
 Future<imap.ImapClient> _connectImapPlaintext(
@@ -76,13 +82,15 @@ class _InMemorySecureStorage implements SecureStorage {
   Future<String?> read({
     required String key,
     SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async => _store[key];
+  }) async =>
+      _store[key];
 
   @override
   Future<void> delete({
     required String key,
     SecureStorageAccess access = SecureStorageAccess.defaultAccess,
-  }) async => _store.remove(key);
+  }) async =>
+      _store.remove(key);
 }
 
 final _sw = Stopwatch()..start();
@@ -117,9 +125,85 @@ Future<void> pumpUntil(
 /// place of Icons.sync (see `_buildSyncButton`), so a bare
 /// `tap(find.byIcon(Icons.sync))` races that spinner and finds 0 widgets when a
 /// background sync happens to be running. Wait for the icon to reappear first.
+///
+/// Not via [pumpUntil]: that pumps another 300 ms after the icon shows, and a
+/// background sync starting inside that window swaps the icon for the spinner
+/// again before the tap (#1400). Tap in the same frame the icon was seen in.
 Future<void> tapSync(WidgetTester tester) async {
-  await pumpUntil(tester, find.byIcon(Icons.sync));
-  await tester.tap(find.byIcon(Icons.sync));
+  // Idle with or without a previous sync error (Icons.sync_problem).
+  final icon = find.byWidgetPredicate(
+    (w) =>
+        w is IconButton && (w.tooltip == 'Sync' || w.tooltip == 'Sync error'),
+  );
+  final deadline = tester.binding.clock.now().add(const Duration(seconds: 15));
+  while (!tester.any(icon)) {
+    if (tester.binding.clock.now().isAfter(deadline)) {
+      throw Exception('tapSync timed out waiting for the sync button');
+    }
+    await tester.pump(const Duration(milliseconds: 200));
+  }
+  await tester.tap(icon);
+}
+
+/// `expect(find.text(subject), findsOneWidget)`, but when it fails it first
+/// prints what the app holds for [subject]: the rows global search finds
+/// with that subject (any visible folder, local or not), where each matching
+/// widget sits, and the recent App Log.
+/// The duplicate behind #1400 only shows under CI load, so the next failure
+/// has to bring its own evidence.
+Future<void> expectOneSubject(
+  WidgetTester tester,
+  String subject,
+  String step,
+) async {
+  final found = find.text(subject);
+  if (found.evaluate().length != 1) {
+    // Synchronous: the live binding throttles debugPrint, and the test fails
+    // right after this dump.
+    const say = debugPrintSynchronously;
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MaterialApp).first),
+      listen: false,
+    );
+    final rows = await tester.runAsync(
+      () => container
+          .read(emailRepositoryProvider)
+          .searchEmailsGlobal(null, subject, limit: 50),
+    );
+    for (final e in rows ?? const <Email>[]) {
+      say('[$step] row id=${e.id} box=${e.mailboxPath} '
+          'srv=${e.srvMailboxPath}/${e.srvUid} local=${e.isLocal} '
+          'sentCopy=${e.isVirtualSentCopy} seen=${e.isSeen} '
+          'mid=${e.messageId} thread=${e.threadId}');
+    }
+    for (final el in found.evaluate()) {
+      final chain = <String>[];
+      el.visitAncestorElements((a) {
+        final w = a.widget;
+        if (w is EmailListScreen) {
+          chain.add('EmailListScreen(${w.mailboxPath})');
+        }
+        if (w is ThreadTile) {
+          chain.add('ThreadTile(${w.thread.latestEmailId})');
+        }
+        return true;
+      });
+      say('[$step] widget ${chain.join(' < ')}');
+    }
+    final log = await tester.runAsync(
+      () => container
+          .read(appLogRepositoryProvider)
+          .watchEntries(
+            const AppLogFilter(levels: {...AppLogLevel.values}, limit: 150),
+          )
+          .first,
+    );
+    for (final e in (log ?? const <AppLogEntry>[]).reversed) {
+      say('[$step] log ${e.createdAt.toIso8601String()} ${e.level.name} '
+          '${e.event} ${e.mailboxPath ?? ''} ${e.emailId ?? ''}: ${e.message}');
+    }
+  }
+  expect(found, findsOneWidget, reason: step);
 }
 
 void main() {
@@ -392,7 +476,7 @@ void main() {
       await pumpUntil(tester, find.text(subject));
       _log('sync Sent done');
 
-      expect(find.text(subject), findsOneWidget);
+      await expectOneSubject(tester, subject, 'Sent');
 
       // ── Check Inbox ────────────────────────────────────────────────────────
       await tester.tap(find.byTooltip('Open folders'));
@@ -422,7 +506,7 @@ void main() {
       await tester.pumpAndSettle();
       _log('sync INBOX done');
 
-      expect(find.text(subject), findsOneWidget);
+      await expectOneSubject(tester, subject, 'INBOX');
 
       // ── Search ─────────────────────────────────────────────────────────────
       // Search by the 'E2E-' prefix — should match the message we just sent.
@@ -443,7 +527,7 @@ void main() {
       );
       _log('search done');
 
-      expect(find.text(subject), findsOneWidget);
+      await expectOneSubject(tester, subject, 'search');
     },
   );
 }
