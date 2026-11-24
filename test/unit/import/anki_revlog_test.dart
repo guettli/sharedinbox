@@ -28,8 +28,8 @@ void main() {
   test('learn, review, relearn and filtered rows rated 1-4 are events', () {
     final r = ankiReviewEvents(_dev, [
       _row(1000, type: 0, ease: 1),
-      _row(1001, type: 1, ease: 2),
-      _row(1002, type: 2, ease: 3),
+      _row(1001, ease: 2),
+      _row(1002, type: 2),
       _row(1003, type: 3, ease: 4),
     ]);
     expect(r.skipped, 0);

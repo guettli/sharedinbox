@@ -39,7 +39,7 @@ class ReviewLogProjector implements LogProjector {
       final seqs = bySeq.keys.toList();
       for (var i = 0; i < seqs.length; i += 400) {
         final chunk = seqs.sublist(i, (i + 400).clamp(0, seqs.length));
-        final known = await _knownSeqs(accountId, deviceId, chunk);
+        final known = await knownReviewSeqs(db, accountId, deviceId, chunk);
         fresh.addAll([
           for (final seq in chunk)
             if (!known.contains(seq)) bySeq[seq]!,
@@ -69,22 +69,6 @@ class ReviewLogProjector implements LogProjector {
     );
     await schedules.recompute(accountId, await _cardsOf(accountId, fresh));
   }
-
-  Future<Set<int>> _knownSeqs(
-    String accountId,
-    String deviceId,
-    List<int> seqs,
-  ) async =>
-      (await (db.selectOnly(db.reviewLog)
-                ..addColumns([db.reviewLog.seq])
-                ..where(
-                  db.reviewLog.accountId.equals(accountId) &
-                      db.reviewLog.deviceId.equals(deviceId) &
-                      db.reviewLog.seq.isIn(seqs),
-                ))
-              .map((r) => r.read(db.reviewLog.seq)!)
-              .get())
-          .toSet();
 
   /// The cards [events] change: of a review its card, of an undo the card
   /// of the review it cancels (none while that review is not here yet).

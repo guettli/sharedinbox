@@ -1,11 +1,10 @@
-import 'package:drift/drift.dart';
-
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
+import 'package:sharedinbox/data/repositories/review_log_rows.dart';
 
 /// SQLite's default limit of host parameters is 999; stay well below.
 const _chunk = 400;
@@ -41,7 +40,8 @@ class ReviewImporter {
     final known = <int>{};
     for (var i = 0; i < seqs.length; i += _chunk) {
       known.addAll(
-        await _knownSeqs(
+        await knownReviewSeqs(
+          db,
           accountId,
           deviceId,
           seqs.sublist(i, (i + _chunk).clamp(0, seqs.length)),
@@ -67,20 +67,4 @@ class ReviewImporter {
     }
     return (added: fresh.length, known: known.length);
   }
-
-  Future<Set<int>> _knownSeqs(
-    String accountId,
-    String deviceId,
-    List<int> seqs,
-  ) async =>
-      (await (db.selectOnly(db.reviewLog)
-                ..addColumns([db.reviewLog.seq])
-                ..where(
-                  db.reviewLog.accountId.equals(accountId) &
-                      db.reviewLog.deviceId.equals(deviceId) &
-                      db.reviewLog.seq.isIn(seqs),
-                ))
-              .map((r) => r.read(db.reviewLog.seq)!)
-              .get())
-          .toSet();
 }
