@@ -71,6 +71,7 @@ class KeyDevice {
       keepVanishedKeyMail: ring.keepVanishedKeyMail,
       appLogger: AppLogger(logs),
       projectors: projectors(db),
+      onStep: (step) async => onStep?.call(step),
     );
     service = EncryptedKeyService(
       db: db,
@@ -96,6 +97,9 @@ class KeyDevice {
   late final MailboxRepositoryImpl mailboxes;
   late final MailObjectStoreImap store;
   late final EncryptedKeyService service;
+
+  /// Test seam: called before and after each server write of the store.
+  void Function(String step)? onStep;
 
   String get id => account.id;
 

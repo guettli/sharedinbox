@@ -131,13 +131,16 @@ device; the effective value of a key is the one with the highest HLC.
 `mail_object_blobs` is the decrypted blob cache. A segment or pack that a
 pack covers gets `mail_objects.coveredBy` (the pack's Message-ID) and is
 hidden from readers. If it vanishes from the server it is dropped, not
-uploaded again. Only rows of this device are also marked `pendingDelete`.
-Such a delete waits until the pack is confirmed (`deletableNow`): APPEND →
-confirm (APPENDUID, or by Message-ID) → expunge. `compact` writes the pack
-and marks the covered rows in one transaction, so a crash in between is
-repaired by the next sync. The services are `MailObjectLog` (`append`,
-`segments`, `events`, `compact`; owner-only through `CompactionAuthority`,
-which #1382 extends with the 90-day takeover), `MailObjectBlobStore`
+uploaded again. A covered row is also marked `pendingDelete` only when the
+covering pack is this device's: the pack's writer deletes what it covers,
+every other device only hides it (#1382). Such a delete waits until the
+pack is confirmed (`deletableNow`): APPEND → confirm (APPENDUID, or by
+Message-ID) → expunge. `compact` writes the pack and marks the covered rows
+in one transaction, so a crash in between is repaired by the next sync. The
+services are `MailObjectLog` (`append`, `segments`, `events`, `compact`,
+`removeDevice`; who may compact whose segments is the
+`CompactionAuthority`, by default `TakeoverCompaction`: own, removed, or
+not seen for 90 days), `MailObjectBlobStore`
 (`putBlob`, `blob`; blobs are immutable) and `DeviceStateStore`. The blob
 cache holds 100 MiB of decrypted bytes per account. Eviction drops the
 least recently used confirmed blobs, and for those over 256 KiB also the
@@ -498,9 +501,25 @@ app" and **never edited** by that reader (editing would fork history).
    ignore segments covered by a pack and **always dedupe events by
    `(deviceId, seq)`**, so overlapping packs after a crash are harmless. A
    pack may cover segments and older packs of the same open month (`covers`
-   lists `(deviceId, seqFrom, seqTo)` ranges). Segments of a deviceId not seen
-   for 90 days may be compacted by any device. A deleted segment never means
-   its events are gone.
+   lists `(deviceId, seqFrom, seqTo)` ranges). **Packs of a closed month**
+   (before the current UTC month) **are immutable**: a later compaction of
+   that month covers only its segments, so a late segment gets an extra pack
+   of its own and the older packs stay as they are. The writer of the
+   covering pack deletes the segments and packs it covers; every other
+   device only hides them. Segments of a deviceId not seen for 90 days
+   (newest HLC of its log events, device-state values and object versions)
+   may be compacted by any device, and so may those of a device listed in
+   the device-state key `devices.removed` = `{deviceId: generation}`
+   ("remove device"; effective value account-global, item 4), at once. A
+   removal gets the next generation (the highest in the map + 1); a device
+   listed already keeps its own. A pack head carries `generation`: the
+   highest generation of the devices it adopted, 0 for a pack of its
+   writer's own segments (absent in segments and older packs, read as 0;
+   readers that do not know the field keep it). Of two packs with the same
+   coverage (two devices adopting at once, or a crash and a second
+   compaction) the higher `generation` wins, then the newer `versionId`; the
+   loser is hidden, and deleted by the winner's writer. A deleted segment
+   never means its events are gone.
 3. **Blob** — immutable document (image), referenced by its itemId.
 4. **Device-state** — one document per device (a key → value map with an HLC
    per key); the effective value of a key is the one with the highest HLC
@@ -768,7 +787,12 @@ log are added by the cards issues.
   device.
 - **Compaction**: owner device only, at > 30 own segments or month rollover;
   packs of closed months are immutable. Events of deleted cards are dropped at
-  the next pack **only** if a synced tombstone exists.
+  the next pack **only** if a synced tombstone exists: the card's `Cards` row
+  is `deleted` and the `mail_objects` row of its winning `card` tombstone is
+  confirmed (not pending upload, with an IMAP UID or JMAP id). The pack then
+  drops the card's `review` events and the `undo` events whose `ref` points
+  at one of them; its `covers` still lists them, and the local `review_log`
+  rows stay.
 
 Implemented in `lib/core/encrypted_objects/card_object.dart` (the kinds
 `card`, `card-batch` and `deck`: new, read, edit, delete, import packing,
@@ -877,8 +901,26 @@ Reviews, schedules and upload are implemented in #1380:
   the background, session end, 5 min after the last rating, ≥ 300 pending
   events (at once), and each regular sync cycle. Without a write key the
   rows stay pending; a crash after the put at worst writes the events
-  again, which the `(deviceId, seq)` dedupe makes harmless. Compaction is
-  #1382.
+  again, which the `(deviceId, seq)` dedupe makes harmless.
+
+Compaction of the review log is implemented in #1382:
+
+- **Triggers** (`ReviewCompactor.maybeCompact`, run by
+  `ReviewUploadScheduler` right after each flush, so with the regular sync
+  cycle and the other upload triggers; one run per account at a time, a
+  locked account is skipped):
+  - more than 30 uncovered own `review-seg` segments in the current month
+    compact that month;
+  - month rollover: each earlier month with uncovered segments of this
+    device or of an adoptable one gets its pack (or an extra pack, 5.4
+    item 2);
+  - adoptable devices (in `devices.removed`, or not seen for 90 days) with
+    uncovered segments: their months are compacted with them.
+- **Where**: `ReviewCompactor` (`lib/data/repositories/review_compactor.dart`),
+  `ReviewCompactionFilter` (the synced-tombstone rule) and
+  `TakeoverCompaction` / `MailObjectLog.removeDevice`
+  (`lib/data/repositories/mail_object_log.dart`). The "remove device" UI
+  comes later; so far it is API only.
 - **Export serializers** (`lib/core/flashcards/card_export.dart`, wired into
   the ZIP by #1356): `cardsCsv` (RFC 4180, columns
   `cardId,deckId,deckName,front,back,tags,h`, `si-img:<itemId>` rewritten to

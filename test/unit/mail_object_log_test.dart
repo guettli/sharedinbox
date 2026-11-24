@@ -5,11 +5,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/device_identity.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
+import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/data/db/database.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
 
 import 'db_test_helper.dart';
+import 'encrypted_objects/test_helpers.dart';
 import 'helpers/mail_object_rig.dart';
 
 const _log = 'review';
@@ -21,8 +23,19 @@ String get _period =>
 /// Allows every device: the #1382 extension point.
 class _AnyDevice implements CompactionAuthority {
   @override
-  bool mayCompact(String accountId, String deviceId) => true;
+  Future<bool> mayCompact(String accountId, String deviceId) async => true;
 }
+
+/// A clock in a later month than every segment of the test: their month
+/// is closed.
+DateTime _nextMonth() => DateTime.now().add(const Duration(days: 40));
+
+Future<String> _deviceOf(RigDevice d) async =>
+    (await d.store.clockFor(d.accountId)).deviceId;
+
+/// The head of [pack] as [d] reads it.
+Future<SegmentHead> _headOf(RigDevice d, MailObject pack) async =>
+    readSegment((await d.store.open(pack))!)!.head;
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -272,5 +285,237 @@ void main() {
       (await restarted.store.clockFor(a.accountId)).deviceId,
       identity.deviceId,
     );
+  });
+
+  group('closed months (#1382)', () {
+    test('an open month re-packs its pack and the new segments into one',
+        () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+      await a.appendEvents(_log, [1]);
+      await a.appendEvents(_log, [2]);
+      final first = (await a.log.compact(a.accountId, _log, _period)).single;
+      await a.store.waitForIdle();
+      await a.appendEvents(_log, [3]);
+
+      final second = (await a.log.compact(a.accountId, _log, _period)).single;
+      await a.store.waitForIdle();
+
+      expect(rig.dataIds(), [second.messageId]);
+      // Covered, then deleted with the segments.
+      expect(await a.row(first.messageId), isNull);
+      final device = await _deviceOf(a);
+      expect((await _headOf(a, second)).covers, [LogRange(device, 1, 3)]);
+      expect(await a.eventNs(_log), [1, 2, 3]);
+    });
+
+    test(
+        'a closed month never covers its pack: a late segment gets an extra '
+        'pack and the old pack stays', () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+      final closed = MailObjectLog(a.db, a.store, now: _nextMonth);
+      await a.appendEvents(_log, [1]);
+      await a.appendEvents(_log, [2]);
+      final first = (await closed.compact(a.accountId, _log, _period)).single;
+      await a.store.waitForIdle();
+      await a.appendEvents(_log, [3]);
+      await a.appendEvents(_log, [4]);
+
+      final extra = (await closed.compact(a.accountId, _log, _period)).single;
+      await a.store.waitForIdle();
+
+      expect(
+        rig.dataIds(),
+        unorderedEquals([first.messageId, extra.messageId]),
+      );
+      final device = await _deviceOf(a);
+      expect((await _headOf(a, first)).covers, [LogRange(device, 1, 2)]);
+      expect((await _headOf(a, extra)).covers, [LogRange(device, 3, 4)]);
+      expect(
+        {for (final s in await a.log.segments(a.accountId, _log)) s.messageId},
+        {first.messageId, extra.messageId},
+      );
+      expect(await a.eventNs(_log), [1, 2, 3, 4]);
+      // Only packs are left, and they are final.
+      expect(await closed.compact(a.accountId, _log, _period), isEmpty);
+    });
+  });
+
+  test(
+      'keep drops events from the pack; its covers still lists them '
+      '(#1382)', () async {
+    final rig = ObjectRig(ObjectTransport.imap);
+    final a = await rig.device();
+    final b = await rig.device();
+    await a.appendEvents(_log, [1, 2]);
+    await a.appendEvents(_log, [3]);
+
+    final pack = (await a.log.compact(
+      a.accountId,
+      _log,
+      _period,
+      keep: (e) => e.json['n'] != 2,
+    ))
+        .single;
+    await a.store.waitForIdle();
+    await b.listAndSync();
+
+    final opened = readSegment((await b.store.open(pack))!)!;
+    expect([for (final e in opened.events) e.json['n']], [1, 3]);
+    expect(opened.head.covers, [LogRange(await _deviceOf(a), 1, 3)]);
+    expect(rig.dataIds(), [pack.messageId]);
+    expect(await b.eventNs(_log), [1, 3]);
+  });
+
+  group('adoption (#1382)', () {
+    test('removeDevice: generations 1, then 2; a repeat keeps its own',
+        () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+
+      expect(await a.log.removeDevice(a.accountId, 'lost-1'), 1);
+      expect(await a.log.removeDevice(a.accountId, 'lost-2'), 2);
+      expect(await a.log.removeDevice(a.accountId, 'lost-1'), 1);
+
+      expect(
+        await removedDevicesOf(a.db, a.accountId),
+        {'lost-1': 1, 'lost-2': 2},
+      );
+      expect(
+        () async => a.log.removeDevice(a.accountId, await _deviceOf(a)),
+        throwsArgumentError,
+      );
+    });
+
+    test(
+        'the takeover authority: own device, a removed device, and one not '
+        'seen for 91 but not 89 days', () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+      final lost = await rig.device();
+      await lost.appendEvents(_log, [1]);
+      await a.listAndSync();
+      final lostId = await _deviceOf(lost);
+      TakeoverCompaction after(int days) => TakeoverCompaction(
+            a.db,
+            a.store,
+            now: () => DateTime.now().add(Duration(days: days)),
+          );
+
+      expect(await after(0).mayCompact(a.accountId, await _deviceOf(a)), true);
+      expect(await after(0).mayCompact(a.accountId, lostId), false);
+      expect(await after(89).mayCompact(a.accountId, lostId), false);
+      expect(await after(91).mayCompact(a.accountId, lostId), true);
+      expect(await after(91).mayCompact(a.accountId, 'never-seen'), false);
+
+      await a.log.removeDevice(a.accountId, lostId);
+      expect(await after(0).mayCompact(a.accountId, lostId), true);
+    });
+
+    test(
+        'the adopter packs a removed device with its generation and deletes '
+        'its segments; a third device only hides them', () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+      final c = await rig.device();
+      final lost = await rig.device();
+      await lost.appendEvents(_log, [1]);
+      await lost.appendEvents(_log, [2]);
+      final segments = rig.dataIds();
+      await a.listAndSync();
+      await c.listAndSync();
+      final lostId = await _deviceOf(lost);
+      await a.log.removeDevice(a.accountId, lostId);
+      await a.store.waitForIdle();
+      // The adopter's deletes fail until it syncs again.
+      a.onStep = (step) {
+        if (step == 'expunge') throw StateError('refused');
+      };
+
+      final pack = (await a.log.compact(
+        a.accountId,
+        _log,
+        _period,
+        deviceIds: {await _deviceOf(a), lostId},
+      ))
+          .single;
+      await a.store.waitForIdle();
+
+      expect((await _headOf(a, pack)).generation, 1);
+      expect((await _headOf(a, pack)).covers, [LogRange(lostId, 1, 2)]);
+      for (final id in segments) {
+        expect((await a.row(id))!.pendingDelete, isTrue);
+      }
+      await c.sync();
+      for (final id in segments) {
+        final row = (await c.row(id))!;
+        expect(row.coveredBy, pack.messageId);
+        expect(row.pendingDelete, isFalse);
+      }
+      await c.sync();
+      expect(rig.dataIds(), containsAll(segments));
+      expect(await c.eventNs(_log), [1, 2]);
+
+      a.onStep = null;
+      await a.sync();
+      expect(rig.dataIds(), contains(pack.messageId));
+      expect(rig.dataIds(), isNot(contains(anyOf(segments))));
+      await c.sync();
+      expect(await c.eventNs(_log), [1, 2]);
+      expect(
+        [for (final r in await c.rows()) r.kind],
+        contains(packKind(_log)),
+      );
+    });
+
+    test(
+        'of two packs with the same coverage the higher generation wins over '
+        'the newer one', () async {
+      final rig = ObjectRig(ObjectTransport.imap);
+      final a = await rig.device();
+      await a.appendEvents(_log, [1]);
+      await a.appendEvents(_log, [2]);
+      final segment = readSegment(
+        (await a.store.open(
+          (await a.log.compact(a.accountId, _log, _period)).single,
+        ))!,
+      )!;
+      await a.store.waitForIdle();
+      final clock = await a.store.clockFor(a.accountId);
+      Future<MailObject> pack(String itemId, int generation) =>
+          a.store.putCovering(
+            a.accountId,
+            segmentObject(
+              log: _log,
+              itemId: itemId,
+              collectionId: testDeckKey.collectionId,
+              versionId: clock.send(),
+              head: SegmentHead(
+                device: segment.head.device,
+                seqFrom: segment.head.seqFrom,
+                seqTo: segment.head.seqTo,
+                covers: segment.head.covers,
+                period: segment.head.period,
+                hlcMax: segment.head.hlcMax,
+                generation: generation,
+              ),
+              events: segment.events,
+              pack: true,
+            ),
+            covered: const [],
+          );
+
+      final adopted = await pack('pack-gen-1', 1);
+      await pack('pack-gen-0', 0);
+      await a.store.waitForIdle();
+
+      expect(
+        [for (final s in await a.log.segments(a.accountId, _log)) s.messageId],
+        [adopted.messageId],
+      );
+      expect(rig.dataIds(), [adopted.messageId]);
+      expect(await a.eventNs(_log), [1, 2]);
+    });
   });
 }

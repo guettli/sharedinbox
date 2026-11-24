@@ -144,4 +144,36 @@ void main() {
       expect(flushed, isEmpty);
     });
   });
+
+  test(
+      'each flush is followed by a compaction; a failing one is logged '
+      '(#1382)', () {
+    fakeAsync((async) {
+      final steps = <String>[];
+      final logs = RecordingAppLogRepository();
+      var fail = false;
+      final s = ReviewUploadScheduler(
+        flush: (accountId) async => steps.add('flush $accountId'),
+        compact: (accountId) async {
+          steps.add('compact $accountId');
+          if (fail) throw StateError('locked');
+        },
+        pendingAccounts: () async => const [],
+        appLogger: AppLogger(logs),
+      );
+      s.synced('a');
+      async.elapse(const Duration(seconds: 2));
+      expect(steps, ['flush a', 'compact a']);
+
+      fail = true;
+      s.rated('a', 300);
+      async.flushMicrotasks();
+      expect(steps, ['flush a', 'compact a', 'flush a', 'compact a']);
+      expect(
+        [for (final r in logs.rows) r.event],
+        contains('review.compact_failed'),
+      );
+      s.dispose();
+    });
+  });
 }

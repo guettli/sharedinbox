@@ -102,8 +102,8 @@ class LogRange {
 }
 
 /// The kind fields of a segment or pack head: `{device, seqFrom, seqTo,
-/// covers, period, hlcMax}`. A segment covers its own range; a pack the
-/// ranges of everything it replaces.
+/// covers, period, hlcMax}`, and of a pack `generation` (#1382). A segment
+/// covers its own range; a pack the ranges of everything it replaces.
 class SegmentHead {
   SegmentHead({
     required this.device,
@@ -112,6 +112,7 @@ class SegmentHead {
     required List<LogRange> covers,
     required this.period,
     required this.hlcMax,
+    this.generation,
   }) : covers = List.unmodifiable(covers);
 
   /// The head of [events] written by [device] in [period]: [covers] is
@@ -121,6 +122,7 @@ class SegmentHead {
     List<LogEvent> events, {
     required String period,
     List<LogRange>? covers,
+    int? generation,
   }) {
     if (events.isEmpty) throw ArgumentError.value(events, 'events', 'empty');
     final seqs = [for (final e in events) e.seq];
@@ -131,6 +133,7 @@ class SegmentHead {
       covers: covers ?? rangesOf(events),
       period: period,
       hlcMax: events.map((e) => e.hlc).reduce((a, b) => a > b ? a : b),
+      generation: generation,
     );
   }
 
@@ -139,6 +142,7 @@ class SegmentHead {
     final seqFrom = extra['seqFrom'];
     final seqTo = extra['seqTo'];
     final covers = extra['covers'];
+    final generation = extra['generation'];
     if (seqFrom is! int || seqTo is! int || covers is! List) {
       throw const FormatException('bad segment head');
     }
@@ -149,6 +153,7 @@ class SegmentHead {
       covers: [for (final c in covers) LogRange.fromJson(c)],
       period: readStringField(extra, 'period'),
       hlcMax: Hlc.parse(readStringField(extra, 'hlcMax')),
+      generation: generation is int ? generation : null,
     );
   }
 
@@ -161,6 +166,12 @@ class SegmentHead {
   final String period;
   final Hlc hlcMax;
 
+  /// Of a pack: the highest removal generation of the devices it adopted
+  /// (`devices.removed`), 0 for a pack of its writer's own segments; null
+  /// in a segment and in packs written before #1382 (read as 0). Of two
+  /// packs with the same coverage the higher one wins.
+  final int? generation;
+
   Map<String, Object?> toExtra() => {
         'device': device,
         'seqFrom': seqFrom,
@@ -168,6 +179,7 @@ class SegmentHead {
         'covers': [for (final c in covers) c.toJson()],
         'period': period,
         'hlcMax': hlcMax.encode(),
+        if (generation case final g?) 'generation': g,
       };
 
   /// Whether every range of [other] lies within a range of this head.
@@ -208,8 +220,12 @@ bool isCovered(SegmentHead segment, Iterable<SegmentHead> packs) =>
     packs.any((p) => p.coversAll(segment));
 
 /// The UTC month of [hlc], `YYYY-MM`.
-String periodOf(Hlc hlc) {
-  final d = DateTime.fromMillisecondsSinceEpoch(hlc.wallMs, isUtc: true);
+String periodOf(Hlc hlc) =>
+    periodOfTime(DateTime.fromMillisecondsSinceEpoch(hlc.wallMs));
+
+/// The UTC month of [time], `YYYY-MM`.
+String periodOfTime(DateTime time) {
+  final d = time.toUtc();
   return '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}';
 }
