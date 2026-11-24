@@ -2,7 +2,6 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
-import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/flashcards/card_replay.dart';
 import 'package:sharedinbox/core/flashcards/fsrs.dart';
@@ -172,17 +171,12 @@ LogEvent _wire(CardEvent e) =>
     LogEvent(seq: e.seq, hlc: Hlc.parse(e.h), json: e.toJson());
 
 void main() {
-  late StatefulFakeImapServer server;
-  late SharedCollectionKeys keys;
-  setUpFakeObjectServer(
-    (s, k) => (server, keys) = (s, k),
-    collections: const [personalCollectionId],
-  );
+  final fixture = setUpPersonalObjectServer();
 
   test(
       'a rating with a transport that fails every call: one pending event, '
       'the schedule, and not a single connection', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     a.offline = true;
     a.connects = 0;
 
@@ -218,7 +212,7 @@ void main() {
   test(
       'an undo cancels the review; a card without a counted review has no '
       'schedule', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     final first = await a.repo.rate(_acc, 'c1', Rating.good);
     await a.repo.rate(_acc, 'c1', Rating.easy);
     final undo =
@@ -244,8 +238,8 @@ void main() {
   test(
       'two devices rate the same card offline; after a flush and a sync '
       'both count both reviews and show the same schedule', () async {
-    final a = await _ReviewDevice.open(server, keys);
-    final b = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
+    final b = await _ReviewDevice.open(fixture.server, fixture.keys);
     a.offline = b.offline = true;
 
     await a.repo.rate(_acc, 'c1', Rating.good);
@@ -254,7 +248,7 @@ void main() {
     // Offline: the segment is stored locally, its upload waits.
     expect(await a.uploader.flush(_acc), 1);
     await a.store.waitForIdle();
-    expect(server.messagesIn(_dataPath), isEmpty);
+    expect(fixture.server.messagesIn(_dataPath), isEmpty);
     expect((await a.reviewRows()).single.segmentItemId, isNotNull);
     expect(await a.uploader.pendingAccounts(), isEmpty);
 
@@ -265,7 +259,7 @@ void main() {
     await b.sync();
     await a.sync();
 
-    expect(server.messagesIn(_dataPath), hasLength(2));
+    expect(fixture.server.messagesIn(_dataPath), hasLength(2));
     for (final d in [a, b]) {
       final rows = await d.reviewRows();
       expect(rows, hasLength(2));
@@ -282,7 +276,7 @@ void main() {
   test(
       'a flush splits the pending reviews into segments of at most '
       '`maxEvents`', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     for (var i = 0; i < 5; i++) {
       await a.repo.rate(_acc, 'c$i', Rating.good);
     }
@@ -299,9 +293,9 @@ void main() {
   });
 
   test('without a write key the reviews stay pending', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.repo.rate(_acc, 'c1', Rating.good);
-    keys.byCollection.clear();
+    fixture.keys.byCollection.clear();
 
     expect(await a.uploader.flush(_acc), 0);
     expect((await a.reviewRows()).single.segmentItemId, isNull);
@@ -312,7 +306,7 @@ void main() {
   });
 
   test('after a restart the clock moves past pending own reviews', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.repo.rate(_acc, 'c1', Rating.good);
     final deviceId = (await a.store.clockFor(_acc)).deviceId;
     // A rating stored right before the app died, before its high-water
@@ -341,7 +335,7 @@ void main() {
   test(
       'a change of deck options replays that deck; a change of fsrs.params '
       'replays every deck', () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.addCard('c1', 'deck-1');
     await a.addCard('c2', 'deck-2');
     await a.repo.rate(_acc, 'c1', Rating.good);
@@ -386,7 +380,7 @@ void main() {
 
   test('the params watch replays as soon as the device state changes',
       () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.addCard('c1', 'deck-1');
     await a.repo.rate(_acc, 'c1', Rating.good);
     final before = (await a.schedule('c1'))!;
@@ -413,7 +407,7 @@ void main() {
 
   test('a card arriving after its reviews is replayed with its deck options',
       () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.repo.setDeckOptions(
       _acc,
       'deck-1',
@@ -446,7 +440,7 @@ void main() {
 
   test('the due queue of a deck holds its reviewed cards due by then',
       () async {
-    final a = await _ReviewDevice.open(server, keys);
+    final a = await _ReviewDevice.open(fixture.server, fixture.keys);
     await a.addCard('c1', 'deck-1');
     await a.addCard('c2', 'deck-1');
     await a.addCard('c3', 'deck-2');
@@ -500,7 +494,7 @@ void main() {
     test(
         'due, learning within the learn-ahead window and new per deck; '
         'deleted cards are not counted', () async {
-      final a = await _ReviewDevice.open(server, keys);
+      final a = await _ReviewDevice.open(fixture.server, fixture.keys);
       final repo = utcRepo(a);
       for (final id in ['c1', 'c2', 'c3', 'c5']) {
         await card(a, id, 'deck-1');
@@ -534,7 +528,7 @@ void main() {
     test(
         'the new cards: never reviewed, not deleted, in creation order, '
         'and an undo makes a card new again', () async {
-      final a = await _ReviewDevice.open(server, keys);
+      final a = await _ReviewDevice.open(fixture.server, fixture.keys);
       final repo = utcRepo(a);
       await card(a, 'b', 'deck-1', h: 'h2');
       await card(a, 'a', 'deck-1', h: 'h3');
@@ -552,7 +546,7 @@ void main() {
     test(
         'newPerDay counts the first ratings since the study day started at '
         'dayStartHour; an undone first rating does not count', () async {
-      final a = await _ReviewDevice.open(server, keys);
+      final a = await _ReviewDevice.open(fixture.server, fixture.keys);
       final repo = utcRepo(a);
       for (final id in ['n1', 'n2', 'n3', 'n4']) {
         await card(a, id, 'deck-1');
@@ -611,7 +605,7 @@ void main() {
 
     test('remote events are stored once, unknown ops skipped, undos applied',
         () async {
-      final a = await _ReviewDevice.open(server, keys);
+      final a = await _ReviewDevice.open(fixture.server, fixture.keys);
       final projector = ReviewLogProjector(a.db);
       final segment = [
         _wire(review(1, 'c1', 3)),
@@ -640,7 +634,7 @@ void main() {
 
     test('an undo arriving before its review cancels it once it arrives',
         () async {
-      final a = await _ReviewDevice.open(server, keys);
+      final a = await _ReviewDevice.open(fixture.server, fixture.keys);
       final projector = ReviewLogProjector(a.db);
 
       await projector.apply(_acc, 'seg-2', [_wire(undo(2, 1))]);

@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
@@ -6,19 +6,16 @@ import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/flashcards/review_event.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
+import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/data/db/database.dart';
-import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_log.dart';
-import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
-import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/review_compaction_filter.dart';
 import 'package:sharedinbox/data/repositories/review_compactor.dart';
 import 'package:sharedinbox/data/repositories/review_log_projector.dart';
 import 'package:sharedinbox/data/repositories/review_log_rows.dart';
 
-import 'db_test_helper.dart';
 import 'helpers/fake_object_account.dart';
-import 'helpers/fake_secure_storage.dart';
+import 'helpers/shared_keys_device.dart';
 import 'helpers/stateful_fake_imap.dart';
 
 const _acc = fakeObjectAccountId;
@@ -28,61 +25,25 @@ DateTime _nextMonth() => DateTime.now().add(const Duration(days: 40));
 
 /// One install with the review projection on the shared fake [server];
 /// [now] is the clock of its log (and so of its compactor).
-class _Device {
-  _Device(this.server, this.keys, {DateTime Function()? now})
+class _Device extends SharedKeysDevice {
+  _Device(super.server, super.keys, {DateTime Function()? now})
       : now = now ?? DateTime.now;
 
-  final StatefulFakeImapServer server;
-  final SharedCollectionKeys keys;
   final DateTime Function() now;
-  final AppDatabase db = openTestDatabase();
-  final storage = FakeSecureStorage();
 
-  late final accounts = AccountRepositoryImpl(db, storage);
-  late final mailboxes = MailboxRepositoryImpl(
-    db,
-    accounts,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-  );
-  late final store = MailObjectStoreImap(
-    db,
-    accounts,
-    mailboxes,
-    storage,
-    imapConnect: (_, __, ___) async => server.connect(),
-    namespace: _namespace,
-    keyLookup: (_, keyId) => keys.lookup(keyId),
-    writeKey: (_, collectionId) => keys.byCollection[collectionId],
-    projectors: [ReviewLogProjector(db)],
-  );
+  @override
+  late final List<MailObjectProjector> projectors = [ReviewLogProjector(db)];
   late final log = MailObjectLog(db, store, now: now);
   late final compactor = ReviewCompactor(log);
-
-  static Future<String> _namespace(Object client) =>
-      (client as StatefulFakeImapClient).namespace();
 
   static Future<_Device> open(
     StatefulFakeImapServer server,
     SharedCollectionKeys keys, {
     DateTime Function()? now,
-  }) async {
-    final device = _Device(server, keys, now: now);
-    addTearDown(() async {
-      await device.store.waitForIdle();
-      await device.db.close();
-    });
-    await device.accounts.addAccount(fakeObjectAccount, 'pw');
-    return device;
-  }
+  }) =>
+      _Device(server, keys, now: now).init();
 
   Future<String> deviceId() async => (await store.clockFor(_acc)).deviceId;
-
-  Future<void> sync() async {
-    await mailboxes.syncMailboxes(_acc);
-    await store.sync(_acc);
-    await store.waitForIdle();
-  }
 
   /// [count] segments of one review each.
   Future<void> writeSegments(int count) async {
@@ -102,16 +63,11 @@ class _Device {
 }
 
 void main() {
-  late StatefulFakeImapServer server;
-  late SharedCollectionKeys keys;
-  setUpFakeObjectServer(
-    (s, k) => (server, keys) = (s, k),
-    collections: const [personalCollectionId],
-  );
+  final fixture = setUpPersonalObjectServer();
 
   test('30 own segments of the open month stay; the 31st compacts them',
       () async {
-    final a = await _Device.open(server, keys);
+    final a = await _Device.open(fixture.server, fixture.keys);
     await a.writeSegments(30);
 
     expect(await a.compactor.maybeCompact(_acc), isEmpty);
@@ -123,7 +79,7 @@ void main() {
 
     expect(await a.segments(), isEmpty);
     expect(await a.packs(), [isA<MailObject>()]);
-    expect(server.messagesIn(fakeObjectDataPath), hasLength(1));
+    expect(fixture.server.messagesIn(fakeObjectDataPath), hasLength(1));
     expect(
       readSegment((await a.store.open(pack))!)!.head.covers,
       [LogRange(await a.deviceId(), 1, 31)],
@@ -133,7 +89,7 @@ void main() {
   });
 
   test('at the month rollover the previous month gets its pack', () async {
-    final a = await _Device.open(server, keys);
+    final a = await _Device.open(fixture.server, fixture.keys);
     await a.writeSegments(2);
     expect(await a.compactor.maybeCompact(_acc), isEmpty);
 
@@ -148,24 +104,28 @@ void main() {
       readSegment((await a.store.open(pack))!)!.head.period,
       periodOfTime(DateTime.now()),
     );
-    expect(server.messagesIn(fakeObjectDataPath), hasLength(1));
+    expect(fixture.server.messagesIn(fakeObjectDataPath), hasLength(1));
     expect(await later.maybeCompact(_acc), isEmpty);
   });
 
   test('a locked account (no write key) is a no-op', () async {
-    final a = await _Device.open(server, keys);
+    final a = await _Device.open(fixture.server, fixture.keys);
     await a.writeSegments(31);
     final ids = {
-      for (final m in server.messagesIn(fakeObjectDataPath)) m.messageId,
+      for (final m in fixture.server.messagesIn(fakeObjectDataPath))
+        m.messageId,
     };
-    keys.byCollection.clear();
+    fixture.keys.byCollection.clear();
 
     expect(await a.compactor.maybeCompact(_acc), isEmpty);
     await a.store.waitForIdle();
 
     expect(await a.segments(), hasLength(31));
     expect(
-      {for (final m in server.messagesIn(fakeObjectDataPath)) m.messageId},
+      {
+        for (final m in fixture.server.messagesIn(fakeObjectDataPath))
+          m.messageId,
+      },
       ids,
     );
   });
@@ -173,9 +133,9 @@ void main() {
   test(
       'the segments of a removed device are adopted at once, of another '
       'device not', () async {
-    final a = await _Device.open(server, keys);
-    final lost = await _Device.open(server, keys);
-    final active = await _Device.open(server, keys);
+    final a = await _Device.open(fixture.server, fixture.keys);
+    final lost = await _Device.open(fixture.server, fixture.keys);
+    final active = await _Device.open(fixture.server, fixture.keys);
     await lost.writeSegments(2);
     await active.writeSegments(1);
     await a.sync();
@@ -192,7 +152,7 @@ void main() {
     expect(head.device, await a.deviceId());
     // The active device's segment stays; the lost one's are gone.
     expect(await a.segments(), hasLength(1));
-    expect(server.messagesIn(fakeObjectDataPath), hasLength(3));
+    expect(fixture.server.messagesIn(fakeObjectDataPath), hasLength(3));
     expect(await a.log.events(_acc, reviewLogName), hasLength(3));
   });
 
@@ -248,7 +208,7 @@ void main() {
     }
 
     setUp(() async {
-      a = await _Device.open(server, keys);
+      a = await _Device.open(fixture.server, fixture.keys);
       filter = ReviewCompactionFilter(a.db);
     });
 
