@@ -86,20 +86,23 @@ ObjectPart markdownPart(String body) => ObjectPart(
       bytes: Uint8List.fromList(utf8.encode(body)),
     );
 
-/// The key lookups of a device that holds [testDeckKey] while [unlocked].
+/// The key lookups of a device that holds [testDeckKey] and
+/// [testPersonalKey] while [unlocked].
 ({
   CollectionKey? Function(String, Uint8List) keyLookup,
   CollectionKey? Function(String, String) writeKey,
 }) testDeckKeys(bool Function() unlocked) => (
-      keyLookup: (_, keyId) =>
-          unlocked() && constantTimeEquals(keyId, testDeckKey.keyId)
-              ? testDeckKey
-              : null,
-      writeKey: (_, collectionId) =>
-          unlocked() && collectionId == testDeckKey.collectionId
-              ? testDeckKey
-              : null,
+      keyLookup: (_, keyId) => !unlocked()
+          ? null
+          : _testKeys
+              .where((k) => constantTimeEquals(keyId, k.keyId))
+              .firstOrNull,
+      writeKey: (_, collectionId) => !unlocked()
+          ? null
+          : _testKeys.where((k) => k.collectionId == collectionId).firstOrNull,
     );
+
+final _testKeys = [testDeckKey, testPersonalKey];
 
 /// A Message-ID without its angle brackets.
 String bareMessageId(String messageId) =>

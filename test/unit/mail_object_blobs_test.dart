@@ -132,6 +132,8 @@ void main() {
       ),
       throwsStateError,
     );
+    final rowsBefore = await a.messageIds();
+    final cachedBefore = await a.db.select(a.db.mailObjectBlobs).get();
     await expectLater(
       a.blobs.putBlob(a.accountId, _deck, _bytes(maxEnvelopeBytes), _png),
       throwsA(isA<ObjectTooLargeException>()),
@@ -139,6 +141,12 @@ void main() {
     expect(
       (await a.rows()).where((r) => r.itemId == itemId),
       hasLength(1),
+    );
+    // Refused before anything is written (#1377).
+    expect(await a.messageIds(), rowsBefore);
+    expect(
+      (await a.db.select(a.db.mailObjectBlobs).get()).map((r) => r.itemId),
+      cachedBefore.map((r) => r.itemId),
     );
   });
 }

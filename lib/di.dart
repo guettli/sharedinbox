@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -192,6 +193,22 @@ final pickAttachmentFilesProvider =
       for (final f in result?.files ?? const <PlatformFile>[])
         if (f.path case final path?) (path: path, name: f.name),
     ];
+  },
+);
+
+/// An image the user picked: its path, name and bytes.
+typedef PickedImageFile = ({String path, String name, Uint8List bytes});
+
+/// Opens the platform file picker for one image (an entry's "Insert
+/// image", #1377); null when the user cancels. A provider so widget tests
+/// can pick without a platform.
+final pickImageFileProvider = Provider<Future<PickedImageFile?> Function()>(
+  (ref) => () async {
+    final result = await FilePicker.pickFiles(type: FileType.image);
+    final file = result?.files.firstOrNull;
+    final path = file?.path;
+    if (file == null || path == null) return null;
+    return (path: path, name: file.name, bytes: await file.readAsBytes());
   },
 );
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/entry_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
@@ -363,12 +364,14 @@ MailObjectItem conflictItemOf(List<InnerObject> versions) {
 }
 
 /// Pumps the app on the entries screen with personal data unlocked, backed by
-/// [repo] and [store] (and [today], if set), and waits for it to settle.
+/// [repo] and [store] (and [today] and [overrides], if set), and waits for
+/// it to settle.
 Future<void> pumpEntriesApp(
   WidgetTester tester, {
   required EntryRepository repo,
   required MailObjectStore store,
   DateTime Function()? today,
+  List<Override> overrides = const [],
 }) async {
   await tester.pumpWidget(
     buildApp(
@@ -382,6 +385,7 @@ Future<void> pumpEntriesApp(
         entryRepositoryProvider.overrideWithValue(repo),
         mailObjectStoreProvider.overrideWithValue(store),
         if (today != null) todayProvider.overrideWithValue(today),
+        ...overrides,
       ],
     ),
   );
