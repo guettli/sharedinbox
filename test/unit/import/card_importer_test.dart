@@ -114,6 +114,31 @@ void main() {
     expect(await device.allCards(), hasLength(7));
   });
 
+  test('basic_21b.apkg and then its anki21 twin basic.apkg: nothing changes',
+      () async {
+    final first = await device.importer.importApkg(
+      _acc,
+      _fixture('basic_21b.apkg'),
+    );
+    expect(first.added, 7);
+    expect(first.decks, ['Lang::German']);
+    final before = await device.serverMessages();
+    final blobs = await device.store.rowsOfKind(_acc, mailObjectBlobKind);
+
+    final twin = await device.importer.importApkg(
+      _acc,
+      _fixture('basic.apkg'),
+    );
+    expect(twin.added, 0);
+    expect(twin.updated, 0);
+    expect(twin.unchanged, 7);
+    expect(await device.serverMessages(), before);
+    expect(
+      await device.store.rowsOfKind(_acc, mailObjectBlobKind),
+      hasLength(blobs.length),
+    );
+  });
+
   test('basic_v2.apkg updates the changed card and adds the new note',
       () async {
     await device.importer.importApkg(_acc, _fixture('basic.apkg'));

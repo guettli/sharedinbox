@@ -9,8 +9,9 @@ import 'package:sharedinbox/core/import/anki_revlog.dart';
 import 'package:sharedinbox/core/import/anki_template.dart';
 import 'package:sharedinbox/core/import/card_import.dart';
 import 'package:sharedinbox/core/import/import_ids.dart';
+import 'package:sharedinbox/core/import/protobuf_wire.dart';
 import 'package:sharedinbox/core/models/card.dart';
-import 'package:sqlite3/sqlite3.dart' show OpenMode, sqlite3;
+import 'package:sqlite3/sqlite3.dart' show Database, OpenMode, sqlite3;
 
 /// The deck of a card whose deck is not in the collection.
 const ankiDefaultDeck = 'Default';
@@ -65,18 +66,32 @@ const _imageTypes = {
   'avif': 'image/avif',
 };
 
-/// Reads an Anki `.apkg` (a ZIP): the collection `collection.anki21`, else
-/// `collection.anki2` (newer exports hold a dummy `anki2` next to the real
-/// one), in the legacy schema 11 (note types and decks as JSON in `col`).
-/// Every row of `cards` becomes a card: the front is the note rendered
-/// with the question template, the back with the answer template without
-/// the front, both converted to Markdown ([ankiHtmlToMarkdown]). Cloze
-/// notes are skipped. Only images a card references are read. The
-/// `revlog` rows of the imported cards become [AnkiImport.reviews].
+/// The `meta` version of an `.apkg` whose collection is
+/// `collection.anki21b` and whose media are zstd-compressed with a protobuf
+/// `media` map (Anki's `PackageMetadata.Version.LATEST`).
+const _latestVersion = 3;
+
+/// The largest collection or media file a zstd entry may unpack to.
+const _maxUnpackedSize = 1 << 30;
+
+/// Reads an Anki `.apkg` (a ZIP). The collection is `collection.anki21b`
+/// when the `meta` version is LATEST (3) or the entry is there (newer
+/// exports hold a dummy `anki2` next to it): a zstd-compressed SQLite file
+/// in schema 18 (note types, fields, templates and decks in their own
+/// tables, their configs as protobuf, deck names split by `\x1f`), whose
+/// `media` map is a zstd-compressed protobuf `MediaEntries` and whose media
+/// files are zstd-compressed (#1384). Else it is `collection.anki21`, then
+/// `collection.anki2`, in the legacy schema 11 (note types and decks as
+/// JSON in `col`) with a JSON `media` map. Every row of `cards` becomes a
+/// card: the front is the note rendered with the question template, the
+/// back with the answer template without the front, both converted to
+/// Markdown ([ankiHtmlToMarkdown]). Cloze notes are skipped. Only images a
+/// card references are read. The `revlog` rows of the imported cards
+/// become [AnkiImport.reviews].
 ///
-/// Throws [UnsupportedAnkiFormatException] for an `.apkg` with only
-/// `collection.anki21b` (#1384) and [FormatException] for a file that is
-/// not an `.apkg`.
+/// Throws [UnsupportedAnkiFormatException] for a `meta` version above
+/// LATEST or a collection in neither schema, and [FormatException] for a
+/// file that is not an `.apkg` or holds invalid zstd or protobuf data.
 Future<AnkiImport> readApkg(Uint8List bytes) async {
   final Archive zip;
   try {
@@ -84,38 +99,81 @@ Future<AnkiImport> readApkg(Uint8List bytes) async {
   } catch (e) {
     throw FormatException('not an .apkg (ZIP) file: $e');
   }
-  final collection =
-      zip.findFile('collection.anki21') ?? zip.findFile('collection.anki2');
-  if (collection == null) {
-    if (zip.findFile('collection.anki21b') != null) {
-      throw const UnsupportedAnkiFormatException(
-        'this .apkg holds only collection.anki21b; export it from Anki with '
-        '"Support older Anki versions" checked',
-      );
-    }
-    throw const FormatException('no Anki collection in the .apkg');
+  final version = _packageVersion(zip);
+  if (version > _latestVersion) {
+    throw UnsupportedAnkiFormatException(
+      'this .apkg is of a newer Anki version (package version $version)',
+    );
   }
-  final media = _ApkgMedia(zip);
+  final latest = version == _latestVersion;
+  final anki21b = zip.findFile('collection.anki21b');
+  final Uint8List collection;
+  if (latest || anki21b != null) {
+    if (anki21b == null) {
+      throw const FormatException('no collection.anki21b in the .apkg');
+    }
+    collection = _unzstd(anki21b.readBytes() ?? Uint8List(0), anki21b.name);
+  } else {
+    final legacy =
+        zip.findFile('collection.anki21') ?? zip.findFile('collection.anki2');
+    if (legacy == null) {
+      throw const FormatException('no Anki collection in the .apkg');
+    }
+    collection = legacy.readBytes() ?? Uint8List(0);
+  }
+  final media = latest ? _ApkgMedia.latest(zip) : _ApkgMedia.legacy(zip);
   final dir = await Directory.systemTemp.createTemp('sharedinbox-anki-');
   try {
     final file = File('${dir.path}/collection.sqlite');
-    await file.writeAsBytes(collection.readBytes() ?? Uint8List(0));
+    await file.writeAsBytes(collection);
     return _readCollection(file.path, media);
   } finally {
     await dir.delete(recursive: true);
   }
 }
 
+/// The `PackageMetadata.version` of the `meta` entry; 0 without one
+/// (a legacy package).
+int _packageVersion(Archive zip) {
+  final meta = zip.findFile('meta');
+  if (meta == null) return 0;
+  return ProtoReader(meta.readBytes() ?? Uint8List(0)).varint(1) ?? 0;
+}
+
+/// [data] (the ZIP entry [name]) decompressed with zstd.
+Uint8List _unzstd(Uint8List data, String name) {
+  try {
+    return ZstdDecoder().decodeBytes(
+      data,
+      verify: true,
+      throwOnError: true,
+      maxOutputSize: _maxUnpackedSize,
+    );
+  } catch (e) {
+    throw FormatException('$name is not valid zstd data: $e');
+  }
+}
+
 AnkiImport _readCollection(String path, _ApkgMedia media) {
   final db = sqlite3.open(path, mode: OpenMode.readOnly);
   try {
+    // Schema 18 sorts names with Anki's own collation.
+    db.createCollation(
+      name: 'unicase',
+      function: (a, b) =>
+          (a ?? '').toLowerCase().compareTo((b ?? '').toLowerCase()),
+    );
     final col = db.select('SELECT crt, models, decks FROM col LIMIT 1');
     if (col.isEmpty) throw const FormatException('the collection has no col');
-    final models = _jsonMap(col.first['models']);
-    final decks = _jsonMap(col.first['decks']);
+    var models = _jsonMap(col.first['models']);
+    var decks = _jsonMap(col.first['decks']);
+    if (models.isEmpty && _hasTable(db, 'notetypes')) {
+      models = _tableModels(db);
+      decks = _tableDecks(db);
+    }
     if (models.isEmpty) {
       throw const UnsupportedAnkiFormatException(
-        'the collection keeps its note types outside the legacy schema',
+        'the collection keeps its note types in an unknown schema',
       );
     }
     final notes = {
@@ -213,6 +271,53 @@ Map<String, Object?> _jsonMap(Object? json) {
   return decoded is Map<String, Object?> ? decoded : const {};
 }
 
+bool _hasTable(Database db, String name) => db.select(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+      [name],
+    ).isNotEmpty;
+
+/// The note types of a schema 18 collection, in the shape of the legacy
+/// `col.models` JSON: `{type, flds: [{name, ord}], tmpls: [{ord, qfmt,
+/// afmt}]}` by id. `type` is `NotetypeConfig.kind` (field 1, 1 = cloze),
+/// `qfmt`/`afmt` are `CardTemplate.Config.q_format`/`a_format` (fields 1
+/// and 2).
+Map<String, Object?> _tableModels(Database db) {
+  final flds = <String, List<Object?>>{};
+  final tmpls = <String, List<Object?>>{};
+  for (final r in db.select('SELECT ntid, ord, name FROM fields')) {
+    flds.putIfAbsent('${r['ntid']}', () => []).add({
+      'name': r['name'],
+      'ord': r['ord'],
+    });
+  }
+  for (final r in db.select('SELECT ntid, ord, config FROM templates')) {
+    final config = ProtoReader(_blob(r['config']));
+    tmpls.putIfAbsent('${r['ntid']}', () => []).add({
+      'ord': r['ord'],
+      'qfmt': config.string(1) ?? '',
+      'afmt': config.string(2) ?? '',
+    });
+  }
+  return {
+    for (final r in db.select('SELECT id, config FROM notetypes'))
+      '${r['id']}': {
+        'type': ProtoReader(_blob(r['config'])).varint(1) ?? 0,
+        'flds': flds['${r['id']}'] ?? const [],
+        'tmpls': tmpls['${r['id']}'] ?? const [],
+      },
+  };
+}
+
+/// The decks of a schema 18 collection, in the shape of the legacy
+/// `col.decks` JSON: `{name}` by id, the `\x1f`-separated name parts
+/// joined with `::`.
+Map<String, Object?> _tableDecks(Database db) => {
+      for (final r in db.select('SELECT id, name FROM decks'))
+        '${r['id']}': {'name': '${r['name']}'.replaceAll('\u001f', '::')},
+    };
+
+Uint8List _blob(Object? value) => value is Uint8List ? value : Uint8List(0);
+
 /// The template of card [ord] of note type [model].
 Map<Object?, Object?>? _template(Map<Object?, Object?> model, int ord) {
   final tmpls = model['tmpls'];
@@ -242,10 +347,11 @@ Map<String, String> _fields(Map<Object?, Object?> model, String flds) {
   };
 }
 
-/// The media of an `.apkg`: the `media` JSON maps the ZIP entries `"0"`,
-/// `"1"`, … to file names.
+/// The media of an `.apkg`: the `media` map names the ZIP entries `"0"`,
+/// `"1"`, … by file name.
 class _ApkgMedia {
-  _ApkgMedia(this._zip) {
+  /// The legacy `media` JSON `{"0": "cat.png", …}`.
+  _ApkgMedia.legacy(this._zip) : _zstd = false {
     final index = _zip.findFile('media');
     if (index == null) return;
     try {
@@ -260,7 +366,26 @@ class _ApkgMedia {
     }
   }
 
+  /// The zstd-compressed protobuf `MediaEntries { repeated MediaEntry
+  /// entries = 1; }` with `MediaEntry { string name = 1; …; optional uint32
+  /// legacy_zip_filename = 255; }`: entry i is in the ZIP entry
+  /// `legacy_zip_filename ?? i`, zstd-compressed.
+  _ApkgMedia.latest(this._zip) : _zstd = true {
+    final index = _zip.findFile('media');
+    if (index == null) return;
+    final entries = ProtoReader(
+      _unzstd(index.readBytes() ?? Uint8List(0), index.name),
+    ).repeated(1);
+    for (var i = 0; i < entries.length; i++) {
+      final entry = ProtoReader(entries[i]);
+      final name = entry.string(1);
+      if (name == null || name.isEmpty) continue;
+      _entryByName[name] = '${entry.varint(255) ?? i}';
+    }
+  }
+
   final Archive _zip;
+  final bool _zstd;
   final _entryByName = <String, String>{};
   final _blobIdByName = <String, String?>{};
 
@@ -276,8 +401,10 @@ class _ApkgMedia {
         final entry = name == null ? null : _entryByName[name];
         final type = name == null ? null : _imageTypes[_extension(name)];
         if (entry == null || type == null) return null;
-        final bytes = _zip.findFile(entry)?.readBytes();
-        if (bytes == null) return null;
+        final file = _zip.findFile(entry);
+        final stored = file?.readBytes();
+        if (file == null || stored == null) return null;
+        final bytes = _zstd ? _unzstd(stored, file.name) : stored;
         final id = mediaBlobId(bytes);
         used[id] = (bytes: bytes, contentType: type);
         return id;

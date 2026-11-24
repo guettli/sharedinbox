@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/hlc.dart';
 import 'package:sharedinbox/core/import/card_import.dart';
@@ -9,6 +10,44 @@ import 'package:sharedinbox/data/import/anki_apkg_reader.dart';
 
 Uint8List _fixture(String name) =>
     File('test/fixtures/anki/$name').readAsBytesSync();
+
+/// [b] imports exactly like [a].
+void _expectSameImport(AnkiImport b, AnkiImport a) {
+  expect(
+    [for (final c in b.cards) (c.cardId, c.deckName, c.content)],
+    [for (final c in a.cards) (c.cardId, c.deckName, c.content)],
+  );
+  expect(b.media.keys, a.media.keys);
+  for (final MapEntry(:key, :value) in a.media.entries) {
+    expect(b.media[key]!.bytes, value.bytes);
+    expect(b.media[key]!.contentType, value.contentType);
+  }
+  expect(b.skippedCloze, a.skippedCloze);
+  expect(b.skippedEmpty, a.skippedEmpty);
+  expect(b.droppedSounds, a.droppedSounds);
+  expect(b.missingMedia, a.missingMedia);
+  expect(b.reviewDeviceId, a.reviewDeviceId);
+  expect(b.reviews, a.reviews);
+}
+
+/// The zstd entries of [apkg] (raw blocks only) re-encoded with compressed
+/// blocks.
+Uint8List _recompressed(Uint8List apkg) {
+  final out = Archive();
+  for (final f in ZipDecoder().decodeBytes(apkg).files) {
+    final data = f.readBytes()!;
+    final zstd = const {'collection.anki21b', 'media', '0'}.contains(f.name);
+    out.addFile(
+      ArchiveFile.bytes(
+        f.name,
+        zstd
+            ? ZstdEncoder().encodeBytes(ZstdDecoder().decodeBytes(data))
+            : data,
+      ),
+    );
+  }
+  return ZipEncoder().encodeBytes(out);
+}
 
 void main() {
   test('basic.apkg: 7 cards (reversed notes twice), deck, tags, image',
@@ -123,9 +162,48 @@ void main() {
     expect(anki.reviewDeviceId, isNot(ankiImportDeviceId(1700000000)));
   });
 
-  test('an .apkg with only collection.anki21b is not supported', () {
+  test('basic_21b.apkg (anki21b, zstd, protobuf media) imports like basic',
+      () async {
+    final legacy = await readApkg(_fixture('basic.apkg'));
+    final latest = await readApkg(_fixture('basic_21b.apkg'));
+    expect(latest.cards, hasLength(7));
+    expect(latest.media, hasLength(1));
+    // Not the dummy collection.anki2 next to it.
     expect(
-      readApkg(_fixture('anki21b_only.apkg')),
+      latest.cards.where((c) => c.content.front.contains('Please update')),
+      isEmpty,
+    );
+    _expectSameImport(latest, legacy);
+  });
+
+  test('anki21b with compressed zstd blocks imports like basic', () async {
+    final raw = _fixture('basic_21b.apkg');
+    final compressed = _recompressed(raw);
+    final rawCollection =
+        ZipDecoder().decodeBytes(raw).findFile('collection.anki21b')!;
+    final compressedCollection =
+        ZipDecoder().decodeBytes(compressed).findFile('collection.anki21b')!;
+    // The encoder really compressed the schema 18 collection.
+    expect(
+      compressedCollection.readBytes()!.length,
+      lessThan(rawCollection.readBytes()!.length ~/ 2),
+    );
+    _expectSameImport(
+      await readApkg(compressed),
+      await readApkg(_fixture('basic.apkg')),
+    );
+  });
+
+  test('a corrupt zstd collection.anki21b is a FormatException', () {
+    expect(readApkg(_fixture('anki21b_corrupt.apkg')), throwsFormatException);
+  });
+
+  test('a meta version newer than LATEST is not supported', () {
+    final out = Archive()
+      ..addFile(ArchiveFile.bytes('collection.anki21b', Uint8List(0)))
+      ..addFile(ArchiveFile.bytes('meta', [0x08, 0x04]));
+    expect(
+      readApkg(ZipEncoder().encodeBytes(out)),
       throwsA(isA<UnsupportedAnkiFormatException>()),
     );
   });

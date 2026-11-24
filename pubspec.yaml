@@ -72,8 +72,10 @@ dependencies:
   # Synchronous SHA-256 for the stable ids of imported cards and media (#1383).
   crypto: ^3.0.7
 
-  # Reads Anki .apkg (ZIP) files for the flash-card import (#1383).
-  archive: ^4.0.9
+  # Reads Anki .apkg (ZIP) files for the flash-card import (#1383). 4.7.1
+  # for its pure-Dart ZstdDecoder (anki21b packages, #1384) with a bounded
+  # window and output size.
+  archive: ^4.7.1
 
   # QR code scanning (camera) for secure account import
   mobile_scanner: ^7.2.0

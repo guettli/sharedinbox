@@ -80,8 +80,8 @@ class ImportResult {
       'skippedReviews: $skippedReviews, decks: $decks)';
 }
 
-/// The `.apkg` holds only a format this app cannot read yet (for example
-/// only `collection.anki21b`, #1384).
+/// The `.apkg` is in a format this app cannot read (a package version of
+/// a newer Anki, or a collection schema it does not know).
 class UnsupportedAnkiFormatException implements Exception {
   const UnsupportedAnkiFormatException(this.message);
 
@@ -98,7 +98,8 @@ class UnsupportedAnkiFormatException implements Exception {
 /// deleted, and known review events are not written again. Works offline (the normal sync uploads
 /// the cards); throws `NoWriteKeyException` while the account is locked.
 abstract class CardImporter {
-  /// Imports an Anki `.apkg` (`collection.anki21` or `collection.anki2`).
+  /// Imports an Anki `.apkg` (`collection.anki21b`, `collection.anki21` or
+  /// `collection.anki2`, #1384).
   /// Throws [UnsupportedAnkiFormatException] and [FormatException].
   Future<ImportResult> importApkg(String accountId, Uint8List bytes);
 
