@@ -59,13 +59,18 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     bool pushPending = true,
     DateTime Function()? now,
     this.onStep,
-    List<ObjectProjector> projectors = const [],
+    List<MailObjectProjector> projectors = const [],
   })  : _keyLookup = keyLookup,
         _writeKey = writeKey,
         _keepVanishedKey = keepVanishedKeyMail,
         pushEnabled = pushPending,
         now = now ?? DateTime.now,
-        _projectors = {for (final p in projectors) p.kind: p},
+        _projectors = {
+          for (final p in projectors.whereType<ObjectProjector>()) p.kind: p,
+        },
+        _logProjectors = {
+          for (final p in projectors.whereType<LogProjector>()) p.log: p,
+        },
         _resolver = DeviceIdentityResolver(storage, MailObjectDevicesDb(db));
 
   @protected
@@ -93,6 +98,9 @@ abstract class MailObjectStoreBase implements MailObjectStore {
 
   /// The projection of each document kind that has one, by kind (#1373).
   final Map<String, ObjectProjector> _projectors;
+
+  /// The projection of each log that has one, by log (#1380).
+  final Map<String, LogProjector> _logProjectors;
   final DeviceIdentityResolver _resolver;
   final Map<String, HlcClock> _clocks = {};
 
@@ -333,7 +341,34 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         .map((r) => r.read(maxSeq))
         .getSingle();
     if (ownSeq != null) clock.advanceSeqPast(ownSeq);
+    // And past own reviews not uploaded yet: they are in no segment (#1380).
+    final maxReviewSeq = db.reviewLog.seq.max();
+    final maxReviewH = db.reviewLog.h.max();
+    final review = await (db.selectOnly(db.reviewLog)
+          ..addColumns([maxReviewSeq, maxReviewH])
+          ..where(
+            db.reviewLog.accountId.equals(accountId) &
+                db.reviewLog.deviceId.equals(identity.deviceId),
+          ))
+        .getSingle();
+    if (review.read(maxReviewSeq) case final seq?) clock.advanceSeqPast(seq);
+    if (_tryHlc(review.read(maxReviewH)) case final h?) {
+      clock.advancePast([h]);
+    }
     return _clocks[accountId] ??= clock;
+  }
+
+  @override
+  Future<void> recordHighWater(String accountId) async {
+    final clock = await clockFor(accountId);
+    await _resolver.recordHighWater(
+      accountId,
+      DeviceIdentity(
+        deviceId: clock.deviceId,
+        hlcHigh: clock.high,
+        seqHigh: clock.seqHigh,
+      ),
+    );
   }
 
   @override
@@ -417,14 +452,7 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     if (log != null) await _coverLog(accountId, log);
     final clock = await clockFor(accountId);
     if (device == clock.deviceId) clock.advancePast([head.versionId]);
-    await _resolver.recordHighWater(
-      accountId,
-      DeviceIdentity(
-        deviceId: clock.deviceId,
-        hlcHigh: clock.high,
-        seqHigh: clock.seqHigh,
-      ),
-    );
+    await recordHighWater(accountId);
     _kickPush(accountId);
     return _toModel((await row(accountId, messageId))!);
   }
@@ -864,7 +892,8 @@ abstract class MailObjectStoreBase implements MailObjectStore {
   // ── Projections (#1372) ───────────────────────────────────────────────────
 
   /// Writes what readers query of the head [object] (row [messageId]): the
-  /// events of a log segment or pack, the values of a device-state doc.
+  /// events of a log segment or pack (and its [LogProjector]'s projection),
+  /// the values of a device-state doc.
   /// Returns the log of a segment or pack.
   Future<String?> _project(
     String accountId,
@@ -897,6 +926,8 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         mode: InsertMode.insertOrIgnore,
       );
     });
+    await _logProjectors[log]
+        ?.apply(accountId, object.head.itemId, segment.events);
     return log;
   }
 

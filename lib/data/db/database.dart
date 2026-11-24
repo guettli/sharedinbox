@@ -911,6 +911,67 @@ class Cards extends Table {
   Set<Column> get primaryKey => {accountId, cardId};
 }
 
+/// Every review and undo event seen here (ENCRYPTED-OBJECTS.md §7, #1380),
+/// own and remote, deduped by `(deviceId, seq)` through the key. A rating
+/// is one insert with [segmentItemId] null: pending, not in a segment yet.
+/// Written by `ReviewRepositoryImpl` (own) and `ReviewLogProjector` (from
+/// the segments). Added in schema v89.
+@DataClassName('ReviewLogRow')
+class ReviewLog extends Table {
+  @override
+  String get tableName => 'review_log';
+
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get deviceId => text()();
+  IntColumn get seq => integer()();
+  // Null for an undo.
+  TextColumn get cardId => text().nullable()();
+  // `review` or `undo`.
+  TextColumn get op => text()();
+  // The encoded HLC of the event.
+  TextColumn get h => text()();
+  // Review: wall clock (ms since the epoch), rating 1–4 and duration.
+  IntColumn get t => integer().nullable()();
+  IntColumn get rating => integer().nullable()();
+  IntColumn get durationMs => integer().nullable()();
+  // Undo: the event it cancels.
+  TextColumn get refDeviceId => text().nullable()();
+  IntColumn get refSeq => integer().nullable()();
+  // The itemId of the segment it is in; null = own and not uploaded yet.
+  TextColumn get segmentItemId => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, deviceId, seq};
+}
+
+/// The schedule of each reviewed card (#1380): derived by replaying its
+/// [ReviewLog] events, never synced. A card without a counted review has no
+/// row. Added in schema v89.
+@DataClassName('CardScheduleRow')
+class CardSchedules extends Table {
+  @override
+  String get tableName => 'card_schedule';
+
+  TextColumn get accountId =>
+      text().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get cardId => text()();
+  // `CardState.name`.
+  TextColumn get state => text()();
+  IntColumn get step => integer().nullable()();
+  RealColumn get stability => real().nullable()();
+  RealColumn get difficulty => real().nullable()();
+  IntColumn get dueMs => integer()();
+  IntColumn get lastReviewMs => integer().nullable()();
+  IntColumn get reps => integer()();
+  IntColumn get lapses => integer()();
+  // The effective params it was computed with (`paramsKeyOf`).
+  TextColumn get paramsKey => text()();
+
+  @override
+  Set<Column> get primaryKey => {accountId, cardId};
+}
+
 /// Senders for whom remote images are loaded automatically.
 /// Per-device/per-user — not tied to any email account.
 @DataClassName('ImageTrustedSenderRow')
@@ -1118,6 +1179,8 @@ class UserPreferences extends Table {
     Decks,
     CardSources,
     Cards,
+    ReviewLog,
+    CardSchedules,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -1615,6 +1678,7 @@ class AppDatabase extends _$AppDatabase {
           await _createEntriesIndex();
           await _createEntryLinksIndex();
           await _createCardIndexes();
+          await _createReviewIndexes();
         },
         onUpgrade: _upgradeAtomically,
         // Drift runs this after onCreate/onUpgrade, so the upgrade steps
@@ -2690,6 +2754,34 @@ class AppDatabase extends _$AppDatabase {
         );
       }
     }
+    if (from < 89) {
+      // The review log and the schedule cache (#1380). Each step
+      // re-runnable (#1084).
+      if (!await _tableExists(this, 'review_log')) {
+        await m.createTable(reviewLog);
+      }
+      if (!await _tableExists(this, 'card_schedule')) {
+        await m.createTable(cardSchedules);
+      }
+      await _createReviewIndexes();
+    }
+  }
+
+  /// Schema v89: the events of a card (its replay), the pending own events
+  /// (the upload), and the due queue.
+  Future<void> _createReviewIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS review_log_card ON review_log '
+      '(account_id, card_id);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS review_log_pending ON review_log '
+      '(account_id, device_id, segment_item_id);',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS card_schedule_due ON card_schedule '
+      '(account_id, due_ms);',
+    );
   }
 
   /// Schema v88: the entries of a mail, which the mail detail screen reads.

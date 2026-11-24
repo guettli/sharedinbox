@@ -76,16 +76,16 @@ class DeviceStateStore {
 
   /// The effective map, updated with every merge.
   Stream<Map<String, Object?>> watch(String accountId) =>
-      _query(accountId).watch().map(_toMap);
+      _query(accountId).watch().map(effectiveOf);
 
   Future<Map<String, Object?>> _effective(String accountId) =>
-      _query(accountId).get().then(_toMap);
+      effectiveDeviceStateOf(db, accountId);
 
   SimpleSelectStatement<$MailObjectDeviceStatesTable, MailObjectDeviceStateRow>
-      _query(String accountId) => db.select(db.mailObjectDeviceStates)
-        ..where((t) => t.accountId.equals(accountId));
+      _query(String accountId) => _deviceStateQuery(db, accountId);
 
-  static Map<String, Object?> _toMap(List<MailObjectDeviceStateRow> rows) {
+  /// The effective map of the projected [rows] of one account.
+  static Map<String, Object?> effectiveOf(List<MailObjectDeviceStateRow> rows) {
     final byDevice = <String, Map<String, DeviceStateValue>>{};
     for (final r in rows) {
       final hlc = _tryHlc(r.hlc);
@@ -108,3 +108,16 @@ class DeviceStateStore {
     }
   }
 }
+
+/// The effective device state of [accountId] as projected in [db]: what
+/// [DeviceStateStore.get] reads, without a store (e.g. inside a projector).
+Future<Map<String, Object?>> effectiveDeviceStateOf(
+  AppDatabase db,
+  String accountId,
+) =>
+    _deviceStateQuery(db, accountId).get().then(DeviceStateStore.effectiveOf);
+
+SimpleSelectStatement<$MailObjectDeviceStatesTable, MailObjectDeviceStateRow>
+    _deviceStateQuery(AppDatabase db, String accountId) =>
+        db.select(db.mailObjectDeviceStates)
+          ..where((t) => t.accountId.equals(accountId));

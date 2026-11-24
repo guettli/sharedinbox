@@ -1,10 +1,6 @@
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
-import 'package:sharedinbox/core/encrypted_objects/wire.dart';
-import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/card.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
@@ -16,32 +12,12 @@ import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 
 import 'db_test_helper.dart';
 import 'encrypted_objects/test_helpers.dart';
+import 'helpers/fake_object_account.dart';
 import 'helpers/fake_secure_storage.dart';
 import 'helpers/stateful_fake_imap.dart';
 
-const _acc = 'acc-1';
-const _dataPath = 'SharedInbox/Data';
-
-const _account = Account(
-  id: _acc,
-  displayName: 'Alice',
-  email: 'alice@example.com',
-  imapHost: 'imap.example.com',
-  smtpHost: 'smtp.example.com',
-);
-
-/// The collection keys of the account, as the key lifecycle shares them
-/// between devices through the keys folder.
-class _Keys {
-  final byCollection = <String, CollectionKey>{};
-
-  CollectionKey? lookup(Uint8List keyId) {
-    for (final k in byCollection.values) {
-      if (constantTimeEquals(k.keyId, keyId)) return k;
-    }
-    return null;
-  }
-}
+const _acc = fakeObjectAccountId;
+const _dataPath = fakeObjectDataPath;
 
 /// One install with the card projections, talking to the shared fake
 /// [server].
@@ -49,7 +25,7 @@ class _CardDevice {
   _CardDevice(this.server, this.keys);
 
   final StatefulFakeImapServer server;
-  final _Keys keys;
+  final SharedCollectionKeys keys;
   final db = openTestDatabase();
   final storage = FakeSecureStorage();
   late final accounts = AccountRepositoryImpl(db, storage);
@@ -87,14 +63,14 @@ class _CardDevice {
 
   static Future<_CardDevice> open(
     StatefulFakeImapServer server,
-    _Keys keys,
+    SharedCollectionKeys keys,
   ) async {
     final device = _CardDevice(server, keys);
     addTearDown(() async {
       await device.store.waitForIdle();
       await device.db.close();
     });
-    await device.accounts.addAccount(_account, 'pw');
+    await device.accounts.addAccount(fakeObjectAccount, 'pw');
     return device;
   }
 
@@ -114,15 +90,11 @@ class _CardDevice {
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
-
   late StatefulFakeImapServer server;
-  late _Keys keys;
-
-  setUp(() {
-    server = StatefulFakeImapServer(uidValidityByFolder: {'INBOX': 1});
-    keys = _Keys();
-  });
+  late SharedCollectionKeys keys;
+  setUpFakeObjectServer(
+    (s, k) => (server, keys) = (s, k),
+  );
 
   Future<(_CardDevice, _CardDevice, Deck)> twoDevicesWithDeck() async {
     final a = await _CardDevice.open(server, keys);

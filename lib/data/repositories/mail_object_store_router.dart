@@ -63,6 +63,10 @@ class MailObjectStoreRouter implements MailObjectStore {
       (await _for(accountId)).clockFor(accountId);
 
   @override
+  Future<void> recordHighWater(String accountId) async =>
+      (await _for(accountId)).recordHighWater(accountId);
+
+  @override
   Future<MailObject> put(String accountId, InnerObject object) async =>
       (await _for(accountId)).put(accountId, object);
 

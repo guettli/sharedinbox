@@ -747,6 +747,52 @@ the projections, writes through the store); #1379.
   on the server. The `Decks` projection lists them. Deleting a deck comes
   with the deck UI (#1381).
 
+Reviews, schedules and upload are implemented in #1380:
+
+- **Device-state keys** of the params (effective value account-global,
+  5.4 item 4):
+  - `fsrs.params` = `{weights, desiredRetention, maximumInterval,
+    enableFuzz}`, for every deck;
+  - `deck.<deckId>.options` = `{learningSteps, relearningSteps,
+    dayStartHour, desiredRetention?}` (steps in seconds); a deck value
+    overrides the global one.
+  A missing or invalid field falls back to its default
+  (`lib/core/flashcards/review_params.dart`).
+- **Tables** (schema v89): `review_log` holds every review and undo seen on
+  this device, own and remote, deduped by `(deviceId, seq)`; an own event
+  with `segmentItemId` NULL is pending (in no segment yet). `card_schedule`
+  is the derived cache per card (never synced), with the `paramsKey` of the
+  effective params it was computed with; a card without a counted review
+  has no row.
+- **Rating** (`ReviewRepositoryImpl`): one transaction — `seq` and `h` from
+  the store's clock, the insert, the recompute of that card
+  (`CardScheduleWriter`) — then the HLC and `seq` high-water marks go to
+  secure storage (`MailObjectStore.recordHighWater`); no `put`, no sync.
+  `clockFor` also advances past this device's own `review_log` rows, since
+  pending ones are in no segment.
+- **Projection hook** `LogProjector`: the store calls it inside the merge
+  transaction right after it stores the events of a segment or pack head (a
+  local put, a pull, a reopen). `ReviewLogProjector` inserts the events,
+  marks own pending rows with the segment's itemId (atomic with its local
+  put) and recomputes the cards that new events touch. A card whose deck
+  changes (it arrived after its reviews) is recomputed by the card
+  projectors; a change of the params keys replays the affected decks
+  (`CardScheduleWriter.watchParams`).
+- **Upload** (`ReviewUploader`, `ReviewUploadScheduler`): a flush writes the
+  pending own rows in `seq` order as `review-seg` segments of at most 1 000
+  events (`MailObjectLog.appendStamped`), which the store's sync uploads.
+  Triggers, debounced (2 s) and coalesced into one flush per account: app to
+  the background, session end, 5 min after the last rating, ≥ 300 pending
+  events (at once), and each regular sync cycle. Without a write key the
+  rows stay pending; a crash after the put at worst writes the events
+  again, which the `(deviceId, seq)` dedupe makes harmless. Compaction is
+  #1382.
+- **Export serializers** (`lib/core/flashcards/card_export.dart`, wired into
+  the ZIP by #1356): `cardsCsv` (RFC 4180, columns
+  `cardId,deckId,deckName,front,back,tags,h`, `si-img:<itemId>` rewritten to
+  `media/<itemId>`, returning the referenced media) and `reviewLogJsonl`
+  (one wire event plus `device` per line, ordered by `(h, deviceId, seq)`).
+
 ## 8. Test vectors
 
 `test/fixtures/encrypted_objects/vectors.json` holds fixed keys, nonces,

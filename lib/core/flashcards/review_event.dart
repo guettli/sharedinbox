@@ -1,14 +1,60 @@
+import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
+
+/// The log of the review events: segments `review-seg`, packs `review-pack`.
+const reviewLogName = 'review';
+
 /// Events of the flash card review log (ENCRYPTED-OBJECTS.md, section 7).
 ///
 /// In a log segment the device id lives in the segment head, not in each
-/// event. The parser (#1380) copies it into [CardEvent.deviceId] so replay can
-/// dedupe and order events from several devices.
+/// event. [CardEvent.fromLogEvent] copies it (the writer of `h`) into
+/// [CardEvent.deviceId] so replay can dedupe and order events from several
+/// devices.
 sealed class CardEvent {
   const CardEvent({
     required this.deviceId,
     required this.seq,
     required this.h,
   });
+
+  /// Reads the wire event [event]; null for an unknown `op` or a malformed
+  /// event, which the log skips.
+  static CardEvent? fromLogEvent(LogEvent event) {
+    final json = event.json;
+    final deviceId = event.deviceId;
+    final h = event.hlc.encode();
+    switch (json['op']) {
+      case 'review':
+        final (c, t, r, ms) = (json['c'], json['t'], json['r'], json['ms']);
+        if (c is! String || t is! int || r is! int) return null;
+        return ReviewEvent(
+          deviceId: deviceId,
+          seq: event.seq,
+          h: h,
+          cardId: c,
+          t: t,
+          rating: r,
+          ms: ms is int ? ms : 0,
+        );
+      case 'undo':
+        final ref = json['ref'];
+        if (ref is! List || ref.length != 2) return null;
+        final [refDevice, refSeq] = ref;
+        if (refDevice is! String || refSeq is! int) return null;
+        return UndoEvent(
+          deviceId: deviceId,
+          seq: event.seq,
+          h: h,
+          refDeviceId: refDevice,
+          refSeq: refSeq,
+        );
+    }
+    return null;
+  }
+
+  /// The wire event: `{op: "review", c, s, h, t, r, ms}` or
+  /// `{op: "undo", s, h, ref}`, without the deviceId (the segment head
+  /// holds it).
+  Map<String, Object?> toJson();
 
   /// Device that wrote the event (from the segment head).
   final String deviceId;
@@ -45,6 +91,17 @@ class ReviewEvent extends CardEvent {
   final int ms;
 
   @override
+  Map<String, Object?> toJson() => {
+        'op': 'review',
+        'c': cardId,
+        's': seq,
+        'h': h,
+        't': t,
+        'r': rating,
+        'ms': ms,
+      };
+
+  @override
   bool operator ==(Object other) =>
       other is ReviewEvent &&
       other.deviceId == deviceId &&
@@ -76,6 +133,14 @@ class UndoEvent extends CardEvent {
 
   final String refDeviceId;
   final int refSeq;
+
+  @override
+  Map<String, Object?> toJson() => {
+        'op': 'undo',
+        's': seq,
+        'h': h,
+        'ref': [refDeviceId, refSeq],
+      };
 
   @override
   bool operator ==(Object other) =>

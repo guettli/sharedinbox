@@ -62,10 +62,25 @@ class MailObjectLog {
   ) async {
     if (events.isEmpty) throw ArgumentError.value(events, 'events', 'empty');
     final clock = await store.clockFor(accountId);
-    final stamped = [
+    return appendStamped(accountId, log, collectionId, [
       for (final e in events)
         LogEvent(seq: clock.nextSeq(), hlc: clock.send(), json: e),
-    ];
+    ]);
+  }
+
+  /// Writes the events [stamped], already stamped with this device's `s`
+  /// and `h` (e.g. ratings stored before, #1380), as one segment of [log]
+  /// in [collectionId].
+  Future<MailObject> appendStamped(
+    String accountId,
+    String log,
+    String collectionId,
+    List<LogEvent> stamped,
+  ) async {
+    if (stamped.isEmpty) {
+      throw ArgumentError.value(stamped, 'stamped', 'empty');
+    }
+    final clock = await store.clockFor(accountId);
     final versionId = clock.send();
     return store.put(
       accountId,

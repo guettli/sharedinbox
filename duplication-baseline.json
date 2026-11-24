@@ -1439,9 +1439,9 @@
     {
       "tool": "jscpd",
       "file": "test/unit/card_repository_impl_test.dart",
-      "start_line": 52,
-      "end_line": 69,
-      "key": "5e25317d400830a2"
+      "start_line": 28,
+      "end_line": 45,
+      "key": "1a8c10f08a202cf4"
     },
     {
       "tool": "jscpd",
@@ -1504,7 +1504,7 @@
       "file": "test/unit/entry_repository_impl_test.dart",
       "start_line": 41,
       "end_line": 67,
-      "key": "5e25317d400830a2"
+      "key": "1a8c10f08a202cf4"
     },
     {
       "tool": "jscpd",
