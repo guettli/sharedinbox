@@ -137,6 +137,15 @@ class Entry {
   /// Several heads with different content.
   final bool hasConflict;
 
+  /// Nothing but a journal day: no title, text, tags, task or mail links.
+  /// What "New entry" leaves when the user goes back without typing.
+  bool get isBlank =>
+      (title?.trim() ?? '').isEmpty &&
+      body.trim().isEmpty &&
+      tags.isEmpty &&
+      task == null &&
+      links.isEmpty;
+
   /// What a list shows for it: the title, or else the first line of the
   /// body.
   String get displayTitle {

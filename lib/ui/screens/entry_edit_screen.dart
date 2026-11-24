@@ -36,6 +36,8 @@ import 'package:sharedinbox/ui/widgets/shrink_image_dialog.dart';
 /// the journal or takes it out (#1358); it is saved with the text.
 /// "Insert image" uploads a picked, shrunk image as a blob and adds its
 /// `si-img:` line to the text (#1377).
+/// Leaving with unsaved title, text or journal-day edits saves them, like
+/// Save does; if that fails, the user chooses to keep editing or discard.
 class EntryEditScreen extends ConsumerStatefulWidget {
   const EntryEditScreen({
     super.key,
@@ -59,8 +61,42 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   /// The journal day (`YYYY-MM-DD`), null: not in the journal.
   String? _date;
   bool _loaded = false;
-  bool _busy = false;
+
+  /// Completes when the running save, task change or upload ends; null
+  /// while none runs. Leaving waits for it.
+  Completer<void>? _running;
+  bool get _busy => _running != null;
+
+  void _setBusy(bool busy) {
+    if (busy) {
+      _running ??= Completer<void>();
+      return;
+    }
+    _running?.complete();
+    _running = null;
+  }
+
+  /// Ends the running operation, also when the screen is gone.
+  void _idle() {
+    if (!mounted) {
+      _setBusy(false);
+      return;
+    }
+    setState(() => _setBusy(false));
+  }
+
+  /// A back press is being handled; further ones are ignored.
+  bool _popping = false;
   bool _preview = false;
+
+  /// Title, body and journal day as last loaded or saved, to tell whether
+  /// leaving has to save first.
+  String _savedTitle = '';
+  String _savedBody = '';
+  String? _savedDate;
+
+  /// Set once leaving should no longer save (saved, deleted or discarded).
+  bool _leaving = false;
 
   /// The settings of the last shrink, the start of the next.
   ImageShrinkSettings _shrinkSettings = ImageShrinkSettings.defaults;
@@ -84,7 +120,42 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       _title.text = entry?.title ?? '';
       _body.text = entry?.body ?? '';
       _preview = _body.text.trim().isNotEmpty;
+      _markSaved();
     });
+  }
+
+  void _markSaved() {
+    _savedTitle = _title.text;
+    _savedBody = _body.text;
+    _savedDate = _date;
+  }
+
+  /// Whether title, body or journal day differ from what is saved.
+  bool get _dirty =>
+      _entry != null &&
+      !_leaving &&
+      (_title.text != _savedTitle ||
+          _body.text != _savedBody ||
+          _date != _savedDate);
+
+  /// Back while edits are unsaved or a save runs: waits for the running
+  /// operation, then saves what is unsaved (which leaves) or just leaves.
+  void _onPopBlocked(bool didPop, Object? _) {
+    if (didPop || _popping) return;
+    _popping = true;
+    unawaited(_leave());
+  }
+
+  Future<void> _leave() async {
+    await _running?.future;
+    if (!mounted) return;
+    if (_dirty) {
+      await _save(leaving: true);
+      _popping = false;
+      return;
+    }
+    setState(() => _leaving = true);
+    context.pop();
   }
 
   @override
@@ -97,6 +168,19 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   @override
   Widget build(BuildContext context) {
     final entry = _entry;
+    return ListenableBuilder(
+      listenable: Listenable.merge([_title, _body]),
+      builder: (context, child) => PopScope(
+        // While false, iOS swipe-back is off; the back button saves.
+        canPop: !_dirty && !_busy,
+        onPopInvokedWithResult: _onPopBlocked,
+        child: child!,
+      ),
+      child: _scaffold(entry),
+    );
+  }
+
+  Widget _scaffold(Entry? entry) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Entry'),
@@ -290,7 +374,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
     final old = _task;
     setState(() {
       _task = task;
-      _busy = true;
+      _setBusy(true);
     });
     try {
       await ref
@@ -301,7 +385,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
       setState(() => _task = old);
       context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _idle();
     }
   }
 
@@ -348,7 +432,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
   /// inserts its image line at the cursor, or at the end in the preview.
   /// The entry itself is saved by [_save].
   Future<void> _insertImageBytes(Uint8List bytes, String contentType) async {
-    setState(() => _busy = true);
+    setState(() => _setBusy(true));
     try {
       final itemId = await ref.read(mailObjectBlobStoreProvider).putBlob(
             widget.accountId,
@@ -397,7 +481,7 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
         stack: stack,
       );
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _idle();
     }
   }
 
@@ -412,8 +496,10 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
     await _load();
   }
 
-  Future<void> _save() async {
-    setState(() => _busy = true);
+  /// Saves title, body and journal day and goes back. When [leaving] (back
+  /// with unsaved edits) and the save fails, asks whether to discard them.
+  Future<void> _save({bool leaving = false}) async {
+    setState(() => _setBusy(true));
     try {
       await ref.read(entryRepositoryProvider).update(
             widget.accountId,
@@ -423,12 +509,45 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
             date: _date,
           );
       if (!mounted) return;
+      setState(() => _leaving = true);
       context.pop();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _busy = false);
+      setState(() => _setBusy(false));
+      if (leaving && await _confirmDiscard(e) && mounted) {
+        setState(() => _leaving = true);
+        context.pop();
+        return;
+      }
+      if (!mounted) return;
       context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
     }
+  }
+
+  /// Asks whether to leave without the unsaved edits after [error].
+  Future<bool> _confirmDiscard(Object error) async {
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Could not save'),
+        content: Text(
+          '${userErrorMessage(error)}\n\nDiscard your changes to this entry?',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('entryEditKeepEditing'),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          TextButton(
+            key: const Key('entryEditDiscard'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    return discard ?? false;
   }
 
   /// Ticks or unticks task [index] and saves it like [_save], with the
@@ -438,37 +557,49 @@ class _EntryEditScreenState extends ConsumerState<EntryEditScreen> {
     final old = _body.text;
     setState(() {
       _body.text = toggleTask(old, index);
-      _busy = true;
+      _setBusy(true);
     });
+    final title = _title.text;
+    final body = _body.text;
+    final date = _date;
     try {
       await ref.read(entryRepositoryProvider).update(
             widget.accountId,
             widget.itemId,
-            title: _title.text,
-            body: _body.text,
-            date: _date,
+            title: title,
+            body: body,
+            date: date,
           );
+      // What was saved, not what was typed meanwhile.
+      if (mounted) {
+        setState(() {
+          _savedTitle = title;
+          _savedBody = body;
+          _savedDate = date;
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _body.text = old);
       context.showAppSnackBar('Could not save: ${userErrorMessage(e)}');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _idle();
     }
   }
 
   Future<void> _delete(Entry entry) async {
     if (!await confirmDeleteEntry(context, entry) || !mounted) return;
-    setState(() => _busy = true);
+    setState(() => _setBusy(true));
     try {
       await ref
           .read(entryRepositoryProvider)
           .delete(widget.accountId, widget.itemId);
       if (!mounted) return;
+      setState(() => _leaving = true);
       context.pop();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _busy = false);
+      setState(() => _setBusy(false));
       context.showAppSnackBar('Could not delete: ${userErrorMessage(e)}');
     }
   }

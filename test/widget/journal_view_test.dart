@@ -115,6 +115,54 @@ void main() {
     expect(find.byKey(const Key('entryEditDate')), findsOneWidget);
   });
 
+  testWidgets('"New entry" left without typing is deleted again',
+      (tester) async {
+    final repo = await _pump(tester);
+    await _tap(tester, 'journalNewEntry');
+    expect(repo.entries, hasLength(1));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(repo.entries, isEmpty);
+    expect(find.text('No entries for this day.'), findsOneWidget);
+  });
+
+  testWidgets('"New entry" with text typed is kept', (tester) async {
+    final repo = await _pump(tester);
+    await _tap(tester, 'journalNewEntry');
+    await tester.enterText(
+      find.byKey(const Key('entryEditBody')),
+      'Dear diary',
+    );
+    await tester.pump();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(repo.entries.single.body, 'Dear diary');
+    expect(repo.entries.single.date, isNotNull);
+  });
+
+  testWidgets('"New entry" with only Todo turned on is kept', (tester) async {
+    final repo = await _pump(tester);
+    await _tap(tester, 'journalNewEntry');
+    await tester.tap(find.byKey(const Key('entryTodoSwitch')));
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(repo.entries.single.task, isNotNull);
+  });
+
+  testWidgets('"New entry": a failed save, then Discard, deletes it',
+      (tester) async {
+    final repo = await _pump(tester);
+    await _tap(tester, 'journalNewEntry');
+    repo.failUpdateWith = Exception('offline');
+    await tester.enterText(find.byKey(const Key('entryEditBody')), 'x');
+    await tester.pump();
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('entryEditDiscard')));
+    await tester.pumpAndSettle();
+    expect(repo.entries, isEmpty);
+  });
+
   testWidgets('"New entry" while locked asks to unlock', (tester) async {
     final repo = await _pump(tester);
     expect(find.text('No entries for this day.'), findsOneWidget);
