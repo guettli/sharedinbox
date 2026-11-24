@@ -3,6 +3,13 @@
 //
 // Uses a per-isolate pool user from stalwart_harness.dart so multiple test
 // files can run in parallel without racing on INBOX/Trash resets.
+//
+// 90 s, not the default 30 s: the body pool retries a failed fetch on a fresh
+// connection, and under CI load that reconnect (greeting timeout 45 s) plus
+// its commands (20 s each) can outlast 30 s. A test hit exactly that after the
+// pooled fetch came back empty, while the retry was still running (#1400).
+@Timeout(Duration(seconds: 90))
+library;
 
 import 'dart:convert';
 import 'dart:io';
@@ -12,6 +19,7 @@ import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:enough_mail/enough_mail.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
+import 'package:sharedinbox/core/models/email.dart' as model show Email;
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
@@ -968,6 +976,57 @@ void main() {
         .toList();
     expect(matching, hasLength(1));
     expect(matching.single.isLocal, isFalse);
+  });
+
+  // #1400: before the mailbox sync has told us which folder is Sent, the
+  // copy goes to the fallback "Sent" without a role. Its arrival must not be
+  // paired with the inbox note of the same mail-to-self, or the real inbox
+  // delivery is left as a second inbox row next to the note. The inbox is
+  // known, so the note exists.
+  test('mail to self sent before the Sent role is known: one row per folder',
+      () async {
+    final subject = 'no-sent-role-${DateTime.now().millisecondsSinceEpoch}';
+    final r = makeRepo();
+    await r.accounts.addAccount(account, user.password);
+    // The inbox is known (the note is written into the role-'inbox' folder);
+    // no folder has the sent role yet.
+    await r.db.into(r.db.mailboxes).insert(
+          MailboxesCompanion.insert(
+            id: 'test:INBOX',
+            accountId: 'test',
+            path: 'INBOX',
+            name: 'INBOX',
+            role: const Value('inbox'),
+          ),
+        );
+
+    await r.emails.enqueueSend(
+      'test',
+      EmailDraft(
+        from: EmailAddress(name: user.email, email: user.email),
+        to: [EmailAddress(name: user.email, email: user.email)],
+        cc: const [],
+        subject: subject,
+        body: 'note to self',
+      ),
+    );
+    await r.emails.flushOutbox('test', user.password);
+
+    Future<List<model.Email>> rowsIn(String path) async =>
+        (await r.emails.observeEmails('test', path).first)
+            .where((e) => e.subject == subject)
+            .toList();
+
+    await r.emails.syncEmails('test', 'Sent');
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      await r.emails.syncEmails('test', 'INBOX');
+      if ((await rowsIn('INBOX')).any((e) => !e.isLocal)) break;
+    }
+
+    expect(await rowsIn('INBOX'), hasLength(1), reason: 'one inbox row');
+    expect((await rowsIn('INBOX')).single.isLocal, isFalse);
+    expect(await rowsIn('Sent'), hasLength(1), reason: 'one Sent row');
   });
 
   test('searchEmails returns messages matching query', () async {
