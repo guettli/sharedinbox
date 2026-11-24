@@ -3,16 +3,21 @@
 
 Standard library only (sqlite3, zipfile, json). The collections use the
 legacy schema 11 (note types and decks as JSON in `col`), as Anki writes
-into `collection.anki2` / `collection.anki21`.
+into `collection.anki2` / `collection.anki21`, except for the schema 18
+`collection.anki21b` of basic_21b.apkg (#1384): note types, fields,
+templates and decks in tables, their configs as protobuf, zstd-compressed
+like its protobuf `media` map and media files. Python has no zstd module,
+so the zstd frames hold raw (stored) blocks.
 
 Usage:
     python3 scripts/make_anki_fixtures.py
 
-Writes basic.apkg, basic_v2.apkg, both.apkg, anki21b_only.apkg,
-reviews.apkg and test/fixtures/cards.csv. The tests depend on their content: change both
-together.
+Writes basic.apkg, basic_v2.apkg, both.apkg, basic_21b.apkg,
+anki21b_corrupt.apkg, reviews.apkg and test/fixtures/cards.csv. The tests
+depend on their content: change both together.
 """
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -130,8 +135,92 @@ REVLOG = [
 ]
 
 
-def _collection(path, notes, decks=None, crt=0, revlog=()):
+def _varint(n):
+    out = bytearray()
+    while True:
+        b = n & 0x7f
+        n >>= 7
+        if n:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def _pb_varint(field, n):
+    return _varint(field << 3) + _varint(n)
+
+
+def _pb_bytes(field, data):
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    return _varint(field << 3 | 2) + _varint(len(data)) + data
+
+
+def _zstd(data):
+    """A zstd frame of raw blocks: single segment, 4-byte content size."""
+    out = bytearray(b'\x28\xb5\x2f\xfd')
+    out.append(0xa0)  # Frame_Content_Size_flag 2, Single_Segment_flag.
+    out += len(data).to_bytes(4, 'little')
+    block = 128 * 1024
+    at = 0
+    while True:
+        chunk = data[at:at + block]
+        at += len(chunk)
+        last = at >= len(data)
+        # Block_Size << 3 | Block_Type 0 (raw) << 1 | Last_Block.
+        out += (len(chunk) << 3 | int(last)).to_bytes(3, 'little')
+        out += chunk
+        if last:
+            return bytes(out)
+
+
+def _unicase(a, b):
+    a, b = a.lower(), b.lower()
+    return (a > b) - (a < b)
+
+
+def _schema18(db, models, decks):
+    """The note types and decks of schema 18 in their tables."""
+    db.executescript('''
+        CREATE TABLE notetypes (id integer not null primary key,
+          name text not null COLLATE unicase, mtime_secs integer not null,
+          usn integer not null, config blob not null);
+        CREATE TABLE fields (ntid integer not null, ord integer not null,
+          name text not null COLLATE unicase, config blob not null,
+          PRIMARY KEY (ntid, ord)) without rowid;
+        CREATE TABLE templates (ntid integer not null, ord integer not null,
+          name text not null COLLATE unicase, mtime_secs integer not null,
+          usn integer not null, config blob not null,
+          PRIMARY KEY (ntid, ord)) without rowid;
+        CREATE TABLE decks (id integer primary key not null,
+          name text not null COLLATE unicase, mtime_secs integer not null,
+          usn integer not null, common blob not null, kind blob not null);
+        CREATE UNIQUE INDEX idx_notetypes_name ON notetypes (name);
+        CREATE UNIQUE INDEX idx_decks_name ON decks (name);
+    ''')
+    for m in models.values():
+        # NotetypeConfig: kind = 1 (omitted when 0, normal), css = 3.
+        config = (_pb_varint(1, m['type']) if m['type'] else b'') + \
+            _pb_bytes(3, m['css'])
+        db.execute('INSERT INTO notetypes VALUES (?, ?, 0, 0, ?)',
+                   (m['id'], m['name'], config))
+        for f in m['flds']:
+            db.execute('INSERT INTO fields VALUES (?, ?, ?, ?)',
+                       (m['id'], f['ord'], f['name'], b''))
+        for t in m['tmpls']:
+            # CardTemplate.Config: q_format = 1, a_format = 2.
+            config = _pb_bytes(1, t['qfmt']) + _pb_bytes(2, t['afmt'])
+            db.execute('INSERT INTO templates VALUES (?, ?, ?, 0, 0, ?)',
+                       (m['id'], t['ord'], t['name'], config))
+    for d in decks.values():
+        db.execute('INSERT INTO decks VALUES (?, ?, 0, 0, ?, ?)',
+                   (d['id'], d['name'].replace('::', '\x1f'), b'', b''))
+
+
+def _collection(path, notes, decks=None, crt=0, revlog=(), schema=11):
     db = sqlite3.connect(path)
+    db.create_collation('unicase', _unicase)
     db.executescript('''
         CREATE TABLE col (id integer primary key, crt integer not null,
           mod integer not null, scm integer not null, ver integer not null,
@@ -157,11 +246,18 @@ def _collection(path, notes, decks=None, crt=0, revlog=()):
           type integer not null);
     ''')
     models = _models()
-    db.execute(
-        'INSERT INTO col VALUES (1, ?, 0, 0, 11, 0, 0, 0, ?, ?, ?, ?, ?)',
-        (crt, '{}', json.dumps(models), json.dumps(decks or _decks()), '{}',
-         '{}'),
-    )
+    if schema == 18:
+        _schema18(db, models, decks or _decks())
+        db.execute(
+            'INSERT INTO col VALUES (1, ?, 0, 0, 18, 0, 0, 0, ?, ?, ?, ?, ?)',
+            (crt, '', '', '', '', ''),
+        )
+    else:
+        db.execute(
+            'INSERT INTO col VALUES (1, ?, 0, 0, 11, 0, 0, 0, ?, ?, ?, ?, ?)',
+            (crt, '{}', json.dumps(models), json.dumps(decks or _decks()),
+             '{}', '{}'),
+        )
     did = DECK if decks is None else int(next(iter(decks)))
     card_id = 1
     for i, (guid, mid, fields, tags) in enumerate(notes, start=1):
@@ -187,9 +283,10 @@ def _collection(path, notes, decks=None, crt=0, revlog=()):
         return f.read()
 
 
-def _collection_bytes(notes, decks=None, crt=0, revlog=()):
+def _collection_bytes(notes, decks=None, crt=0, revlog=(), schema=11):
     with tempfile.TemporaryDirectory() as d:
-        return _collection(os.path.join(d, 'c.db'), notes, decks, crt, revlog)
+        return _collection(os.path.join(d, 'c.db'), notes, decks, crt, revlog,
+                           schema)
 
 
 def _apkg(name, entries):
@@ -203,6 +300,18 @@ def _apkg(name, entries):
 
 def _media():
     return [('media', json.dumps({'0': 'cat.png'})), ('0', CAT_PNG)]
+
+
+# PackageMetadata { Version version = 1; } with LATEST = 3.
+META_LATEST = _pb_varint(1, 3)
+
+
+def _media_latest():
+    """MediaEntries { repeated MediaEntry entries = 1; } with
+    MediaEntry { string name = 1; uint32 size = 2; bytes sha1 = 3; }."""
+    entry = _pb_bytes(1, 'cat.png') + _pb_varint(2, len(CAT_PNG)) + \
+        _pb_bytes(3, hashlib.sha1(CAT_PNG).digest())
+    return [('media', _zstd(_pb_bytes(1, entry))), ('0', _zstd(CAT_PNG))]
 
 
 def main():
@@ -225,10 +334,21 @@ def main():
     _apkg('both.apkg', [('collection.anki2', dummy),
                         ('collection.anki21', basic)] + _media())
 
-    # The zstd-compressed schema 18 collection of newer exports; its content
-    # does not matter, only that it is the only collection.
-    _apkg('anki21b_only.apkg', [('collection.anki21b', b'\x28\xb5\x2f\xfd'),
-                                ('meta', b'\x08\x03')])
+    # The twin of basic.apkg as newer Anki versions export it: the dummy
+    # anki2 next to the zstd-compressed schema 18 anki21b.
+    _apkg('basic_21b.apkg', [
+        ('collection.anki2', dummy),
+        ('collection.anki21b', _zstd(_collection_bytes(NOTES, schema=18))),
+        ('meta', META_LATEST),
+    ] + _media_latest())
+
+    # A zstd frame header without blocks.
+    _apkg('anki21b_corrupt.apkg', [
+        ('collection.anki2', dummy),
+        ('collection.anki21b', b'\x28\xb5\x2f\xfd\xa0\x10\x00\x00\x00'),
+        ('meta', META_LATEST),
+        ('media', _zstd(b'')),
+    ])
 
     _apkg('reviews.apkg', [
         ('collection.anki2',

@@ -847,9 +847,22 @@ the projections, writes through the store); #1379.
   collection-key mail stays. Like every write it needs the deck's write key.
 - **Import** (#1383, `lib/core/import/`, `lib/data/import/`; the UI is
   #1381): an Anki `.apkg` is a ZIP whose collection is read from
-  `collection.anki21`, else `collection.anki2` (newer exports hold a dummy
-  `anki2` next to the real one), in the legacy schema 11 (note types and
-  decks as JSON in `col`). Each row of `cards` is a card: the front is the
+  `collection.anki21b` when the protobuf `meta` (`PackageMetadata.version`)
+  is LATEST (3) or that entry is there, else from `collection.anki21`, then
+  `collection.anki2` (newer exports hold a dummy `anki2` next to the real
+  one). `anki21` and `anki2` are in the legacy schema 11 (note types and
+  decks as JSON in `col`, a JSON `media` map). `anki21b` (#1384) is a
+  zstd-compressed SQLite file in schema 18: the note types, fields,
+  templates and decks are tables (`NotetypeConfig.kind` 1 = cloze,
+  `CardTemplate.Config` `q_format`/`a_format` as protobuf, deck name parts
+  split by `\x1f`), the `media` map is a zstd-compressed protobuf
+  `MediaEntries` (entry i is the ZIP entry `legacy_zip_filename ?? i`) and
+  each media file is zstd-compressed; blob ids are of the decompressed
+  bytes, so an `anki21b` export imports exactly like its `anki21` twin.
+  zstd is `archive`'s pure-Dart `ZstdDecoder` (already the ZIP reader; no
+  FFI, works on web; window and output bounded), protobuf a small wire-format
+  reader (`protobuf_wire.dart`) instead of `protobuf` with `protoc`-generated
+  code for five scalar fields of untrusted input. Each row of `cards` is a card: the front is the
   question template (`qfmt`) of its `ord`, the back the answer template
   (`afmt`) without `{{FrontSide}}` and the `<hr id=answer>` after it, with
   `{{Field}}`, `{{text:Field}}`, `{{#F}}…{{/F}}` and `{{^F}}…{{/F}}`. The deck
@@ -865,8 +878,8 @@ the projections, writes through the store); #1379.
   re-import looks each cardId up: a deleted card stays deleted (the
   tombstone wins), an unchanged one is not written, a changed one gets a new
   batch member in the deck it is in (its fresh `h` wins: the file's content
-  replaces a local edit), an unknown one is added. Cloze notes, `anki21b`
-  (#1384) and sound and video media are not imported yet.
+  replaces a local edit), an unknown one is added. Cloze notes and sound
+  and video media are not imported yet.
 - **Review history** (`revlog`, #1385): the rows of the imported cards
   become review events of the deviceId `import:` + base64url of the first
   16 bytes of SHA-256(`"anki-col\0" + col.crt`), the same for every
