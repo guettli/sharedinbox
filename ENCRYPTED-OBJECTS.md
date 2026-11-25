@@ -549,6 +549,15 @@ app" and **never edited** by that reader (editing would fork history).
    per key); the effective value of a key is the one with the highest HLC
    across all devices' docs; a value `null` means unset.
 
+**Hostile input** (crypto review, M2–M4): every byte from the server is
+untrusted. A parser failure of one mail (any exception, not only
+`FormatException`) skips that mail and is logged; it never stops a sync,
+an unlock or a reopen. A download longer than any object mail
+(`maxObjectMailBytes`: the base64 of a full envelope plus 1 MiB of
+headers) is not stored; JMAP downloads stop at that size. (An IMAP server
+can still announce a huge literal; enough_mail reads it before the size
+check.)
+
 ### 5.5 Provider specifics
 
 - **Gmail** (`X-GM-EXT-1`): expunge from a label only removes the label.

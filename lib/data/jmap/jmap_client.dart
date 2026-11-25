@@ -349,10 +349,14 @@ class JmapClient {
   /// Downloads a blob by [blobId] and returns its raw bytes.
   ///
   /// Uses the `downloadUrl` URI template from the Session object (RFC 8620 §6).
+  /// Downloads blob [blobId]. With [maxBytes] the body is read as a stream
+  /// and the download stops with [BlobTooLargeException] once it is longer,
+  /// so a server cannot make the app hold more than that in memory.
   Future<Uint8List> downloadBlob(
     String blobId, {
     String name = 'attachment',
     String type = 'application/octet-stream',
+    int? maxBytes,
   }) async {
     if (_downloadUrl == null) {
       throw JmapException('Server does not advertise a downloadUrl');
@@ -365,6 +369,7 @@ class JmapClient {
           .replaceAll('{type}', Uri.encodeComponent(type)),
     );
     _requireSecureRequestUrl(url, 'downloadUrl');
+    if (maxBytes != null) return _downloadCapped(url, maxBytes);
     final resp = await _httpClient.get(
       url,
       headers: {
@@ -375,6 +380,37 @@ class JmapClient {
       throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
     }
     return resp.bodyBytes;
+  }
+
+  Future<Uint8List> _downloadCapped(Uri url, int maxBytes) async {
+    final request = http.Request('GET', url)
+      ..headers['Authorization'] = 'Basic $_credentials';
+    // [blobTimeout] bounds the whole download, not each chunk: a server
+    // trickling bytes must not hold the sync forever.
+    final deadline = DateTime.now().add(blobTimeout);
+    final resp = await _httpClient.send(request).timeout(blobTimeout);
+    // Not read on: cancelled, so a huge or endless body costs nothing.
+    Future<void> discard() => resp.stream.listen(null).cancel();
+    if (resp.statusCode != 200) {
+      await discard();
+      throw JmapException('Blob download failed (HTTP ${resp.statusCode})');
+    }
+    final declared = resp.contentLength;
+    if (declared != null && declared > maxBytes) {
+      await discard();
+      throw BlobTooLargeException(maxBytes);
+    }
+    final out = BytesBuilder(copy: false);
+    final left = deadline.difference(DateTime.now());
+    await for (final chunk in resp.stream.timeout(left)) {
+      out.add(chunk);
+      // Leaving the loop cancels the rest of the download.
+      if (out.length > maxBytes) throw BlobTooLargeException(maxBytes);
+      if (DateTime.now().isAfter(deadline)) {
+        throw TimeoutException('blob download', blobTimeout);
+      }
+    }
+    return out.takeBytes();
   }
 
   static Uri _extractApiUrl(Map<String, dynamic> session, Uri sessionUri) {
@@ -612,6 +648,15 @@ class JmapSessionResponse {
 
   final http.Response response;
   final Uri url;
+}
+
+/// A blob longer than the `maxBytes` of [JmapClient.downloadBlob].
+class BlobTooLargeException implements Exception {
+  BlobTooLargeException(this.maxBytes);
+  final int maxBytes;
+
+  @override
+  String toString() => 'BlobTooLargeException: over $maxBytes bytes';
 }
 
 class JmapException implements Exception {

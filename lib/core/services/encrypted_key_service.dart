@@ -875,6 +875,31 @@ class EncryptedKeyService {
     );
   }
 
+  void _logSkippedSlot(
+    String accountId,
+    String slotType,
+    String messageId,
+    String error,
+  ) {
+    unawaited(
+      _appLogger?.warn(
+        'mos.unlock_slot_skipped',
+        'Skipped a malformed unlock slot',
+        accountId: accountId,
+        data: {
+          'type': _short(slotType),
+          'messageId': messageId,
+          'error': _short(error),
+        },
+      ),
+    );
+  }
+
+  /// A server-controlled string as it goes into the App Log: at most 200
+  /// characters (a hostile field may be 70 KB).
+  static String _short(String s) =>
+      s.length <= 200 ? s : '${s.substring(0, 200)}…';
+
   Future<AccountKey?> _openWith(
     String accountId,
     List<KeyMailEntry> entries,
@@ -891,18 +916,12 @@ class EncryptedKeyService {
         } on KeyUnwrapException {
           continue;
         } on FormatException catch (err) {
-          unawaited(
-            _appLogger?.warn(
-              'mos.unlock_slot_skipped',
-              'Skipped a malformed unlock slot',
-              accountId: accountId,
-              data: {
-                'type': slotType,
-                'messageId': e.messageId,
-                'error': err.message,
-              },
-            ),
-          );
+          _logSkippedSlot(accountId, slotType, e.messageId, err.message);
+          continue;
+        } on ArgumentError catch (err) {
+          // E.g. a slot field over the 65535-byte limit of the AAD encoding
+          // (crypto review, M2): one hostile mail must not stop the unlock.
+          _logSkippedSlot(accountId, slotType, e.messageId, '${err.message}');
           continue;
         }
         final group = [
@@ -1364,7 +1383,8 @@ class EncryptedKeyService {
       final PairingMail mail;
       try {
         mail = parsePairingMail(payload);
-      } on FormatException {
+      } on Object {
+        // Bytes from the server (crypto review, M3).
         continue;
       }
       yield (row, mail);
@@ -1442,6 +1462,19 @@ class EncryptedKeyService {
         key = await mail.unwrapWith(accountKey);
       } on KeyUnwrapException {
         continue;
+      } on Object catch (err) {
+        // Any other failure of one mail from the server (e.g. a field too
+        // long for the AAD, crypto review M2) skips that mail; it must not
+        // stop the other keys from loading.
+        unawaited(
+          _appLogger?.warn(
+            'mos.collection_key_skipped',
+            'Skipped a malformed collection-key mail',
+            accountId: accountId,
+            data: {'messageId': row.messageId, 'error': _short('$err')},
+          ),
+        );
+        continue;
       }
       if (_ring.addCollectionKey(accountId, key)) added = true;
       final rank = int.tryParse(row.serverId ?? '') ?? 1 << 62;
@@ -1479,7 +1512,9 @@ class EncryptedKeyService {
     if (payload == null) return null;
     try {
       return parseKeyMailMessage(payload);
-    } on FormatException {
+    } on Object {
+      // Bytes from the server: whatever a parser throws on them, the mail
+      // is not a key mail (crypto review, M3).
       return null;
     }
   }

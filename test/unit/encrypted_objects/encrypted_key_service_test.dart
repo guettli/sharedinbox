@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/collection_key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
@@ -219,6 +220,43 @@ void main() {
     final fresh = await device();
     await fresh.store.sync(_acc);
     expect(await fresh.status(), PersonalDataStatus.notSetUp);
+  });
+
+  test(
+      'a collection-key mail with an over-long collectionId is skipped; the '
+      'other keys still load', () async {
+    final a = await device();
+    final created = (await a.service.createKey(_acc)) as KeyCreated;
+    final accountKey = (await a.keys.load(_acc))!;
+    final real = await CollectionKeyMail.create(
+      accountKey,
+      CollectionKey.generate('decks'),
+    );
+    // Its AAD cannot encode a collectionId over 65535 bytes: before the
+    // fix the ArgumentError stopped every later key from loading.
+    final hostile = CollectionKeyMail(
+      accountKeyId: accountKey.accountKeyId,
+      collectionId: 'x' * 70000,
+      keyId: real.keyId,
+      wraps: real.wraps,
+    );
+    const messageId = '<hostile@sharedinbox.invalid>';
+    server.append(
+      messageId,
+      buildCollectionKeyMail(
+        messageId: messageId,
+        mail: hostile,
+        date: DateTime.now(),
+      ),
+    );
+    await a.store.sync(_acc);
+
+    final fresh = await device();
+    await fresh.store.sync(_acc);
+    await fresh.service.unlockWithRecoveryKey(_acc, created.formatted);
+    expect(fresh.ring.hasWriteKey(_acc, personalCollectionId), isTrue);
+    expect(fresh.events, contains('mos.collection_key_skipped'));
+    await fresh.service.afterSync(_acc, foreground: true);
   });
 
   test('a device finding a key mail creates nothing and is locked', () async {

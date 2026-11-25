@@ -29,6 +29,11 @@ import 'package:sharedinbox/data/repositories/mail_object_devices_db.dart';
 /// on demand ([MailObjectStore.fetchBody], ENCRYPTED-OBJECTS.md 5.5).
 const mailObjectEagerBodyLimit = 256 * 1024;
 
+/// The longest object or key mail there is: the base64 of a full envelope
+/// plus headers. A download over it is not one of ours, so it is dropped
+/// instead of stored and parsed again on every reopen (crypto review, M4).
+const maxObjectMailBytes = maxEnvelopeBytes * 4 ~/ 3 + 1024 * 1024;
+
 /// [SyncStates.resourceType] of the pull checkpoint of [folder]. Its JSON
 /// shape depends on the transport.
 String mailObjectCheckpointKey(MailObjectFolder folder) => 'mos:${folder.name}';
@@ -189,6 +194,22 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     } on EnvelopeException {
       return null;
     } on FormatException {
+      return null;
+    } on Object catch (err) {
+      // Bytes from the server: no parser failure may stop a sync, an unlock
+      // or a reopen (crypto review, M3).
+      unawaited(
+        appLogger?.warn(
+          'mos.object_unparsable',
+          'Skipped an encrypted object that could not be parsed',
+          accountId: accountId,
+          data: {
+            'error': '$err'.length <= 200
+                ? '$err'
+                : '${'$err'.substring(0, 200)}…',
+          },
+        ),
+      );
       return null;
     }
   }
