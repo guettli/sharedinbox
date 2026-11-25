@@ -120,11 +120,17 @@ class ShareEncryptionService {
   /// [info] is the HKDF domain-separation label; the same value must be used
   /// when decrypting.  Returns the raw wire-format bytes:
   ///   keyId[16] || ephPubKey[32] || nonce[12] || ciphertext || mac[16]
+  ///
+  /// With [bindSecret] (pairing v2) the key also depends on that secret,
+  /// which travels only out-of-band, and on both public keys; see
+  /// [deriveAesKey]. Throws [FormatException] for a weak (low-order)
+  /// recipient key.
   static Future<Uint8List> encryptBytes({
     required Uint8List recipientKeyId,
     required Uint8List recipientPublicKeyBytes,
     required List<int> plaintext,
     required String info,
+    List<int>? bindSecret,
   }) async {
     // Ephemeral sender key pair for forward-secrecy.
     final ephKeyPair = await _x25519.newKeyPair();
@@ -139,11 +145,15 @@ class ShareEncryptionService {
       ),
     );
 
-    // Derive AES key via HKDF-SHA256.
-    final aesKey = await _hkdf.deriveKey(
-      secretKey: sharedSecret,
-      nonce: recipientKeyId,
-      info: utf8.encode(info),
+    final aesKey = SecretKey(
+      await deriveAesKey(
+        sharedSecret: await sharedSecret.extractBytes(),
+        keyId: recipientKeyId,
+        info: info,
+        bindSecret: bindSecret,
+        ephPub: ephPub.bytes,
+        recipientPub: recipientPublicKeyBytes,
+      ),
     );
 
     // Encrypt with AES-256-GCM.
@@ -210,6 +220,40 @@ class ShareEncryptionService {
 
   // ── Decryption ───────────────────────────────────────────────────────────────
 
+  /// The AES key of [encryptBytes] / [decryptBytes]: HKDF-SHA256 with salt
+  /// [keyId]. Without [bindSecret]: key material [sharedSecret], info
+  /// [info]. With it (pairing v2): key material `sharedSecret ‖ bindSecret`,
+  /// info `info ‖ ephPub ‖ recipientPub`. Throws [FormatException] when
+  /// [sharedSecret] is all zero: one side used a low-order public key, so
+  /// anyone could compute the key.
+  static Future<List<int>> deriveAesKey({
+    required List<int> sharedSecret,
+    required Uint8List keyId,
+    required String info,
+    required List<int>? bindSecret,
+    required List<int> ephPub,
+    required List<int> recipientPub,
+  }) async {
+    var acc = 0;
+    for (final b in sharedSecret) {
+      acc |= b;
+    }
+    if (acc == 0) throw const FormatException('weak X25519 public key');
+    final infoBytes = utf8.encode(info);
+    final key = bindSecret == null
+        ? await _hkdf.deriveKey(
+            secretKey: SecretKey(sharedSecret),
+            nonce: keyId,
+            info: infoBytes,
+          )
+        : await _hkdf.deriveKey(
+            secretKey: SecretKey([...sharedSecret, ...bindSecret]),
+            nonce: keyId,
+            info: [...infoBytes, ...ephPub, ...recipientPub],
+          );
+    return key.extractBytes();
+  }
+
   /// Decrypts a raw ECIES payload produced by [encryptBytes].
   ///
   /// [info] must match the label used at encryption time.
@@ -222,6 +266,7 @@ class ShareEncryptionService {
     required Uint8List publicKeyBytes,
     required Uint8List keyId,
     required String info,
+    List<int>? bindSecret,
   }) async {
     // Minimum: keyId + ephPubKey + nonce + mac (no ciphertext is valid but odd).
     if (data.length < _keyIdLen + _pubKeyLen + _nonceLen + _macLen) {
@@ -262,11 +307,16 @@ class ShareEncryptionService {
       remotePublicKey: SimplePublicKey(ephPubBytes, type: KeyPairType.x25519),
     );
 
-    // Re-derive AES key.
-    final aesKey = await _hkdf.deriveKey(
-      secretKey: sharedSecret,
-      nonce: keyId,
-      info: utf8.encode(info),
+    // Re-derive AES key; a weak ephemeral key throws here.
+    final aesKey = SecretKey(
+      await deriveAesKey(
+        sharedSecret: await sharedSecret.extractBytes(),
+        keyId: keyId,
+        info: info,
+        bindSecret: bindSecret,
+        ephPub: ephPubBytes,
+        recipientPub: publicKeyBytes,
+      ),
     );
 
     // Decrypt — throws SecretBoxAuthenticationError if tampered.

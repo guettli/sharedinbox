@@ -1494,6 +1494,15 @@ class _PairReceiveViewState extends ConsumerState<_PairReceiveView>
           'of this account, tap "Pair a new device" and scan or paste this '
           'code. This device unlocks by itself when the key arrives.',
         ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          'Keep this code secret, like a password: never send it by email '
+          'or a chat that runs over this mail account. Scan it, or copy it '
+          'directly between your own devices.',
+          key: const Key('pairRequestSecretWarning'),
+          style: theme.textTheme.bodyMedium
+              ?.copyWith(color: theme.colorScheme.error),
+        ),
         const SizedBox(height: AppSpacing.lg),
         if (startError != null)
           _ErrorText(startError)
@@ -1513,6 +1522,20 @@ class _PairReceiveViewState extends ConsumerState<_PairReceiveView>
             textKey: const Key('pairRequestText'),
             qrKey: const Key('pairRequestQrCode'),
           ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Comparison code',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.labelLarge,
+          ),
+          SelectableText(
+            start.fingerprint,
+            key: const Key('pairFingerprint'),
+            textAlign: TextAlign.center,
+            style:
+                theme.textTheme.titleMedium?.copyWith(fontFamily: 'monospace'),
+          ),
+          const SizedBox(height: AppSpacing.sm),
           Text(
             'Valid for ${_remaining(start)}',
             key: const Key('pairCountdown'),
@@ -1593,13 +1616,64 @@ class _PairSendViewState extends ConsumerState<_PairSendView> with _TextInput {
     return failure == null;
   }
 
+  Future<void> _sendPasted() => _confirmAndSend(controller.text);
+
+  /// A request may have travelled over a channel the server can change (a
+  /// pasted text, or a QR code that did not come from the new device's
+  /// screen): the user compares the code the new device shows first.
+  /// Returns whether it was sent.
+  Future<bool> _confirmAndSend(String text) async {
+    final fingerprint = pairingFingerprintOf(text);
+    if (fingerprint == null) return _send(text);
+    final same = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Compare the codes'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Does the new device show this comparison code? Compare all '
+              '16 characters. If they differ, someone changed the code on '
+              'its way: do not send.',
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SelectableText(
+              fingerprint,
+              key: const Key('pairingSendFingerprint'),
+              style: Theme.of(ctx)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            key: const Key('pairingFingerprintMismatch'),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('No, cancel'),
+          ),
+          FilledButton(
+            key: const Key('pairingFingerprintMatch'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Yes, it matches'),
+          ),
+        ],
+      ),
+    );
+    if (same != true || !mounted) return false;
+    return _send(text);
+  }
+
   @override
   Widget build(BuildContext context) {
     final code = _sentCode;
     if (code != null) return _sent(context, code);
     if (_paste) return _pasteForm(context);
     return QrScannerView(
-      onDetect: _send,
+      onDetect: _confirmAndSend,
       fallbackBuilder: _pasteForm,
       logEvent: 'mos.pairing_scanner_failed',
       screen: 'PersonalDataScreen',
@@ -1635,12 +1709,12 @@ class _PairSendViewState extends ConsumerState<_PairSendView> with _TextInput {
             labelText: 'Code of the new device',
             errorText: error,
           ),
-          onSubmitted: (_) => _send(controller.text),
+          onSubmitted: (_) => _sendPasted(),
         ),
         const SizedBox(height: AppSpacing.lg),
         FilledButton(
           key: const Key('pairingSend'),
-          onPressed: busy ? null : () => _send(controller.text),
+          onPressed: busy ? null : _sendPasted,
           child: const Text('Send the key'),
         ),
         if (busy) ...[

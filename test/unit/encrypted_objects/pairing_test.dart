@@ -42,6 +42,7 @@ class _Keys implements ShareKeyRepository {
 PairingRequest _request(ShareKeyMaterial pair) => PairingRequest(
       keyId: pair.keyId,
       publicKey: pair.publicKeyBytes,
+      secret: pairingSecret(pair.privateKeyBytes),
       server: _server,
       username: _user,
     );
@@ -83,11 +84,12 @@ void main() {
   group('request', () {
     test('round-trips', () {
       final text = encodePairingRequest(_request(pair));
-      expect(text, startsWith('sharedinbox.de:pair:v1:'));
+      expect(text, startsWith('sharedinbox.de:pair:v2:'));
 
       final parsed = parsePairingRequest('  $text\n')!;
       expect(parsed.keyId, pair.keyId);
       expect(parsed.publicKey, pair.publicKeyBytes);
+      expect(parsed.secret, pairingSecret(pair.privateKeyBytes));
       expect(parsed.server, _server);
       expect(parsed.username, _user);
     });
@@ -138,7 +140,7 @@ void main() {
     expect(parsed.ecies, ecies);
 
     final code = encodePairingCode(ecies);
-    expect(code, startsWith('sharedinbox.de:pairing:v1:'));
+    expect(code, startsWith('sharedinbox.de:pairing:v2:'));
     expect(parsePairingCode(' $code '), ecies);
 
     final key = await open(parsed.ecies);
@@ -256,6 +258,40 @@ void main() {
       await expectLater(open(ecies), rejected(PairingRejection.tampered));
     });
 
+    test('a reply without the request secret, or with another one', () async {
+      Future<Uint8List> sealWith(List<int>? secret) =>
+          ShareEncryptionService.encryptBytes(
+            recipientKeyId: pair.keyId,
+            recipientPublicKeyBytes: pair.publicKeyBytes,
+            plaintext: PairingPayload(
+              accountKey: testAccountKey,
+              server: _server,
+              username: _user,
+              issuedAt: _now,
+            ).toBytes(),
+            info: HkdfInfo.pairingV2,
+            bindSecret: secret,
+          );
+      // Who knows only the public key (e.g. the server) cannot reply.
+      await expectLater(
+        open(await sealWith(null)),
+        rejected(PairingRejection.tampered),
+      );
+      await expectLater(
+        open(await sealWith(List<int>.filled(16, 7))),
+        rejected(PairingRejection.tampered),
+      );
+    });
+
+    test('a weak (all-zero) ephemeral key', () async {
+      // X25519 with a low-order point gives an all-zero shared secret that
+      // anyone can compute; it is refused before any decryption.
+      final ecies = await seal();
+      final weak = Uint8List.fromList(ecies)
+        ..fillRange(idLength, idLength + 32, 0);
+      await expectLater(open(weak), rejected(PairingRejection.badFormat));
+    });
+
     test('another server or username', () async {
       final ecies = await seal();
       await expectLater(
@@ -273,7 +309,8 @@ void main() {
         recipientKeyId: pair.keyId,
         recipientPublicKeyBytes: pair.publicKeyBytes,
         plaintext: utf8.encode('{"v":2}'),
-        info: HkdfInfo.pairing,
+        info: HkdfInfo.pairingV2,
+        bindSecret: pairingSecret(pair.privateKeyBytes),
       );
       await expectLater(open(ecies), rejected(PairingRejection.badFormat));
       await expectLater(
@@ -283,6 +320,51 @@ void main() {
       await expectLater(
         open(Uint8List.fromList([...pair.keyId, 1, 2, 3])),
         rejected(PairingRejection.badFormat),
+      );
+    });
+  });
+
+  test('sealing to a weak recipient key throws', () async {
+    final weak = PairingRequest(
+      keyId: pair.keyId,
+      publicKey: Uint8List(32),
+      secret: pairingSecret(pair.privateKeyBytes),
+      server: _server,
+      username: _user,
+    );
+    await expectLater(seal(request: weak), throwsFormatException);
+  });
+
+  group('comparison code', () {
+    test('is the same for the request and its parsed text', () {
+      final request = _request(pair);
+      final text = encodePairingRequest(request);
+      final fp = pairingFingerprint(request);
+      expect(
+          fp,
+          matches(
+              RegExp(r'^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$')));
+      expect(pairingFingerprintOf(' $text '), fp);
+      expect(pairingFingerprintOf('not a request'), isNull);
+    });
+
+    test('differs when only the secret differs', () {
+      final request = _request(pair);
+      final other = PairingRequest(
+        keyId: request.keyId,
+        publicKey: request.publicKey,
+        secret: Uint8List(16),
+        server: _server,
+        username: _user,
+      );
+      expect(pairingFingerprint(other), isNot(pairingFingerprint(request)));
+    });
+
+    test('differs for another key pair', () async {
+      final other = await keys.createKeyPair();
+      expect(
+        pairingFingerprint(_request(other)),
+        isNot(pairingFingerprint(_request(pair))),
       );
     });
   });

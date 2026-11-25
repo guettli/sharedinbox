@@ -189,8 +189,13 @@ List<String> passphraseContext(Account account) => [
       account.username,
     ];
 
-/// A pairing request this device shows, and when its key pair expires.
-typedef PairingStart = ({String request, DateTime expiresAt});
+/// A pairing request this device shows, its comparison code
+/// ([pairingFingerprint]) and when its key pair expires.
+typedef PairingStart = ({
+  String request,
+  String fingerprint,
+  DateTime expiresAt,
+});
 
 typedef _KeyState = ({KeyPhase phase, String? ownMessageId, bool committed});
 
@@ -1149,15 +1154,16 @@ class EncryptedKeyService {
   Future<PairingStart> startPairing(String accountId) async {
     final id = await _identity(accountId);
     final pair = await _requireShareKeys().createKeyPair();
+    final request = PairingRequest(
+      keyId: pair.keyId,
+      publicKey: pair.publicKeyBytes,
+      secret: pairingSecret(pair.privateKeyBytes),
+      server: id.server,
+      username: id.username,
+    );
     return (
-      request: encodePairingRequest(
-        PairingRequest(
-          keyId: pair.keyId,
-          publicKey: pair.publicKeyBytes,
-          server: id.server,
-          username: id.username,
-        ),
-      ),
+      request: encodePairingRequest(request),
+      fingerprint: pairingFingerprint(request),
       expiresAt:
           pair.expiresAt ?? _now().toUtc().add(ShareKeyMaterial.lifetime),
     );
@@ -1182,11 +1188,18 @@ class EncryptedKeyService {
         _logPairingRejected(accountId, PairingRejection.wrongAccount);
         throw const PairingRejected(PairingRejection.wrongAccount);
       }
-      final ecies = await sealPairing(
-        request: request,
-        accountKey: key,
-        issuedAt: _now(),
-      );
+      final Uint8List ecies;
+      try {
+        ecies = await sealPairing(
+          request: request,
+          accountKey: key,
+          issuedAt: _now(),
+        );
+      } on FormatException {
+        // A weak (low-order) public key in the request.
+        _logPairingRejected(accountId, PairingRejection.badFormat);
+        throw const PairingRejected(PairingRejection.badFormat);
+      }
       final messageId = newMessageId();
       await _store.appendRaw(
         accountId,

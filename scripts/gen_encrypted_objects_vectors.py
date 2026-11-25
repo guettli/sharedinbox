@@ -158,6 +158,96 @@ INFOS = {
 }
 
 
+# ── X25519 (RFC 7748), for the pairing-v2 section ──────────────────────────
+
+_P = 2**255 - 19
+_BASE = (9).to_bytes(32, "little")
+
+
+def x25519(k, u):
+    k = bytearray(k)
+    k[0] &= 248
+    k[31] &= 127
+    k[31] |= 64
+    k = int.from_bytes(k, "little")
+    x1 = int.from_bytes(u, "little") & ((1 << 255) - 1)
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+    for t in reversed(range(255)):
+        kt = (k >> t) & 1
+        swap ^= kt
+        if swap:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = kt
+        a, b = x2 + z2, x2 - z2
+        aa, bb = a * a % _P, b * b % _P
+        e = aa - bb
+        c, d = x3 + z3, x3 - z3
+        da, cb = d * a % _P, c * b % _P
+        x3 = (da + cb) ** 2 % _P
+        z3 = x1 * (da - cb) ** 2 % _P
+        x2 = aa * bb % _P
+        z2 = e * (aa + 121665 * e) % _P
+    if swap:
+        x2, z2 = x3, z3
+    return (x2 * pow(z2, _P - 2, _P) % _P).to_bytes(32, "little")
+
+
+def _x25519_self_check():
+    # RFC 7748 5.2 and 6.1.
+    out = x25519(
+        bytes.fromhex("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+        bytes.fromhex("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"),
+    )
+    assert out.hex() == "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552", out.hex()
+    alice = bytes.fromhex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")
+    pub = x25519(alice, _BASE)
+    assert pub.hex() == "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", pub.hex()
+
+
+def pairing_v2_section():
+    """Pairing v2 (4.2, 4.6): the request secret, the reply key and the
+    comparison code. A weak (all-zero) ephemeral key gives an all-zero
+    shared secret, which v2 rejects."""
+    _x25519_self_check()
+    # Bytes that clamping changes (first and last byte): the secret is the
+    # HMAC of the 32 private-key bytes as stored, not of the clamped scalar.
+    recipient_priv = bytes(range(0x61, 0x81))
+    eph_priv = bytes(range(0x80, 0xA0))
+    key_id = bytes(range(0xA0, 0xB0))
+    recipient_pub = x25519(recipient_priv, _BASE)
+    eph_pub = x25519(eph_priv, _BASE)
+    shared = x25519(eph_priv, recipient_pub)
+    assert shared == x25519(recipient_priv, eph_pub)
+    secret = hmac.new(
+        recipient_priv, b"sharedinbox-pairing-secret-v2", hashlib.sha256
+    ).digest()[:16]
+    info = b"sharedinbox-pairing-v2" + eph_pub + recipient_pub
+    prk = hmac.new(key_id, shared + secret, hashlib.sha256).digest()
+    aes_key = hmac.new(prk, info + b"\x01", hashlib.sha256).digest()
+    fp_raw = hashlib.sha256(
+        b"sharedinbox-pairing-fp-v2" + key_id + recipient_pub + secret
+    ).digest()[:10]
+    fp = crockford(fp_raw)
+    weak = x25519(recipient_priv, bytes(32))
+    assert weak == bytes(32)
+    return {
+        "pairingV2": {
+            "recipientPriv": recipient_priv.hex(),
+            "recipientPub": recipient_pub.hex(),
+            "ephPriv": eph_priv.hex(),
+            "ephPub": eph_pub.hex(),
+            "keyId": key_id.hex(),
+            "sharedSecret": shared.hex(),
+            "secret": secret.hex(),
+            "info": info.hex(),
+            "aesKey": aes_key.hex(),
+            "fingerprint": "-".join(fp[i : i + 4] for i in range(0, 16, 4)),
+            "weakEphPub": bytes(32).hex(),
+            "weakSharedSecret": weak.hex(),
+        }
+    }
+
+
 def padded_length(p):
     if p > 65536:
         return -(-p // 65536) * 65536
@@ -427,6 +517,7 @@ def main():
     vectors.update(
         passkey_slot_section(account_key, account_key_id, slot_id, slot_nonce)
     )
+    vectors.update(pairing_v2_section())
     json.dump(vectors, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

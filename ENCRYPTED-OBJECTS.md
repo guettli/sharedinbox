@@ -36,6 +36,7 @@ with other people.
 | Stolen, locked phone | As strong as the OS keystore (Android Keystore / iOS Keychain) and the optional SQLCipher DB encryption (`db_encryption_service.dart`). | The data key is readable without biometrics so background sync works (4.2). |
 | Stolen, unlocked phone / malware on the device | **No.** | Out of scope. |
 | Android auto backup / iCloud backup of the app DB | Content in the DB is plaintext unless SQLCipher is on; the data key in secure storage is device-bound and not part of the backup. | A restored DB gets a new deviceId (5.2). |
+| Malicious server during pairing (forged reply, swapped request) | **Yes**, as long as the pairing request does not pass through the server: the reply key needs the request's secret, low-order keys are refused, and a pasted request is sent only after the user compared the 80-bit comparison code on both devices (4.2). | A request the user mails to themselves gives the server its secret, so it could forge a reply; the UI says never to do that. |
 | Brute force of a passphrase slot by the provider | Only as strong as the passphrase (Argon2id). | The UI warns; recovery key and pairing are the recommended paths. |
 | Provider keeps copies of deleted mails (Gmail All Mail, Exchange Recoverable Items) | Plaintext only matters for **migrated legacy notes** (#1355); everything else is ciphertext anyway. | The migration warns the user. |
 
@@ -216,11 +217,19 @@ Not slots, but ways to get the key onto a device:
   new in the storage wrapper (`lib/data/storage/flutter_secure_storage_impl.dart`
   uses the package default today). A biometric app lock may come later as a
   UI-only feature.
-- **Pairing**: an unlocked device sends the account key to a new device via
-  X25519/ECIES (`ShareEncryptionService.encryptBytes`, info
-  `sharedinbox-pairing-v1`). The new device's ephemeral **public key travels
-  only out-of-band** (QR shown by the new device, or paste) — never via the
-  server, which could otherwise sit in the middle. Linux cannot scan QR codes
+- **Pairing** (v2, after the format review): an unlocked device sends the
+  account key to a new device via X25519/ECIES
+  (`ShareEncryptionService.encryptBytes`, info `sharedinbox-pairing-v2`,
+  bound to the request secret and both public keys, 4.6). The new device's
+  ephemeral public key and a 16-byte **request secret travel only
+  out-of-band** (QR shown by the new device, or paste) — never via the
+  server. The secret makes the reply unforgeable for anyone who has not
+  seen the request; an all-zero X25519 output (a low-order key) is refused.
+  Both devices show a **comparison code**; an old device that got the
+  request pasted (not scanned) sends only after the user confirmed that the
+  codes match, so a request swapped on its way gets nothing. v1 (without
+  the secret) was replaced after the review found that the server could
+  forge a reply with a low-order ephemeral key. Linux cannot scan QR codes
   (`mobile_scanner`), so the *reply* goes as a pairing mail in
   `SharedInbox/Keys` encrypted to that public key (fallback: paste). The
   pairing plaintext includes `accountKeyId`; the receiver checks the key
@@ -379,18 +388,26 @@ Implemented in `lib/core/encrypted_objects/` (pure Dart).
   bytes. A reader rejects a missing or duplicate MAC header, another schema
   or kind, and any other mail (e.g. a pairing mail).
 - **Pairing** (`pairing.dart`):
-  - Request: `sharedinbox.de:pair:v1:<base64url(keyId (16) ‖ publicKey (32)
-    ‖ enc(server) ‖ enc(username))>`; its own prefix, so an account-transfer
-    code is rejected.
-  - Plaintext (JSON, encrypted with `ShareEncryptionService.encryptBytes`,
-    info `sharedinbox-pairing-v1`, to the request's key):
+  - Request: `sharedinbox.de:pair:v2:<base64url(keyId (16) ‖ publicKey (32)
+    ‖ secret (16) ‖ enc(server) ‖ enc(username))>`; its own prefix, so an
+    account-transfer code (and a v1 request) is rejected. `secret` = the
+    first 16 bytes of HMAC-SHA256(the 32 private-key bytes as stored, not
+    the clamped scalar; `sharedinbox-pairing-secret-v2`),
+    so the new device stores nothing but its key pair.
+  - Reply key: X25519(eph, recipient) must not be all zero; AES-256 key =
+    HKDF-SHA256(ikm = sharedSecret ‖ secret, salt = keyId, info =
+    `sharedinbox-pairing-v2` ‖ ephPub ‖ recipientPub). Vector `pairingV2`.
+  - Comparison code: the first 80 bits of SHA-256(`sharedinbox-pairing-fp-v2`
+    ‖ keyId ‖ publicKey ‖ secret) in Crockford base32, 4 groups of 4.
+  - Plaintext (JSON, encrypted with `ShareEncryptionService.encryptBytes`
+    and the reply key above, to the request's key):
     `{"v": 1, "kind": "pairing", "accountKeyId", "accountKey", "server",
     "username", "issuedAt"}`; `issuedAt` is ISO 8601 UTC.
   - Pairing mail: `Date`, `Subject: SharedInbox pairing`, `Message-ID`,
     `MIME-Version`, `X-SharedInbox-Schema: 1`, `X-SharedInbox-Key-Kind:
     pairing`, and one `base64` `application/octet-stream` body with the
     ECIES bytes `keyId ‖ ephPub ‖ nonce ‖ ciphertext ‖ mac`.
-  - Paste fallback: `sharedinbox.de:pairing:v1:<base64url(ECIES bytes)>`.
+  - Paste fallback: `sharedinbox.de:pairing:v2:<base64url(ECIES bytes)>`.
 - **Recovery key**: checksum = the first 4 bytes of SHA-256 of the raw 16
   bytes; `raw ‖ checksum` (160 bit) is written MSB-first in Crockford base32
   (`0123456789ABCDEFGHJKMNPQRSTVWXYZ`) as 8 groups of 4 joined by `-`.
@@ -975,7 +992,7 @@ The key-hierarchy slice (#1365) created it with `hkdf`, `recoveryKey`,
 `scripts/gen_encrypted_objects_vectors.py`. The envelope slice (#1369) added
 `itemHmac`, `padding`, `envelope`, `hlc` and `messageId`; the log-segment
 slice (#1372) `logSegment`; the passkey slot (#1360) `passkeySlot`; the
-card batches (#1379) `cardBatch`. Once
+card batches (#1379) `cardBatch`; pairing v2 (crypto review) `pairingV2`. Once
 merged, a section is **frozen**: changing it requires a new magic (`SIE2`)
 or schema version and a migration. New slices add sections; they never edit existing ones.
 
@@ -1002,10 +1019,13 @@ device] [Enter recovery key] [Passphrase] [Passkey]".
 **Pairing** (4.2):
 
 ```text
-New device:  [Pair with another device] → shows the request as QR + text,
-             a 20-min countdown, checks SharedInbox/Keys every ~10 s,
-             a paste field for the fallback code → unlocks by itself
+New device:  [Pair with another device] → shows the request as QR + text
+             (warning: keep it secret, never send it by mail), the
+             comparison code, a 20-min countdown, checks SharedInbox/Keys
+             every ~10 s, a paste field for the fallback code → unlocks
+             by itself
 Old device:  [Pair a new device] → scan (Android/iOS) or paste the request
+             → pasted: "Does the new device show <code>?" — sent only on yes
              → refused if it is for another account
              → pairing mail appended (offline first) → "Sent — the new
                device unlocks on its next sync" + the paste code (text + QR)

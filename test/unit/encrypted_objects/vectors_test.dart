@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 import 'package:sharedinbox/core/encrypted_objects/card_object.dart';
@@ -10,9 +11,11 @@ import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/keys.dart';
 import 'package:sharedinbox/core/encrypted_objects/log_segment.dart';
 import 'package:sharedinbox/core/encrypted_objects/object_mail.dart';
+import 'package:sharedinbox/core/encrypted_objects/pairing.dart';
 import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
+import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:test/test.dart';
 
 import 'test_helpers.dart';
@@ -36,6 +39,64 @@ void main() {
       final derived = await deriveSubKey(root, s['info'] as String);
       expect(toHex(derived.bytes), s['key'], reason: s['info'] as String);
     }
+  });
+
+  test('pairingV2', () async {
+    final v = vectors['pairingV2'] as Map<String, dynamic>;
+    final x25519 = X25519();
+    Future<SimpleKeyPair> pairOf(String hex) =>
+        x25519.newKeyPairFromSeed(hexBytes(hex));
+    final recipient = await pairOf(v['recipientPriv'] as String);
+    final eph = await pairOf(v['ephPriv'] as String);
+    final recipientPub = (await recipient.extractPublicKey()).bytes;
+    final ephPub = (await eph.extractPublicKey()).bytes;
+    expect(toHex(recipientPub), v['recipientPub']);
+    expect(toHex(ephPub), v['ephPub']);
+    final shared = await (await x25519.sharedSecretKey(
+      keyPair: eph,
+      remotePublicKey: SimplePublicKey(recipientPub, type: KeyPairType.x25519),
+    ))
+        .extractBytes();
+    expect(toHex(shared), v['sharedSecret']);
+
+    final secret = pairingSecret(hexBytes(v['recipientPriv'] as String));
+    expect(toHex(secret), v['secret']);
+    final keyId = hexBytes(v['keyId'] as String);
+    final aesKey = await ShareEncryptionService.deriveAesKey(
+      sharedSecret: shared,
+      keyId: keyId,
+      info: HkdfInfo.pairingV2,
+      bindSecret: secret,
+      ephPub: ephPub,
+      recipientPub: recipientPub,
+    );
+    expect(toHex(aesKey), v['aesKey']);
+    expect(
+      pairingFingerprint(
+        PairingRequest(
+          keyId: keyId,
+          publicKey: Uint8List.fromList(recipientPub),
+          secret: secret,
+          server: 's',
+          username: 'u',
+        ),
+      ),
+      v['fingerprint'],
+    );
+
+    // The weak point: an all-zero shared secret is refused.
+    expect(v['weakSharedSecret'], '00' * 32);
+    await expectLater(
+      ShareEncryptionService.deriveAesKey(
+        sharedSecret: hexBytes(v['weakSharedSecret'] as String),
+        keyId: keyId,
+        info: HkdfInfo.pairingV2,
+        bindSecret: secret,
+        ephPub: hexBytes(v['weakEphPub'] as String),
+        recipientPub: recipientPub,
+      ),
+      throwsFormatException,
+    );
   });
 
   test('recoveryKey', () async {
