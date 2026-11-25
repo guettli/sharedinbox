@@ -400,13 +400,11 @@ Future<void> pumpEntriesApp(
 }) async {
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(PersonalDataStatus.unlocked),
       initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
         entryRepositoryProvider.overrideWithValue(repo),
         mailObjectStoreProvider.overrideWithValue(store),
         if (today != null) todayProvider.overrideWithValue(today),

@@ -1123,7 +1123,8 @@ class UserPreferences extends Table {
   // Added in schema v38: max cache size for offline email bodies, in megabytes.
   IntColumn get bodyCacheLimitMb =>
       integer().withDefault(const Constant(100))();
-  // Added in schema v83: the "Personal data (beta)" switch (#1366).
+  // Added in schema v83: the "Personal data (beta)" switch (#1366). Unused
+  // since the switch was removed; kept so no migration drops a column.
   BoolColumn get personalDataBeta =>
       boolean().withDefault(const Constant(false))();
   // Added in schema v87: the account new todos and entries go to (#1357);

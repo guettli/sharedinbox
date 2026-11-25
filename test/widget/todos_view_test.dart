@@ -24,19 +24,16 @@ Future<FakeEntryRepository> _pump(
   final repo = FakeEntryRepository(entries);
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(
+        PersonalDataStatus.unlocked,
+        byAccount: status,
+      ),
       initialLocation: '/accounts/acc-1/entries',
       userPreferences: FakeUserPreferencesRepository(
-        personalDataBeta: true,
         defaultItemsAccountId: defaultAccount,
       ),
       overrides: [
         ...baseOverrides(accounts: accounts),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(
-            PersonalDataStatus.unlocked,
-            byAccount: status,
-          ),
-        ),
         entryRepositoryProvider.overrideWithValue(repo),
         mailObjectStoreProvider.overrideWithValue(FakeConflictStore({})),
         todayProvider.overrideWithValue(() => DateTime(2026, 11, 23, 9)),

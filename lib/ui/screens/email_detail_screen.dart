@@ -506,8 +506,6 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
     final cached = _checkedHeader?.id == widget.emailId ? _checkedHeader : null;
     final header = detail.value?.$1 ?? cached;
     final body = detail.value?.$2;
-    final personalDataBeta =
-        ref.watch(userPreferencesProvider).value?.personalDataBeta ?? false;
 
     final isMobile = defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS;
@@ -698,18 +696,17 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 value: 'mark_unread',
                 child: Text('Mark as unread'),
               ),
-              if (personalDataBeta && header?.messageId != null)
+              if (header?.messageId != null)
                 const PopupMenuItem(
                   key: Key('emailCreateTodo'),
                   value: 'create_todo',
                   child: Text('Create todo'),
                 ),
-              if (personalDataBeta)
-                const PopupMenuItem(
-                  key: Key('emailCreateCard'),
-                  value: 'create_card',
-                  child: Text('Create card'),
-                ),
+              const PopupMenuItem(
+                key: Key('emailCreateCard'),
+                value: 'create_card',
+                child: Text('Create card'),
+              ),
               const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'headers',
@@ -764,7 +761,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
                 _showSelectText(
                   context,
                   body,
-                  cardsIn: personalDataBeta ? header?.accountId : null,
+                  cardsIn: header?.accountId,
                 );
               } else if (value == 'create_card' &&
                   body != null &&
@@ -2473,7 +2470,7 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
   /// platform. HTML is stripped to plain text via [htmlToPlain]; text-only
   /// messages are shown as-is.
   ///
-  /// With [cardsIn] (an account, while "Personal data (beta)" is on) it also
+  /// With [cardsIn] (an account) it also
   /// offers "Create card": the selection (or the whole text) becomes the
   /// back of a new flash card in that account (#1381).
   void _showSelectText(

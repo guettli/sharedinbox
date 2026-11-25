@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/entry.dart';
-import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
@@ -44,8 +43,7 @@ Widget _cardsTab(String accountId) => DecksView(accountId: accountId);
 /// The entries home (ENCRYPTED-OBJECTS.md 9, #1373): tabs for notes (search,
 /// quick-add and the list, newest first), todos (#1357), the journal
 /// (#1358) and the flash card decks (#1381).
-/// Behind the "Personal data (beta)" switch, and only while the account is
-/// unlocked on this device.
+/// Only while the account is unlocked on this device.
 class EntriesScreen extends ConsumerWidget {
   const EntriesScreen({super.key, required this.accountId});
 
@@ -220,9 +218,8 @@ Future<bool> confirmDeleteEntry(BuildContext context, Entry entry) {
   );
 }
 
-/// Shows [child] only while the "Personal data (beta)" switch is on and the
-/// account is unlocked on this device; otherwise a message and a way to the
-/// personal-data screen.
+/// Shows [child] only while the account is unlocked on this device;
+/// otherwise a message and a way to the personal-data screen.
 class PersonalDataGate extends ConsumerWidget {
   const PersonalDataGate({
     super.key,
@@ -235,14 +232,6 @@ class PersonalDataGate extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final prefs =
-        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
-    if (!prefs.personalDataBeta) {
-      return const _GateMessage(
-        'Turn on "Personal data (beta)" in Preferences to use encrypted '
-        'personal data.',
-      );
-    }
     final status = ref.watch(personalDataStatusProvider(accountId));
     return status.when(
       loading: () => const Center(child: CircularProgressIndicator()),

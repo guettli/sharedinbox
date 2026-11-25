@@ -4,8 +4,7 @@ import 'package:sharedinbox/core/models/note.dart';
 /// An account with a key mail is an encrypted account: this device never
 /// writes a new plaintext note for it.
 enum NotesMode {
-  /// No key mail (or "Personal data (beta)" is off): plaintext notes in the
-  /// `Notes` folder, as before.
+  /// No key mail: plaintext notes in the `Notes` folder, as before.
   legacy,
 
   /// A key mail exists, but this device has no key: no new notes, and notes

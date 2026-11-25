@@ -122,36 +122,23 @@ void main() {
       expect(repo.afterMailViewAction, AfterMailViewAction.showMailbox);
     });
 
-    testWidgets('the Personal data (beta) switch is off and turns on', (
-      tester,
-    ) async {
-      await _pumpPreferences(tester);
-      await _scrollTo(tester, 'Personal data (beta)');
-      final tile = find.byKey(const Key('personalDataBetaSwitch'));
-      expect(tester.widget<SwitchListTile>(tile).value, isFalse);
-
-      final repo = await _tapAndGetRepo(tester, 'Personal data (beta)');
-
-      expect(repo.personalDataBeta, isTrue);
-      expect(tester.widget<SwitchListTile>(tile).value, isTrue);
-    });
-
-    testWidgets('the default account for new items shows with the beta on', (
+    testWidgets('the default account for new items is picked', (
       tester,
     ) async {
       await _pumpPreferences(tester, accounts: [kTestAccount]);
-      await _scrollTo(tester, 'Personal data (beta)');
-      final dropdown = find.byKey(const Key('defaultItemsAccountDropdown'));
-      expect(dropdown, findsNothing);
-
-      final repo = await _tapAndGetRepo(tester, 'Personal data (beta)');
       await _scrollTo(tester, 'Default account for new items');
       expect(find.text('Open account'), findsOneWidget);
+      expect(find.text('Personal data (beta)'), findsNothing);
+      final dropdown = find.byKey(const Key('defaultItemsAccountDropdown'));
 
       await tester.tap(dropdown);
       await tester.pumpAndSettle();
       await tester.tap(find.text('alice@example.com').last);
       await tester.pumpAndSettle();
+      final repo = ProviderScope.containerOf(
+        tester.element(find.byType(UserPreferencesScreen)),
+      ).read(userPreferencesRepositoryProvider)
+          as FakeUserPreferencesRepository;
       expect(repo.defaultItemsAccountId, 'acc-1');
     });
   });

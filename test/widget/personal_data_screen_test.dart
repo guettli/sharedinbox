@@ -165,7 +165,6 @@ PasskeySlotInfo _passkey(int n, String label) => PasskeySlotInfo(
 Future<_FakeKeyService> _pump(
   WidgetTester tester,
   PersonalDataStatus status, {
-  bool beta = true,
   bool hasPassphrase = false,
   bool passkeys = false,
   List<PasskeySlotInfo> passkeySlots = const [],
@@ -179,11 +178,11 @@ Future<_FakeKeyService> _pump(
     ..passkeys.addAll(passkeySlots);
   await tester.pumpWidget(
     buildApp(
+      keyService: service,
       initialLocation: location,
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: beta),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider.overrideWithValue(service),
         entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
         mailObjectStoreProvider.overrideWithValue(FakeConflictStore({})),
       ],
@@ -578,31 +577,18 @@ void main() {
     expect(find.byKey(const Key('foreignKeyWarning')), findsOneWidget);
   });
 
-  testWidgets('the account home entry shows only with the beta switch on',
+  testWidgets('the account home entry opens the personal-data screen',
       (tester) async {
     await _pump(
       tester,
       PersonalDataStatus.notSetUp,
-      beta: false,
       location: '/accounts/acc-1',
     );
-    expect(find.text('Personal data (beta)'), findsNothing);
-
-    await _pump(
-      tester,
-      PersonalDataStatus.notSetUp,
-      location: '/accounts/acc-1',
-    );
-    await tester.scrollUntilVisible(find.text('Personal data (beta)'), 200);
-    await tester.tap(find.text('Personal data (beta)'));
+    final entry = find.byKey(const Key('accountHomePersonalData'));
+    await tester.scrollUntilVisible(entry, 200);
+    await tester.tap(entry);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('personalDataGenerate')), findsOneWidget);
-  });
-
-  testWidgets('with the switch off the screen points to Preferences',
-      (tester) async {
-    await _pump(tester, PersonalDataStatus.notSetUp, beta: false);
-    expect(find.textContaining('in Preferences'), findsOneWidget);
   });
 
   testWidgets('locked with no key mail visible explains, no unlock form',

@@ -38,6 +38,7 @@ import 'package:sharedinbox/core/repositories/user_preferences_repository.dart';
 import 'package:sharedinbox/core/services/account_discovery_service.dart';
 import 'package:sharedinbox/core/services/connection_test_service.dart';
 import 'package:sharedinbox/core/services/db_encryption_service.dart';
+import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/services/share_encryption_service.dart';
 import 'package:sharedinbox/core/sync/message_debug_service.dart';
@@ -935,6 +936,7 @@ Widget buildApp({
   required String initialLocation,
   required List<Override> overrides,
   UserPreferencesRepository? userPreferences,
+  EncryptedKeyService? keyService,
   ThemeMode themeMode = ThemeMode.light,
   bool debugShowCheckedModeBanner = true,
   Object? initialExtra,
@@ -1137,6 +1139,11 @@ Widget buildApp({
       // A Drift StreamQuery too (#1375): no legacy notes to migrate.
       legacyNotesAwaitingConfirmationProvider
           .overrideWith((ref, accountId) => Stream.value(0)),
+      // Personal data is opt-in per account: by default no account has a
+      // key, so notes on mails stay plaintext. Tests of the encrypted
+      // features pass their own [keyService].
+      encryptedKeyServiceProvider
+          .overrideWithValue(keyService ?? const NotSetUpKeyService()),
       ...overrides,
       manageSieveProbeServiceProvider.overrideWith(
         (ref) => _NoOpManageSieveProbeService(),
@@ -1286,14 +1293,12 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   FakeUserPreferencesRepository({
     this.menuPosition = MenuPosition.bottom,
     this.afterMailViewAction = AfterMailViewAction.nextMessage,
-    this.personalDataBeta = false,
     this.defaultItemsAccountId,
     List<String>? trustedImageSenders,
   }) : _trustedImageSenders = trustedImageSenders ?? [];
 
   MenuPosition menuPosition;
   AfterMailViewAction afterMailViewAction;
-  bool personalDataBeta;
   String? defaultItemsAccountId;
   final _changes = StreamController<void>.broadcast();
   final List<String> _trustedImageSenders;
@@ -1310,7 +1315,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
   UserPreferences _current() => UserPreferences(
         menuPosition: menuPosition,
         afterMailViewAction: afterMailViewAction,
-        personalDataBeta: personalDataBeta,
         defaultItemsAccountId: defaultItemsAccountId,
       );
 
@@ -1329,12 +1333,6 @@ class FakeUserPreferencesRepository implements UserPreferencesRepository {
 
   @override
   Future<void> updateBodyCacheLimitMb(int mb) async {}
-
-  @override
-  Future<void> updatePersonalDataBeta({required bool enabled}) async {
-    personalDataBeta = enabled;
-    _changes.add(null);
-  }
 
   @override
   Future<void> updateDefaultItemsAccountId(String? accountId) async {
@@ -1466,3 +1464,26 @@ List<Email> bulkSearchHits(int count) => [
           receivedAt: DateTime(2024, 6).subtract(Duration(minutes: i)),
         ),
     ];
+
+/// A key lifecycle for an account without personal data set up: the default
+/// of [buildApp].
+class NotSetUpKeyService implements EncryptedKeyService {
+  const NotSetUpKeyService();
+
+  @override
+  Stream<PersonalDataStatus> watchStatus(String accountId) =>
+      Stream.value(PersonalDataStatus.notSetUp);
+
+  @override
+  Future<PersonalDataStatus> status(String accountId) async =>
+      PersonalDataStatus.notSetUp;
+
+  @override
+  bool get passkeysAvailable => false;
+
+  @override
+  Future<bool> hasPassphraseSlot(String accountId) async => false;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}

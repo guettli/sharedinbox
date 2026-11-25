@@ -78,7 +78,6 @@ class KeyDevice {
       store: store,
       keys: keys,
       ring: ring,
-      betaEnabled: () async => true,
       listFolders: (id) => mailboxes.syncMailboxes(id),
       shareKeys: ShareKeyRepositoryImpl(db),
       findAccount: accounts.getAccount,

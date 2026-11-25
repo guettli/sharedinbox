@@ -40,9 +40,14 @@ with other people.
 | Brute force of a passphrase slot by the provider | Only as strong as the passphrase (Argon2id). | The UI warns; recovery key and pairing are the recommended paths. |
 | Provider keeps copies of deleted mails (Gmail All Mail, Exchange Recoverable Items) | Plaintext only matters for **migrated legacy notes** (#1355); everything else is ciphertext anyway. | The migration warns the user. |
 
-**Before the first release that writes encrypted objects for real users, the
-format (sections 4–5) gets a review by a human with cryptography experience.**
-Until then the features stay behind the debug flag (section 9).
+**Format review (2026-11):** two independent AI reviews (Claude sub-agents: design against this
+spec, and the implementation) found a forgeable pairing reply, an item
+binding that trusted a server header fetch, a plaintext downgrade, missing
+robustness against hostile input, cloud backups of the decrypted DB and a
+passkey rpId on the website's domain. All are fixed (#1436, #1437) and the
+global "Personal data (beta)" switch is gone (section 9). A review by a
+human cryptographer is still open and recommended; the passkey slot also waits
+for real-device tests (#1412).
 
 ## 3. Folders
 
@@ -79,7 +84,7 @@ top level and under that prefix (e.g. `INBOX.SharedInbox.Data`).
 are filled once a key opens it), `mail_object_uids` (the UID → Message-ID /
 item-HMAC index), `mail_object_clocks` (the per-item version vector of
 5.4) and `mail_object_devices` (the DB side of the deviceId, 5.3). Until
-the beta switch, the store only pulls folders the listing recorded and
+the beta switch (removed since), the store only pulls folders the listing recorded and
 creates folders only for a local row to upload. For the key lifecycle
 (#1366) it treats `SharedInbox/Keys` as opaque raw mails: `observe`,
 `appendRaw` (idempotent by Message-ID), `deleteRaw` (foreground) and
@@ -93,9 +98,11 @@ key; it fills one in-memory `KeyRing` (`key_ring.dart`) that the store uses
 as its key lookups (also in the background isolate). Its state per account
 is the `SyncStates` row `mos:key-state`, JSON
 `{phase: none|pending|won|lost, ownMessageId, committed}` — never key
-material. It runs after each object sync (`afterSync`), only while the
-"Personal data (beta)" switch (`UserPreferences.personalDataBeta`, schema
-v83) is on; the background only reads.
+material. It runs after each object sync (`afterSync`) and does nothing
+for an account without a key, key mails or a setup in progress; the
+background only reads. (Until the format review it ran only while the
+"Personal data (beta)" switch was on; the switch is gone, its schema v83
+column `user_preferences.personal_data_beta` is unused.)
 
 **JMAP store (#1371)**: `MailObjectStoreJmap`
 (`lib/data/repositories/mail_object_store_jmap.dart`); the transport-free
@@ -247,7 +254,7 @@ Not slots, but ways to get the key onto a device:
     future, of another account, that does not authenticate, or whose key is
     not the winning group's or fails its slot-list MAC.
   - A pairing mail is never uploaded again when it vanishes. Every device
-    with the beta switch on deletes pairing mails whose `Date` is older than
+    deletes pairing mails whose `Date` is older than
     20 + 5 min in its **foreground** keys-folder sync; pairing mails of other
     devices are otherwise left alone.
 
@@ -1032,8 +1039,9 @@ or schema version and a migration. New slices add sections; they never edit exis
 
 ## 9. Rollout and user flows
 
-**Rollout**: everything behind a debug/beta switch "Personal data (beta)"
-until the format review (section 2) is done; then opt-in per account.
+**Rollout**: opt-in per account. Until the format review (section 2) it
+was behind a global "Personal data (beta)" switch, removed after that
+review.
 
 **Setup** (per account, from settings or the first time a feature opens):
 

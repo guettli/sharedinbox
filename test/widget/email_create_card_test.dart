@@ -14,15 +14,13 @@ const _url = '/accounts/acc-1/mailboxes/INBOX/emails/acc-1%3A42';
 const _body = 'Pay the invoice by Friday';
 
 /// Opens mail acc-1:42 and its menu.
-Future<FakeCardRepository> _openMenu(
-  WidgetTester tester, {
-  bool beta = true,
-}) async {
+Future<FakeCardRepository> _openMenu(WidgetTester tester) async {
   final cards = FakeCardRepository(decks: [testDeck('deck-1', 'Work')]);
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(PersonalDataStatus.unlocked),
       initialLocation: _url,
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: beta),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         accountRepositoryProvider
             .overrideWithValue(FakeAccountRepository([kTestAccount])),
@@ -36,9 +34,6 @@ Future<FakeCardRepository> _openMenu(
               attachments: [],
             ),
           ),
-        ),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
         ),
         conversationNotesProvider.overrideWith((ref, key) => Stream.value([])),
         entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
@@ -147,14 +142,5 @@ void main() {
     await tester.pumpAndSettle();
     await _save(tester, 'Q2');
     expect(cards.added.map((c) => c.deckId), ['deck-1', 'deck-1']);
-  });
-
-  testWidgets('without "Personal data (beta)" there is no Create card',
-      (tester) async {
-    await _openMenu(tester, beta: false);
-    expect(find.byKey(const Key('emailCreateCard')), findsNothing);
-    await tester.tap(find.text('Select text'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('selectTextCreateCard')), findsNothing);
   });
 }

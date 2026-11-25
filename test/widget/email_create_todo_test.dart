@@ -17,7 +17,6 @@ const _url = '/accounts/acc-2/mailboxes/INBOX/emails/acc-2%3A42';
 /// says otherwise) and its menu.
 Future<FakeEntryRepository> _openMenu(
   WidgetTester tester, {
-  bool beta = true,
   String? messageId = '<inv@x>',
   List<Entry> entries = const [],
   List<LinkedNote> notes = const [],
@@ -29,8 +28,9 @@ Future<FakeEntryRepository> _openMenu(
           .copyWith(messageId: messageId);
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(PersonalDataStatus.unlocked),
       initialLocation: _url,
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: beta),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         accountRepositoryProvider.overrideWithValue(
           FakeAccountRepository([
@@ -48,9 +48,6 @@ Future<FakeEntryRepository> _openMenu(
               attachments: [],
             ),
           ),
-        ),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
         ),
         // A mail with a Message-ID shows its notes; no Drift stream here.
         conversationNotesProvider
@@ -210,11 +207,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(repo.entries, isEmpty);
     expect(find.text('Unlock personal data to add todos.'), findsOneWidget);
-  });
-
-  testWidgets('hidden without the beta switch', (tester) async {
-    await _openMenu(tester, beta: false);
-    expect(find.byKey(const Key('emailCreateTodo')), findsNothing);
   });
 
   testWidgets('hidden for a mail without a Message-ID', (tester) async {

@@ -31,13 +31,11 @@ Future<FakeCardRepository> _pump(
   );
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(PersonalDataStatus.unlocked),
       initialLocation: '/accounts/acc-1/entries',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         ...baseOverrides(),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
         entryRepositoryProvider.overrideWithValue(FakeEntryRepository()),
         mailObjectStoreProvider.overrideWithValue(FakeConflictStore({})),
         cardRepositoryProvider.overrideWithValue(cards),
