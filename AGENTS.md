@@ -139,6 +139,17 @@ Notes:
   if anything fails, feeds the logs back so you can push a fix. Reach for the
   full `task check` locally only when a change plausibly affects the build or
   integration/backend tests and you want to confirm before pushing.
+- **"Generated files are out of date" locally, but not in CI:** generated
+  files such as `lib/data/db/database.g.dart` are gitignored, but
+  `--source=.` uploads them from your checkout. A stale one left by an
+  earlier local codegen fails the check. Delete it (`rm
+  lib/data/db/database.g.dart`); `task format` (`format-write -o .`) writes it
+  back, so delete it again after formatting.
+- **Widget tests and `PopScope`:** `tester.enterText` does not render a
+  frame, so a `PopScope(canPop: !dirty)` still has its old value. Call
+  `await tester.pump()` after typing and before `tester.pageBack()` or
+  `tester.binding.handlePopRoute()`, or the back press pops without the
+  dirty check.
 - The **local-only** tasks (`task test`, `task run`, `task build-linux`, …) use
   a local Flutter SDK and will **not** work here — use the Dagger targets above
   instead.

@@ -218,6 +218,48 @@ python3 stalwart-dev/jmap_probe.py http://127.0.0.1:28080 bob@example.com secret
 
 IMAP is available too, at `localhost:21430` (plaintext).
 
+**Explore personal data (beta).** Notes, todos, journal and flash cards are
+stored encrypted on the account's own mail server (see
+[ENCRYPTED-OBJECTS.md](ENCRYPTED-OBJECTS.md)). They are behind a switch and
+need a key first:
+
+```bash
+c tap x=36 y=760                                 # drawer (bottom-left ☰)
+c click name=Preferences role='push button'
+c click name='Personal data (beta)' contains=1 role='toggle button'
+c click-unnamed role='push button' index=0       # back
+c tap x=36 y=760; c click name=Bob contains=1 role='push button'  # account home
+c click name='Personal data (beta)' contains=1 role='push button'
+c click name='Generate key' role='push button'   # takes ~10 s
+c texts | grep -o "'[A-Z0-9-]\{39\}'"           # the recovery key
+c click name='I saved it' role='push button'
+c fill name='Last group' text=XXXX               # its last group
+c click name=Done role='push button'
+c click name=Entries contains=1 role='push button'   # Notes/Todos/Journal/Cards
+```
+
+The tabs are unnamed panels: switch with `c tap` on their label (y=79). The
+account home is reached from the drawer, not from the account list. "Create
+todo" and "Create card" are in a mail's ⋮ menu (under the DEBUG banner,
+`c tap x=1262 y=28`; the items need `force=1`).
+
+To check that the server sees only ciphertext, read the `SharedInbox/Data`
+and `SharedInbox/Keys` folders over IMAP:
+
+```python
+import imaplib
+m = imaplib.IMAP4("localhost", 21430); m.login("bob@example.com", "secret")
+m.select('"SharedInbox/Data"', readonly=True)
+typ, ids = m.search(None, "ALL")
+for i in ids[0].split():
+    raw = m.fetch(i, "(RFC822)")[1][0][1]
+    assert b"some text you typed" not in raw    # no plaintext on the server
+```
+
+Worth trying there: leave an editor with the back button instead of Save,
+create and edit while `net mode=down`, delete from a mail's Notes section, a
+deck without cards.
+
 **Break the network.** The app reaches Stalwart through a fault-injecting
 proxy (`scripts/fault_proxy.py`, run by the driving API) on its localhost
 ports: `imap` 1430, `smtp` 1025, `jmap` 8080, `sieve` 4190. `c net` shows
@@ -283,12 +325,18 @@ while a flag change or move is pending, then `up`, and compare with the server.
   `lib/ui/widgets/secure_email_webview.dart`), because webview_flutter has no
   Linux support. Judge HTML layout on Android. On Linux, check only that the
   text is complete and readable.
+- **Export and "Save as" do nothing.** The save-location picker needs a
+  desktop portal, which the container does not have, so it returns no path
+  and the app silently stays where it was. Test exporting and saving files
+  on Android or a desktop.
 - **Type ASCII only.** `xdotool` types a non-ASCII character such as `ü` by
   temporarily remapping a keycode. Flutter's GTK key handling then logs
   `CRITICAL … update_pressing_state … assertion … failed` and the keystrokes
   are lost. Worse, the app can drop off the accessibility bus (`texts` says
   `<app not on the accessibility bus>`) until `c restart`. To test non-ASCII
   input, seed it through SMTP (see **Seed mail** above) or check it on Android.
+  Lowercase umlauts sometimes do get through, but an uppercase one arrives
+  lowercase (`Ü` → `ü`): that is `xdotool`, not the app.
 - **The paperclip opens the system file chooser.** Attaching a file opens a
   GTK file dialog in the app's process. While it is open, the app is off the
   accessibility bus (`texts` says `<app not on the accessibility bus>`) and
