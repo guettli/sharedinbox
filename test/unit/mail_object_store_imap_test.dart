@@ -501,8 +501,8 @@ void main() {
     final server = _server();
     final a = await _Device.open(server);
     final b = await _Device.open(server, unlocked: false);
-    final itemA = await a.putNew(body: 'from A');
-    final itemB = await a.putNew(body: 'from B');
+    final itemA = await a.putNew(itemId: 'a', body: 'from A');
+    final itemB = await a.putNew(itemId: 'b', body: 'from B');
     await b.list();
     await b.sync();
     // The server answered the header fetch of A's mail with B's item: that

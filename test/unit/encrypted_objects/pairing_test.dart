@@ -188,6 +188,7 @@ void main() {
         request: PairingRequest(
           keyId: pair.keyId,
           publicKey: other.publicKeyBytes,
+          secret: pairingSecret(pair.privateKeyBytes),
           server: _server,
           username: _user,
         ),
@@ -198,6 +199,7 @@ void main() {
         request: PairingRequest(
           keyId: other.keyId,
           publicKey: other.publicKeyBytes,
+          secret: pairingSecret(other.privateKeyBytes),
           server: _server,
           username: _user,
         ),

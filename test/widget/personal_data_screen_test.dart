@@ -259,9 +259,15 @@ void main() {
 
     expect(find.byKey(const Key('pairRequestQrCode')), findsOneWidget);
     expect(find.text('${pairingRequestPrefix}request'), findsOneWidget);
-    expect(find.byKey(const Key('pairCountdown')), findsOneWidget);
-    expect(find.text('ABCD-EFGH-JKMN-PQRS'), findsOneWidget);
     expect(find.byKey(const Key('pairRequestSecretWarning')), findsOneWidget);
+    final countdown = find.byKey(const Key('pairCountdown'));
+    await tester.scrollUntilVisible(
+      countdown,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('ABCD-EFGH-JKMN-PQRS'), findsOneWidget);
+    expect(countdown, findsOneWidget);
 
     // The keys folder is checked while the view waits.
     await tester.pump(const Duration(seconds: 10));

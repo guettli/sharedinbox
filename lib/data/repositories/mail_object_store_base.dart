@@ -204,9 +204,8 @@ abstract class MailObjectStoreBase implements MailObjectStore {
           'Skipped an encrypted object that could not be parsed',
           accountId: accountId,
           data: {
-            'error': '$err'.length <= 200
-                ? '$err'
-                : '${'$err'.substring(0, 200)}…',
+            'error':
+                '$err'.length <= 200 ? '$err' : '${'$err'.substring(0, 200)}…',
           },
         ),
       );
