@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ (API 31). Cloud backup must not carry the app database or
+     files: they hold decrypted personal data (entries, images, review
+     history) and mail, and for a Gmail user the backup provider is the
+     mail provider, the adversary of ENCRYPTED-OBJECTS.md section 2
+     (crypto review, F3). The data key in secure storage is never backed
+     up anyway. A direct device-to-device transfer (cable / local Wi-Fi)
+     does not go through a server and stays allowed. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+</data-extraction-rules>

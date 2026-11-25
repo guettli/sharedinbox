@@ -69,7 +69,7 @@ void main() {
     expect(reg.credentialId, _credentialId);
     final (method, json) = requests.single;
     expect(method, 'create');
-    expect(json['rp'], {'id': 'sharedinbox.de', 'name': 'SharedInbox'});
+    expect(json['rp'], {'id': 'keys.sharedinbox.de', 'name': 'SharedInbox'});
     expect((json['user']! as Map)['name'], 'alice@example.com');
     expect(json['authenticatorSelection'], {
       'residentKey': 'required',
@@ -105,7 +105,7 @@ void main() {
     expect(assertion.output, _output);
     final (method, json) = requests.single;
     expect(method, 'get');
-    expect(json['rpId'], 'sharedinbox.de');
+    expect(json['rpId'], 'keys.sharedinbox.de');
     expect(json['userVerification'], 'required');
     expect(json['allowCredentials'], [
       {'type': 'public-key', 'id': b64url(_credentialId)},

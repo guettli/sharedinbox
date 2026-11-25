@@ -36,4 +36,26 @@ void main() {
       reason: 'the app must still advertise itself as a mailto: handler',
     );
   });
+
+  test('cloud backup excludes the database and app files (crypto review F3)',
+      () {
+    expect(
+      manifest,
+      contains('android:dataExtractionRules="@xml/data_extraction_rules"'),
+    );
+    expect(manifest, contains('android:fullBackupContent="@xml/backup_rules"'));
+    final modern = File(
+      'android/app/src/main/res/xml/data_extraction_rules.xml',
+    ).readAsStringSync();
+    final cloud = RegExp(r'<cloud-backup>(.*?)</cloud-backup>', dotAll: true)
+        .firstMatch(modern)!
+        .group(1)!;
+    final legacy = File(
+      'android/app/src/main/res/xml/backup_rules.xml',
+    ).readAsStringSync();
+    for (final rules in [cloud, legacy]) {
+      expect(rules, contains('<exclude domain="database" path="." />'));
+      expect(rules, contains('<exclude domain="file" path="." />'));
+    }
+  });
 }

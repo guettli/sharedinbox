@@ -12,8 +12,12 @@ import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 /// slot carries, in clear next to the known fields: `credentialId`
 /// (base64url), `prfSalt` (32 bytes, base64url), `rpId` and `label`.
 
-/// The WebAuthn relying party of every passkey slot.
-const passkeyRpId = 'sharedinbox.de';
+/// The WebAuthn relying party of every passkey slot: a host that serves
+/// `assetlinks.json` and nothing else. Any web page on the rpId (or below
+/// it) could ask the browser for this passkey's PRF and, with the slot from
+/// the mail server, unwrap the data key; so it is not the website's domain
+/// (crypto review, F4). Fixed for good once a passkey is registered.
+const passkeyRpId = 'keys.sharedinbox.de';
 
 /// Length of the PRF salt of a passkey slot.
 const prfSaltLength = 32;

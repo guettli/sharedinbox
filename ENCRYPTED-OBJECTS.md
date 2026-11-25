@@ -35,7 +35,7 @@ with other people.
 | Malicious server planting a key mail | **Yes** — slot lists are MAC'd; a device that already wrote objects never switches to a foreign key (4.3). | |
 | Stolen, locked phone | As strong as the OS keystore (Android Keystore / iOS Keychain) and the optional SQLCipher DB encryption (`db_encryption_service.dart`). | The data key is readable without biometrics so background sync works (4.2). |
 | Stolen, unlocked phone / malware on the device | **No.** | Out of scope. |
-| Android auto backup / iCloud backup of the app DB | Content in the DB is plaintext unless SQLCipher is on; the data key in secure storage is device-bound and not part of the backup. | A restored DB gets a new deviceId (5.2). |
+| Android auto backup / iCloud backup of the app DB | **Yes on Android**: cloud backup excludes the database and app files (`res/xml/data_extraction_rules.xml`, `backup_rules.xml`; crypto review F3), since for a Gmail user the backup provider is the mail provider. A direct device-to-device transfer stays allowed. The data key in secure storage is device-bound and never backed up. | A new device syncs everything from the server again. iOS has no project yet; it needs the same (exclude from iCloud) before release. |
 | Malicious server during pairing (forged reply, swapped request) | **Yes**, as long as the pairing request does not pass through the server: the reply key needs the request's secret, low-order keys are refused, and a pasted request is sent only after the user compared the 80-bit comparison code on both devices (4.2). | A request the user mails to themselves gives the server its secret, so it could forge a reply; the UI says never to do that. |
 | Brute force of a passphrase slot by the provider | Only as strong as the passphrase (Argon2id). | The UI warns; recovery key and pairing are the recommended paths. |
 | Provider keeps copies of deleted mails (Gmail All Mail, Exchange Recoverable Items) | Plaintext only matters for **migrated legacy notes** (#1355); everything else is ciphertext anyway. | The migration warns the user. |
@@ -284,7 +284,7 @@ Only an unlocked device may add or remove slots.
   the device, and only the PRF output is used, never the signature.
 - Slot fields next to the known ones, all in clear: `credentialId`
   (base64url), `prfSalt` (32 random bytes, base64url; the PRF input),
-  `rpId` (`sharedinbox.de`) and `label` (chosen by the user, e.g. the name
+  `rpId` (`keys.sharedinbox.de`) and `label` (chosen by the user, e.g. the name
   of the password manager; may be empty). A slot with a missing or
   malformed field is skipped.
 - Each "Add passkey" registers a new discoverable passkey (`residentKey` and
@@ -302,7 +302,14 @@ Only an unlocked device may add or remove slots.
 - Deleting the passkey in the password manager removes this way to unlock.
 - Android only for now (Credential Manager; `assetlinks.json` with
   `delegate_permission/common.get_login_creds` for `de.sharedinbox.mua` on
-  `sharedinbox.de`). Linux, iOS and macOS show no passkey UI.
+  `keys.sharedinbox.de`). Linux, iOS and macOS show no passkey UI.
+- The rpId host `keys.sharedinbox.de` serves `/.well-known/assetlinks.json`
+  and nothing else (no HTML, no JavaScript; gitops static-web). Any page on
+  the rpId could request the PRF with the public `prfSalt` and, with one
+  tap of the user on a prompt naming the rpId, unwrap the account key from
+  the slot on the mail server. So whoever controls that host is trusted;
+  it is not the website's domain (crypto review, F4). The rpId cannot
+  change without registering every passkey again.
 
 ### 4.3 Key creation race and missing key folder
 
