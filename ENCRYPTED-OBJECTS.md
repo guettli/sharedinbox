@@ -445,6 +445,11 @@ AAD = "SIE1" ‖ keyId ‖ itemHmac (raw 32 bytes)     -- built from parsed valu
   Gmail / M365 limits) and ≤ JMAP `maxSizeUpload`. Larger blobs are rejected
   with a user-visible error (chunking is a later issue).
 - After decrypting, check `HMAC(k_item, itemId) == X-SharedInbox-Item`.
+  A version belongs to the item this **authenticated** header of its own
+  body names. An item HMAC learned elsewhere (a header-only fetch, a JMAP
+  header property) is only a hint for what to download: a body of another
+  item is filed under its own item, or not used where an item was expected
+  (crypto review, H1).
 - JMAP uploads the **same RFC 5322 bytes** via the upload endpoint +
   `Email/import` (one format, one parser; omit `receivedAt`).
 

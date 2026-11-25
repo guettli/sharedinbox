@@ -191,7 +191,8 @@ class LegacyNoteMigrator implements LegacyNoteMigration {
       );
 
   /// Whether item [itemHmac] has a version here, a tombstone too; with
-  /// [onServer] one the server confirmed.
+  /// [onServer] one the server confirmed. Only opened rows count: the
+  /// column of an unopened one is the server's word (crypto review, H1).
   Future<bool> _hasVersion(
     String accountId,
     String itemHmac, {
@@ -199,7 +200,10 @@ class LegacyNoteMigrator implements LegacyNoteMigration {
   }) async {
     final q = _db.select(_db.mailObjects)
       ..where(
-        (t) => t.accountId.equals(accountId) & t.itemHmac.equals(itemHmac),
+        (t) =>
+            t.accountId.equals(accountId) &
+            t.itemHmac.equals(itemHmac) &
+            t.versionId.isNotNull(),
       )
       ..limit(1);
     if (onServer) {
