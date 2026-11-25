@@ -22,6 +22,12 @@ class _FakeKeyService implements EncryptedKeyService {
 
   PersonalDataStatus _status;
   final _statuses = StreamController<PersonalDataStatus>.broadcast();
+
+  /// What [hasKeyMails] says.
+  bool keyMailsVisible = true;
+
+  @override
+  Future<bool> hasKeyMails(String accountId) async => keyMailsVisible;
   CreateKeyResult? createResult;
   UnlockFailure? unlockFailure;
   final unlockInputs = <String>[];
@@ -67,6 +73,7 @@ class _FakeKeyService implements EncryptedKeyService {
   @override
   Future<PairingStart> startPairing(String accountId) async => (
         request: '${pairingRequestPrefix}request',
+        fingerprint: 'ABCD-EFGH-JKMN-PQRS',
         expiresAt: DateTime.now().add(const Duration(minutes: 20)),
       );
 
@@ -163,8 +170,10 @@ Future<_FakeKeyService> _pump(
   bool passkeys = false,
   List<PasskeySlotInfo> passkeySlots = const [],
   String location = '/accounts/acc-1/personal-data',
+  bool keyMailsVisible = true,
 }) async {
   final service = _FakeKeyService(status)
+    ..keyMailsVisible = keyMailsVisible
     ..hasPassphrase = hasPassphrase
     ..passkeysAvailable = passkeys
     ..passkeys.addAll(passkeySlots);
@@ -250,7 +259,15 @@ void main() {
 
     expect(find.byKey(const Key('pairRequestQrCode')), findsOneWidget);
     expect(find.text('${pairingRequestPrefix}request'), findsOneWidget);
-    expect(find.byKey(const Key('pairCountdown')), findsOneWidget);
+    expect(find.byKey(const Key('pairRequestSecretWarning')), findsOneWidget);
+    final countdown = find.byKey(const Key('pairCountdown'));
+    await tester.scrollUntilVisible(
+      countdown,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('ABCD-EFGH-JKMN-PQRS'), findsOneWidget);
+    expect(countdown, findsOneWidget);
 
     // The keys folder is checked while the view waits.
     await tester.pump(const Duration(seconds: 10));
@@ -295,6 +312,38 @@ void main() {
     expect(find.byKey(const Key('pairingSent')), findsOneWidget);
     expect(find.byKey(const Key('pairingCodeQrCode')), findsOneWidget);
     expect(find.text('${pairingCodePrefix}reply'), findsOneWidget);
+  });
+
+  testWidgets('a pasted request is sent only after comparing the codes',
+      (tester) async {
+    final service = await _pump(tester, PersonalDataStatus.unlocked);
+    await tester.tap(find.byKey(const Key('pairSendStart')));
+    await tester.pumpAndSettle();
+    final request = PairingRequest(
+      keyId: Uint8List.fromList(List.filled(16, 1)),
+      publicKey: Uint8List.fromList(List.filled(32, 2)),
+      secret: Uint8List.fromList(List.filled(16, 3)),
+      server: 'imap.example.com',
+      username: 'alice@example.com',
+    );
+    final text = encodePairingRequest(request);
+    await tester.enterText(
+      find.byKey(const Key('pairingRequestField')),
+      text,
+    );
+    await tester.tap(find.byKey(const Key('pairingSend')));
+    await tester.pumpAndSettle();
+    expect(find.text(pairingFingerprint(request)), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('pairingFingerprintMismatch')));
+    await tester.pumpAndSettle();
+    expect(service.pairingRequests, isEmpty);
+
+    await tester.tap(find.byKey(const Key('pairingSend')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pairingFingerprintMatch')));
+    await tester.pumpAndSettle();
+    expect(service.pairingRequests, [text]);
   });
 
   testWidgets(
@@ -554,5 +603,12 @@ void main() {
       (tester) async {
     await _pump(tester, PersonalDataStatus.notSetUp, beta: false);
     expect(find.textContaining('in Preferences'), findsOneWidget);
+  });
+
+  testWidgets('locked with no key mail visible explains, no unlock form',
+      (tester) async {
+    await _pump(tester, PersonalDataStatus.locked, keyMailsVisible: false);
+    expect(find.byKey(const Key('personalDataKeysMissing')), findsOneWidget);
+    expect(find.textContaining('remove the account'), findsOneWidget);
   });
 }

@@ -72,7 +72,7 @@ class CollectionKeyMail {
     ];
     return CollectionKeyMail._(
       accountKeyId: readBytesField(json, 'accountKeyId', idLength),
-      collectionId: readStringField(json, 'collectionId'),
+      collectionId: readAadStringField(json, 'collectionId'),
       keyId: readBytesField(json, 'keyId', idLength),
       wraps: wraps,
       extra: unknownFields(json, _known),

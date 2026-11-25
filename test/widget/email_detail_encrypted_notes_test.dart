@@ -141,12 +141,21 @@ void main() {
     expect(add.onPressed, isNull);
   });
 
+  testWidgets('not set up: the add dialog says the note is unencrypted',
+      (tester) async {
+    await _open(tester, PersonalDataStatus.notSetUp);
+    await tester.tap(find.byKey(const Key('notesAdd')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Stored unencrypted'), findsOneWidget);
+  });
+
   testWidgets('unlocked: a new note is an entry linked to the mail',
       (tester) async {
     final (_, entries) = await _open(tester, PersonalDataStatus.unlocked);
     expect(find.byKey(const Key('notesLockedHint')), findsNothing);
     await tester.tap(find.byKey(const Key('notesAdd')));
     await tester.pumpAndSettle();
+    expect(find.textContaining('Stored unencrypted'), findsNothing);
     await tester.enterText(find.byType(TextField).last, 'remember');
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();

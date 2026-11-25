@@ -569,4 +569,100 @@ void main() {
       );
     });
   });
+
+  group('downloadBlob with maxBytes', () {
+    Future<JmapClient> connectWith(
+      List<int> blob, {
+      bool declareLength = true,
+    }) =>
+        JmapClient.connect(
+          httpClient: MockClient.streaming((req, _) async {
+            if (req.url.path.contains('well-known')) {
+              final body = utf8.encode(
+                jsonEncode({
+                  ..._sessionBody(),
+                  'downloadUrl':
+                      'https://jmap.example.com/download/{accountId}/{blobId}/{name}?type={type}',
+                }),
+              );
+              return http.StreamedResponse(Stream.value(body), 200);
+            }
+            // The blob in chunks of 1000 bytes.
+            return http.StreamedResponse(
+              Stream.fromIterable([
+                for (var i = 0; i < blob.length; i += 1000)
+                  blob.sublist(
+                    i,
+                    i + 1000 > blob.length ? blob.length : i + 1000,
+                  ),
+              ]),
+              200,
+              contentLength: declareLength ? blob.length : null,
+            );
+          }),
+          jmapUrl: Uri.parse(_sessionUrl),
+          username: 'alice',
+          password: 'secret',
+        );
+
+    test('returns a blob within the limit', () async {
+      final blob = List<int>.generate(2500, (i) => i % 256);
+      final client = await connectWith(blob);
+      expect(await client.downloadBlob('b1', maxBytes: 2500), blob);
+    });
+
+    test('a declared-too-large or failed endless body is not read on',
+        () async {
+      for (final status in [200, 500]) {
+        final client = await JmapClient.connect(
+          httpClient: MockClient.streaming((req, _) async {
+            if (req.url.path.contains('well-known')) {
+              return http.StreamedResponse(
+                Stream.value(
+                  utf8.encode(
+                    jsonEncode({
+                      ..._sessionBody(),
+                      'downloadUrl':
+                          'https://jmap.example.com/download/{accountId}/{blobId}/{name}?type={type}',
+                    }),
+                  ),
+                ),
+                200,
+              );
+            }
+            // Never ends: only cancelling the subscription stops it.
+            return http.StreamedResponse(
+              Stream<List<int>>.periodic(
+                const Duration(milliseconds: 1),
+                (_) => List<int>.filled(100, 1),
+              ),
+              status,
+              contentLength: 10 * 1000 * 1000 * 1000,
+            );
+          }),
+          jmapUrl: Uri.parse(_sessionUrl),
+          username: 'alice',
+          password: 'secret',
+        );
+        await expectLater(
+          client.downloadBlob('b1', maxBytes: 2500),
+          throwsA(
+            status == 200 ? isA<BlobTooLargeException>() : isA<JmapException>(),
+          ),
+        );
+      }
+    });
+
+    test('a longer blob stops the download, declared or not', () async {
+      final blob = List<int>.filled(5000, 7);
+      for (final declare in [true, false]) {
+        final client = await connectWith(blob, declareLength: declare);
+        await expectLater(
+          client.downloadBlob('b1', maxBytes: 2500),
+          throwsA(isA<BlobTooLargeException>()),
+          reason: 'declareLength: $declare',
+        );
+      }
+    });
+  });
 }

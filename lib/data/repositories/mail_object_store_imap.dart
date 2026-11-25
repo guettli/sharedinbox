@@ -94,6 +94,9 @@ class MailObjectStoreImap extends MailObjectStoreBase {
   ) async {
     final uid = int.tryParse(object.serverId ?? '');
     if (uid == null) return null;
+    // Announced larger than any object mail: not downloaded at all, so a
+    // view does not fetch it again and again (crypto review, M4).
+    if (object.sizeBytes > maxObjectMailBytes) return null;
     final client = await _connect(account);
     try {
       final layout = await _layout(account.id, client);
@@ -400,11 +403,27 @@ class MailObjectStoreImap extends MailObjectStoreBase {
       imap.MessageSequence.fromIds(uids, isUid: true),
       '(UID BODY.PEEK[])',
     );
-    return {
-      for (final msg in fetched.messages)
-        if (msg.uid case final uid?)
-          if (_rawBytes(msg) case final bytes?) uid: bytes,
-    };
+    final out = <int, Uint8List>{};
+    for (final msg in fetched.messages) {
+      final uid = msg.uid;
+      final bytes = _rawBytes(msg);
+      if (uid == null || bytes == null) continue;
+      // The server chose the size: what is longer than any object mail is
+      // not one, so it is not stored (crypto review, M4).
+      if (bytes.length > maxObjectMailBytes) {
+        unawaited(
+          appLogger?.warn(
+            'mos.object_oversized',
+            'Skipped a mail in an encrypted-object folder that is larger '
+                'than any encrypted object',
+            data: {'uid': uid, 'bytes': bytes.length},
+          ),
+        );
+        continue;
+      }
+      out[uid] = bytes;
+    }
+    return out;
   }
 
   static Uint8List? _rawBytes(imap.MimeMessage msg) {

@@ -162,7 +162,11 @@ class MailObjectBlobStore {
                 t.pendingDelete.equals(false),
           ))
         .get();
-    return rows.isEmpty ? null : mailObjectFromRow(rows.first);
+    if (rows.isEmpty) return null;
+    // An opened row first: its column is authenticated, an unopened one's is
+    // only the server's word (crypto review, H1).
+    final opened = rows.where((r) => r.versionId != null);
+    return mailObjectFromRow(opened.isEmpty ? rows.first : opened.first);
   }
 
   Future<MailObjectBlobRow?> _cached(String accountId, String itemId) =>

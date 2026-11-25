@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:sharedinbox/core/encrypted_objects/account_key_store.dart';
+import 'package:sharedinbox/core/encrypted_objects/collection_key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_mail_message.dart';
 import 'package:sharedinbox/core/encrypted_objects/key_ring.dart';
@@ -13,6 +14,7 @@ import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/encrypted_objects/wire.dart';
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/repositories/note_repository.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/data/db/database.dart' hide Account;
@@ -191,6 +193,72 @@ void main() {
     expect(await a.status(), PersonalDataStatus.unlocked);
     expect(a.store.reopens, greaterThan(0));
     expect(a.events, containsAll(['mos.key_created', 'mos.key_race_won']));
+  });
+
+  test(
+      'a device that once saw a key mail stays locked when the server hides '
+      'the keys folder; a device that never saw one is not set up', () async {
+    final a = await device();
+    await a.service.createKey(_acc);
+    final b = await device();
+    await b.store.sync(_acc);
+    // No status() call before the keys vanish: the sync hook alone marks it.
+    await b.service.afterSync(_acc, foreground: false);
+
+    // The server hides every key mail; b keeps no copy of foreign ones.
+    b.store.keepVanished = (_) async => false;
+    server.mails.clear();
+    await b.store.sync(_acc);
+    expect(await b.status(), PersonalDataStatus.locked);
+    expect(
+      notesModeOf(await b.status()),
+      NotesMode.locked,
+      reason: 'no plaintext notes once the account was seen encrypted',
+    );
+    expect(await b.service.hasKeyMails(_acc), isFalse);
+
+    final fresh = await device();
+    await fresh.store.sync(_acc);
+    expect(await fresh.status(), PersonalDataStatus.notSetUp);
+  });
+
+  test(
+      'a collection-key mail with an over-long collectionId is skipped; the '
+      'other keys still load', () async {
+    final a = await device();
+    final created = (await a.service.createKey(_acc)) as KeyCreated;
+    final accountKey = (await a.keys.load(_acc))!;
+    final real = await CollectionKeyMail.create(
+      accountKey,
+      CollectionKey.generate('decks'),
+    );
+    // Its AAD cannot encode a collectionId over 65535 bytes: before the
+    // fix the ArgumentError stopped every later key from loading.
+    final hostile = CollectionKeyMail(
+      accountKeyId: accountKey.accountKeyId,
+      collectionId: 'x' * 70000,
+      keyId: real.keyId,
+      wraps: real.wraps,
+    );
+    const messageId = '<hostile@sharedinbox.invalid>';
+    server.append(
+      messageId,
+      buildCollectionKeyMail(
+        messageId: messageId,
+        mail: hostile,
+        date: DateTime.now(),
+      ),
+    );
+    await a.store.sync(_acc);
+
+    final fresh = await device();
+    await fresh.store.sync(_acc);
+    await fresh.service.unlockWithRecoveryKey(_acc, created.formatted);
+    expect(fresh.ring.hasWriteKey(_acc, personalCollectionId), isTrue);
+    // Refused while parsing already: a FormatException, not an ArgumentError
+    // out of the AAD encoding.
+    expect(() => CollectionKeyMail.parse(hostile.bytes), throwsFormatException);
+    await fresh.service.afterSync(_acc, foreground: true);
   });
 
   test('a device finding a key mail creates nothing and is locked', () async {

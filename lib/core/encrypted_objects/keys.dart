@@ -19,7 +19,14 @@ abstract final class HkdfInfo {
   static const kekRecovery = 'sharedinbox-kek-recovery-v1';
   static const kekPassphrase = 'sharedinbox-kek-passphrase-v1';
   static const kekPasskey = 'sharedinbox-kek-passkey-v1';
+
+  /// Pairing v1: superseded by [pairingV2]; kept for its frozen vector.
   static const pairing = 'sharedinbox-pairing-v1';
+
+  /// Pairing v2 (4.6): followed by `ephPub ‖ recipientPub`, with the request
+  /// secret mixed into the key material. Not a root-key sub key, so not in
+  /// [all].
+  static const pairingV2 = 'sharedinbox-pairing-v2';
 
   static const all = [
     obj,

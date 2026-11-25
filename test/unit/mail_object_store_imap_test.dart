@@ -8,6 +8,7 @@ import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/mail_object.dart';
 import 'package:sharedinbox/core/repositories/mail_object_store.dart';
 import 'package:sharedinbox/core/services/app_logger.dart';
+import 'package:sharedinbox/data/db/database.dart' show MailObjectsCompanion;
 import 'package:sharedinbox/data/imap/imap_namespace.dart';
 import 'package:sharedinbox/data/repositories/account_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/mail_object_store_imap.dart';
@@ -492,6 +493,31 @@ void main() {
 
     expect((await b.rows()).single.versionId, put.versionId);
     expect(await b.bodyOf(put.itemHmac!), 'secret');
+  });
+
+  test(
+      'a body is filed under its authenticated item, not the item the '
+      'server named in the header fetch', () async {
+    final server = _server();
+    final a = await _Device.open(server);
+    final b = await _Device.open(server, unlocked: false);
+    final itemA = await a.putNew(itemId: 'a', body: 'from A');
+    final itemB = await a.putNew(itemId: 'b', body: 'from B');
+    await b.list();
+    await b.sync();
+    // The server answered the header fetch of A's mail with B's item: that
+    // is all the itemHmac column of an unopened row comes from.
+    await (b.db.update(b.db.mailObjects)
+          ..where((t) => t.messageId.equals(itemA.messageId)))
+        .write(MailObjectsCompanion(itemHmac: Value(itemB.itemHmac)));
+
+    b.unlocked = true;
+    await b.store.reopen(_acc);
+
+    expect(await b.bodyOf(itemB.itemHmac!), 'from B');
+    expect(await b.bodyOf(itemA.itemHmac!), 'from A');
+    expect((await b.row(itemA.messageId))!.itemHmac, itemA.itemHmac);
+    expect(b.events(), contains('mos.item_header_mismatch'));
   });
 
   test('a body over 256 KiB is fetched on demand', () async {

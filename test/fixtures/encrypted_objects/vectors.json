@@ -193,5 +193,19 @@
     "aad": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecf000b706173736b65792d707266",
     "wrapped": "db5e09751793c1ec2f66511d57cefb38d58e91e3bf781be07c71b0dc7965361da9c3eeddc125238b942b1058463786ef",
     "slot": "{\"slotId\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"type\":\"passkey-prf\",\"nonce\":\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZn\",\"wrapped\":\"214JdReTwewvZlEdV877ONWOkeO_eBvgfHGw3HllNh2pw-7dwSUji5QrEFhGN4bv\",\"credentialId\":\"0NHS09TV1tfY2drb3N3e3w\",\"prfSalt\":\"4OHi4-Tl5ufo6err7O3u7_Dx8vP09fb3-Pn6-_z9_v8\",\"rpId\":\"sharedinbox.de\",\"label\":\"Google Password Manager\"}"
+  },
+  "pairingV2": {
+    "recipientPriv": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "recipientPub": "244fe3b963e899dd295baffce248d3530f3a9a7479ba063002680ebfe7adad49",
+    "ephPriv": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "ephPub": "493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d",
+    "keyId": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "sharedSecret": "04e893993f49e235c7669c306c13cd2900a9ce2d655b306a9bcdb2acec855400",
+    "secret": "48ac32d869cb76b525ebea8bc713ebf4",
+    "info": "736861726564696e626f782d70616972696e672d7632493e82fc74464a59268817623d2053c5eb8e2cc4a988b4fee179ec6b010d531d244fe3b963e899dd295baffce248d3530f3a9a7479ba063002680ebfe7adad49",
+    "aesKey": "ebe521f8c59c8cbe2476b40bd601ae73c005778a7d3c8cf46eff5d50ce56629e",
+    "fingerprint": "0XNE-5CMZ-GYQS-K29K",
+    "weakEphPub": "0000000000000000000000000000000000000000000000000000000000000000",
+    "weakSharedSecret": "0000000000000000000000000000000000000000000000000000000000000000"
   }
 }

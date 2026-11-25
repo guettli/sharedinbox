@@ -29,6 +29,11 @@ import 'package:sharedinbox/data/repositories/mail_object_devices_db.dart';
 /// on demand ([MailObjectStore.fetchBody], ENCRYPTED-OBJECTS.md 5.5).
 const mailObjectEagerBodyLimit = 256 * 1024;
 
+/// The longest object or key mail there is: the base64 of a full envelope
+/// plus headers. A download over it is not one of ours, so it is dropped
+/// instead of stored and parsed again on every reopen (crypto review, M4).
+const maxObjectMailBytes = maxEnvelopeBytes * 4 ~/ 3 + 1024 * 1024;
+
 /// [SyncStates.resourceType] of the pull checkpoint of [folder]. Its JSON
 /// shape depends on the transport.
 String mailObjectCheckpointKey(MailObjectFolder folder) => 'mos:${folder.name}';
@@ -145,10 +150,39 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     if (payload == null || object.folder != MailObjectFolder.data) {
       return Future.value();
     }
-    return _openPayload(object.accountId, payload);
+    return _openPayload(
+      object.accountId,
+      payload,
+      expectedItemHmac: object.itemHmac,
+    );
   }
 
-  Future<InnerObject?> _openPayload(String accountId, Uint8List payload) async {
+  /// Opens [payload]; null if no key opens it or it does not authenticate.
+  /// The item it belongs to is the authenticated item header of the body
+  /// (`openObject` checks it against the decrypted itemId), never the
+  /// `itemHmac` column, which comes from a separate header fetch the server
+  /// answers (#1352 crypto review, H1): with [expectedItemHmac] (the row's
+  /// column) a body of another item is refused.
+  Future<InnerObject?> _openPayload(
+    String accountId,
+    Uint8List payload, {
+    required String? expectedItemHmac,
+  }) async {
+    final opened = await _openVerified(accountId, payload);
+    if (opened == null) return null;
+    if (expectedItemHmac != null && opened.itemHmac != expectedItemHmac) {
+      _logItemMismatch(accountId, expectedItemHmac, opened.itemHmac);
+      return null;
+    }
+    return opened.object;
+  }
+
+  /// [payload] opened, with the item HMAC (base64url) its authenticated
+  /// header names.
+  Future<({InnerObject object, String itemHmac})?> _openVerified(
+    String accountId,
+    Uint8List payload,
+  ) async {
     try {
       final mail = parseObjectMail(payload);
       final opened = await openObject(
@@ -156,12 +190,39 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         itemHmacFromHeader: mail.itemHmac,
         keyLookup: (keyId) => _keyLookup(accountId, keyId),
       );
-      return opened.object;
+      return (object: opened.object, itemHmac: b64url(mail.itemHmac));
     } on EnvelopeException {
       return null;
     } on FormatException {
       return null;
+    } on Object catch (err) {
+      // Bytes from the server: no parser failure may stop a sync, an unlock
+      // or a reopen (crypto review, M3).
+      unawaited(
+        appLogger?.warn(
+          'mos.object_unparsable',
+          'Skipped an encrypted object that could not be parsed',
+          accountId: accountId,
+          data: {
+            'error':
+                '$err'.length <= 200 ? '$err' : '${'$err'.substring(0, 200)}…',
+          },
+        ),
+      );
+      return null;
     }
+  }
+
+  void _logItemMismatch(String accountId, String column, String verified) {
+    unawaited(
+      appLogger?.warn(
+        'mos.item_header_mismatch',
+        'An encrypted object did not belong to the item the server named; '
+            'it is filed under its authenticated item',
+        accountId: accountId,
+        data: {'column': column, 'verified': verified},
+      ),
+    );
   }
 
   @override
@@ -197,7 +258,11 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     for (final row in await _itemRows(accountId, itemHmac)) {
       final payload = row.payload;
       if (row.versionId == null || payload == null) continue;
-      final object = await _openPayload(accountId, payload);
+      final object = await _openPayload(
+        accountId,
+        payload,
+        expectedItemHmac: itemHmac,
+      );
       if (object == null) continue;
       objects[row.messageId] = object;
       versions.add(await ObjectVersion.of(object, ref: row.messageId));
@@ -754,11 +819,23 @@ abstract class MailObjectStoreBase implements MailObjectStore {
     final incoming = <String, Map<String, InnerObject>>{};
     for (final r in pending) {
       if (only != null && !only.contains(r.messageId)) continue;
-      final hmac = r.itemHmac;
-      if (hmac == null) continue;
-      final object = await _openPayload(accountId, r.payload!);
-      if (object == null) continue;
-      (incoming[hmac] ??= {})[r.messageId] = object;
+      if (r.itemHmac == null) continue;
+      final opened = await _openVerified(accountId, r.payload!);
+      if (opened == null) continue;
+      // Filed under the item its authenticated header names, whatever the
+      // server's header fetch put into the column.
+      final hmac = opened.itemHmac;
+      if (hmac != r.itemHmac) {
+        _logItemMismatch(accountId, r.itemHmac!, hmac);
+        await (db.update(db.mailObjects)
+              ..where(
+                (t) =>
+                    t.accountId.equals(accountId) &
+                    t.messageId.equals(r.messageId),
+              ))
+            .write(MailObjectsCompanion(itemHmac: Value(hmac)));
+      }
+      (incoming[hmac] ??= {})[r.messageId] = opened.object;
     }
     final logs = <String>{};
     for (final MapEntry(key: hmac, value: objects) in incoming.entries) {
@@ -795,7 +872,11 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         continue;
       }
       if (r.versionId == null || r.payload == null) continue;
-      final opened = await _openPayload(accountId, r.payload!);
+      final opened = await _openPayload(
+        accountId,
+        r.payload!,
+        expectedItemHmac: itemHmac,
+      );
       if (opened == null) continue;
       objects[r.messageId] = opened;
       known.add(await ObjectVersion.of(opened, ref: r.messageId));
@@ -980,7 +1061,11 @@ abstract class MailObjectStoreBase implements MailObjectStore {
         .get();
     final heads = <MailObjectRow, SegmentHead>{};
     for (final r in rows) {
-      final object = await _openPayload(accountId, r.payload!);
+      final object = await _openPayload(
+        accountId,
+        r.payload!,
+        expectedItemHmac: r.itemHmac,
+      );
       if (object == null || object.head.deleted) continue;
       try {
         heads[r] = SegmentHead.fromExtra(object.head.extra);

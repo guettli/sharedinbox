@@ -181,8 +181,28 @@ class MailObjectStoreJmap extends MailObjectStoreBase {
     return _download(jmap, blobId);
   }
 
-  Future<Uint8List> _download(JmapClient jmap, String blobId) =>
-      jmap.downloadBlob(blobId, name: 'object.eml', type: 'message/rfc822');
+  /// The object mail [blobId]; null when it is longer than any object
+  /// mail ([maxObjectMailBytes], crypto review M4): not stored, not parsed.
+  Future<Uint8List?> _download(JmapClient jmap, String blobId) async {
+    try {
+      return await jmap.downloadBlob(
+        blobId,
+        name: 'object.eml',
+        type: 'message/rfc822',
+        maxBytes: maxObjectMailBytes,
+      );
+    } on BlobTooLargeException {
+      unawaited(
+        appLogger?.warn(
+          'mos.object_oversized',
+          'Skipped a mail in an encrypted-object folder that is larger '
+              'than any encrypted object',
+          data: {'blobId': blobId},
+        ),
+      );
+      return null;
+    }
+  }
 
   // ── Sync ──────────────────────────────────────────────────────────────────
 
