@@ -61,8 +61,9 @@ Future<(_Notes, FakeEntryRepository)> _open(
   final entries = FakeEntryRepository();
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(status),
       initialLocation: _url,
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         accountRepositoryProvider.overrideWithValue(
           FakeAccountRepository([kTestAccount]),
@@ -77,9 +78,6 @@ Future<(_Notes, FakeEntryRepository)> _open(
               attachments: [],
             ),
           ),
-        ),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(status),
         ),
         noteRepositoryProvider.overrideWithValue(notes),
         entryRepositoryProvider.overrideWithValue(entries),

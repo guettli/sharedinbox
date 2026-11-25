@@ -85,19 +85,6 @@ void main() {
       await db.close();
     });
 
-    test('personalDataBeta is off by default and round-trips', () async {
-      final db = openTestDatabase();
-      final repo = UserPreferencesRepositoryImpl(db);
-
-      expect((await repo.observePreferences().first).personalDataBeta, isFalse);
-      await repo.updatePersonalDataBeta(enabled: true);
-      expect((await repo.observePreferences().first).personalDataBeta, isTrue);
-      await repo.updatePersonalDataBeta(enabled: false);
-      expect((await repo.observePreferences().first).personalDataBeta, isFalse);
-
-      await db.close();
-    });
-
     test('the default account for new items round-trips', () async {
       final db = openTestDatabase();
       final repo = UserPreferencesRepositoryImpl(db);

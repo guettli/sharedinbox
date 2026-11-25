@@ -68,8 +68,8 @@ enum PersonalDataStatus {
   setupInterrupted,
 }
 
-/// The [NotesMode] an account in status [s] has, with "Personal data
-/// (beta)" on (#1375): a key mail makes it an encrypted account.
+/// The [NotesMode] an account in status [s] has (#1375): a key mail makes
+/// it an encrypted account; without one its notes stay plaintext.
 NotesMode notesModeOf(PersonalDataStatus s) => switch (s) {
       PersonalDataStatus.notSetUp => NotesMode.legacy,
       PersonalDataStatus.unlocked ||
@@ -222,7 +222,6 @@ class EncryptedKeyService {
     required MailObjectStore store,
     required AccountKeyStore keys,
     required KeyRing ring,
-    required Future<bool> Function() betaEnabled,
     Future<void> Function(String accountId)? listFolders,
     ShareKeyRepository? shareKeys,
     Future<Account?> Function(String accountId)? findAccount,
@@ -234,7 +233,6 @@ class EncryptedKeyService {
         _store = store,
         _keys = keys,
         _ring = ring,
-        _betaEnabled = betaEnabled,
         _listFolders = listFolders,
         _shareKeys = shareKeys,
         _findAccount = findAccount,
@@ -252,7 +250,6 @@ class EncryptedKeyService {
   final MailObjectStore _store;
   final AccountKeyStore _keys;
   final KeyRing _ring;
-  final Future<bool> Function() _betaEnabled;
   final Future<void> Function(String accountId)? _listFolders;
 
   /// The ephemeral key pairs of pairing; null (e.g. in the background
@@ -295,10 +292,8 @@ class EncryptedKeyService {
         : PersonalDataStatus.unlocked;
   }
 
-  /// How notes on mails of [accountId] work ([notesModeOf]); legacy while
-  /// the beta switch is off.
+  /// How notes on mails of [accountId] work ([notesModeOf]).
   Future<NotesMode> notesMode(String accountId) async {
-    if (!await _betaEnabled()) return NotesMode.legacy;
     return notesModeOf(await status(accountId));
   }
 
@@ -381,21 +376,18 @@ class EncryptedKeyService {
   /// Fills the ring from the device key and the local keys-folder rows,
   /// e.g. in the background isolate before its sync.
   Future<void> loadKeys(String accountId) async {
-    if (!await _betaEnabled()) return;
     final key = await _localKey(accountId);
     if (key == null) return;
     await _loadCollectionKeys(accountId, key, await _keyRows(accountId));
   }
 
-  /// Runs after each object sync. A no-op unless the beta switch is on and
-  /// the account has a key, key mails or a setup in progress. Loads new
+  /// Runs after each object sync. A no-op unless the account has a key, key mails or a setup in progress. Loads new
   /// collection keys and warns about a foreign key mail; in the
   /// [foreground] it also settles an interrupted setup that lost the race
   /// and deletes expired pairing mails. A locked device opens the pairing
   /// mails sent to it. The background never changes the phase and never
   /// deletes.
   Future<void> afterSync(String accountId, {required bool foreground}) async {
-    if (!await _betaEnabled()) return;
     await _exclusive(accountId, () async {
       final state = await _loadState(accountId);
       var key = await _localKey(accountId);

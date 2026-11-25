@@ -16,7 +16,6 @@ import 'package:sharedinbox/core/encrypted_objects/passkey_slot.dart';
 import 'package:sharedinbox/core/encrypted_objects/passphrase.dart';
 import 'package:sharedinbox/core/encrypted_objects/recovery_key.dart';
 import 'package:sharedinbox/core/models/account.dart';
-import 'package:sharedinbox/core/models/user_preferences.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
 import 'package:sharedinbox/core/services/encrypted_key_service.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
@@ -28,7 +27,7 @@ import 'package:sharedinbox/ui/widgets/app_snackbar.dart';
 import 'package:sharedinbox/ui/widgets/qr_scanner_view.dart';
 
 /// Setup and unlock of the encrypted personal data of one account
-/// (`ENCRYPTED-OBJECTS.md` 9), behind the "Personal data (beta)" switch.
+/// (`ENCRYPTED-OBJECTS.md` 9).
 class PersonalDataScreen extends ConsumerStatefulWidget {
   const PersonalDataScreen({super.key, required this.accountId});
 
@@ -47,21 +46,13 @@ class _PersonalDataScreenState extends ConsumerState<PersonalDataScreen> {
   @override
   Widget build(BuildContext context) {
     final account = ref.watch(accountByIdProvider(widget.accountId)).value;
-    final prefs =
-        ref.watch(userPreferencesProvider).value ?? const UserPreferences();
     return Scaffold(
-      appBar: AppBar(title: const Text('Personal data (beta)')),
-      body: _body(context, account, prefs),
+      appBar: AppBar(title: const Text('Personal data')),
+      body: _body(context, account),
     );
   }
 
-  Widget _body(BuildContext context, Account? account, UserPreferences prefs) {
-    if (!prefs.personalDataBeta) {
-      return const _Message(
-        'Turn on "Personal data (beta)" in Preferences to use encrypted '
-        'personal data.',
-      );
-    }
+  Widget _body(BuildContext context, Account? account) {
     if (account?.type == AccountType.jmap) {
       return const _Message(
         'Encrypted personal data is not supported for JMAP accounts yet.',
@@ -1489,7 +1480,7 @@ class _PairReceiveViewState extends ConsumerState<_PairReceiveView>
         Text('Pair with another device', style: theme.textTheme.titleLarge),
         const SizedBox(height: AppSpacing.sm),
         const Text(
-          'On a device that is already unlocked, open "Personal data (beta)" '
+          'On a device that is already unlocked, open "Personal data" '
           'of this account, tap "Pair a new device" and scan or paste this '
           'code. This device unlocks by itself when the key arrives.',
         ),
@@ -1694,7 +1685,7 @@ class _PairSendViewState extends ConsumerState<_PairSendView> with _TextInput {
         Text('Pair a new device', style: theme.textTheme.titleLarge),
         const SizedBox(height: AppSpacing.sm),
         const Text(
-          'On the new device, open "Personal data (beta)" of this account and '
+          'On the new device, open "Personal data" of this account and '
           'tap "Pair with another device". Paste the code it shows here.',
         ),
         const SizedBox(height: AppSpacing.lg),

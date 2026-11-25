@@ -11,7 +11,6 @@ import 'helpers.dart';
 Future<FakeEntryRepository> _pump(
   WidgetTester tester, {
   List<Entry> entries = const [],
-  bool beta = true,
   PersonalDataStatus status = PersonalDataStatus.unlocked,
   String location = '/accounts/acc-1/entries',
   FakeConflictStore? store,
@@ -19,12 +18,11 @@ Future<FakeEntryRepository> _pump(
   final repo = FakeEntryRepository(entries);
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(status),
       initialLocation: location,
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: beta),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         ...baseOverrides(accounts: [kTestAccount]),
-        encryptedKeyServiceProvider
-            .overrideWithValue(FixedStatusKeyService(status)),
         entryRepositoryProvider.overrideWithValue(repo),
         mailObjectStoreProvider
             .overrideWithValue(store ?? FakeConflictStore({})),
@@ -196,13 +194,6 @@ void main() {
     await tester.tap(find.text('Open me'));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('entryEditTitle')), findsOneWidget);
-  });
-
-  testWidgets('hidden while the beta switch is off', (tester) async {
-    await _pump(tester, beta: false, entries: [testEntry('x', title: 'Hid')]);
-    expect(find.textContaining('Personal data (beta)'), findsOneWidget);
-    expect(find.byKey(const Key('entriesQuickAdd')), findsNothing);
-    expect(find.text('Hid'), findsNothing);
   });
 
   testWidgets('hidden while the account is locked', (tester) async {

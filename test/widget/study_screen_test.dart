@@ -48,13 +48,11 @@ Future<FakeReviewRepository> _pump(
   );
   await tester.pumpWidget(
     buildApp(
+      keyService: FixedStatusKeyService(PersonalDataStatus.unlocked),
       initialLocation: '/accounts/acc-1/decks/deck-1/study',
-      userPreferences: FakeUserPreferencesRepository(personalDataBeta: true),
+      userPreferences: FakeUserPreferencesRepository(),
       overrides: [
         ...baseOverrides(),
-        encryptedKeyServiceProvider.overrideWithValue(
-          FixedStatusKeyService(PersonalDataStatus.unlocked),
-        ),
         cardRepositoryProvider.overrideWithValue(
           FakeCardRepository(
             decks: [testDeck('deck-1', 'Spanish')],

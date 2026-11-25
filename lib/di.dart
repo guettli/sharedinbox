@@ -888,9 +888,6 @@ final legacyNotesAwaitingConfirmationProvider =
 /// yet.
 final notesModeProvider =
     Provider.autoDispose.family<NotesMode?, String>((ref, accountId) {
-  final beta = ref.watch(userPreferencesProvider).value?.personalDataBeta;
-  if (beta == null) return null;
-  if (!beta) return NotesMode.legacy;
   final status = ref.watch(personalDataStatusProvider(accountId)).value;
   return status == null ? null : notesModeOf(status);
 });
@@ -1156,17 +1153,14 @@ final reviewRepositoryProvider = Provider<ReviewRepository>(
 );
 
 /// Key mail, key-creation race and unlock of the encrypted personal data
-/// (#1366), behind the "Personal data (beta)" switch.
+/// (#1366). Opt-in per account: nothing happens until a key exists.
 final encryptedKeyServiceProvider = Provider<EncryptedKeyService>((ref) {
-  final prefs = ref.watch(userPreferencesRepositoryProvider);
   final mailboxes = ref.watch(mailboxRepositoryProvider);
   final service = EncryptedKeyService(
     db: ref.watch(dbProvider),
     store: ref.watch(mailObjectStoreProvider),
     keys: AccountKeyStore(ref.watch(secureStorageProvider)),
     ring: ref.watch(keyRingProvider),
-    betaEnabled: () async =>
-        (await prefs.observePreferences().first).personalDataBeta,
     listFolders: (accountId) => mailboxes.syncMailboxes(accountId),
     shareKeys: ref.watch(shareKeyRepositoryProvider),
     findAccount: ref.watch(accountRepositoryProvider).getAccount,

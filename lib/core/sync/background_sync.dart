@@ -29,7 +29,6 @@ import 'package:sharedinbox/data/repositories/mail_object_store_factory.dart';
 import 'package:sharedinbox/data/repositories/mailbox_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/note_repository_impl.dart';
 import 'package:sharedinbox/data/repositories/notification_rule_repository_impl.dart';
-import 'package:sharedinbox/data/repositories/user_preferences_repository_impl.dart';
 import 'package:sharedinbox/data/storage/flutter_secure_storage_impl.dart';
 
 import 'package:workmanager/workmanager.dart';
@@ -132,14 +131,11 @@ Future<void> _doBackgroundSync() async {
       ring: ring,
       pushPending: false,
     );
-    final prefs = UserPreferencesRepositoryImpl(db);
     final keyService = EncryptedKeyService(
       db: db,
       store: objectStore,
       keys: const AccountKeyStore(FlutterSecureStorageImpl()),
       ring: ring,
-      betaEnabled: () async =>
-          (await prefs.observePreferences().first).personalDataBeta,
     );
     final accounts = await accountRepo.observeAccounts().first;
     await initNotifications();

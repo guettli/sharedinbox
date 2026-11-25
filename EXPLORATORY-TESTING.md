@@ -218,18 +218,14 @@ python3 stalwart-dev/jmap_probe.py http://127.0.0.1:28080 bob@example.com secret
 
 IMAP is available too, at `localhost:21430` (plaintext).
 
-**Explore personal data (beta).** Notes, todos, journal and flash cards are
+**Explore personal data.** Notes, todos, journal and flash cards are
 stored encrypted on the account's own mail server (see
-[ENCRYPTED-OBJECTS.md](ENCRYPTED-OBJECTS.md)). They are behind a switch and
-need a key first:
+[ENCRYPTED-OBJECTS.md](ENCRYPTED-OBJECTS.md)). They are opt-in per account
+and need a key first:
 
 ```bash
-c tap x=36 y=760                                 # drawer (bottom-left ☰)
-c click name=Preferences role='push button'
-c click name='Personal data (beta)' contains=1 role='toggle button'
-c click-unnamed role='push button' index=0       # back
 c tap x=36 y=760; c click name=Bob contains=1 role='push button'  # account home
-c click name='Personal data (beta)' contains=1 role='push button'
+c click name='Personal data' contains=1 role='push button'
 c click name='Generate key' role='push button'   # takes ~10 s
 c texts | grep -o "'[A-Z0-9-]\{39\}'"           # the recovery key
 c click name='I saved it' role='push button'

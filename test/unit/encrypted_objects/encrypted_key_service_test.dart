@@ -41,7 +41,6 @@ const _account = Account(
 class _Device {
   _Device(
     this.server, {
-    this.beta = true,
     this.account = _account,
     this.prf,
   }) {
@@ -50,7 +49,6 @@ class _Device {
       store: store,
       keys: keys,
       ring: ring,
-      betaEnabled: () async => beta,
       shareKeys: ShareKeyRepositoryImpl(db),
       findAccount: (id) async => id == _acc ? account : null,
       appLogger: AppLogger(logs),
@@ -61,7 +59,6 @@ class _Device {
   }
 
   final FakeKeysServer server;
-  bool beta;
   final Account account;
   final FakePrfProvider? prf;
   final AppDatabase db = openTestDatabase();
@@ -103,11 +100,10 @@ void main() {
   final devices = <_Device>[];
 
   Future<_Device> device({
-    bool beta = true,
     Account account = _account,
     FakePrfProvider? prf,
   }) async {
-    final d = _Device(server, beta: beta, account: account, prf: prf);
+    final d = _Device(server, account: account, prf: prf);
     devices.add(d);
     await seedAccountRow(d.db, _acc);
     return d;
@@ -502,22 +498,6 @@ void main() {
     expect(byA.values.where((k) => k), hasLength(2));
     // A device without the key keeps nothing.
     expect((await kept(b)).values, everyElement(isFalse));
-  });
-
-  test('with the beta switch off the hook does nothing', () async {
-    final a = await device();
-    await a.service.createKey(_acc);
-    final reopens = a.store.reopens;
-    final b = await device(beta: false);
-    await b.store.sync(_acc);
-    await b.service.loadKeys(_acc);
-    await b.service.afterSync(_acc, foreground: true);
-    a.beta = false;
-    await a.service.afterSync(_acc, foreground: true);
-
-    expect(a.store.reopens, reopens);
-    expect(b.ring.accountKey(_acc), isNull);
-    expect(b.logs.rows, isEmpty);
   });
 
   test('loadKeys fills the ring of a fresh install from the device key',

@@ -214,22 +214,7 @@ class UserPreferencesScreen extends ConsumerWidget {
               onTap: () => context.push('/accounts/push'),
             ),
             const Divider(),
-            SwitchListTile(
-              key: const Key('personalDataBetaSwitch'),
-              title: const Text('Personal data (beta)'),
-              subtitle: const Text(
-                'End-to-end encrypted notes and cards on your own mail '
-                'server. Experimental. Turning it off hides it and keeps '
-                'your keys.',
-              ),
-              value: prefs.personalDataBeta,
-              onChanged: (value) => unawaited(
-                ref
-                    .read(userPreferencesRepositoryProvider)
-                    .updatePersonalDataBeta(enabled: value),
-              ),
-            ),
-            if (prefs.personalDataBeta) _DefaultItemsAccountTile(prefs),
+            _DefaultItemsAccountTile(prefs),
             const Divider(),
             _EncryptionSection(),
           ],

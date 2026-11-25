@@ -61,16 +61,6 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
   }
 
   @override
-  Future<void> updatePersonalDataBeta({required bool enabled}) async {
-    await _db.into(_db.userPreferences).insertOnConflictUpdate(
-          UserPreferencesCompanion(
-            id: const Value(_rowId),
-            personalDataBeta: Value(enabled),
-          ),
-        );
-  }
-
-  @override
   Future<void> updateDefaultItemsAccountId(String? accountId) async {
     await _db.into(_db.userPreferences).insertOnConflictUpdate(
           UserPreferencesCompanion(
@@ -118,7 +108,6 @@ class UserPreferencesRepositoryImpl implements UserPreferencesRepository {
       ),
       prefetchMode: pref.PrefetchMode.fromString(row.prefetchMode),
       bodyCacheLimitMb: row.bodyCacheLimitMb,
-      personalDataBeta: row.personalDataBeta,
       defaultItemsAccountId: row.defaultItemsAccountId,
     );
   }

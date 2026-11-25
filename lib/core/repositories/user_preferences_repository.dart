@@ -6,7 +6,6 @@ abstract class UserPreferencesRepository {
   Future<void> updateAfterMailViewAction(AfterMailViewAction action);
   Future<void> updatePrefetchMode(PrefetchMode mode);
   Future<void> updateBodyCacheLimitMb(int mb);
-  Future<void> updatePersonalDataBeta({required bool enabled});
 
   /// Null: no preference.
   Future<void> updateDefaultItemsAccountId(String? accountId);
