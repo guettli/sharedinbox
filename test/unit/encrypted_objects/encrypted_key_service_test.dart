@@ -255,7 +255,9 @@ void main() {
     await fresh.store.sync(_acc);
     await fresh.service.unlockWithRecoveryKey(_acc, created.formatted);
     expect(fresh.ring.hasWriteKey(_acc, personalCollectionId), isTrue);
-    expect(fresh.events, contains('mos.collection_key_skipped'));
+    // Refused while parsing already: a FormatException, not an ArgumentError
+    // out of the AAD encoding.
+    expect(() => CollectionKeyMail.parse(hostile.bytes), throwsFormatException);
     await fresh.service.afterSync(_acc, foreground: true);
   });
 

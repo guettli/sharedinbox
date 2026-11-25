@@ -165,6 +165,17 @@ String readStringField(Map<String, Object?> json, String name) {
   return value;
 }
 
+/// [readStringField] for a field that goes into an AAD ([buildAad]): one
+/// over 65535 UTF-8 bytes cannot be encoded there, so it is a
+/// [FormatException] here, not an [ArgumentError] later (crypto review, M2).
+String readAadStringField(Map<String, Object?> json, String name) {
+  final value = readStringField(json, name);
+  if (utf8.encode(value).length > 0xffff) {
+    throw FormatException('field "$name" is too long');
+  }
+  return value;
+}
+
 /// Decodes [bytes] as a UTF-8 JSON object.
 Map<String, Object?> decodeJsonObject(Uint8List bytes) {
   final Object? decoded;

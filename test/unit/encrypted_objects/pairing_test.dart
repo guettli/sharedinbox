@@ -343,9 +343,11 @@ void main() {
       final text = encodePairingRequest(request);
       final fp = pairingFingerprint(request);
       expect(
-          fp,
-          matches(
-              RegExp(r'^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$')));
+        fp,
+        matches(
+          RegExp(r'^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$'),
+        ),
+      );
       expect(pairingFingerprintOf(' $text '), fp);
       expect(pairingFingerprintOf('not a request'), isNull);
     });

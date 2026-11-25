@@ -918,11 +918,6 @@ class EncryptedKeyService {
         } on FormatException catch (err) {
           _logSkippedSlot(accountId, slotType, e.messageId, err.message);
           continue;
-        } on ArgumentError catch (err) {
-          // E.g. a slot field over the 65535-byte limit of the AAD encoding
-          // (crypto review, M2): one hostile mail must not stop the unlock.
-          _logSkippedSlot(accountId, slotType, e.messageId, '${err.message}');
-          continue;
         }
         final group = [
           for (final o in entries)

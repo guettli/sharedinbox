@@ -571,8 +571,10 @@ void main() {
   });
 
   group('downloadBlob with maxBytes', () {
-    Future<JmapClient> connectWith(List<int> blob,
-            {bool declareLength = true}) =>
+    Future<JmapClient> connectWith(
+      List<int> blob, {
+      bool declareLength = true,
+    }) =>
         JmapClient.connect(
           httpClient: MockClient.streaming((req, _) async {
             if (req.url.path.contains('well-known')) {
@@ -590,7 +592,9 @@ void main() {
               Stream.fromIterable([
                 for (var i = 0; i < blob.length; i += 1000)
                   blob.sublist(
-                      i, i + 1000 > blob.length ? blob.length : i + 1000),
+                    i,
+                    i + 1000 > blob.length ? blob.length : i + 1000,
+                  ),
               ]),
               200,
               contentLength: declareLength ? blob.length : null,

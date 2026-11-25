@@ -38,7 +38,7 @@ class UnlockSlot {
 
   factory UnlockSlot.fromJson(Map<String, Object?> json) => UnlockSlot(
         slotId: readBytesField(json, 'slotId', idLength),
-        type: readStringField(json, 'type'),
+        type: readAadStringField(json, 'type'),
         nonce: readBytesField(json, 'nonce', nonceLength),
         wrapped: readBytesField(json, 'wrapped', null),
         extra: unknownFields(json, _known),
