@@ -15,6 +15,7 @@ Future<String?> showTextPrompt(
   required String confirmLabel,
   String? hintText,
   String? labelText,
+  String? helperText,
   int maxLines = 1,
   TextInputType? keyboardType,
   TextCapitalization textCapitalization = TextCapitalization.none,
@@ -26,6 +27,7 @@ Future<String?> showTextPrompt(
       confirmLabel: confirmLabel,
       hintText: hintText,
       labelText: labelText,
+      helperText: helperText,
       maxLines: maxLines,
       keyboardType: keyboardType,
       textCapitalization: textCapitalization,
@@ -41,6 +43,7 @@ class _TextPromptDialog extends StatefulWidget {
     required this.confirmLabel,
     required this.hintText,
     required this.labelText,
+    required this.helperText,
     required this.maxLines,
     required this.keyboardType,
     required this.textCapitalization,
@@ -50,6 +53,7 @@ class _TextPromptDialog extends StatefulWidget {
   final String confirmLabel;
   final String? hintText;
   final String? labelText;
+  final String? helperText;
   final int maxLines;
   final TextInputType? keyboardType;
   final TextCapitalization textCapitalization;
@@ -85,6 +89,8 @@ class _TextPromptDialogState extends State<_TextPromptDialog> {
         decoration: InputDecoration(
           hintText: widget.hintText,
           labelText: widget.labelText,
+          helperText: widget.helperText,
+          helperMaxLines: 3,
         ),
         onSubmitted: widget.maxLines == 1 ? (_) => _submit() : null,
       ),

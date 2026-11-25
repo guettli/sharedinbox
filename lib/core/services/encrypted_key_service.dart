@@ -29,6 +29,12 @@ import 'package:sharedinbox/data/db/database.dart' hide Account;
 /// JSON `{phase, ownMessageId, committed}`, never key material.
 const keyStateResourceType = 'mos:key-state';
 
+/// `SyncStates` row set once this device saw that an account is encrypted
+/// (a key mail, or a local key). It is never cleared, so a server that
+/// later hides `SharedInbox/Keys` gets a locked account, not plaintext
+/// notes (crypto review, M1/F5).
+const encryptedSeenResourceType = 'mos:encrypted-seen';
+
 /// Where this device is in the key-creation race (4.3).
 enum KeyPhase {
   none,
@@ -275,10 +281,14 @@ class EncryptedKeyService {
     }
     final key = await _localKey(accountId);
     final mails = await _accountKeyMails(accountId);
+    if (key != null || mails.isNotEmpty) await _markEncryptedSeen(accountId);
     if (key == null) {
-      return mails.isEmpty
-          ? PersonalDataStatus.notSetUp
-          : PersonalDataStatus.locked;
+      if (mails.isNotEmpty) return PersonalDataStatus.locked;
+      // No key mail now, but one was seen before: the keys folder is
+      // hidden or gone. Locked, so nothing is written in plaintext.
+      return await _encryptedSeen(accountId)
+          ? PersonalDataStatus.locked
+          : PersonalDataStatus.notSetUp;
     }
     return _foreignCount(mails, key) > 0
         ? PersonalDataStatus.foreignKeyWarning
@@ -391,6 +401,9 @@ class EncryptedKeyService {
       var key = await _localKey(accountId);
       final rows = await _keyRows(accountId);
       if (key == null && rows.isEmpty && state.phase == KeyPhase.none) return;
+      // Also in the background and before any status() call: a later sync
+      // may drop key mails this device cannot keep (crypto review, M1).
+      await _markEncryptedSeen(accountId);
       if (foreground) await _deleteExpiredPairings(accountId, rows);
       if (key == null && foreground) {
         await _acceptPairingMails(accountId, rows);
@@ -445,6 +458,7 @@ class EncryptedKeyService {
   /// an interrupted setup is then resumed by the next call.
   Future<CreateKeyResult> createKey(String accountId) async {
     final result = await _exclusive(accountId, () => _createKey(accountId));
+    if (result is KeyCreated) await _markEncryptedSeen(accountId);
     _changed(accountId);
     return result;
   }
@@ -844,6 +858,7 @@ class EncryptedKeyService {
     required String via,
   }) async {
     await _keys.save(accountId, accountKey);
+    await _markEncryptedSeen(accountId);
     _ring.setAccountKey(accountId, accountKey);
     final rows = await _keyRows(accountId);
     await _loadCollectionKeys(accountId, accountKey, rows);
@@ -1497,6 +1512,35 @@ class EncryptedKeyService {
     } catch (_) {
       return _noState;
     }
+  }
+
+  /// Whether a key mail of [accountId] is visible here: with a locked
+  /// status and none, the keys folder is hidden or gone (crypto review,
+  /// M1), and no unlock method can work.
+  Future<bool> hasKeyMails(String accountId) async =>
+      (await _accountKeyMails(accountId)).isNotEmpty;
+
+  Future<bool> _encryptedSeen(String accountId) async {
+    final row = await (_db.select(_db.syncStates)
+          ..where(
+            (t) =>
+                t.accountId.equals(accountId) &
+                t.resourceType.equals(encryptedSeenResourceType),
+          ))
+        .getSingleOrNull();
+    return row != null;
+  }
+
+  Future<void> _markEncryptedSeen(String accountId) async {
+    if (await _encryptedSeen(accountId)) return;
+    await _db.into(_db.syncStates).insertOnConflictUpdate(
+          SyncStatesCompanion.insert(
+            accountId: accountId,
+            resourceType: encryptedSeenResourceType,
+            state: '1',
+            syncedAt: _now(),
+          ),
+        );
   }
 
   Future<void> _saveState(String accountId, _KeyState state) =>

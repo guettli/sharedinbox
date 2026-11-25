@@ -22,6 +22,12 @@ class _FakeKeyService implements EncryptedKeyService {
 
   PersonalDataStatus _status;
   final _statuses = StreamController<PersonalDataStatus>.broadcast();
+
+  /// What [hasKeyMails] says.
+  bool keyMailsVisible = true;
+
+  @override
+  Future<bool> hasKeyMails(String accountId) async => keyMailsVisible;
   CreateKeyResult? createResult;
   UnlockFailure? unlockFailure;
   final unlockInputs = <String>[];
@@ -164,8 +170,10 @@ Future<_FakeKeyService> _pump(
   bool passkeys = false,
   List<PasskeySlotInfo> passkeySlots = const [],
   String location = '/accounts/acc-1/personal-data',
+  bool keyMailsVisible = true,
 }) async {
   final service = _FakeKeyService(status)
+    ..keyMailsVisible = keyMailsVisible
     ..hasPassphrase = hasPassphrase
     ..passkeysAvailable = passkeys
     ..passkeys.addAll(passkeySlots);
@@ -589,5 +597,12 @@ void main() {
       (tester) async {
     await _pump(tester, PersonalDataStatus.notSetUp, beta: false);
     expect(find.textContaining('in Preferences'), findsOneWidget);
+  });
+
+  testWidgets('locked with no key mail visible explains, no unlock form',
+      (tester) async {
+    await _pump(tester, PersonalDataStatus.locked, keyMailsVisible: false);
+    expect(find.byKey(const Key('personalDataKeysMissing')), findsOneWidget);
+    expect(find.textContaining('remove the account'), findsOneWidget);
   });
 }

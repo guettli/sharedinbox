@@ -1739,6 +1739,13 @@ class _EmailDetailScreenState extends ConsumerState<EmailDetailScreen> {
       context,
       title: 'Add note',
       hintText: 'Type a note…',
+      // A plaintext note: say so, every time (crypto review, M1/F5). A
+      // device that never saw this account's key mails cannot tell a
+      // hidden keys folder from an account without encryption.
+      helperText: mode == NotesMode.entries
+          ? null
+          : 'Stored unencrypted on your mail server. Set up "Personal data" '
+              'for this account to encrypt notes.',
       confirmLabel: 'Save',
       maxLines: 4,
     );

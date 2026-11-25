@@ -705,6 +705,19 @@ the folder itself is never deleted or renamed.
   for it. Locked, adding a note is disabled ("Unlock personal data to add
   notes") and notes still pending upload stay on the device. Unlocked, a new
   note is an entry. Accounts without a key mail keep plaintext notes.
+  "Has a key mail" is sticky per device (`SyncStates` row
+  `mos:encrypted-seen`, never cleared): once this device saw a key mail or
+  held the key, a keys folder the server hides later makes the account
+  locked, not plaintext (crypto review, M1/F5). A device that never saw one
+  cannot tell a hidden keys folder from an account without encryption, so
+  its "Add note" dialog says every time that the note is stored unencrypted
+  and how to encrypt notes. (Setting up there while the server hides an
+  existing key creates a second account key: a split brain that the other
+  devices show as a foreign key.) The flag is set when a status sees a key
+  mail or key, after each sync that has key mails (both isolates), on key
+  creation and on every unlock. Locked with no key mail visible, the
+  personal-data screen explains that the keys folder is gone or hidden and
+  that removing and re-adding the account starts over.
 - **Deterministic itemId**: base64url of the first 16 bytes of
   `SHA-256("sharedinbox-legacy-note:" + noteId)`. The content depends on the
   note only (body = text, `links: [messageId]`, no title, no tags,

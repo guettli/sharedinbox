@@ -90,8 +90,7 @@ class _PersonalDataScreenState extends ConsumerState<PersonalDataScreen> {
             interrupted: true,
             onGenerate: _generate,
           ),
-        PersonalDataStatus.locked =>
-          _UnlockView(accountId: widget.accountId, lostRace: false),
+        PersonalDataStatus.locked => _LockedView(accountId: widget.accountId),
         PersonalDataStatus.lostRace =>
           _UnlockView(accountId: widget.accountId, lostRace: true),
         PersonalDataStatus.unlocked =>
@@ -133,7 +132,7 @@ class _PersonalDataScreenState extends ConsumerState<PersonalDataScreen> {
 }
 
 class _Message extends StatelessWidget {
-  const _Message(this.text);
+  const _Message(this.text, {super.key});
 
   final String text;
 
@@ -1749,4 +1748,33 @@ class _PairSendViewState extends ConsumerState<_PairSendView> with _TextInput {
           FilledButton(onPressed: widget.onDone, child: const Text('Done')),
         ],
       );
+}
+
+/// Locked: the unlock methods, or, when no key mail is visible any more,
+/// why none of them can work (crypto review, M1).
+class _LockedView extends ConsumerWidget {
+  const _LockedView({required this.accountId});
+
+  final String accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<bool>(
+      future: ref.read(encryptedKeyServiceProvider).hasKeyMails(accountId),
+      builder: (context, snapshot) {
+        if (snapshot.data == false) {
+          return const _Message(
+            'This account had encrypted personal data on this device, but '
+            'its keys are no longer visible on the mail server (the folder '
+            'SharedInbox/Keys is missing or hidden). Unlocking cannot work '
+            'until they are back. Notes on mails stay off, so nothing is '
+            'stored unencrypted. If the keys are gone for good, remove the '
+            'account and add it again to start over.',
+            key: Key('personalDataKeysMissing'),
+          );
+        }
+        return _UnlockView(accountId: accountId, lostRace: false);
+      },
+    );
+  }
 }
