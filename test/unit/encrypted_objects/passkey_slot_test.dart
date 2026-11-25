@@ -39,7 +39,7 @@ void main() {
     expect(info.credentialId, _credentialId);
     expect(info.credentialIdB64, b64url(_credentialId));
     expect(info.prfSalt, _salt);
-    expect(info.rpId, 'sharedinbox.de');
+    expect(info.rpId, 'keys.sharedinbox.de');
     expect(info.label, 'Phone');
     expect(info.slotIdB64, slot.slotIdB64);
 

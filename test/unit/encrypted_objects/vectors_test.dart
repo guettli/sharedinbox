@@ -152,6 +152,9 @@ void main() {
       credentialId: hexBytes(v['credentialId'] as String),
       salt: hexBytes(v['prfSalt'] as String),
       label: 'Google Password Manager',
+      // The frozen vector predates the move to keys.sharedinbox.de; the
+      // rpId is a clear field of the slot, so it is passed as it was.
+      rpId: 'sharedinbox.de',
       random: queuedRandom([
         hexBytes(v['slotId'] as String),
         hexBytes(v['nonce'] as String),
