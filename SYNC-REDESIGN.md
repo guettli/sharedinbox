@@ -1874,7 +1874,7 @@ State as of phase 6b (checked with `gh issue view`):
 | #1240 mailto unsubscribe | closed | phase 0, independent |
 | #1242 folder ops offline | closed | phase 5 |
 | #1247 race test helper | closed | replaced by the phase 0 stale-answer fuzz |
-| #1241 a cached body older than 7 days does not open offline | open | independent of the redesign |
+| #1241 a cached body older than 7 days does not open offline | closed | independent: a failed refresh of a stale cached body serves that body (App Log `email.body.stale_cache_served`) |
 | #1243 Sieve scripts offline | open | independent (§7) |
 | #1244 raw source / attachment cache | open | independent |
 | #1245 "needs a connection" UI | open | independent |

@@ -129,6 +129,45 @@ extension _Bodies on EmailRepositoryImpl {
       }
     }
 
+    // From here on the body comes from the server. A cached copy that was
+    // only too old (or lacked the structure) still beats an error: offline,
+    // or with the server unreachable, the user who opens the mail gets that
+    // copy (#1241). Not for forceRefresh, which asks for the server's answer,
+    // nor for a prefetch, which only warms the cache and would log once per
+    // stale body it walks past while offline.
+    final fallback = forceRefresh || prefetch ? null : cached;
+    if (fallback == null) {
+      return _fetchEmailBody(
+        emailId,
+        cached,
+        prefetch: prefetch,
+        startedAt: startedAt,
+      );
+    }
+    try {
+      return await _fetchEmailBody(
+        emailId,
+        cached,
+        prefetch: prefetch,
+        startedAt: startedAt,
+      );
+    } on Exception catch (e, stack) {
+      // Exceptions only (no connection, timeouts, IMAP/JMAP/HTTP failures):
+      // an Error is a bug or a mail gone from the server (a StateError for an
+      // empty fetch), which the user should see rather than an old copy.
+      return _staleBodyServed(emailId, fallback, e, stack);
+    }
+  }
+
+  /// The body of [emailId] from the server (IMAP or JMAP), cached as it is
+  /// fetched. [cached] is the row's cached body, if any; a mail that cannot be
+  /// located on the server answers with it ([_bodyNotLocated]).
+  Future<model.EmailBody> _fetchEmailBody(
+    String emailId,
+    EmailBody? cached, {
+    required bool prefetch,
+    required DateTime startedAt,
+  }) async {
     final emailRow = await (_db.select(
       _db.emails,
     )..where((t) => t.id.equals(emailId)))
@@ -375,6 +414,41 @@ extension _Bodies on EmailRepositoryImpl {
         );
       },
     );
+  }
+
+  /// What [getEmailBody] answers when the server fetch for a stale cached
+  /// body ([cached]: older than [_bodyCacheTtl], or without its structure)
+  /// failed: that cached copy, as it was (#1241). App Log warn
+  /// `email.body.stale_cache_served`.
+  Future<model.EmailBody> _staleBodyServed(
+    String emailId,
+    EmailBody cached,
+    Object error,
+    StackTrace stack,
+  ) async {
+    final age = cached.cachedAt == null
+        ? null
+        : DateTime.now().difference(cached.cachedAt!);
+    unawaited(
+      _appLogger?.warn(
+        'email.body.stale_cache_served',
+        'Could not refresh the message body from the server, so the copy '
+            'cached on this device '
+            '${age == null ? '(age unknown)' : '${age.inDays} days ago'} '
+            'is shown: $error',
+        error: error,
+        stack: stack,
+        data: {
+          if (age != null) 'cacheAgeSeconds': age.inSeconds,
+          'missingStructure':
+              cached.mimeTreeJson == null || cached.headersJson == null,
+        },
+        emailId: emailId,
+      ),
+    );
+    final body = _bodyRowToModel(cached);
+    await _backfillAddressHeaders(emailId, body.headers);
+    return body;
   }
 
   /// Runs [action] against an IMAP connection for [account], reusing the pooled

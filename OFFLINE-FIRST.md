@@ -48,14 +48,15 @@ Found by an audit in November 2026. Each issue says how to confirm it.
 | #1238 | JMAP `Email/get` upsert overwrites a pending move or snooze |
 | #1239 | Sync drops queued changes when a folder or mail disappears |
 | #1240 | `mailto:` unsubscribe bypasses the outbox |
-| #1241 | A cached body older than 7 days does not open offline |
 | #1243 | Sieve scripts are server-first |
 | #1244 | Raw source and attachments need the network |
 | #1245 | No consistent "needs a connection" UI |
 
 Already offline-first: flags, move, delete, snooze, mark-all-read, drafts,
 outbox / compose, undo, local search, notes (#1235), notification rules,
-preferences, folder create, rename, move and delete (#1242, SYNC.md §6b).
+preferences, folder create, rename, move and delete (#1242, SYNC.md §6b),
+opening a mail whose cached body is past its 7-day refresh (#1241: the cached
+copy is shown when the refresh fails).
 
 ## Enforcement
 

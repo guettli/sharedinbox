@@ -1001,6 +1001,160 @@ void main() {
       expect(body.htmlBody, '<p>Hello</p>');
     });
 
+    // #1241: a cached body past the 7-day TTL (or without its structure) is
+    // re-fetched; when the server cannot be reached the user gets the cached
+    // copy instead of an error.
+    group('stale cached body when the server is unreachable (#1241)', () {
+      Future<imap.ImapClient> unreachable(Account a, String u, String p) =>
+          Future.error(const SocketException('Network is unreachable'));
+
+      Future<_Repos> withCachedBody({
+        required DateTime? cachedAt,
+        bool withStructure = true,
+        AppLogger? appLogger,
+        Future<imap.ImapClient> Function(Account, String, String)? imapConnect,
+      }) async {
+        final r = _makeRepos(
+          appLogger: appLogger,
+          imapConnect: imapConnect ?? unreachable,
+        );
+        await r.accounts.addAccount(_account, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'acc-1:1',
+                accountId: 'acc-1',
+                mailboxPath: 'INBOX',
+                uid: 1,
+                receivedAt: DateTime(2024),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: 'acc-1:1',
+                textBody: const Value('Old but readable'),
+                htmlBody: const Value('<p>Old but readable</p>'),
+                headersJson: Value(withStructure ? '[]' : null),
+                mimeTreeJson:
+                    Value(withStructure ? '{"type":"text/plain"}' : null),
+                cachedAt: Value(cachedAt),
+              ),
+            );
+        return r;
+      }
+
+      test('a 30-day-old cached body is returned and the fallback is logged',
+          () async {
+        final recorder = _PushStatusRecorder();
+        final r = await withCachedBody(
+          cachedAt: DateTime.now().subtract(const Duration(days: 30)),
+          appLogger: AppLogger(recorder),
+        );
+
+        final body = await r.emails.getEmailBody('acc-1:1');
+
+        expect(body.textBody, 'Old but readable');
+        expect(body.htmlBody, '<p>Old but readable</p>');
+        expect(body.loadError, isNull);
+        final entry = recorder.entries
+            .singleWhere((e) => e.event == 'email.body.stale_cache_served');
+        expect(entry.level, AppLogLevel.warn);
+        expect(entry.emailId, 'acc-1:1');
+        final data = jsonDecode(entry.dataJson!) as Map<String, dynamic>;
+        expect(data['cacheAgeSeconds'], greaterThan(29 * 24 * 3600));
+        expect(data['missingStructure'], false);
+      });
+
+      test('the cached row is left as it was', () async {
+        // Whole seconds: the database stores no finer.
+        final cachedAt = DateTime(2026, 1, 2, 3, 4, 5);
+        final r = await withCachedBody(cachedAt: cachedAt);
+
+        await r.emails.getEmailBody('acc-1:1');
+
+        final row = await (r.db.select(r.db.emailBodies)
+              ..where((t) => t.emailId.equals('acc-1:1')))
+            .getSingle();
+        expect(row.cachedAt, cachedAt);
+        expect(row.textBody, 'Old but readable');
+      });
+
+      test('a bug (an Error, not an Exception) is not hidden', () async {
+        final r = await withCachedBody(
+          cachedAt: DateTime.now().subtract(const Duration(days: 30)),
+          imapConnect: _noImapConnect,
+        );
+
+        expect(
+          () => r.emails.getEmailBody('acc-1:1'),
+          throwsA(isA<UnsupportedError>()),
+        );
+      });
+
+      test('a JMAP account gets its stale cached body too', () async {
+        final r = _makeRepos(
+          httpClient: MockClient(
+            (req) async => throw const SocketException('unreachable'),
+          ),
+        );
+        await r.accounts.addAccount(_jmapAccount, 'pw');
+        await r.db.into(r.db.emails).insert(
+              EmailsCompanion.insert(
+                id: 'jmap-1:e1',
+                accountId: 'jmap-1',
+                mailboxPath: 'mbx1',
+                uid: 0,
+                receivedAt: DateTime(2024),
+                srvJmapId: const Value('e1'),
+              ),
+            );
+        await r.db.into(r.db.emailBodies).insert(
+              EmailBodiesCompanion.insert(
+                emailId: 'jmap-1:e1',
+                textBody: const Value('Old JMAP body'),
+                headersJson: const Value('[]'),
+                mimeTreeJson: const Value('{"type":"text/plain"}'),
+                cachedAt:
+                    Value(DateTime.now().subtract(const Duration(days: 30))),
+              ),
+            );
+
+        final body = await r.emails.getEmailBody('jmap-1:e1');
+
+        expect(body.textBody, 'Old JMAP body');
+      });
+
+      test('a legacy row without structure or cachedAt is returned too',
+          () async {
+        final r = await withCachedBody(cachedAt: null, withStructure: false);
+
+        final body = await r.emails.getEmailBody('acc-1:1');
+
+        expect(body.textBody, 'Old but readable');
+      });
+
+      test('forceRefresh still reports the server error', () async {
+        final r = await withCachedBody(
+          cachedAt: DateTime.now().subtract(const Duration(days: 30)),
+        );
+
+        expect(
+          () => r.emails.getEmailBody('acc-1:1', forceRefresh: true),
+          throwsA(isA<SocketException>()),
+        );
+      });
+
+      test('a prefetch still reports the server error', () async {
+        final r = await withCachedBody(
+          cachedAt: DateTime.now().subtract(const Duration(days: 30)),
+        );
+
+        expect(
+          () => r.emails.getEmailBody('acc-1:1', prefetch: true),
+          throwsA(isA<SocketException>()),
+        );
+      });
+    });
+
     // ── "Did opening this mail need the Internet?" logging (#642) ─────────────
     group('getEmailBody logs how the body was loaded (#642)', () {
       AppLogEntry loadedEntry(_PushStatusRecorder recorder) =>
