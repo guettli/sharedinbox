@@ -17,6 +17,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:sharedinbox/core/models/account.dart';
 import 'package:sharedinbox/core/models/email.dart';
 import 'package:sharedinbox/core/repositories/app_log_repository.dart';
+import 'package:sharedinbox/core/services/managesieve_probe_service.dart';
 import 'package:sharedinbox/core/storage/secure_storage.dart';
 import 'package:sharedinbox/di.dart';
 import 'package:sharedinbox/main.dart' as app;
@@ -270,6 +271,22 @@ void main() {
           // CircularProgressIndicator — pumpAndSettle() cannot settle while a
           // continuously-running animation is in the tree.
           accountConnectionStatusProvider.overrideWith((ref, _) async {}),
+          // The dev Stalwart offers STARTTLS on 4190 but aborts the handshake,
+          // so the real ManageSieve probe (TLS by default) failed on every run
+          // and logged "ManageSieve probe failed … TLS handshake aborted", a
+          // line two flake reports took for the cause (#817, #1307). This test
+          // does not use Sieve: answer "not available" without connecting.
+          manageSieveProbeServiceProvider.overrideWith(
+            (ref) => ManageSieveProbeService(
+              ref.watch(accountRepositoryProvider),
+              probeFn: ({
+                required String host,
+                required int port,
+                required bool useTls,
+              }) async =>
+                  false,
+            ),
+          ),
         ],
       );
 
