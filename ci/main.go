@@ -825,19 +825,28 @@ func (m *Ci) CheckFast(ctx context.Context) (string, error) {
 	return "All fast checks passed!", nil
 }
 
-// CheckGenerated verifies that all generated files (*.g.dart, *.mocks.dart) are up to date.
+// CheckGenerated verifies that the tracked generated files (*.mocks.dart) are up to date.
 // It reuses the codegenBase() output instead of running build_runner a second time,
 // diffing committed generated files against the freshly built ones.
+//
+// *.g.dart is git-ignored, so none is committed: every check builds them fresh
+// (setup excludes uploaded copies). They are left out of the comparison too, or
+// a seat's stale local copy, uploaded with the working tree by --source=.,
+// fails the check although nothing committed is out of date (#1306).
 func (m *Ci) CheckGenerated(ctx context.Context) (string, error) {
 	fresh := m.codegenBase().Directory("/src")
+	committed := m.checkSrc().Filter(dagger.DirectoryFilterOpts{
+		Exclude: []string{"**/*.g.dart"},
+	})
 	return m.pubGetLayer().
-		WithDirectory("/committed", m.checkSrc(), dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
+		WithDirectory("/committed", committed, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithDirectory("/generated", fresh, dagger.ContainerWithDirectoryOpts{Owner: "ci"}).
 		WithExec([]string{"/bin/bash", "-c",
-			`stale=$(find /committed -name '*.g.dart' -o -name '*.mocks.dart' | ` +
+			`stale=$(find /committed -name '*.mocks.dart' | ` +
 				`while IFS= read -r f; do rel="${f#/committed/}"; diff -q "$f" "/generated/$rel" >/dev/null 2>&1 || echo "$rel"; done); ` +
 				`if [ -n "$stale" ]; then ` +
-				`echo "ERROR: Generated files are out of date — run: dart run build_runner build"; echo "$stale"; exit 1; ` +
+				`echo "ERROR: Generated files are out of date — run: dart run build_runner build"; echo "$stale"; ` +
+				`echo "(An untracked local copy counts too: see git ls-files --others '*.mocks.dart'.)"; exit 1; ` +
 				`else echo "Generated files are up to date."; fi`}).
 		Stdout(ctx)
 }
