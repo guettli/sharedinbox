@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.get_login_creds"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "de.sharedinbox.mua",
+      "sha256_cert_fingerprints": [
+        "B6:4A:50:F7:D1:4A:B0:67:F2:9F:3C:C3:5E:9F:FD:90:B1:EE:3B:22:DA:00:1F:6C:97:80:92:72:9C:1C:13:B1"
+      ]
+    }
+  }
+]
