@@ -29,8 +29,9 @@ set -uo pipefail
 
 OUT=$(mktemp)
 RC_FILE=$(mktemp)
+FETCH_LOG=$(mktemp)
 APK_DIR=$(mktemp -d /tmp/playstore-apks-XXXXXX)
-trap 'rm -rf "$OUT" "$RC_FILE" "$APK_DIR"' EXIT
+trap 'rm -rf "$OUT" "$RC_FILE" "$FETCH_LOG" "$APK_DIR"' EXIT
 
 _strip_ansi() {
     sed 's/\x1b\[[0-9;]*[mGKHFJ]//g'
@@ -161,10 +162,18 @@ echo "[firebase] fetching latest alpha APK set from Play Store via Dagger…" >&
 # stall repeats FETCH_MAX_CONSECUTIVE_TIMEOUTS times in a row (a genuinely
 # wedged engine, which waiting will not fix) or the overall budget elapses.
 # Every other non-zero exit (auth, network, Play API 5xx) still fails at once.
+#
+# A lost engine session is the same kind of stall, just reported faster: in
+# #1398 the engine dropped the client ("engine closed session … fails its
+# health checks") ~25s into attempt 1, the exec exited 1 instead of timing out,
+# and the run went red before Firebase ever started. FETCH_TRANSIENT_PATTERN
+# matches those engine-side errors in the attempt's output; they count towards
+# the same consecutive-stall limit as a timeout.
 FETCH_ATTEMPT_TIMEOUT_SECONDS="${FIREBASE_FETCH_ATTEMPT_TIMEOUT_S:-600}"
 FETCH_TOTAL_BUDGET_SECONDS="${FIREBASE_FETCH_TOTAL_BUDGET_S:-5400}"
 FETCH_RETRY_INTERVAL_SECONDS="${FIREBASE_FETCH_RETRY_INTERVAL_S:-60}"
 FETCH_MAX_CONSECUTIVE_TIMEOUTS="${FIREBASE_FETCH_MAX_CONSECUTIVE_TIMEOUTS:-3}"
+FETCH_TRANSIENT_PATTERN="engine closed session|No Dagger server responded"
 
 FETCH_DEADLINE=$(( $(date +%s) + FETCH_TOTAL_BUDGET_SECONDS ))
 FETCH_ATTEMPT=0
@@ -187,17 +196,18 @@ while :; do
     #
     # Capture rc separately: an `if !` clause flips $? to 0 in its then-block,
     # which would hide the timeout (124/137) vs real-failure distinction the
-    # retry below depends on.
+    # retry below depends on. The output is tee'd to FETCH_LOG so a lost engine
+    # session can be told apart from a real failure; PIPESTATUS keeps dagger's rc.
     VERSION_CODE_ARGS=()
     if [ -n "$VERSION_CODE" ]; then
         VERSION_CODE_ARGS=(--version-code "$VERSION_CODE")
     fi
-    FETCH_RC=0
     timeout --kill-after=10 "$FETCH_ATTEMPT_TIMEOUT_SECONDS" dagger call --progress=plain -q -m ci --source=. fetch-play-store-apks \
             --play-store-config env://PLAY_STORE_CONFIG_JSON \
             --cache-buster "${FETCH_ATTEMPT}-$(date +%s)" \
             "${VERSION_CODE_ARGS[@]}" \
-            -o "$APK_DIR" || FETCH_RC=$?
+            -o "$APK_DIR" 2>&1 | tee "$FETCH_LOG"
+    FETCH_RC=${PIPESTATUS[0]}
     # 124: the exec honoured SIGTERM. 137: it ignored TERM and needed the
     # --kill-after SIGKILL. Both mean "wedged", not "the APK is broken".
     if [ "$FETCH_RC" -eq 124 ] || [ "$FETCH_RC" -eq 137 ]; then
@@ -208,6 +218,17 @@ while :; do
             exit 1
         fi
         echo "::warning::[firebase] fetch attempt $FETCH_ATTEMPT timed out after ${FETCH_ATTEMPT_TIMEOUT_SECONDS}s (${FETCH_CONSECUTIVE_TIMEOUTS}/${FETCH_MAX_CONSECUTIVE_TIMEOUTS} consecutive); retrying in ${FETCH_RETRY_INTERVAL_SECONDS}s ($(( FETCH_DEADLINE - NOW ))s left)" >&2
+        sleep "$FETCH_RETRY_INTERVAL_SECONDS"
+        continue
+    fi
+    if [ "$FETCH_RC" -ne 0 ] && grep -qE "$FETCH_TRANSIENT_PATTERN" "$FETCH_LOG"; then
+        FETCH_CONSECUTIVE_TIMEOUTS=$((FETCH_CONSECUTIVE_TIMEOUTS + 1))
+        NOW=$(date +%s)
+        if [ "$FETCH_CONSECUTIVE_TIMEOUTS" -ge "$FETCH_MAX_CONSECUTIVE_TIMEOUTS" ] || [ "$NOW" -ge "$FETCH_DEADLINE" ]; then
+            echo "ERROR: dagger fetch-play-store-apks lost its engine session on ${FETCH_CONSECUTIVE_TIMEOUTS} consecutive attempt(s) (exit $FETCH_RC)" >&2
+            exit 1
+        fi
+        echo "::warning::[firebase] fetch attempt $FETCH_ATTEMPT lost its Dagger engine session (exit $FETCH_RC, ${FETCH_CONSECUTIVE_TIMEOUTS}/${FETCH_MAX_CONSECUTIVE_TIMEOUTS} consecutive); retrying in ${FETCH_RETRY_INTERVAL_SECONDS}s ($(( FETCH_DEADLINE - NOW ))s left)" >&2
         sleep "$FETCH_RETRY_INTERVAL_SECONDS"
         continue
     fi
@@ -261,7 +282,7 @@ for attempt in 1 2 3; do
         echo "::warning::[firebase] attempt $attempt/3 timed out after 2400s" >&2
         exit 124
     fi
-    if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|No Dagger server responded" "$OUT"; then
+    if [ "$attempt" -lt 3 ] && grep -qE "connection reset|context canceled|connection refused|No Dagger server responded|engine closed session" "$OUT"; then
         echo "[firebase] dagger connectivity error on attempt $attempt/3, retrying..." >&2
     elif [ "$attempt" -lt 3 ] && grep -q "No space left on device" "$OUT"; then
         echo "[firebase] dagger disk space error on attempt $attempt/3, pruning Dagger cache..." >&2

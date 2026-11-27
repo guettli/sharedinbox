@@ -8,8 +8,10 @@
 #                          pulling python:3.12-alpine, see #453); retry on a
 #                          fresh exec, and only fail after a run of consecutive
 #                          timeouts (#897)
+#   - lost engine session → "engine closed session" (#1398); retried exactly
+#                          like a timeout
 #   - any other non-zero → a real failure (auth, network, Play 5xx); fail now
-# These tests pin all three.
+# These tests pin all of them.
 #
 # Run directly: bash scripts/test_run_firebase_test.sh
 set -uo pipefail
@@ -44,7 +46,8 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 # Stub `dagger` with a per-attempt plan: FETCH_PLAN is a space-separated list
 # of outcomes, one per attempt ("ready", "pending", or a numeric exit code —
-# 124 stands in for a wedged exec killed by `timeout`). The last entry repeats
+# 124 stands in for a wedged exec killed by `timeout`; "lost" is an exec whose
+# engine session was dropped, see #1398). The last entry repeats
 # once the plan runs out, so "pending" alone means "PENDING forever".
 cat >"$SCRATCH/dagger" <<EOF
 #!/usr/bin/env bash
@@ -72,6 +75,10 @@ case "\${plan[\$idx]}" in
     pending)
         echo 1790309773 >"\$dest/versionCode"
         : >"\$dest/PENDING"
+        ;;
+    lost)
+        echo 'Error: query module objects: engine closed session "342CQRXMTOVK6SOKZJFCRMOOSV": it closed this client'"'"'s session attachables connection' >&2
+        exit 1
         ;;
     *)
         exit "\${plan[\$idx]}"
@@ -111,6 +118,7 @@ run_fetch() {
     mkdir -p "$SCRATCH/apks"
     PATH="$SCRATCH:$PATH" \
         APK_DIR="$SCRATCH/apks" \
+        FETCH_LOG="$SCRATCH/fetch.log" \
         FETCH_PLAN="$plan" \
         FIREBASE_FETCH_ATTEMPT_TIMEOUT_S=5 \
         FIREBASE_FETCH_TOTAL_BUDGET_S="$budget" \
@@ -203,6 +211,36 @@ elif ! printf '%s' "$out" | grep -q "timed out after 5s (1/3 consecutive)"; then
     _fail "reset: second timeout should be counted as the first again" "$out"
 elif printf '%s' "$out" | grep -q "2/3 consecutive"; then
     _fail "reset: counter should have been reset by the PENDING answer" "$out"
+else
+    _pass
+fi
+
+# --- A lost engine session recovers on the next exec (#1398) -----------------
+out=$(run_fetch "lost ready")
+rc=$?
+attempts=$(cat "$SCRATCH/attempts")
+if [ "$rc" -ne 0 ]; then
+    _fail "session-lost-recovers: should exit 0 after retrying" "$out"
+elif [ "$attempts" -ne 2 ]; then
+    _fail "session-lost-recovers: expected 2 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "::warning::.*lost its Dagger engine session (exit 1, 1/3 consecutive)"; then
+    _fail "session-lost-recovers: should warn about the lost session" "$out"
+elif ! printf '%s' "$out" | grep -q "downloaded APKs for versionCode=1790309773"; then
+    _fail "session-lost-recovers: should proceed to the downloaded APKs" "$out"
+else
+    _pass
+fi
+
+# --- Session losses and timeouts share one consecutive-stall budget -----------
+out=$(run_fetch "lost 124 lost ready")
+rc=$?
+attempts=$(cat "$SCRATCH/attempts")
+if [ "$rc" -eq 0 ]; then
+    _fail "session-lost-wedged: 3 consecutive stalls should fail the run" "$out"
+elif [ "$attempts" -ne 3 ]; then
+    _fail "session-lost-wedged: should stop after 3 attempts (got $attempts)" "$out"
+elif ! printf '%s' "$out" | grep -q "lost its engine session on 3 consecutive attempt"; then
+    _fail "session-lost-wedged: error should name the consecutive stalls" "$out"
 else
     _pass
 fi
