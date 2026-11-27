@@ -226,6 +226,9 @@ void main() {
       tester,
     ) async {
       await _pumpAccountHome(tester, [_inbox]);
+      // Scroll the button to the top so the snack bar cannot cover it.
+      await tester.ensureVisible(find.text('Verify sync health'));
+      await tester.pumpAndSettle();
       ScaffoldMessenger.of(tester.element(find.text('Verify sync health')))
           .showSnackBar(
         const SnackBar(

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:sharedinbox/core/models/account.dart';
+import 'package:sharedinbox/core/services/encrypted_key_service.dart'
+    show PersonalDataStatus;
 import 'package:sharedinbox/core/sync/account_comparison_provider.dart';
 import 'package:sharedinbox/core/utils/format_utils.dart';
 import 'package:sharedinbox/di.dart';
@@ -114,6 +116,7 @@ class _AccountHomeBody extends ConsumerWidget {
           subtitle: const Text('Browse all mailboxes for this account'),
           onTap: () => context.push('/accounts/${account.id}/mailboxes'),
         ),
+        _NotesTile(accountId: account.id),
         const Divider(),
         ListTile(
           leading: const Icon(Icons.receipt_long),
@@ -186,7 +189,7 @@ class _AccountHomeBody extends ConsumerWidget {
           leading: const Icon(Icons.lock_outline),
           title: const Text('Personal data'),
           subtitle: const Text(
-            'Encrypted notes, todos and flash cards, stored on your server',
+            'Encryption keys, recovery and devices for your notes',
           ),
           onTap: () => context.push('/accounts/${account.id}/personal-data'),
         ),
@@ -239,6 +242,60 @@ class _AccountHomeBody extends ConsumerWidget {
     unawaited(
       context.push(
         '/accounts/${account.id}/mailboxes/${Uri.encodeComponent(inbox.path)}/emails',
+      ),
+    );
+  }
+}
+
+/// Notes, todos, journal and cards are encrypted entries (#1352). Shown
+/// right after Folders so they are found. Opens the entries when this
+/// device can read them (or the status is still loading: the entries
+/// screen gates on it), else the personal-data screen to set up or unlock.
+class _NotesTile extends ConsumerWidget {
+  const _NotesTile({required this.accountId});
+
+  final String accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(personalDataStatusProvider(accountId)).value;
+    final (subtitle, open, icon) = switch (status) {
+      null || PersonalDataStatus.unlocked => (
+          'Notes, todos, journal and flash cards',
+          true,
+          null
+        ),
+      PersonalDataStatus.foreignKeyWarning => (
+          'Another key was found on the server. Check Personal data.',
+          true,
+          Icons.warning_amber_rounded,
+        ),
+      PersonalDataStatus.notSetUp => (
+          'Set up encryption to write notes, todos and journal',
+          false,
+          Icons.lock_outline,
+        ),
+      PersonalDataStatus.setupInterrupted => (
+          'Finish setting up encryption',
+          false,
+          Icons.lock_outline,
+        ),
+      PersonalDataStatus.locked || PersonalDataStatus.lostRace => (
+          'Unlock on this device to read and write notes',
+          false,
+          Icons.lock_outline,
+        ),
+    };
+    return ListTile(
+      key: const Key('accountHomeNotes'),
+      leading: const Icon(Icons.notes),
+      title: const Text('Notes'),
+      subtitle: Text(subtitle),
+      trailing: icon == null ? null : Icon(icon),
+      onTap: () => context.push(
+        open
+            ? '/accounts/$accountId/entries'
+            : '/accounts/$accountId/personal-data',
       ),
     );
   }
