@@ -618,6 +618,67 @@ void main() {
     expect(find.byKey(const Key('personalDataGenerate')), findsOneWidget);
   });
 
+  // Account home tests live here: _pump wires the fake key service.
+  testWidgets('account home Notes: setup when not set up', (tester) async {
+    await _pump(
+      tester,
+      PersonalDataStatus.notSetUp,
+      location: '/accounts/acc-1',
+    );
+    final notes = find.byKey(const Key('accountHomeNotes'));
+    expect(notes, findsOneWidget);
+    expect(find.textContaining('Set up encryption'), findsOneWidget);
+    await tester.tap(notes);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('personalDataGenerate')), findsOneWidget);
+  });
+
+  testWidgets('account home Notes: unlock when locked', (tester) async {
+    await _pump(tester, PersonalDataStatus.locked, location: '/accounts/acc-1');
+    expect(find.textContaining('Unlock on this device'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('accountHomeNotes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('pairReceiveStart')), findsOneWidget);
+  });
+
+  testWidgets('account home Notes: finish an interrupted setup',
+      (tester) async {
+    await _pump(
+      tester,
+      PersonalDataStatus.setupInterrupted,
+      location: '/accounts/acc-1',
+    );
+    expect(find.textContaining('Finish setting up'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('accountHomeNotes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('personalDataGenerate')), findsOneWidget);
+  });
+
+  testWidgets('account home Notes: a foreign key warns, still opens entries',
+      (tester) async {
+    await _pump(
+      tester,
+      PersonalDataStatus.foreignKeyWarning,
+      location: '/accounts/acc-1',
+    );
+    expect(find.textContaining('Another key was found'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('accountHomeNotes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+  });
+
+  testWidgets('account home Notes: opens entries when unlocked',
+      (tester) async {
+    await _pump(
+      tester,
+      PersonalDataStatus.unlocked,
+      location: '/accounts/acc-1',
+    );
+    await tester.tap(find.byKey(const Key('accountHomeNotes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('entriesQuickAdd')), findsOneWidget);
+  });
+
   testWidgets('locked with no key mail visible explains, no unlock form',
       (tester) async {
     await _pump(tester, PersonalDataStatus.locked, keyMailsVisible: false);
