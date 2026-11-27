@@ -133,7 +133,7 @@ def test_about_screen() -> None:
     g.click("About", "push button")
     g.wait_for("Copy info", "push button")
 
-    links = [(n.name or "").strip() for n, _ in g._walk(g._app_root())
+    links = [(n.name or "").strip() for n, _ in g._walk(g.app_root())
              if n.getRoleName() == "link"]
 
     # A release build carries the auto-incrementing build number, so the
@@ -192,7 +192,7 @@ def test_imap_reaches_server() -> None:
     time.sleep(12)
     shot("04-connection")
 
-    names = [n.name for n, _ in g._walk(g._app_root()) if (n.name or "").strip()]
+    names = [n.name for n, _ in g._walk(g.app_root()) if (n.name or "").strip()]
     errors = [n for n in names if "Exception:" in n or "Connection failed" in n]
     imap_errors = [e for e in errors if "IMAP:" in e]
     if imap_errors:

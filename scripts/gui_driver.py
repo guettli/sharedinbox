@@ -58,6 +58,27 @@ def _app_root(app_name: str = "sharedinbox"):
     return None
 
 
+def app_root(app_name: str = "sharedinbox", timeout: float = DEFAULT_TIMEOUT):
+    """Return the app's accessible root, waiting while the registry lags.
+
+    `_app_root` returns None when the app is not listed on the accessibility
+    bus, and walking None fails with the opaque "'NoneType' object is not
+    iterable". Under load the registry can briefly omit a live app, so poll
+    before concluding it is gone, then fail with an error that says so.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        app = _app_root(app_name)
+        if app is not None:
+            return app
+        if time.monotonic() > deadline:
+            raise GuiError(
+                f"application {app_name!r} is no longer on the accessibility bus "
+                f"after {timeout:.0f}s — did it crash?"
+            )
+        time.sleep(POLL_INTERVAL)
+
+
 def _walk(node, depth: int = 0, max_depth: int = 40, deadline: float | None = None):
     """Yield (node, depth) for the whole subtree.
 
