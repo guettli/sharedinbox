@@ -42,6 +42,7 @@ class _FakeKeyService implements EncryptedKeyService {
   final passkeys = <PasskeySlotInfo>[];
   Object? passkeyError;
   UnlockFailure? passkeyUnlockFailure;
+  Object? passkeyUnlockError;
   final passkeyLabels = <String>[];
   final removedPasskeys = <String>[];
 
@@ -147,6 +148,8 @@ class _FakeKeyService implements EncryptedKeyService {
   Future<void> unlockWithPasskey(String accountId) async {
     final failure = passkeyUnlockFailure;
     if (failure != null) throw UnlockFailed(failure);
+    final error = passkeyUnlockError;
+    if (error != null) throw error;
     setStatus(PersonalDataStatus.unlocked);
   }
 
@@ -473,6 +476,17 @@ void main() {
     }
 
     service.passkeyUnlockFailure = null;
+    service.passkeyUnlockError = const PrfFailed('TYPE_DATA_ERROR');
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('could not use the passkey'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Details: TYPE_DATA_ERROR'), findsOneWidget);
+    expect(find.textContaining('PrfFailed'), findsNothing);
+
+    service.passkeyUnlockError = null;
     await tester.tap(button);
     await tester.pumpAndSettle();
     expect(find.text('Unlocked on this device'), findsOneWidget);
@@ -507,6 +521,19 @@ void main() {
     );
     expect(find.textContaining('delete the passkey'), findsOneWidget);
 
+    service.passkeyError = const PrfFailed(
+      'androidx.credentials.TYPE_CREATE_PUBLIC_KEY_CREDENTIAL_DOM_EXCEPTION/'
+      'androidx.credentials.TYPE_DATA_ERROR',
+    );
+    await tester.tap(find.byKey(const Key('passkeySave')));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('could not create a passkey'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Details: androidx'), findsOneWidget);
+    expect(find.textContaining('PrfFailed'), findsNothing);
+
     service.passkeyError =
         const KeyMailOfflineException(SocketException('offline'));
     await tester.tap(find.byKey(const Key('passkeySave')));
@@ -516,7 +543,7 @@ void main() {
     service.passkeyError = null;
     await tester.tap(find.byKey(const Key('passkeySave')));
     await tester.pumpAndSettle();
-    expect(service.passkeyLabels, ['Tab', 'Tab', 'Tab']);
+    expect(service.passkeyLabels, ['Tab', 'Tab', 'Tab', 'Tab']);
     expect(find.byKey(const Key('passkeySave')), findsNothing);
     expect(find.text('Tab'), findsOneWidget);
   });
