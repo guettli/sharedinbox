@@ -134,3 +134,6 @@ dagger-certs
 # code stay the single source of truth, and Renovate keeps those current; a
 # committed lock would freeze them until someone ran `dagger lock update`.
 dagger.lock
+
+# Captured Dagger CLI progress output; not a project file.
+fm_out.txt
