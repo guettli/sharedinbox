@@ -954,11 +954,15 @@ class _FuzzRun {
     final r = _rnd.nextDouble();
     final what = '${row.id} ($messageId)';
     final onServer = _server.find(messageId);
-    // The row records where the server has the mail now.
+    // The row records where the server has the mail now, and shows it
+    // there: an acked move of a merged copy can still show it elsewhere
+    // (seed 65275), and what the user does then acts on that location.
     final current = onServer != null &&
         row.srvMailboxPath == onServer.folder.path &&
         row.srvUid == onServer.message.uid &&
-        row.srvUidValidity == onServer.folder.uidValidity;
+        row.srvUidValidity == onServer.folder.uidValidity &&
+        row.mailboxPath == onServer.folder.path &&
+        row.uid == onServer.message.uid;
     if (intent.conflicted &&
         current &&
         rows.where((r) => r.messageId == messageId).length == 1 &&
