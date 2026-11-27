@@ -452,6 +452,18 @@ const _noPrf = 'Your password manager does not support passkey encryption '
     '(PRF). Use the recovery key. You can delete the passkey that was just '
     'created in your password manager.';
 
+// A platform passkey failure we cannot classify, e.g. Android 9 answers a
+// PRF create request with a DOM DataError. Plain words first; the raw text
+// stays at the end for bug reports.
+String _passkeyAddFailed(PrfFailed e) =>
+    'The password manager could not create a passkey for your personal '
+    'data. Nothing was saved. If a passkey was created, you can delete it '
+    'in your password manager.\n\nDetails: ${e.message}';
+
+String _passkeyUnlockFailed(PrfFailed e) =>
+    'The password manager could not use the passkey. Use the recovery key '
+    'or pair with another device.\n\nDetails: ${e.message}';
+
 /// Locked device: unlock with a passkey, shown only where there are
 /// passkeys and the account has a passkey slot.
 class _PasskeyUnlock extends ConsumerStatefulWidget {
@@ -495,6 +507,8 @@ class _PasskeyUnlockState extends ConsumerState<_PasskeyUnlock> {
         _ => 'None of your passkeys unlocks the data of this account. If you '
             'deleted the passkey, use the recovery key.',
       };
+    } on PrfFailed catch (e) {
+      failure = _passkeyUnlockFailed(e);
     } catch (e) {
       failure = 'Could not unlock: ${userErrorMessage(e)}';
     }
@@ -1115,6 +1129,8 @@ class _PasskeyDialogState extends ConsumerState<_PasskeyDialog>
             'can delete it in your password manager.';
       } on KeyMailOfflineException {
         return _passkeyNeedsConnection;
+      } on PrfFailed catch (e) {
+        return _passkeyAddFailed(e);
       } catch (e) {
         return 'Could not add the passkey: ${userErrorMessage(e)}';
       }
